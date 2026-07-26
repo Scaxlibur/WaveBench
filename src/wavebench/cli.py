@@ -24,8 +24,10 @@ from .cli_output import (
     _print_doctor_records,
     _print_dmm_function_set,
     _print_dmm_function_status,
+    _print_dmm_dcv_impedance_configuration,
     _print_dmm_measurement_profile,
     _print_dmm_reading,
+    _print_dmm_voltage_range_configuration,
     _print_market_plugin_info,
     _print_market_search_results,
     _print_instrument_descriptor,
@@ -450,6 +452,19 @@ def main(argv: list[str] | None = None) -> int:
                 if args.dmm_function_command == "set":
                     _print_dmm_function_set(service.set_function(function=args.function))
                     return 0
+            if args.command == "range" and args.dmm_range_command == "set":
+                _print_dmm_voltage_range_configuration(
+                    service.set_voltage_range(
+                        function=args.function,
+                        range_code=args.range_code,
+                    )
+                )
+                return 0
+            if args.command == "impedance" and args.dmm_impedance_command == "set":
+                _print_dmm_dcv_impedance_configuration(
+                    service.set_dcv_impedance(args.impedance)
+                )
+                return 0
         if args.domain == "power":
             service = _load_power_service(args)
             if args.command == "idn":

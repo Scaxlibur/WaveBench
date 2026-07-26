@@ -48,6 +48,8 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "dmm.function_status": ("function_status",),
     "dmm.set_function": ("set_function",),
     "dmm.measurement_profile": ("measurement_profile",),
+    "dmm.set_voltage_range": ("set_voltage_range",),
+    "dmm.set_dcv_impedance": ("set_dcv_impedance",),
     "sweep_analyzer.idn": ("idn",),
     "sweep_analyzer.status": ("get_snapshot",),
     "sweep_analyzer.trace": ("fetch_frequency_response",),

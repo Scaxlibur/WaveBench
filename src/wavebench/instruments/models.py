@@ -884,10 +884,10 @@ class DmmMeasurementProfile:
             or self.range_code < 0
         ):
             raise ValueError("DMM measurement profile range_code must be a nonnegative integer")
-        if (self.range_code is None) != (self.auto_range is None):
-            raise ValueError("DMM measurement profile range_code and auto_range must coexist")
-        if self.range_code is not None and self.auto_range != (self.range_code == 0):
-            raise ValueError("DMM measurement profile auto_range must match range_code == 0")
+        if self.range_code is None and self.auto_range is not None:
+            raise ValueError("DMM measurement profile auto_range requires range_code")
+        if self.auto_range is not None and not isinstance(self.auto_range, bool):
+            raise ValueError("DMM measurement profile auto_range must be boolean when present")
         if self.impedance is not None and not self.impedance.strip():
             raise ValueError("DMM measurement profile impedance must be nonempty when present")
 
@@ -897,4 +897,66 @@ class DmmMeasurementProfile:
             "range_code": self.range_code,
             "auto_range": self.auto_range,
             "impedance": self.impedance,
+        }
+
+
+@dataclass(frozen=True)
+class DmmVoltageRangeConfiguration:
+    function: str
+    previous_range_code: int
+    range_code: int
+
+    def __post_init__(self) -> None:
+        if self.function not in {"dcv", "acv"}:
+            raise ValueError("DMM voltage range function must be dcv or acv")
+        for name, value in (
+            ("previous_range_code", self.previous_range_code),
+            ("range_code", self.range_code),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 4:
+                raise ValueError(f"DMM voltage range {name} must be an integer from 0 to 4")
+
+    @property
+    def changed(self) -> bool:
+        return self.previous_range_code != self.range_code
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "function": self.function,
+            "previous_range_code": self.previous_range_code,
+            "range_code": self.range_code,
+            "changed": self.changed,
+        }
+
+
+@dataclass(frozen=True)
+class DmmDcvImpedanceConfiguration:
+    previous_impedance: str
+    impedance: str
+    range_code: int
+
+    def __post_init__(self) -> None:
+        previous = self.previous_impedance.strip().upper()
+        current = self.impedance.strip().upper()
+        if previous not in {"10M", "10G"} or current not in {"10M", "10G"}:
+            raise ValueError("DMM DCV impedance must be 10M or 10G")
+        if isinstance(self.range_code, bool) or not isinstance(self.range_code, int):
+            raise ValueError("DMM DCV impedance range_code must be an integer")
+        if not 0 <= self.range_code <= 4:
+            raise ValueError("DMM DCV impedance range_code must be from 0 to 4")
+        if current == "10G" and self.range_code not in {0, 1, 2}:
+            raise ValueError("DMM DCV 10G impedance requires range code 0, 1, or 2")
+        object.__setattr__(self, "previous_impedance", previous)
+        object.__setattr__(self, "impedance", current)
+
+    @property
+    def changed(self) -> bool:
+        return self.previous_impedance != self.impedance
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "previous_impedance": self.previous_impedance,
+            "impedance": self.impedance,
+            "range_code": self.range_code,
+            "changed": self.changed,
         }

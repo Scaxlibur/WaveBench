@@ -14,6 +14,7 @@ from wavebench.config import (
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.dmm_service import DmmService
+from wavebench.errors import ConfigError
 
 
 def make_config(settle_ms_before_read: int) -> WaveBenchConfig:
@@ -57,9 +58,17 @@ class FakeDmm:
         return SimpleNamespace(
             function=self.active_function,
             range_code=0,
-            auto_range=True,
+            auto_range=None,
             impedance="10M",
         )
+
+    def set_voltage_range(self, function: str, range_code: int):
+        self.events.append(f"set_voltage_range:{function}:{range_code}")
+        return SimpleNamespace(function=function, previous_range_code=2, range_code=range_code)
+
+    def set_dcv_impedance(self, impedance: str):
+        self.events.append(f"set_dcv_impedance:{impedance}")
+        return SimpleNamespace(previous_impedance="10M", impedance=impedance, range_code=2)
 
     def read(self, function: str = "dcv"):
         self.events.append(f"read:{function}")
@@ -126,6 +135,56 @@ class DmmServiceTests(unittest.TestCase):
 
         self.assertEqual(profile.function, "dcv")
         self.assertEqual(events, ["measurement_profile", "close"])
+
+    def test_voltage_range_closes_transport(self):
+        events: list[str] = []
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+
+        with patch.object(service, "_require"), patch.object(
+            service, "_open_dmm", return_value=FakeDmm(events)
+        ):
+            result = service.set_voltage_range("dcv", 1)
+
+        self.assertEqual(result.range_code, 1)
+        self.assertEqual(events, ["set_voltage_range:dcv:1", "close"])
+
+    def test_dcv_impedance_closes_transport(self):
+        events: list[str] = []
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+
+        with patch.object(service, "_require"), patch.object(
+            service, "_open_dmm", return_value=FakeDmm(events)
+        ):
+            result = service.set_dcv_impedance("10g")
+
+        self.assertEqual(result.impedance, "10G")
+        self.assertEqual(events, ["set_dcv_impedance:10G", "close"])
+
+    def test_voltage_range_missing_capability_fails_before_transport(self):
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.dmm",
+            capabilities=("dmm.read",),
+        )
+
+        with patch.object(service, "_open_dmm") as open_dmm:
+            with self.assertRaisesRegex(ConfigError, "dmm.set_voltage_range"):
+                service.set_voltage_range("dcv", 1)
+
+        open_dmm.assert_not_called()
+
+    def test_dcv_impedance_missing_capability_fails_before_transport(self):
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.dmm",
+            capabilities=("dmm.read",),
+        )
+
+        with patch.object(service, "_open_dmm") as open_dmm:
+            with self.assertRaisesRegex(ConfigError, "dmm.set_dcv_impedance"):
+                service.set_dcv_impedance("10G")
+
+        open_dmm.assert_not_called()
 
 
 if __name__ == "__main__":

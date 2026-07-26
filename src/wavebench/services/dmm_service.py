@@ -8,11 +8,20 @@ from typing import cast
 
 from wavebench.config import DmmConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
-from wavebench.instruments.contracts import DmmDriver, DmmMeasurementProfileDriver
+from wavebench.instruments.contracts import (
+    DmmDriver,
+    DmmMeasurementProfileDriver,
+    DmmVoltageConfigurationDriver,
+)
 from wavebench.instruments.api import InstrumentDescriptor
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.factory import open_instrument_driver
-from wavebench.instruments.models import DmmMeasurementProfile, DmmReading
+from wavebench.instruments.models import (
+    DmmDcvImpedanceConfiguration,
+    DmmMeasurementProfile,
+    DmmReading,
+    DmmVoltageRangeConfiguration,
+)
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 
@@ -88,6 +97,31 @@ class DmmService:
         self._require("dmm.measurement_profile", "dmm.measurement_profile")
         with self._dmm_session() as dmm:
             return cast(DmmMeasurementProfileDriver, dmm).measurement_profile()
+
+    def set_voltage_range(
+        self,
+        function: str,
+        range_code: int,
+    ) -> DmmVoltageRangeConfiguration:
+        normalized = function.strip().lower()
+        if normalized not in {"dcv", "acv"}:
+            raise ConfigError("DMM voltage range function must be dcv or acv")
+        if isinstance(range_code, bool) or not isinstance(range_code, int) or not 0 <= range_code <= 4:
+            raise ConfigError("DMM voltage range code must be an integer from 0 to 4")
+        self._require("dmm.set_voltage_range", "dmm.set_voltage_range")
+        with self._dmm_session() as dmm:
+            return cast(DmmVoltageConfigurationDriver, dmm).set_voltage_range(
+                function=normalized,
+                range_code=range_code,
+            )
+
+    def set_dcv_impedance(self, impedance: str) -> DmmDcvImpedanceConfiguration:
+        normalized = impedance.strip().upper()
+        if normalized not in {"10M", "10G"}:
+            raise ConfigError("DMM DCV impedance must be 10M or 10G")
+        self._require("dmm.set_dcv_impedance", "dmm.set_dcv_impedance")
+        with self._dmm_session() as dmm:
+            return cast(DmmVoltageConfigurationDriver, dmm).set_dcv_impedance(normalized)
 
     def read(self, function: str = "dcv") -> DmmReading:
         self._require("dmm.read", "dmm.read")

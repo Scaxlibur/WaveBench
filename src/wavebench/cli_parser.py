@@ -409,6 +409,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="dcv/acv/dci/aci/res/fres/freq/period/continuity/diode/cap",
     )
     add_runtime_options(dmm_function_set)
+    dmm_range = dmm_sub.add_parser(
+        "range", help="Set a DCV or ACV range code with readback verification"
+    )
+    dmm_range_sub = dmm_range.add_subparsers(dest="dmm_range_command", required=True)
+    dmm_range_set = dmm_range_sub.add_parser(
+        "set", help="Set the range for the already-active DCV or ACV function"
+    )
+    dmm_range_set.add_argument("function", choices=("dcv", "acv"))
+    dmm_range_set.add_argument("range_code", type=int, choices=range(5))
+    add_runtime_options(dmm_range_set)
+    dmm_impedance = dmm_sub.add_parser(
+        "impedance", help="Set DCV input impedance with readback verification"
+    )
+    dmm_impedance_sub = dmm_impedance.add_subparsers(
+        dest="dmm_impedance_command", required=True
+    )
+    dmm_impedance_set = dmm_impedance_sub.add_parser(
+        "set", help="Set impedance for the already-active DCV function"
+    )
+    dmm_impedance_set.add_argument("impedance", type=str.upper, choices=("10M", "10G"))
+    add_runtime_options(dmm_impedance_set)
 
     power_sub = power_parser.add_subparsers(dest="command", required=True)
     power_idn = power_sub.add_parser("idn", help="Query power supply *IDN?")

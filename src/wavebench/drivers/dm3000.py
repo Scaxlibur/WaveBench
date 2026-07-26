@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
+from threading import RLock
 
-from wavebench.errors import DataError
+from wavebench.errors import DataError, InstrumentError
 from wavebench.instruments.dmm import (
     DMM_FUNCTION_ALIASES as DMM_FUNCTION_ALIASES,
     normalize_dmm_function as normalize_dmm_function,
 )
-from wavebench.instruments.models import DmmMeasurementProfile, DmmReading
+from wavebench.instruments.models import (
+    DmmDcvImpedanceConfiguration,
+    DmmMeasurementProfile,
+    DmmReading,
+    DmmVoltageRangeConfiguration,
+)
 
 DMM_FUNCTION_COMMANDS = {
     "dcv": ":MEASure:VOLTage:DC?",
@@ -92,75 +98,217 @@ DMM_FUNCTION_QUERY_MAP = {
 @dataclass
 class DM3000Dmm:
     transport: object
+    _io_lock: RLock = field(default_factory=RLock, init=False, repr=False)
+    _configuration_writes_blocked: bool = field(default=False, init=False, repr=False)
 
     def idn(self) -> str:
-        return self.transport.query("*IDN?")
+        with self._io_lock:
+            return self.transport.query("*IDN?")
 
     def function_status(self) -> str:
-        raw = self.transport.query(":FUNCtion?").strip().strip('"')
-        normalized = DMM_FUNCTION_QUERY_MAP.get(raw.upper())
-        if normalized is None:
-            supported = ", ".join(sorted(DMM_FUNCTION_QUERY_MAP))
-            raise DataError(
-                f"unexpected DMM function status {raw!r}; expected one of: {supported}"
-            )
-        return normalized
+        with self._io_lock:
+            raw = self.transport.query(":FUNCtion?").strip().strip('"')
+            normalized = DMM_FUNCTION_QUERY_MAP.get(raw.upper())
+            if normalized is None:
+                supported = ", ".join(sorted(DMM_FUNCTION_QUERY_MAP))
+                raise DataError(
+                    f"unexpected DMM function status {raw!r}; expected one of: {supported}"
+                )
+            return normalized
 
     def set_function(self, function: str) -> str:
-        self.apply_function(function)
-        return self.function_status()
+        with self._io_lock:
+            self.apply_function(function)
+            return self.function_status()
 
     def measurement_profile(self) -> DmmMeasurementProfile:
-        function = self.function_status()
-        range_query = DMM_FUNCTION_RANGE_QUERIES.get(function)
-        range_code = None
-        auto_range = None
-        if range_query is not None:
-            raw_range = self.transport.query(range_query).strip()
-            try:
-                range_code = int(raw_range)
-            except ValueError as exc:
-                raise DataError(
-                    f"unexpected DM3000 range code for {function}: {raw_range!r}"
-                ) from exc
-            if range_code < 0:
-                raise DataError(
-                    f"unexpected DM3000 range code for {function}: {raw_range!r}"
+        with self._io_lock:
+            function = self.function_status()
+            range_query = DMM_FUNCTION_RANGE_QUERIES.get(function)
+            range_code = None
+            auto_range = None
+            if range_query is not None:
+                raw_range = self.transport.query(range_query).strip()
+                try:
+                    range_code = int(raw_range)
+                except ValueError as exc:
+                    raise DataError(
+                        f"unexpected DM3000 range code for {function}: {raw_range!r}"
+                    ) from exc
+                if range_code < 0:
+                    raise DataError(
+                        f"unexpected DM3000 range code for {function}: {raw_range!r}"
+                    )
+            impedance = None
+            if function == "dcv":
+                impedance = self.transport.query(
+                    ":MEASure:VOLTage:DC:IMPedance?"
+                ).strip().upper()
+                if not impedance:
+                    raise DataError("unexpected empty DM3000 DCV impedance response")
+            return DmmMeasurementProfile(
+                function=function,
+                range_code=range_code,
+                auto_range=auto_range,
+                impedance=impedance,
+            )
+
+    @property
+    def configuration_writes_blocked(self) -> bool:
+        with self._io_lock:
+            return self._configuration_writes_blocked
+
+    def _range_code(self, function: str) -> int:
+        raw = self.transport.query(DMM_FUNCTION_RANGE_QUERIES[function]).strip()
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise DataError(f"unexpected DM3000 range code for {function}: {raw!r}") from exc
+        if not 0 <= value <= 4:
+            raise DataError(f"unexpected DM3000 range code for {function}: {raw!r}")
+        return value
+
+    def _dcv_impedance(self) -> str:
+        raw = self.transport.query(":MEASure:VOLTage:DC:IMPedance?").strip().upper()
+        if raw not in {"10M", "10G"}:
+            raise DataError(f"unexpected DM3000 DCV impedance response: {raw!r}")
+        return raw
+
+    def _require_configuration_writes(self) -> None:
+        if self._configuration_writes_blocked:
+            raise InstrumentError(
+                "DM3000 configuration writes are blocked after an earlier ambiguous transaction"
+            )
+
+    def set_voltage_range(
+        self,
+        function: str,
+        range_code: int,
+    ) -> DmmVoltageRangeConfiguration:
+        key = normalize_dmm_function(function)
+        if key not in {"dcv", "acv"}:
+            raise DataError("DM3000 voltage range function must be dcv or acv")
+        if isinstance(range_code, bool) or not isinstance(range_code, int) or not 0 <= range_code <= 4:
+            raise DataError("DM3000 voltage range code must be an integer from 0 to 4")
+        with self._io_lock:
+            self._require_configuration_writes()
+            active = self.function_status()
+            if active != key:
+                raise InstrumentError(
+                    f"DM3000 voltage range requires active function {key}; current function is {active}"
                 )
-            auto_range = range_code == 0
-        impedance = None
-        if function == "dcv":
-            impedance = self.transport.query(":MEASure:VOLTage:DC:IMPedance?").strip().upper()
-            if not impedance:
-                raise DataError("unexpected empty DM3000 DCV impedance response")
-        return DmmMeasurementProfile(
-            function=function,
-            range_code=range_code,
-            auto_range=auto_range,
-            impedance=impedance,
-        )
+            previous = self._range_code(key)
+            if previous == range_code:
+                return DmmVoltageRangeConfiguration(key, previous, range_code)
+            if key == "dcv" and range_code in {3, 4} and self._dcv_impedance() == "10G":
+                raise InstrumentError(
+                    "DM3000 DCV range codes 3 and 4 require 10M impedance; "
+                    "set impedance explicitly before changing range"
+                )
+            command = (
+                ":MEASure:VOLTage:DC" if key == "dcv" else ":MEASure:VOLTage:AC"
+            )
+            write_returned = False
+            try:
+                self.transport.write(f"{command} {range_code}")
+                write_returned = True
+                if self._range_code(key) != range_code:
+                    raise DataError("DM3000 voltage range readback mismatch")
+            except Exception as exc:
+                try:
+                    self.transport.write(f"{command} {previous}")
+                    if self._range_code(key) != previous:
+                        raise DataError("DM3000 voltage range restore mismatch")
+                except Exception as restore_exc:
+                    self._configuration_writes_blocked = True
+                    raise InstrumentError(
+                        "DM3000 voltage range transaction failed and restoration is ambiguous; "
+                        "configuration writes are blocked"
+                    ) from restore_exc
+                self._configuration_writes_blocked = True
+                if not write_returned:
+                    raise InstrumentError(
+                        "DM3000 voltage range write outcome is ambiguous; the original range was "
+                        "restored but configuration writes are blocked"
+                    ) from exc
+                raise InstrumentError(
+                    "DM3000 voltage range change failed; the original range was restored, the "
+                    "measurement mode may remain manual, and configuration writes are blocked"
+                ) from exc
+            return DmmVoltageRangeConfiguration(key, previous, range_code)
+
+    def set_dcv_impedance(self, impedance: str) -> DmmDcvImpedanceConfiguration:
+        target = impedance.strip().upper()
+        if target not in {"10M", "10G"}:
+            raise DataError("DM3000 DCV impedance must be 10M or 10G")
+        with self._io_lock:
+            self._require_configuration_writes()
+            active = self.function_status()
+            if active != "dcv":
+                raise InstrumentError(
+                    f"DM3000 DCV impedance requires active function dcv; current function is {active}"
+                )
+            range_code = self._range_code("dcv")
+            if target == "10G" and range_code not in {0, 1, 2}:
+                raise InstrumentError(
+                    "DM3000 DCV 10G impedance requires range code 0, 1, or 2"
+                )
+            previous = self._dcv_impedance()
+            if previous == target:
+                return DmmDcvImpedanceConfiguration(previous, target, range_code)
+            write_returned = False
+            try:
+                self.transport.write(f":MEASure:VOLTage:DC:IMPedance {target}")
+                write_returned = True
+                if self._dcv_impedance() != target:
+                    raise DataError("DM3000 DCV impedance readback mismatch")
+            except Exception as exc:
+                try:
+                    self.transport.write(f":MEASure:VOLTage:DC:IMPedance {previous}")
+                    if self._dcv_impedance() != previous:
+                        raise DataError("DM3000 DCV impedance restore mismatch")
+                except Exception as restore_exc:
+                    self._configuration_writes_blocked = True
+                    raise InstrumentError(
+                        "DM3000 DCV impedance transaction failed and restoration is ambiguous; "
+                        "configuration writes are blocked"
+                    ) from restore_exc
+                if not write_returned:
+                    self._configuration_writes_blocked = True
+                    raise InstrumentError(
+                        "DM3000 DCV impedance write outcome is ambiguous; the original value was "
+                        "restored but configuration writes are blocked"
+                    ) from exc
+                raise InstrumentError(
+                    "DM3000 DCV impedance change failed; the original value was restored"
+                ) from exc
+            return DmmDcvImpedanceConfiguration(previous, target, range_code)
 
     def apply_function(self, function: str) -> str:
         key = normalize_dmm_function(function)
         if key not in DMM_FUNCTION_SET_COMMANDS:
             supported = ", ".join(sorted(DMM_FUNCTION_SET_COMMANDS))
             raise DataError(f"unsupported DMM function {function!r}; supported: {supported}")
-        self.transport.write(DMM_FUNCTION_SET_COMMANDS[key])
-        return key
+        with self._io_lock:
+            self._require_configuration_writes()
+            self.transport.write(DMM_FUNCTION_SET_COMMANDS[key])
+            return key
 
     def read(self, function: str = "dcv") -> DmmReading:
         key = normalize_dmm_function(function)
         if key not in DMM_FUNCTION_COMMANDS:
             supported = ", ".join(sorted(DMM_FUNCTION_COMMANDS))
             raise DataError(f"unsupported DMM function {function!r}; supported: {supported}")
-        raw = self.transport.query(DMM_FUNCTION_COMMANDS[key])
-        try:
-            value = float(raw)
-        except ValueError as exc:
-            raise DataError(f"unexpected DM3000 reading for {key}: {raw!r}") from exc
-        if not math.isfinite(value):
-            raise DataError(f"non-finite DM3000 reading for {key}: {raw!r}")
-        return DmmReading(function=key, value=value, unit=DMM_FUNCTION_UNITS[key], raw=raw)
+        with self._io_lock:
+            raw = self.transport.query(DMM_FUNCTION_COMMANDS[key])
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise DataError(f"unexpected DM3000 reading for {key}: {raw!r}") from exc
+            if not math.isfinite(value):
+                raise DataError(f"non-finite DM3000 reading for {key}: {raw!r}")
+            return DmmReading(function=key, value=value, unit=DMM_FUNCTION_UNITS[key], raw=raw)
 
     def close(self) -> None:
-        self.transport.close()
+        with self._io_lock:
+            self.transport.close()

@@ -13,6 +13,7 @@ from wavebench.drivers.rtm2032 import (
 from wavebench.instruments.contracts import (
     DmmDriver,
     DmmMeasurementProfileDriver,
+    DmmVoltageConfigurationDriver,
     PowerDriver,
     ScopeAcquisitionStatusDriver,
     ScopeAverageCaptureDriver,
@@ -28,6 +29,8 @@ from wavebench.instruments.contracts import (
 from wavebench.instruments.models import (
     DmmReading,
     DmmMeasurementProfile,
+    DmmDcvImpedanceConfiguration,
+    DmmVoltageRangeConfiguration,
     PowerStatus,
     ScopeAnalogChannelSnapshot,
     ScopeEdgeTriggerSnapshot,
@@ -63,8 +66,12 @@ def test_shared_models_keep_serialization_and_waveform_behavior():
     assert waveform.sample_count == 3
     assert asdict(reading) == {"function": "dcv", "value": 1.25, "unit": "V", "raw": "1.25"}
     assert reading.as_dict() == asdict(reading)
-    profile = DmmMeasurementProfile("dcv", 0, True, "10M")
+    profile = DmmMeasurementProfile("dcv", 0, None, "10M")
     assert profile.as_dict() == asdict(profile)
+    range_result = DmmVoltageRangeConfiguration("dcv", 2, 1)
+    assert range_result.as_dict()["changed"] is True
+    impedance_result = DmmDcvImpedanceConfiguration("10M", "10G", 2)
+    assert impedance_result.as_dict()["changed"] is True
 
 
 def test_driver_contracts_are_runtime_checkable():
@@ -73,6 +80,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Power(), PowerDriver)
     assert isinstance(_Dmm(), DmmDriver)
     assert isinstance(_DmmMeasurementProfile(), DmmMeasurementProfileDriver)
+    assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
     assert isinstance(_ScopeAverageCapture(), ScopeAverageCaptureDriver)
@@ -125,6 +133,10 @@ class _Dmm(_DynamicDriver):
 
 class _DmmMeasurementProfile(_DynamicDriver):
     idn = close = measurement_profile = lambda *args, **kwargs: None
+
+
+class _DmmVoltageConfiguration(_DynamicDriver):
+    idn = close = set_voltage_range = set_dcv_impedance = lambda *args, **kwargs: None
 
 
 class _ScopeSnapshot(_DynamicDriver):

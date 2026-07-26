@@ -18,6 +18,8 @@ from .instruments.api import InstrumentDescriptor
 from .instruments.models import (
     DmmMeasurementProfile,
     DmmReading,
+    DmmDcvImpedanceConfiguration,
+    DmmVoltageRangeConfiguration,
     PowerProtectionStatus,
     PowerStatus,
     ScopeAcquisitionStatus,
@@ -233,6 +235,24 @@ def _print_dmm_measurement_profile(profile: DmmMeasurementProfile) -> None:
     else:
         print(f"auto_range={'true' if profile.auto_range else 'false'}")
     print(f"impedance={profile.impedance if profile.impedance is not None else 'n/a'}")
+
+
+def _print_dmm_voltage_range_configuration(
+    result: DmmVoltageRangeConfiguration,
+) -> None:
+    print(f"function={result.function}")
+    print(f"previous_range_code={result.previous_range_code}")
+    print(f"range_code={result.range_code}")
+    print(f"changed={'true' if result.changed else 'false'}")
+
+
+def _print_dmm_dcv_impedance_configuration(
+    result: DmmDcvImpedanceConfiguration,
+) -> None:
+    print(f"previous_impedance={result.previous_impedance}")
+    print(f"impedance={result.impedance}")
+    print(f"range_code={result.range_code}")
+    print(f"changed={'true' if result.changed else 'false'}")
 
 
 def _print_scope_snapshot(snapshot: ScopeSnapshot) -> None:

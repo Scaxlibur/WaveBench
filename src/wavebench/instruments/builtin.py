@@ -174,6 +174,8 @@ BUILTIN_INSTRUMENTS: tuple[InstrumentDescriptor, ...] = (
             "dmm.function_status",
             "dmm.set_function",
             "dmm.measurement_profile",
+            "dmm.set_voltage_range",
+            "dmm.set_dcv_impedance",
         ),
         idn_patterns=("RIGOL TECHNOLOGIES,DM3", "RIGOL TECHNOLOGIES,DM3058"),
         backends=("serial", "pyvisa"),

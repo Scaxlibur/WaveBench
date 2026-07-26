@@ -1,13 +1,16 @@
 import unittest
 
 from wavebench.drivers.dm3000 import DM3000Dmm
-from wavebench.errors import DataError
+from wavebench.errors import DataError, InstrumentError
 
 
 class FakeTransport:
     def __init__(self):
         self.commands = []
         self.function_status = "DCV"
+        self.dcv_range = "0"
+        self.acv_range = "0"
+        self.dcv_impedance = "10M"
 
     def query(self, command: str) -> str:
         self.commands.append(command)
@@ -20,9 +23,11 @@ class FakeTransport:
         if command == ":MEASure:RESistance?":
             return "9.876000e+03"
         if command == ":MEASure:VOLTage:DC:RANGe?":
-            return "0"
+            return self.dcv_range
+        if command == ":MEASure:VOLTage:AC:RANGe?":
+            return self.acv_range
         if command == ":MEASure:VOLTage:DC:IMPedance?":
-            return "10M"
+            return self.dcv_impedance
         if command == ":MEASure:RESistance:RANGe?":
             return "6"
         return "bad"
@@ -44,6 +49,12 @@ class FakeTransport:
         }
         if command in mapping:
             self.function_status = mapping[command]
+        if command.startswith(":MEASure:VOLTage:DC "):
+            self.dcv_range = command.rsplit(" ", 1)[1]
+        if command.startswith(":MEASure:VOLTage:AC "):
+            self.acv_range = command.rsplit(" ", 1)[1]
+        if command.startswith(":MEASure:VOLTage:DC:IMPedance "):
+            self.dcv_impedance = command.rsplit(" ", 1)[1]
 
     def close(self):
         pass
@@ -78,7 +89,7 @@ class DM3000DriverTests(unittest.TestCase):
 
         self.assertEqual(profile.function, "dcv")
         self.assertEqual(profile.range_code, 0)
-        self.assertTrue(profile.auto_range)
+        self.assertIsNone(profile.auto_range)
         self.assertEqual(profile.impedance, "10M")
         self.assertEqual(
             transport.commands,
@@ -178,6 +189,176 @@ class DM3000DriverTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(DataError, "non-finite DM3000 reading"):
                     DM3000Dmm(transport).read("dcv")
+
+    def test_set_voltage_range_writes_and_reads_back(self):
+        transport = FakeTransport()
+        transport.dcv_range = "2"
+
+        result = DM3000Dmm(transport).set_voltage_range("dcv", 1)
+
+        self.assertEqual(result.previous_range_code, 2)
+        self.assertEqual(result.range_code, 1)
+        self.assertEqual(
+            transport.commands,
+            [
+                ":FUNCtion?",
+                ":MEASure:VOLTage:DC:RANGe?",
+                ":MEASure:VOLTage:DC 1",
+                ":MEASure:VOLTage:DC:RANGe?",
+            ],
+        )
+
+    def test_set_voltage_range_rejects_high_dcv_range_with_10g_before_write(self):
+        transport = FakeTransport()
+        transport.dcv_range = "2"
+        transport.dcv_impedance = "10G"
+
+        with self.assertRaisesRegex(InstrumentError, "require 10M impedance"):
+            DM3000Dmm(transport).set_voltage_range("dcv", 3)
+
+        self.assertEqual(
+            transport.commands,
+            [
+                ":FUNCtion?",
+                ":MEASure:VOLTage:DC:RANGe?",
+                ":MEASure:VOLTage:DC:IMPedance?",
+            ],
+        )
+
+    def test_ambiguous_range_write_restores_then_latches_all_configuration_writes(self):
+        class AmbiguousFirstRangeWrite(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.dcv_range = "2"
+                self.range_writes = 0
+
+            def write(self, command: str) -> None:
+                if command.startswith(":MEASure:VOLTage:DC "):
+                    self.commands.append(command)
+                    self.range_writes += 1
+                    if self.range_writes == 1:
+                        raise OSError("simulated timeout")
+                    self.dcv_range = command.rsplit(" ", 1)[1]
+                    return
+                super().write(command)
+
+        transport = AmbiguousFirstRangeWrite()
+        driver = DM3000Dmm(transport)
+
+        with self.assertRaisesRegex(InstrumentError, "write outcome is ambiguous"):
+            driver.set_voltage_range("dcv", 1)
+
+        self.assertEqual(transport.dcv_range, "2")
+        self.assertTrue(driver.configuration_writes_blocked)
+        commands_before = list(transport.commands)
+        with self.assertRaisesRegex(InstrumentError, "writes are blocked"):
+            driver.set_function("acv")
+        with self.assertRaisesRegex(InstrumentError, "writes are blocked"):
+            driver.set_dcv_impedance("10G")
+        self.assertEqual(transport.commands, commands_before)
+
+    def test_range_restore_failure_latches_writes(self):
+        class FailedRangeRestore(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.dcv_range = "2"
+                self.range_writes = 0
+
+            def write(self, command: str) -> None:
+                if command.startswith(":MEASure:VOLTage:DC "):
+                    self.commands.append(command)
+                    self.range_writes += 1
+                    if self.range_writes == 1:
+                        return
+                    raise OSError("simulated restore timeout")
+                super().write(command)
+
+        driver = DM3000Dmm(FailedRangeRestore())
+
+        with self.assertRaisesRegex(InstrumentError, "restoration is ambiguous"):
+            driver.set_voltage_range("dcv", 1)
+
+        self.assertTrue(driver.configuration_writes_blocked)
+
+    def test_set_voltage_range_rejects_wrong_function_before_write(self):
+        transport = FakeTransport()
+        transport.function_status = "ACV"
+
+        with self.assertRaisesRegex(InstrumentError, "requires active function dcv"):
+            DM3000Dmm(transport).set_voltage_range("dcv", 1)
+
+        self.assertEqual(transport.commands, [":FUNCtion?"])
+
+    def test_set_dcv_impedance_is_range_gated(self):
+        transport = FakeTransport()
+        transport.dcv_range = "3"
+
+        with self.assertRaisesRegex(InstrumentError, "requires range code 0, 1, or 2"):
+            DM3000Dmm(transport).set_dcv_impedance("10G")
+
+        self.assertEqual(
+            transport.commands,
+            [":FUNCtion?", ":MEASure:VOLTage:DC:RANGe?"],
+        )
+
+    def test_set_dcv_impedance_writes_and_reads_back(self):
+        transport = FakeTransport()
+        transport.dcv_range = "2"
+
+        result = DM3000Dmm(transport).set_dcv_impedance("10g")
+
+        self.assertEqual(result.previous_impedance, "10M")
+        self.assertEqual(result.impedance, "10G")
+        self.assertEqual(result.range_code, 2)
+
+    def test_ambiguous_impedance_write_restores_then_latches(self):
+        class AmbiguousFirstImpedanceWrite(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.dcv_range = "2"
+                self.impedance_writes = 0
+
+            def write(self, command: str) -> None:
+                if command.startswith(":MEASure:VOLTage:DC:IMPedance "):
+                    self.commands.append(command)
+                    self.impedance_writes += 1
+                    if self.impedance_writes == 1:
+                        raise OSError("simulated timeout")
+                    self.dcv_impedance = command.rsplit(" ", 1)[1]
+                    return
+                super().write(command)
+
+        transport = AmbiguousFirstImpedanceWrite()
+        driver = DM3000Dmm(transport)
+
+        with self.assertRaisesRegex(InstrumentError, "write outcome is ambiguous"):
+            driver.set_dcv_impedance("10G")
+
+        self.assertEqual(transport.dcv_impedance, "10M")
+        self.assertTrue(driver.configuration_writes_blocked)
+
+    def test_impedance_restore_failure_latches_writes(self):
+        class FailedImpedanceRestore(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.dcv_range = "2"
+                self.impedance_writes = 0
+
+            def write(self, command: str) -> None:
+                if command.startswith(":MEASure:VOLTage:DC:IMPedance "):
+                    self.commands.append(command)
+                    self.impedance_writes += 1
+                    if self.impedance_writes == 1:
+                        return
+                    raise OSError("simulated restore timeout")
+                super().write(command)
+
+        driver = DM3000Dmm(FailedImpedanceRestore())
+
+        with self.assertRaisesRegex(InstrumentError, "restoration is ambiguous"):
+            driver.set_dcv_impedance("10G")
+
+        self.assertTrue(driver.configuration_writes_blocked)
 
 
 if __name__ == "__main__":

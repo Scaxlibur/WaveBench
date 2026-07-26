@@ -5,8 +5,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from .models import (
     ArbitraryQueryProbeResult,
+    DmmDcvImpedanceConfiguration,
     DmmReading,
     DmmMeasurementProfile,
+    DmmVoltageRangeConfiguration,
     PowerMeasurement,
     PowerProtectionStatus,
     PowerStatus,
@@ -257,6 +259,17 @@ class DmmDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class DmmMeasurementProfileDriver(InstrumentDriver, Protocol):
     def measurement_profile(self) -> DmmMeasurementProfile: ...
+
+
+@runtime_checkable
+class DmmVoltageConfigurationDriver(InstrumentDriver, Protocol):
+    def set_voltage_range(
+        self,
+        function: str,
+        range_code: int,
+    ) -> DmmVoltageRangeConfiguration: ...
+
+    def set_dcv_impedance(self, impedance: str) -> DmmDcvImpedanceConfiguration: ...
 
 
 @runtime_checkable

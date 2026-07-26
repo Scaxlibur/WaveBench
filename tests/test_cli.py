@@ -96,7 +96,7 @@ class CliTests(unittest.TestCase):
             def measurement_profile(self):
                 from wavebench.instruments import DmmMeasurementProfile
 
-                return DmmMeasurementProfile("dcv", 0, True, "10M")
+                return DmmMeasurementProfile("dcv", 0, None, "10M")
 
         stdout = io.StringIO()
         with patch("wavebench.cli._load_dmm_service", return_value=StubDmmService()):
@@ -105,7 +105,41 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(
             stdout.getvalue().strip().splitlines(),
-            ["function=dcv", "range_code=0", "auto_range=true", "impedance=10M"],
+            ["function=dcv", "range_code=0", "auto_range=n/a", "impedance=10M"],
+        )
+
+    def test_dmm_voltage_range_set_prints_stable_fields(self):
+        class StubDmmService:
+            def set_voltage_range(self, function, range_code):
+                from wavebench.instruments import DmmVoltageRangeConfiguration
+
+                return DmmVoltageRangeConfiguration(function, 2, range_code)
+
+        stdout = io.StringIO()
+        with patch("wavebench.cli._load_dmm_service", return_value=StubDmmService()):
+            with redirect_stdout(stdout):
+                code = main(["dmm", "range", "set", "dcv", "1"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            ["function=dcv", "previous_range_code=2", "range_code=1", "changed=true"],
+        )
+
+    def test_dmm_impedance_set_prints_stable_fields(self):
+        class StubDmmService:
+            def set_dcv_impedance(self, impedance):
+                from wavebench.instruments import DmmDcvImpedanceConfiguration
+
+                return DmmDcvImpedanceConfiguration("10M", impedance, 2)
+
+        stdout = io.StringIO()
+        with patch("wavebench.cli._load_dmm_service", return_value=StubDmmService()):
+            with redirect_stdout(stdout):
+                code = main(["dmm", "impedance", "set", "10g"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            ["previous_impedance=10M", "impedance=10G", "range_code=2", "changed=true"],
         )
 
     def test_dmm_function_status_accepts_subcommand(self):
