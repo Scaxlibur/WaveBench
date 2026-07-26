@@ -270,6 +270,24 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "status")
         self.assertEqual(args.channel, 2)
 
+    def test_source_status_still_uses_source_formatter(self):
+        class StubStatus:
+            channel = 2
+
+        class StubSourceService:
+            def status(self, channel):
+                assert channel == 2
+                return StubStatus()
+
+        with patch("wavebench.cli._load_source_service", return_value=StubSourceService()), patch(
+            "wavebench.cli._print_source_status"
+        ) as print_status:
+            code = main(["source", "status", "--channel", "2"])
+
+        self.assertEqual(code, 0)
+        print_status.assert_called_once()
+        self.assertEqual(print_status.call_args.args[0].channel, 2)
+
     def test_source_set_freq_accepts_value(self):
         args = build_parser().parse_args(["source", "set-freq", "--channel", "2", "1000"])
         self.assertEqual(args.domain, "source")

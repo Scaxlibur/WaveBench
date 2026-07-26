@@ -39,6 +39,7 @@ from .cli_output import (
     _print_power_status,
     _print_run_plan_summary,
     _print_run_preflight,
+    _print_scope_snapshot,
     _print_source_status,
     _print_waveform_summary,
 )
@@ -558,6 +559,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "errors":
                 for item in service.errors():
                     print(item)
+                return 0
+            if args.command == "status":
+                channel = args.channel or service.config.scope.default_channel
+                _print_scope_snapshot(service.status(channel=channel))
                 return 0
             if args.command in {"auto", "autoscale"}:
                 service.autoscale()

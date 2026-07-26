@@ -22,6 +22,105 @@ FrequencyAxisSource = Literal["device", "derived", "unknown"]
 MeasurementMethod = Literal["instrument", "core"]
 
 
+@dataclass(frozen=True)
+class ScopeIdentitySnapshot:
+    manufacturer: str
+    model: str
+    serial_number: str
+    firmware: str
+    options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ScopeHealthSnapshot:
+    status_byte: int
+    operation_condition: int
+    questionable_condition: int
+    acquisition_available: int
+    acquisition_count: int
+    sample_rate_hz: float
+    error_queue_nonempty: bool
+    waiting_for_trigger: bool
+
+
+@dataclass(frozen=True)
+class ScopeAnalogChannelSnapshot:
+    channel: int
+    enabled: bool
+    coupling: str
+    range_v: float
+    scale_v_per_div: float
+    offset_v: float
+    position_div: float
+    bandwidth_hz: float | None
+    polarity: str
+    skew_s: float
+    label: str
+    label_enabled: bool
+    overloaded: bool
+    acquisition_type: str
+
+
+@dataclass(frozen=True)
+class ScopeTimebaseSnapshot:
+    acquisition_time_s: float
+    divisions: int
+    position_s: float
+    range_s: float
+    reference_percent: float
+    scale_s_per_div: float
+    roll_enabled: bool
+
+
+@dataclass(frozen=True)
+class ScopeProbeSnapshot:
+    channel: int
+    attenuation_factor: float
+    bandwidth_hz: float | None
+    capacitance_f: float | None
+    impedance_ohm: float | None
+    name: str
+    probe_type: str
+
+
+@dataclass(frozen=True)
+class ScopeWaveformMetadataSnapshot:
+    channel: int
+    x_start_s: float
+    x_stop_s: float
+    points: int
+    values_per_sample: int | None
+    x_increment_s: float
+    x_origin_s: float
+    y_increment_v: float
+    y_origin_v: float
+    y_resolution_bits: int
+
+
+@dataclass(frozen=True)
+class ScopeEdgeTriggerSnapshot:
+    trigger_type: str
+    source_channel: int
+    mode: str
+    slope: str
+    coupling: str
+    level_v: float
+    hysteresis_mode: str
+    holdoff_mode: str
+    holdoff_time_s: float
+
+
+@dataclass(frozen=True)
+class ScopeSnapshot:
+    identity: ScopeIdentitySnapshot
+    health: ScopeHealthSnapshot
+    channel: ScopeAnalogChannelSnapshot
+    timebase: ScopeTimebaseSnapshot
+    probe: ScopeProbeSnapshot
+    waveform: ScopeWaveformMetadataSnapshot
+    trigger: ScopeEdgeTriggerSnapshot
+
+
 def _validate_magnitude_unit_semantics(
     unit: MagnitudeUnit,
     semantics: MagnitudeSemantics,

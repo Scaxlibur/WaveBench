@@ -9,10 +9,24 @@ from wavebench.drivers.rtm2032 import (
     WaveformData as LegacyWaveformData,
     WaveformHeader as LegacyWaveformHeader,
 )
-from wavebench.instruments.contracts import DmmDriver, PowerDriver, ScopeDriver, SourceDriver
+from wavebench.instruments.contracts import (
+    DmmDriver,
+    PowerDriver,
+    ScopeDriver,
+    ScopeSnapshotDriver,
+    SourceDriver,
+)
 from wavebench.instruments.models import (
     DmmReading,
     PowerStatus,
+    ScopeAnalogChannelSnapshot,
+    ScopeEdgeTriggerSnapshot,
+    ScopeHealthSnapshot,
+    ScopeIdentitySnapshot,
+    ScopeProbeSnapshot,
+    ScopeSnapshot,
+    ScopeTimebaseSnapshot,
+    ScopeWaveformMetadataSnapshot,
     SourceStatus,
     WaveformData,
     WaveformHeader,
@@ -44,6 +58,16 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Source(), SourceDriver)
     assert isinstance(_Power(), PowerDriver)
     assert isinstance(_Dmm(), DmmDriver)
+    assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
+
+
+def test_scope_snapshot_keeps_typed_read_only_sections():
+    snapshot = _scope_snapshot()
+
+    assert snapshot.identity.model == "EX1"
+    assert snapshot.channel.channel == 2
+    assert snapshot.waveform.points == 1000
+    assert asdict(snapshot)["trigger"]["source_channel"] == 2
 
 
 class _DynamicDriver:
@@ -65,3 +89,24 @@ class _Power(_DynamicDriver):
 
 class _Dmm(_DynamicDriver):
     idn = close = function_status = set_function = apply_function = read = lambda *args, **kwargs: None
+
+
+class _ScopeSnapshot(_DynamicDriver):
+    idn = close = get_snapshot = lambda *args, **kwargs: None
+
+
+def _scope_snapshot() -> ScopeSnapshot:
+    return ScopeSnapshot(
+        identity=ScopeIdentitySnapshot("Example", "EX1", "123", "1.0", ("OPT",)),
+        health=ScopeHealthSnapshot(0, 0, 0, 1, 1, 1_000_000.0, False, False),
+        channel=ScopeAnalogChannelSnapshot(
+            2, True, "DCL", 8.0, 1.0, 0.0, 0.0, None, "NORM", 0.0,
+            "input", True, False, "SAMPLE",
+        ),
+        timebase=ScopeTimebaseSnapshot(0.001, 10, 0.0, 0.001, 50.0, 0.0001, False),
+        probe=ScopeProbeSnapshot(2, 10.0, None, None, 10_000_000.0, "P10", "PASSIVE"),
+        waveform=ScopeWaveformMetadataSnapshot(
+            2, -0.0005, 0.0005, 1000, 1, 1e-6, -0.0005, 0.001, 0.0, 8,
+        ),
+        trigger=ScopeEdgeTriggerSnapshot("EDGE", 2, "AUTO", "POS", "DC", 0.1, "AUTO", "OFF", 1e-6),
+    )

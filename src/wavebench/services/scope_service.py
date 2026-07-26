@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -17,9 +17,13 @@ from wavebench.data.package import new_package_dir
 from wavebench.errors import ConfigError, WaveBenchError
 from wavebench.instruments.api import InstrumentDescriptor, ScopeCouplingPolicy
 from wavebench.instruments.capabilities import require_capabilities
-from wavebench.instruments.contracts import MultiChannelScopeDriver, ScopeDriver
+from wavebench.instruments.contracts import (
+    MultiChannelScopeDriver,
+    ScopeDriver,
+    ScopeSnapshotDriver,
+)
 from wavebench.instruments.factory import open_instrument_driver
-from wavebench.instruments.models import WaveformData
+from wavebench.instruments.models import ScopeSnapshot, WaveformData
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
 
@@ -145,6 +149,11 @@ class ScopeService:
         self._require("scope.errors", "scope.errors")
         with self._scope_session() as scope:
             return scope.errors()
+
+    def status(self, channel: int) -> ScopeSnapshot:
+        self._require("scope.status", "scope.snapshot")
+        with self._scope_session() as scope:
+            return cast(ScopeSnapshotDriver, scope).get_snapshot(channel)
 
     def channel_coupling(self, channel: int) -> str:
         self._require("scope.channel_coupling", "scope.channel_coupling")

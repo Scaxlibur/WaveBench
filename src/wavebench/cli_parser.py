@@ -517,6 +517,13 @@ def build_parser() -> argparse.ArgumentParser:
     errors = scope_sub.add_parser("errors", help="Read SYST:ERR? until empty")
     add_runtime_options(errors)
 
+    status = scope_sub.add_parser(
+        "status",
+        help="Read a typed, non-mutating oscilloscope state snapshot",
+    )
+    status.add_argument("--channel", type=int, default=None)
+    add_runtime_options(status)
+
     auto = scope_sub.add_parser("auto", help="Run explicit AUToscale and wait for *OPC?")
     add_runtime_options(auto)
 

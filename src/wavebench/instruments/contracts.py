@@ -12,6 +12,7 @@ from .models import (
     FrequencyResponseTrace,
     InstrumentMeasurementResult,
     MarkerReading,
+    ScopeSnapshot,
     SourceStatus,
     SweepAnalyzerSnapshot,
     SweepPlan,
@@ -71,6 +72,11 @@ class MultiChannelScopeDriver(ScopeDriver, Protocol):
         on_channel_start: Callable[[int | None], None] | None = None,
         on_waveform: Callable[[int, WaveformData], None] | None = None,
     ) -> dict[int, WaveformData]: ...
+
+
+@runtime_checkable
+class ScopeSnapshotDriver(InstrumentDriver, Protocol):
+    def get_snapshot(self, channel: int) -> ScopeSnapshot: ...
 
 
 @runtime_checkable

@@ -15,7 +15,14 @@ from .arbitrary import (
 from .data.fft import analyze_fft, fft_harmonics
 from .errors import ConfigError
 from .instruments.api import InstrumentDescriptor
-from .instruments.models import DmmReading, PowerProtectionStatus, PowerStatus, SourceStatus, WaveformData
+from .instruments.models import (
+    DmmReading,
+    PowerProtectionStatus,
+    PowerStatus,
+    ScopeSnapshot,
+    SourceStatus,
+    WaveformData,
+)
 from .plugins.api import InstrumentPlugin, PluginDoctorRecord
 from .plugins.market import MarketPlugin
 from .plugins.lifecycle import InstalledPlugin, LifecycleResult
@@ -206,6 +213,33 @@ def _print_run_preflight(records: list[Any]) -> None:
 
 def _print_dmm_reading(reading: DmmReading) -> None:
     print(f"{reading.function}: {reading.value:.12g} {reading.unit} raw={reading.raw}")
+
+
+def _print_scope_snapshot(snapshot: ScopeSnapshot) -> None:
+    def scalar(value: object) -> str:
+        if value is None:
+            return "n/a"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float):
+            return f"{value:.12g}"
+        return str(value)
+
+    sections = (
+        ("identity", snapshot.identity),
+        ("health", snapshot.health),
+        ("channel", snapshot.channel),
+        ("timebase", snapshot.timebase),
+        ("probe", snapshot.probe),
+        ("waveform", snapshot.waveform),
+        ("trigger", snapshot.trigger),
+    )
+    for section_name, section in sections:
+        for name, value in vars(section).items():
+            if isinstance(value, tuple):
+                print(f"{section_name}.{name}=" + ",".join(str(item) for item in value))
+            else:
+                print(f"{section_name}.{name}={scalar(value)}")
 
 def _print_dmm_function_status(function: str) -> None:
     print(f"功能 / Function: {function}")
