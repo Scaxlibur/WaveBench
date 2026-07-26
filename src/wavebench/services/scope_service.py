@@ -19,11 +19,18 @@ from wavebench.instruments.api import InstrumentDescriptor, ScopeCouplingPolicy
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.contracts import (
     MultiChannelScopeDriver,
+    ScopeAcquisitionStatusDriver,
     ScopeDriver,
+    ScopeHistoryTimestampsDriver,
     ScopeSnapshotDriver,
 )
 from wavebench.instruments.factory import open_instrument_driver
-from wavebench.instruments.models import ScopeSnapshot, WaveformData
+from wavebench.instruments.models import (
+    ScopeAcquisitionStatus,
+    ScopeHistoryTimestamps,
+    ScopeSnapshot,
+    WaveformData,
+)
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
 
@@ -154,6 +161,16 @@ class ScopeService:
         self._require("scope.status", "scope.snapshot")
         with self._scope_session() as scope:
             return cast(ScopeSnapshotDriver, scope).get_snapshot(channel)
+
+    def acquisition_status(self) -> ScopeAcquisitionStatus:
+        self._require("scope.acquisition_status", "scope.acquisition_status")
+        with self._scope_session() as scope:
+            return cast(ScopeAcquisitionStatusDriver, scope).get_acquisition_status()
+
+    def history_timestamps(self, channel: int) -> ScopeHistoryTimestamps:
+        self._require("scope.history_timestamps", "scope.history_timestamps")
+        with self._scope_session() as scope:
+            return cast(ScopeHistoryTimestampsDriver, scope).get_history_timestamps(channel)
 
     def channel_coupling(self, channel: int) -> str:
         self._require("scope.channel_coupling", "scope.channel_coupling")

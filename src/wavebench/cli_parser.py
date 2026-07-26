@@ -524,6 +524,19 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--channel", type=int, default=None)
     add_runtime_options(status)
 
+    acquisition_status = scope_sub.add_parser(
+        "acquisition-status",
+        help="Query read-only average and segmented-acquisition state",
+    )
+    add_runtime_options(acquisition_status)
+
+    history_timestamps = scope_sub.add_parser(
+        "history-timestamps",
+        help="Query the read-only history timestamp table for one channel",
+    )
+    history_timestamps.add_argument("--channel", type=int, default=None)
+    add_runtime_options(history_timestamps)
+
     auto = scope_sub.add_parser("auto", help="Run explicit AUToscale and wait for *OPC?")
     add_runtime_options(auto)
 

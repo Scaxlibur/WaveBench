@@ -121,6 +121,35 @@ class ScopeSnapshot:
     trigger: ScopeEdgeTriggerSnapshot
 
 
+@dataclass(frozen=True)
+class ScopeAcquisitionStatus:
+    average_count: int
+    average_complete: bool
+    segmented_option_installed: bool
+    segmented_enabled: bool | None
+    segmented_maximum_enabled: bool | None
+    segment_capacity: int | None
+    segments_available: int | None
+
+
+@dataclass(frozen=True)
+class ScopeHistoryTimestamp:
+    position: int
+    relative_s: float
+    year: int
+    month: int
+    day: int
+    hour: int
+    minute: int
+    second: float
+
+
+@dataclass(frozen=True)
+class ScopeHistoryTimestamps:
+    channel: int
+    entries: tuple[ScopeHistoryTimestamp, ...]
+
+
 def _validate_magnitude_unit_semantics(
     unit: MagnitudeUnit,
     semantics: MagnitudeSemantics,

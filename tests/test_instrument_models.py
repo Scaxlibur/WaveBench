@@ -12,7 +12,9 @@ from wavebench.drivers.rtm2032 import (
 from wavebench.instruments.contracts import (
     DmmDriver,
     PowerDriver,
+    ScopeAcquisitionStatusDriver,
     ScopeDriver,
+    ScopeHistoryTimestampsDriver,
     ScopeSnapshotDriver,
     SourceDriver,
 )
@@ -59,6 +61,8 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Power(), PowerDriver)
     assert isinstance(_Dmm(), DmmDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
+    assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
+    assert isinstance(_ScopeHistoryTimestamps(), ScopeHistoryTimestampsDriver)
 
 
 def test_scope_snapshot_keeps_typed_read_only_sections():
@@ -93,6 +97,14 @@ class _Dmm(_DynamicDriver):
 
 class _ScopeSnapshot(_DynamicDriver):
     idn = close = get_snapshot = lambda *args, **kwargs: None
+
+
+class _ScopeAcquisitionStatus(_DynamicDriver):
+    idn = close = get_acquisition_status = lambda *args, **kwargs: None
+
+
+class _ScopeHistoryTimestamps(_DynamicDriver):
+    idn = close = get_history_timestamps = lambda *args, **kwargs: None
 
 
 def _scope_snapshot() -> ScopeSnapshot:

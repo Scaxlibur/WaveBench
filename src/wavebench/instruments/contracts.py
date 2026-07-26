@@ -12,6 +12,8 @@ from .models import (
     FrequencyResponseTrace,
     InstrumentMeasurementResult,
     MarkerReading,
+    ScopeAcquisitionStatus,
+    ScopeHistoryTimestamps,
     ScopeSnapshot,
     SourceStatus,
     SweepAnalyzerSnapshot,
@@ -77,6 +79,16 @@ class MultiChannelScopeDriver(ScopeDriver, Protocol):
 @runtime_checkable
 class ScopeSnapshotDriver(InstrumentDriver, Protocol):
     def get_snapshot(self, channel: int) -> ScopeSnapshot: ...
+
+
+@runtime_checkable
+class ScopeAcquisitionStatusDriver(InstrumentDriver, Protocol):
+    def get_acquisition_status(self) -> ScopeAcquisitionStatus: ...
+
+
+@runtime_checkable
+class ScopeHistoryTimestampsDriver(InstrumentDriver, Protocol):
+    def get_history_timestamps(self, channel: int) -> ScopeHistoryTimestamps: ...
 
 
 @runtime_checkable

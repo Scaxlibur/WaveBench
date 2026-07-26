@@ -19,6 +19,8 @@ from .instruments.models import (
     DmmReading,
     PowerProtectionStatus,
     PowerStatus,
+    ScopeAcquisitionStatus,
+    ScopeHistoryTimestamps,
     ScopeSnapshot,
     SourceStatus,
     WaveformData,
@@ -240,6 +242,33 @@ def _print_scope_snapshot(snapshot: ScopeSnapshot) -> None:
                 print(f"{section_name}.{name}=" + ",".join(str(item) for item in value))
             else:
                 print(f"{section_name}.{name}={scalar(value)}")
+
+
+def _print_scope_acquisition_status(status: ScopeAcquisitionStatus) -> None:
+    def scalar(value: object) -> str:
+        if value is None:
+            return "n/a"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    print(f"average.count={status.average_count}")
+    print(f"average.complete={scalar(status.average_complete)}")
+    print(f"segmented.option_installed={scalar(status.segmented_option_installed)}")
+    print(f"segmented.enabled={scalar(status.segmented_enabled)}")
+    print(f"segmented.maximum_enabled={scalar(status.segmented_maximum_enabled)}")
+    print(f"segmented.capacity={scalar(status.segment_capacity)}")
+    print(f"segmented.available={scalar(status.segments_available)}")
+
+
+def _print_scope_history_timestamps(table: ScopeHistoryTimestamps) -> None:
+    print(f"history.channel={table.channel}")
+    print(f"history.count={len(table.entries)}")
+    for entry in table.entries:
+        prefix = f"history.{entry.position}"
+        print(f"{prefix}.relative_s={entry.relative_s:.12g}")
+        print(f"{prefix}.date={entry.year:04d}-{entry.month:02d}-{entry.day:02d}")
+        print(f"{prefix}.time={entry.hour:02d}:{entry.minute:02d}:{entry.second:.12g}")
 
 def _print_dmm_function_status(function: str) -> None:
     print(f"功能 / Function: {function}")
