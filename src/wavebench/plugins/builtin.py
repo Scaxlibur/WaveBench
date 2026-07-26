@@ -103,6 +103,7 @@ BUILTIN_PLUGINS: tuple[InstrumentPlugin, ...] = (
             "dmm.trigger_status",
             "dmm.calculation_status",
             "dmm.calculation_statistics",
+            "dmm.system_interface_status",
             "dmm.set_voltage_range",
             "dmm.set_dcv_impedance",
         ),

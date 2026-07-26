@@ -1008,6 +1008,68 @@ class DmmCalculationStatistics:
 
 
 @dataclass(frozen=True)
+class DmmSystemInterfaceStatus:
+    beeper_enabled: bool
+    language: str
+    decimal_format: str
+    separator_format: str
+    display_brightness: int
+    scan_board_installed: bool
+    lan_interface_installed: bool
+    dhcp_enabled: bool
+    gpib_address: int
+    rs232_baud: int
+    rs232_parity: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.beeper_enabled, bool):
+            raise ValueError("DMM beeper_enabled must be boolean")
+        if self.language not in {"CHINESE", "ENGLISH"}:
+            raise ValueError("unsupported DMM display language")
+        if self.decimal_format not in {"COMMA", "DOT"}:
+            raise ValueError("unsupported DMM decimal format")
+        if self.separator_format not in {"ON", "NONE", "SPACE"}:
+            raise ValueError("unsupported DMM separator format")
+        if (
+            isinstance(self.display_brightness, bool)
+            or not isinstance(self.display_brightness, int)
+            or not 0 <= self.display_brightness <= 255
+        ):
+            raise ValueError("DMM display brightness must be an integer from 0 to 255")
+        if not isinstance(self.scan_board_installed, bool):
+            raise ValueError("DMM scan_board_installed must be boolean")
+        if not isinstance(self.lan_interface_installed, bool):
+            raise ValueError("DMM lan_interface_installed must be boolean")
+        if not isinstance(self.dhcp_enabled, bool):
+            raise ValueError("DMM dhcp_enabled must be boolean")
+        if (
+            isinstance(self.gpib_address, bool)
+            or not isinstance(self.gpib_address, int)
+            or not 0 <= self.gpib_address <= 30
+        ):
+            raise ValueError("DMM GPIB address must be an integer from 0 to 30")
+        if self.rs232_baud not in {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200}:
+            raise ValueError("unsupported DMM RS-232 baud rate")
+        if self.rs232_parity not in {"NONE8BITS", "ODD7BITS", "EVEN7BITS"}:
+            raise ValueError("unsupported DMM RS-232 parity")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "beeper_enabled": self.beeper_enabled,
+            "language": self.language,
+            "decimal_format": self.decimal_format,
+            "separator_format": self.separator_format,
+            "display_brightness": self.display_brightness,
+            "scan_board_installed": self.scan_board_installed,
+            "lan_interface_installed": self.lan_interface_installed,
+            "dhcp_enabled": self.dhcp_enabled,
+            "gpib_address": self.gpib_address,
+            "rs232_baud": self.rs232_baud,
+            "rs232_parity": self.rs232_parity,
+        }
+
+
+@dataclass(frozen=True)
 class DmmVoltageRangeConfiguration:
     function: str
     previous_range_code: int

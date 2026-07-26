@@ -108,6 +108,50 @@ class CliTests(unittest.TestCase):
             ["function=dcv", "range_code=0", "auto_range=n/a", "impedance=10M"],
         )
 
+    def test_dmm_system_interface_status_prints_redacted_stable_fields(self):
+        class StubDmmService:
+            def system_interface_status(self):
+                from wavebench.instruments import DmmSystemInterfaceStatus
+
+                return DmmSystemInterfaceStatus(
+                    True,
+                    "ENGLISH",
+                    "DOT",
+                    "NONE",
+                    128,
+                    False,
+                    True,
+                    True,
+                    22,
+                    9600,
+                    "NONE8BITS",
+                )
+
+        stdout = io.StringIO()
+        with patch("wavebench.cli._load_dmm_service", return_value=StubDmmService()):
+            with redirect_stdout(stdout):
+                code = main(["dmm", "system-interface", "status"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            [
+                "beeper_enabled=true",
+                "language=english",
+                "decimal_format=dot",
+                "separator_format=none",
+                "display_brightness=128",
+                "scan_board_installed=false",
+                "lan_interface_installed=true",
+                "dhcp_enabled=true",
+                "gpib_address=22",
+                "rs232_baud=9600",
+                "rs232_parity=none8bits",
+            ],
+        )
+        output = stdout.getvalue().lower()
+        for sensitive in ("idn", "mac", "ip=", "hostname", "domain"):
+            self.assertNotIn(sensitive, output)
+
     def test_dmm_trigger_status_prints_stable_fields(self):
         class StubDmmService:
             def trigger_status(self):

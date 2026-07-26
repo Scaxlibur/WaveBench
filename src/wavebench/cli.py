@@ -29,6 +29,7 @@ from .cli_output import (
     _print_dmm_dcv_impedance_configuration,
     _print_dmm_measurement_profile,
     _print_dmm_reading,
+    _print_dmm_system_interface_status,
     _print_dmm_trigger_status,
     _print_dmm_voltage_range_configuration,
     _print_market_plugin_info,
@@ -483,6 +484,12 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     )
                     return 0
+            if (
+                args.command == "system-interface"
+                and args.dmm_system_interface_command == "status"
+            ):
+                _print_dmm_system_interface_status(service.system_interface_status())
+                return 0
         if args.domain == "power":
             service = _load_power_service(args)
             if args.command == "idn":

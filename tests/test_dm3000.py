@@ -45,6 +45,17 @@ class FakeTransport:
             ":CALCulate:STATistic:AVERage?": "1.25",
             ":CALCulate:STATistic:MIN?": "1.0",
             ":CALCulate:STATistic:MAX?": "1.5",
+            ":SYSTem:BEEPer:STATe?": "1",
+            ":SYSTem:LANGuage?": "english",
+            ":SYSTem:FORMat:DECimal?": "dot",
+            ":SYSTem:FORMat:SEParate?": "none",
+            ":SYSTem:DISPlay:BRIGht?": "128",
+            ":SYSTem:SCANserial?": "None",
+            ":SYSTem:LANserial?": "Installed",
+            ":UTILity:INTerface:LAN:DHCP?": "ON",
+            ":UTILity:INTerface:GPIB:ADDRess?": "22",
+            ":UTILity:INTerface:RS232:BAUD?": "9600",
+            ":UTILity:INTerface:RS232:PARity?": "none8bits",
         }
         if command in trigger_responses:
             return trigger_responses[command]
@@ -215,6 +226,49 @@ class DM3000DriverTests(unittest.TestCase):
             DM3000Dmm(transport).calculation_statistics("average")
 
         self.assertEqual(transport.commands, [":CALCulate:FUNCtion?"])
+
+    def test_system_interface_status_is_query_only_and_typed(self):
+        transport = FakeTransport()
+
+        status = DM3000Dmm(transport).system_interface_status()
+
+        self.assertTrue(status.beeper_enabled)
+        self.assertEqual(status.language, "ENGLISH")
+        self.assertEqual(status.decimal_format, "DOT")
+        self.assertEqual(status.separator_format, "NONE")
+        self.assertEqual(status.display_brightness, 128)
+        self.assertFalse(status.scan_board_installed)
+        self.assertTrue(status.lan_interface_installed)
+        self.assertTrue(status.dhcp_enabled)
+        self.assertEqual(status.gpib_address, 22)
+        self.assertEqual(status.rs232_baud, 9600)
+        self.assertEqual(status.rs232_parity, "NONE8BITS")
+        self.assertEqual(
+            transport.commands,
+            [
+                ":SYSTem:BEEPer:STATe?",
+                ":SYSTem:LANGuage?",
+                ":SYSTem:FORMat:DECimal?",
+                ":SYSTem:FORMat:SEParate?",
+                ":SYSTem:DISPlay:BRIGht?",
+                ":SYSTem:SCANserial?",
+                ":SYSTem:LANserial?",
+                ":UTILity:INTerface:LAN:DHCP?",
+                ":UTILity:INTerface:GPIB:ADDRess?",
+                ":UTILity:INTerface:RS232:BAUD?",
+                ":UTILity:INTerface:RS232:PARity?",
+            ],
+        )
+
+    def test_system_interface_status_rejects_sensitive_serial_like_response(self):
+        transport = FakeTransport()
+        original_query = transport.query
+        transport.query = lambda command: (
+            "SERIAL123" if command == ":SYSTem:LANserial?" else original_query(command)
+        )
+
+        with self.assertRaisesRegex(DataError, "LAN interface status"):
+            DM3000Dmm(transport).system_interface_status()
 
     def test_trigger_status_rejects_invalid_unit_response(self):
         transport = FakeTransport()

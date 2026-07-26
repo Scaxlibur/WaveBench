@@ -16,6 +16,7 @@ from wavebench.instruments.models import (
     DmmDcvImpedanceConfiguration,
     DmmMeasurementProfile,
     DmmReading,
+    DmmSystemInterfaceStatus,
     DmmTriggerStatus,
     DmmVoltageRangeConfiguration,
 )
@@ -154,6 +155,31 @@ def _on_off(raw: str, field: str) -> bool:
     if normalized == "ON":
         return True
     if normalized == "OFF":
+        return False
+    raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
+
+
+def _zero_one(raw: str, field: str) -> bool:
+    normalized = raw.strip()
+    if normalized == "1":
+        return True
+    if normalized == "0":
+        return False
+    raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
+
+
+def _enum_response(raw: str, field: str, allowed: set[str]) -> str:
+    normalized = raw.strip().strip('"').upper()
+    if normalized not in allowed:
+        raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
+    return normalized
+
+
+def _installed_status(raw: str, field: str) -> bool:
+    normalized = raw.strip().upper()
+    if normalized == "INSTALLED":
+        return True
+    if normalized == "NONE":
         return False
     raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
 
@@ -309,6 +335,73 @@ class DM3000Dmm:
                 "calculation statistic count",
             )
             return DmmCalculationStatistics(function=expected, value=value, count=count)
+
+    def system_interface_status(self) -> DmmSystemInterfaceStatus:
+        with self._io_lock:
+            beeper_enabled = _zero_one(
+                self.transport.query(":SYSTem:BEEPer:STATe?"),
+                "beeper state",
+            )
+            language = _enum_response(
+                self.transport.query(":SYSTem:LANGuage?"),
+                "language",
+                {"CHINESE", "ENGLISH"},
+            )
+            decimal_format = _enum_response(
+                self.transport.query(":SYSTem:FORMat:DECimal?"),
+                "decimal format",
+                {"COMMA", "DOT"},
+            )
+            separator_format = _enum_response(
+                self.transport.query(":SYSTem:FORMat:SEParate?"),
+                "separator format",
+                {"ON", "NONE", "SPACE"},
+            )
+            display_brightness = _nonnegative_int(
+                self.transport.query(":SYSTem:DISPlay:BRIGht?"),
+                "display brightness",
+            )
+            scan_board_installed = _installed_status(
+                self.transport.query(":SYSTem:SCANserial?"),
+                "scan board status",
+            )
+            lan_interface_installed = _installed_status(
+                self.transport.query(":SYSTem:LANserial?"),
+                "LAN interface status",
+            )
+            dhcp_enabled = _on_off(
+                self.transport.query(":UTILity:INTerface:LAN:DHCP?"),
+                "LAN DHCP state",
+            )
+            gpib_address = _nonnegative_int(
+                self.transport.query(":UTILity:INTerface:GPIB:ADDRess?"),
+                "GPIB address",
+            )
+            rs232_baud = _nonnegative_int(
+                self.transport.query(":UTILity:INTerface:RS232:BAUD?"),
+                "RS-232 baud rate",
+            )
+            rs232_parity = _enum_response(
+                self.transport.query(":UTILity:INTerface:RS232:PARity?"),
+                "RS-232 parity",
+                {"NONE8BITS", "ODD7BITS", "EVEN7BITS"},
+            )
+            try:
+                return DmmSystemInterfaceStatus(
+                    beeper_enabled=beeper_enabled,
+                    language=language,
+                    decimal_format=decimal_format,
+                    separator_format=separator_format,
+                    display_brightness=display_brightness,
+                    scan_board_installed=scan_board_installed,
+                    lan_interface_installed=lan_interface_installed,
+                    dhcp_enabled=dhcp_enabled,
+                    gpib_address=gpib_address,
+                    rs232_baud=rs232_baud,
+                    rs232_parity=rs232_parity,
+                )
+            except ValueError as exc:
+                raise DataError(f"invalid DM3000 system/interface status: {exc}") from exc
 
     @property
     def configuration_writes_blocked(self) -> bool:

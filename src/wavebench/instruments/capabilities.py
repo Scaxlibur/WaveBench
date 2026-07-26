@@ -51,6 +51,7 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "dmm.trigger_status": ("trigger_status",),
     "dmm.calculation_status": ("calculation_status",),
     "dmm.calculation_statistics": ("calculation_statistics",),
+    "dmm.system_interface_status": ("system_interface_status",),
     "dmm.set_voltage_range": ("set_voltage_range",),
     "dmm.set_dcv_impedance": ("set_dcv_impedance",),
     "sweep_analyzer.idn": ("idn",),

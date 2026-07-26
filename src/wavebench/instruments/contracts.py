@@ -11,6 +11,7 @@ from .models import (
     DmmReading,
     DmmMeasurementProfile,
     DmmTriggerStatus,
+    DmmSystemInterfaceStatus,
     DmmVoltageRangeConfiguration,
     PowerMeasurement,
     PowerProtectionStatus,
@@ -280,6 +281,11 @@ class DmmCalculationStatisticsDriver(InstrumentDriver, Protocol):
         self,
         expected_function: str,
     ) -> DmmCalculationStatistics: ...
+
+
+@runtime_checkable
+class DmmSystemInterfaceStatusDriver(InstrumentDriver, Protocol):
+    def system_interface_status(self) -> DmmSystemInterfaceStatus: ...
 
 
 @runtime_checkable

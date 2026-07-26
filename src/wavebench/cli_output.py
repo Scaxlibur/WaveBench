@@ -20,6 +20,7 @@ from .instruments.models import (
     DmmCalculationStatus,
     DmmMeasurementProfile,
     DmmReading,
+    DmmSystemInterfaceStatus,
     DmmTriggerStatus,
     DmmDcvImpedanceConfiguration,
     DmmVoltageRangeConfiguration,
@@ -262,6 +263,20 @@ def _print_dmm_calculation_statistics(result: DmmCalculationStatistics) -> None:
     print(f"function={result.function}")
     print(f"value={result.value:.12g}")
     print(f"count={result.count}")
+
+
+def _print_dmm_system_interface_status(status: DmmSystemInterfaceStatus) -> None:
+    print(f"beeper_enabled={'true' if status.beeper_enabled else 'false'}")
+    print(f"language={status.language.lower()}")
+    print(f"decimal_format={status.decimal_format.lower()}")
+    print(f"separator_format={status.separator_format.lower()}")
+    print(f"display_brightness={status.display_brightness}")
+    print(f"scan_board_installed={'true' if status.scan_board_installed else 'false'}")
+    print(f"lan_interface_installed={'true' if status.lan_interface_installed else 'false'}")
+    print(f"dhcp_enabled={'true' if status.dhcp_enabled else 'false'}")
+    print(f"gpib_address={status.gpib_address}")
+    print(f"rs232_baud={status.rs232_baud}")
+    print(f"rs232_parity={status.rs232_parity.lower()}")
 
 
 def _print_dmm_voltage_range_configuration(

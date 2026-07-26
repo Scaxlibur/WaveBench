@@ -74,6 +74,10 @@ class FakeDmm:
         self.events.append(f"calculation_statistics:{expected_function}")
         return SimpleNamespace(function=expected_function, value=1.0, count=2)
 
+    def system_interface_status(self):
+        self.events.append("system_interface_status")
+        return SimpleNamespace(language="ENGLISH")
+
     def set_voltage_range(self, function: str, range_code: int):
         self.events.append(f"set_voltage_range:{function}:{range_code}")
         return SimpleNamespace(function=function, previous_range_code=2, range_code=range_code)
@@ -188,6 +192,27 @@ class DmmServiceTests(unittest.TestCase):
             )
         self.assertEqual(result.function, "max")
         self.assertEqual(events, ["calculation_statistics:max", "close"])
+
+    def test_system_interface_status_closes_transport(self):
+        events: list[str] = []
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        with patch.object(service, "_require"), patch.object(
+            service, "_open_dmm", return_value=FakeDmm(events)
+        ):
+            result = service.system_interface_status()
+        self.assertEqual(result.language, "ENGLISH")
+        self.assertEqual(events, ["system_interface_status", "close"])
+
+    def test_system_interface_status_missing_capability_fails_before_transport(self):
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.dmm",
+            capabilities=("dmm.read",),
+        )
+        with patch.object(service, "_open_dmm") as open_dmm:
+            with self.assertRaisesRegex(ConfigError, "dmm.system_interface_status"):
+                service.system_interface_status()
+        open_dmm.assert_not_called()
 
     def test_voltage_range_closes_transport(self):
         events: list[str] = []

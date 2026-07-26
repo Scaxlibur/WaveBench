@@ -13,6 +13,7 @@ from wavebench.instruments.contracts import (
     DmmCalculationStatusDriver,
     DmmDriver,
     DmmMeasurementProfileDriver,
+    DmmSystemInterfaceStatusDriver,
     DmmTriggerStatusDriver,
     DmmVoltageConfigurationDriver,
 )
@@ -25,6 +26,7 @@ from wavebench.instruments.models import (
     DmmDcvImpedanceConfiguration,
     DmmMeasurementProfile,
     DmmReading,
+    DmmSystemInterfaceStatus,
     DmmTriggerStatus,
     DmmVoltageRangeConfiguration,
 )
@@ -113,6 +115,11 @@ class DmmService:
         self._require("dmm.calculation_status", "dmm.calculation_status")
         with self._dmm_session() as dmm:
             return cast(DmmCalculationStatusDriver, dmm).calculation_status()
+
+    def system_interface_status(self) -> DmmSystemInterfaceStatus:
+        self._require("dmm.system_interface_status", "dmm.system_interface_status")
+        with self._dmm_session() as dmm:
+            return cast(DmmSystemInterfaceStatusDriver, dmm).system_interface_status()
 
     def calculation_statistics(
         self,

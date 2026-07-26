@@ -15,6 +15,7 @@ from wavebench.instruments.contracts import (
     DmmCalculationStatusDriver,
     DmmDriver,
     DmmMeasurementProfileDriver,
+    DmmSystemInterfaceStatusDriver,
     DmmTriggerStatusDriver,
     DmmVoltageConfigurationDriver,
     PowerDriver,
@@ -34,6 +35,7 @@ from wavebench.instruments.models import (
     DmmCalculationStatus,
     DmmReading,
     DmmMeasurementProfile,
+    DmmSystemInterfaceStatus,
     DmmTriggerStatus,
     DmmDcvImpedanceConfiguration,
     DmmVoltageRangeConfiguration,
@@ -86,6 +88,20 @@ def test_shared_models_keep_serialization_and_waveform_behavior():
     assert calculation.as_dict()["dbm_reference_ohm"] == 600.0
     statistics = DmmCalculationStatistics("average", 1.25, 3)
     assert statistics.as_dict()["count"] == 3
+    system_status = DmmSystemInterfaceStatus(
+        True,
+        "ENGLISH",
+        "DOT",
+        "NONE",
+        128,
+        False,
+        True,
+        True,
+        22,
+        9600,
+        "NONE8BITS",
+    )
+    assert system_status.as_dict()["gpib_address"] == 22
 
 
 def test_driver_contracts_are_runtime_checkable():
@@ -97,6 +113,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_DmmTriggerStatus(), DmmTriggerStatusDriver)
     assert isinstance(_DmmCalculationStatus(), DmmCalculationStatusDriver)
     assert isinstance(_DmmCalculationStatistics(), DmmCalculationStatisticsDriver)
+    assert isinstance(_DmmSystemInterfaceStatus(), DmmSystemInterfaceStatusDriver)
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
@@ -162,6 +179,10 @@ class _DmmCalculationStatus(_DynamicDriver):
 
 class _DmmCalculationStatistics(_DynamicDriver):
     idn = close = calculation_statistics = lambda *args, **kwargs: None
+
+
+class _DmmSystemInterfaceStatus(_DynamicDriver):
+    idn = close = system_interface_status = lambda *args, **kwargs: None
 
 
 class _DmmVoltageConfiguration(_DynamicDriver):

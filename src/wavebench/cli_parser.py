@@ -456,6 +456,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Confirm the selected calculation is already active; WaveBench will not enable it",
     )
     add_runtime_options(dmm_calculation_statistics)
+    dmm_system_interface = dmm_sub.add_parser(
+        "system-interface", help="Query a redacted DMM system and interface status snapshot"
+    )
+    dmm_system_interface_sub = dmm_system_interface.add_subparsers(
+        dest="dmm_system_interface_command", required=True
+    )
+    dmm_system_interface_status = dmm_system_interface_sub.add_parser(
+        "status", help="Read non-sensitive system and interface state without changing it"
+    )
+    add_runtime_options(dmm_system_interface_status)
 
     power_sub = power_parser.add_subparsers(dest="command", required=True)
     power_idn = power_sub.add_parser("idn", help="Query power supply *IDN?")
