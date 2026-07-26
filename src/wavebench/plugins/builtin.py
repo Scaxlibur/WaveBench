@@ -99,6 +99,7 @@ BUILTIN_PLUGINS: tuple[InstrumentPlugin, ...] = (
             "dmm.read",
             "dmm.function_status",
             "dmm.set_function",
+            "dmm.measurement_profile",
         ),
         summary="RIGOL DM3000-family DMM driver for configured serial or VISA backends.",
         idn_patterns=("RIGOL TECHNOLOGIES,DM3", "RIGOL TECHNOLOGIES,DM3058"),

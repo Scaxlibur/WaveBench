@@ -866,3 +866,35 @@ class DmmReading:
             "unit": self.unit,
             "raw": self.raw,
         }
+
+
+@dataclass(frozen=True)
+class DmmMeasurementProfile:
+    function: str
+    range_code: int | None
+    auto_range: bool | None
+    impedance: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.function:
+            raise ValueError("DMM measurement profile function must be nonempty")
+        if self.range_code is not None and (
+            isinstance(self.range_code, bool)
+            or not isinstance(self.range_code, int)
+            or self.range_code < 0
+        ):
+            raise ValueError("DMM measurement profile range_code must be a nonnegative integer")
+        if (self.range_code is None) != (self.auto_range is None):
+            raise ValueError("DMM measurement profile range_code and auto_range must coexist")
+        if self.range_code is not None and self.auto_range != (self.range_code == 0):
+            raise ValueError("DMM measurement profile auto_range must match range_code == 0")
+        if self.impedance is not None and not self.impedance.strip():
+            raise ValueError("DMM measurement profile impedance must be nonempty when present")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "function": self.function,
+            "range_code": self.range_code,
+            "auto_range": self.auto_range,
+            "impedance": self.impedance,
+        }

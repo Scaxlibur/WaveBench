@@ -24,6 +24,7 @@ from .cli_output import (
     _print_doctor_records,
     _print_dmm_function_set,
     _print_dmm_function_status,
+    _print_dmm_measurement_profile,
     _print_dmm_reading,
     _print_market_plugin_info,
     _print_market_search_results,
@@ -438,6 +439,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "read":
                 _print_dmm_reading(service.read(function=args.function))
+                return 0
+            if args.command == "profile":
+                _print_dmm_measurement_profile(service.measurement_profile())
                 return 0
             if args.command == "function":
                 if args.dmm_function_command == "status":

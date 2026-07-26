@@ -4,14 +4,15 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import time
+from typing import cast
 
 from wavebench.config import DmmConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
-from wavebench.instruments.contracts import DmmDriver
+from wavebench.instruments.contracts import DmmDriver, DmmMeasurementProfileDriver
 from wavebench.instruments.api import InstrumentDescriptor
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.factory import open_instrument_driver
-from wavebench.instruments.models import DmmReading
+from wavebench.instruments.models import DmmMeasurementProfile, DmmReading
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 
@@ -82,6 +83,11 @@ class DmmService:
         self._require("dmm.set_function", "dmm.set_function")
         with self._dmm_session() as dmm:
             return dmm.set_function(function=function)
+
+    def measurement_profile(self) -> DmmMeasurementProfile:
+        self._require("dmm.measurement_profile", "dmm.measurement_profile")
+        with self._dmm_session() as dmm:
+            return cast(DmmMeasurementProfileDriver, dmm).measurement_profile()
 
     def read(self, function: str = "dcv") -> DmmReading:
         self._require("dmm.read", "dmm.read")

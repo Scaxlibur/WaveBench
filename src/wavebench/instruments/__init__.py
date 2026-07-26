@@ -1,6 +1,7 @@
 from .api import DriverContext, InstrumentDescriptor, OptionSpec
 from .contracts import (
     DmmDriver,
+    DmmMeasurementProfileDriver,
     InstrumentDriver,
     PowerDriver,
     ScopeAcquisitionStatusDriver,
@@ -20,6 +21,7 @@ from .factory import OpenedInstrument, open_instrument_driver
 from .models import (
     ArbitraryQueryProbeResult,
     DmmReading,
+    DmmMeasurementProfile,
     FrequencyResponseTrace,
     InstrumentMeasurementResult,
     MarkerReading,
@@ -58,6 +60,8 @@ from .models import (
 __all__ = [
     "ArbitraryQueryProbeResult",
     "DmmDriver",
+    "DmmMeasurementProfileDriver",
+    "DmmMeasurementProfile",
     "DmmReading",
     "FrequencyResponseTrace",
     "DG4000ByteOrder",

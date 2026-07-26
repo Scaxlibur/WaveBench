@@ -52,6 +52,15 @@ class FakeDmm:
         self.active_function = function
         return self.active_function
 
+    def measurement_profile(self):
+        self.events.append("measurement_profile")
+        return SimpleNamespace(
+            function=self.active_function,
+            range_code=0,
+            auto_range=True,
+            impedance="10M",
+        )
+
     def read(self, function: str = "dcv"):
         self.events.append(f"read:{function}")
         return SimpleNamespace(function=function, value=1.0, unit="V", raw="1.000000E+00")
@@ -105,6 +114,18 @@ class DmmServiceTests(unittest.TestCase):
 
         self.assertEqual(result, "acv")
         self.assertEqual(events, ["set_function:acv", "close"])
+
+    def test_measurement_profile_closes_transport(self):
+        events: list[str] = []
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+
+        with patch.object(service, "_require"), patch.object(
+            service, "_open_dmm", return_value=FakeDmm(events)
+        ):
+            profile = service.measurement_profile()
+
+        self.assertEqual(profile.function, "dcv")
+        self.assertEqual(events, ["measurement_profile", "close"])
 
 
 if __name__ == "__main__":

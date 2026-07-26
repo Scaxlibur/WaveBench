@@ -12,6 +12,7 @@ from wavebench.drivers.rtm2032 import (
 )
 from wavebench.instruments.contracts import (
     DmmDriver,
+    DmmMeasurementProfileDriver,
     PowerDriver,
     ScopeAcquisitionStatusDriver,
     ScopeAverageCaptureDriver,
@@ -26,6 +27,7 @@ from wavebench.instruments.contracts import (
 )
 from wavebench.instruments.models import (
     DmmReading,
+    DmmMeasurementProfile,
     PowerStatus,
     ScopeAnalogChannelSnapshot,
     ScopeEdgeTriggerSnapshot,
@@ -61,6 +63,8 @@ def test_shared_models_keep_serialization_and_waveform_behavior():
     assert waveform.sample_count == 3
     assert asdict(reading) == {"function": "dcv", "value": 1.25, "unit": "V", "raw": "1.25"}
     assert reading.as_dict() == asdict(reading)
+    profile = DmmMeasurementProfile("dcv", 0, True, "10M")
+    assert profile.as_dict() == asdict(profile)
 
 
 def test_driver_contracts_are_runtime_checkable():
@@ -68,6 +72,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Source(), SourceDriver)
     assert isinstance(_Power(), PowerDriver)
     assert isinstance(_Dmm(), DmmDriver)
+    assert isinstance(_DmmMeasurementProfile(), DmmMeasurementProfileDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
     assert isinstance(_ScopeAverageCapture(), ScopeAverageCaptureDriver)
@@ -116,6 +121,10 @@ class _Dmm(_DynamicDriver):
     idn = close = function_status = set_function = apply_function = read = lambda *args, **kwargs: (
         None
     )
+
+
+class _DmmMeasurementProfile(_DynamicDriver):
+    idn = close = measurement_profile = lambda *args, **kwargs: None
 
 
 class _ScopeSnapshot(_DynamicDriver):

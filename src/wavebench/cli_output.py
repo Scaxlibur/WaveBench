@@ -16,6 +16,7 @@ from .data.fft import analyze_fft, fft_harmonics
 from .errors import ConfigError
 from .instruments.api import InstrumentDescriptor
 from .instruments.models import (
+    DmmMeasurementProfile,
     DmmReading,
     PowerProtectionStatus,
     PowerStatus,
@@ -222,6 +223,16 @@ def _print_run_preflight(records: list[Any]) -> None:
 
 def _print_dmm_reading(reading: DmmReading) -> None:
     print(f"{reading.function}: {reading.value:.12g} {reading.unit} raw={reading.raw}")
+
+
+def _print_dmm_measurement_profile(profile: DmmMeasurementProfile) -> None:
+    print(f"function={profile.function}")
+    print(f"range_code={profile.range_code if profile.range_code is not None else 'n/a'}")
+    if profile.auto_range is None:
+        print("auto_range=n/a")
+    else:
+        print(f"auto_range={'true' if profile.auto_range else 'false'}")
+    print(f"impedance={profile.impedance if profile.impedance is not None else 'n/a'}")
 
 
 def _print_scope_snapshot(snapshot: ScopeSnapshot) -> None:

@@ -387,6 +387,10 @@ def build_parser() -> argparse.ArgumentParser:
     dmm_read = dmm_sub.add_parser("read", help="Read one DMM measurement")
     dmm_read.add_argument("function", nargs="?", default="dcv", help="dcv/acv/dci/aci/res/fres/freq/period/continuity/diode/cap")
     add_runtime_options(dmm_read)
+    dmm_profile = dmm_sub.add_parser(
+        "profile", help="Query current DMM function/range profile without changing state"
+    )
+    add_runtime_options(dmm_profile)
     dmm_function = dmm_sub.add_parser(
         "function", help="Query or set DMM function / 查询或设置万用表功能"
     )

@@ -6,6 +6,7 @@ from typing import Any, Protocol, runtime_checkable
 from .models import (
     ArbitraryQueryProbeResult,
     DmmReading,
+    DmmMeasurementProfile,
     PowerMeasurement,
     PowerProtectionStatus,
     PowerStatus,
@@ -251,6 +252,11 @@ class DmmDriver(InstrumentDriver, Protocol):
     def apply_function(self, function: str) -> str: ...
 
     def read(self, function: str = "dcv") -> DmmReading: ...
+
+
+@runtime_checkable
+class DmmMeasurementProfileDriver(InstrumentDriver, Protocol):
+    def measurement_profile(self) -> DmmMeasurementProfile: ...
 
 
 @runtime_checkable

@@ -19,6 +19,12 @@ class FakeTransport:
             return "1.234500e+00"
         if command == ":MEASure:RESistance?":
             return "9.876000e+03"
+        if command == ":MEASure:VOLTage:DC:RANGe?":
+            return "0"
+        if command == ":MEASure:VOLTage:DC:IMPedance?":
+            return "10M"
+        if command == ":MEASure:RESistance:RANGe?":
+            return "6"
         return "bad"
 
     def write(self, command: str) -> None:
@@ -64,6 +70,36 @@ class DM3000DriverTests(unittest.TestCase):
         self.assertEqual(reading.function, "res")
         self.assertEqual(reading.value, 9876.0)
         self.assertEqual(reading.unit, "ohm")
+
+    def test_measurement_profile_is_query_only_and_typed(self):
+        transport = FakeTransport()
+
+        profile = DM3000Dmm(transport).measurement_profile()
+
+        self.assertEqual(profile.function, "dcv")
+        self.assertEqual(profile.range_code, 0)
+        self.assertTrue(profile.auto_range)
+        self.assertEqual(profile.impedance, "10M")
+        self.assertEqual(
+            transport.commands,
+            [
+                ":FUNCtion?",
+                ":MEASure:VOLTage:DC:RANGe?",
+                ":MEASure:VOLTage:DC:IMPedance?",
+            ],
+        )
+
+    def test_measurement_profile_omits_unsupported_range_query(self):
+        transport = FakeTransport()
+        transport.function_status = "CONT"
+
+        profile = DM3000Dmm(transport).measurement_profile()
+
+        self.assertEqual(profile.function, "continuity")
+        self.assertIsNone(profile.range_code)
+        self.assertIsNone(profile.auto_range)
+        self.assertIsNone(profile.impedance)
+        self.assertEqual(transport.commands, [":FUNCtion?"])
 
     def test_unsupported_function_is_rejected_before_io(self):
         with self.assertRaisesRegex(DataError, "unsupported DMM function"):

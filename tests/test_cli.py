@@ -86,6 +86,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "read")
         self.assertEqual(args.function, "dcv")
 
+    def test_dmm_profile_accepts_subcommand(self):
+        args = build_parser().parse_args(["dmm", "profile"])
+        self.assertEqual(args.domain, "dmm")
+        self.assertEqual(args.command, "profile")
+
+    def test_dmm_profile_prints_stable_fields(self):
+        class StubDmmService:
+            def measurement_profile(self):
+                from wavebench.instruments import DmmMeasurementProfile
+
+                return DmmMeasurementProfile("dcv", 0, True, "10M")
+
+        stdout = io.StringIO()
+        with patch("wavebench.cli._load_dmm_service", return_value=StubDmmService()):
+            with redirect_stdout(stdout):
+                code = main(["dmm", "profile"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            ["function=dcv", "range_code=0", "auto_range=true", "impedance=10M"],
+        )
+
     def test_dmm_function_status_accepts_subcommand(self):
         args = build_parser().parse_args(["dmm", "function", "status"])
         self.assertEqual(args.domain, "dmm")
