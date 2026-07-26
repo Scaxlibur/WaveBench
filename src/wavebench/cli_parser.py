@@ -566,6 +566,18 @@ def build_parser() -> argparse.ArgumentParser:
     history_timestamps.add_argument("--channel", type=int, default=None)
     add_runtime_options(history_timestamps)
 
+    digital_status = scope_sub.add_parser(
+        "digital-status",
+        help="Query the existing state of one MSO digital channel",
+    )
+    digital_status.add_argument(
+        "--channel",
+        type=int,
+        required=True,
+        help="Zero-based digital channel number (for example, 0 for D0)",
+    )
+    add_runtime_options(digital_status)
+
     measurement_statistics = scope_sub.add_parser(
         "measurement-statistics",
         help="Read an explicitly preconfigured automatic-measurement slot",

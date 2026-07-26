@@ -42,6 +42,7 @@ from .cli_output import (
     _print_scope_acquisition_status,
     _print_scope_average_capture,
     _print_scope_history_timestamps,
+    _print_scope_digital_status,
     _print_scope_measurement_statistics,
     _print_scope_cursor_readout,
     _print_scope_derived_waveform_metadata,
@@ -587,6 +588,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "history-timestamps":
                 channel = args.channel or service.config.scope.default_channel
                 _print_scope_history_timestamps(service.history_timestamps(channel=channel))
+                return 0
+            if args.command == "digital-status":
+                _print_scope_digital_status(service.digital_status(channel=args.channel))
                 return 0
             if args.command == "measurement-statistics":
                 _print_scope_measurement_statistics(

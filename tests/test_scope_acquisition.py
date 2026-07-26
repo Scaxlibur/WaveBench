@@ -15,6 +15,7 @@ from wavebench.instruments.models import (
     ScopeAverageConfiguration,
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
+    ScopeDigitalChannelStatus,
     ScopeFftStatus,
     ScopeHistoryTimestamp,
     ScopeHistoryTimestamps,
@@ -236,11 +237,38 @@ def test_scope_service_history_timestamps_uses_optional_capability():
     assert service.history_timestamps(channel=2) == expected
 
 
+def test_scope_service_digital_status_uses_optional_capability():
+    expected = ScopeDigitalChannelStatus(
+        channel=5,
+        group_start_channel=4,
+        group_stop_channel=7,
+        displayed=True,
+        activity="TOGGLE",
+        technology="TTL",
+        threshold_v=1.4,
+        threshold_coupled=False,
+        hysteresis="NORMAL",
+        deskew_s=0.0,
+        size="SMALL",
+        position_div=2.5,
+        label="DATA",
+        label_enabled=True,
+    )
+    service = _service(
+        capability="scope.digital_status",
+        method_name="get_digital_status",
+        result=expected,
+    )
+
+    assert service.digital_status(channel=5) == expected
+
+
 @pytest.mark.parametrize(
     ("capability", "call"),
     [
         ("scope.acquisition_status", lambda service: service.acquisition_status()),
         ("scope.history_timestamps", lambda service: service.history_timestamps(1)),
+        ("scope.digital_status", lambda service: service.digital_status(0)),
     ],
 )
 def test_scope_optional_queries_fail_before_opening(capability, call):
@@ -301,6 +329,51 @@ def test_scope_history_timestamps_cli_uses_default_channel_and_stable_rows():
     assert "history.1.relative_s=-0.25\n" in output
     assert "history.1.date=2026-07-26\n" in output
     assert "history.1.time=10:30:1.25\n" in output
+
+
+def test_scope_digital_status_cli_requires_explicit_zero_based_channel():
+    status = ScopeDigitalChannelStatus(
+        channel=0,
+        group_start_channel=0,
+        group_stop_channel=3,
+        displayed=False,
+        activity="LOW",
+        technology="MANUAL",
+        threshold_v=1.2,
+        threshold_coupled=True,
+        hysteresis="ROBUST",
+        deskew_s=1e-9,
+        size="DIV2",
+        position_div=-1.5,
+        label="CLK",
+        label_enabled=False,
+    )
+    calls = []
+    service = SimpleNamespace(
+        digital_status=lambda channel: calls.append(channel) or status,
+    )
+    stdout = io.StringIO()
+
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(["scope", "digital-status", "--channel", "0"])
+
+    assert code == 0
+    assert calls == [0]
+    assert stdout.getvalue().splitlines() == [
+        "digital.channel=0",
+        "digital.group=0-3",
+        "digital.displayed=false",
+        "digital.activity=LOW",
+        "digital.technology=MANUAL",
+        "digital.threshold_v=1.2",
+        "digital.threshold_coupled=true",
+        "digital.hysteresis=ROBUST",
+        "digital.deskew_s=1e-09",
+        "digital.size=DIV2",
+        "digital.position_div=-1.5",
+        "digital.label=CLK",
+        "digital.label_enabled=false",
+    ]
 
 
 def test_scope_service_measurement_statistics_forwards_explicit_guards():

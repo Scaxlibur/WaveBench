@@ -133,6 +133,28 @@ class ScopeAcquisitionStatus:
 
 
 ScopeChannelArithmetic = Literal["OFF", "ENVELOPE", "AVERAGE", "SMOOTH", "FILTER"]
+ScopeDigitalActivity = Literal["LOW", "HIGH", "TOGGLE"]
+ScopeDigitalTechnology = Literal["TTL", "ECL", "CMOS", "MANUAL"]
+ScopeDigitalHysteresis = Literal["MAXIMUM", "ROBUST", "NORMAL"]
+ScopeDigitalSize = Literal["SMALL", "MEDIUM", "LARGE", "DIV1", "DIV2", "DIV4", "DIV8"]
+
+
+@dataclass(frozen=True)
+class ScopeDigitalChannelStatus:
+    channel: int
+    group_start_channel: int
+    group_stop_channel: int
+    displayed: bool
+    activity: ScopeDigitalActivity
+    technology: ScopeDigitalTechnology
+    threshold_v: float
+    threshold_coupled: bool
+    hysteresis: ScopeDigitalHysteresis
+    deskew_s: float
+    size: ScopeDigitalSize
+    position_div: float
+    label: str
+    label_enabled: bool
 
 
 @dataclass(frozen=True)

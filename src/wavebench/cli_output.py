@@ -25,6 +25,7 @@ from .instruments.models import (
     ScopeMeasurementStatistics,
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
+    ScopeDigitalChannelStatus,
     ScopeFftStatus,
     ScopeSnapshot,
     SourceStatus,
@@ -284,6 +285,22 @@ def _print_scope_history_timestamps(table: ScopeHistoryTimestamps) -> None:
         print(f"{prefix}.relative_s={entry.relative_s:.12g}")
         print(f"{prefix}.date={entry.year:04d}-{entry.month:02d}-{entry.day:02d}")
         print(f"{prefix}.time={entry.hour:02d}:{entry.minute:02d}:{entry.second:.12g}")
+
+
+def _print_scope_digital_status(status: ScopeDigitalChannelStatus) -> None:
+    print(f"digital.channel={status.channel}")
+    print(f"digital.group={status.group_start_channel}-{status.group_stop_channel}")
+    print(f"digital.displayed={'true' if status.displayed else 'false'}")
+    print(f"digital.activity={status.activity}")
+    print(f"digital.technology={status.technology}")
+    print(f"digital.threshold_v={status.threshold_v:.12g}")
+    print(f"digital.threshold_coupled={'true' if status.threshold_coupled else 'false'}")
+    print(f"digital.hysteresis={status.hysteresis}")
+    print(f"digital.deskew_s={status.deskew_s:.12g}")
+    print(f"digital.size={status.size}")
+    print(f"digital.position_div={status.position_div:.12g}")
+    print(f"digital.label={status.label}")
+    print(f"digital.label_enabled={'true' if status.label_enabled else 'false'}")
 
 
 def _print_scope_measurement_statistics(stats: ScopeMeasurementStatistics) -> None:

@@ -19,6 +19,7 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "scope.snapshot": ("get_snapshot",),
     "scope.acquisition_status": ("get_acquisition_status",),
     "scope.capture_average": ("capture_average",),
+    "scope.digital_status": ("get_digital_status",),
     "scope.history_timestamps": ("get_history_timestamps",),
     "scope.measurement_statistics": ("get_measurement_statistics",),
     "scope.math_metadata": ("get_math_waveform_metadata",),
