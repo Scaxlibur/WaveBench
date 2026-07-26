@@ -430,6 +430,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dmm_impedance_set.add_argument("impedance", type=str.upper, choices=("10M", "10G"))
     add_runtime_options(dmm_impedance_set)
+    dmm_trigger = dmm_sub.add_parser("trigger", help="Query existing DMM trigger state")
+    dmm_trigger_sub = dmm_trigger.add_subparsers(dest="dmm_trigger_command", required=True)
+    dmm_trigger_status = dmm_trigger_sub.add_parser(
+        "status", help="Read trigger settings without changing or firing a trigger"
+    )
+    add_runtime_options(dmm_trigger_status)
+    dmm_calculation = dmm_sub.add_parser(
+        "calculation", help="Query existing DMM calculation state and statistics"
+    )
+    dmm_calculation_sub = dmm_calculation.add_subparsers(
+        dest="dmm_calculation_command", required=True
+    )
+    dmm_calculation_status = dmm_calculation_sub.add_parser(
+        "status", help="Read calculation mode and references without changing state"
+    )
+    add_runtime_options(dmm_calculation_status)
+    dmm_calculation_statistics = dmm_calculation_sub.add_parser(
+        "statistics", help="Read a statistic only when its matching calculation is already active"
+    )
+    dmm_calculation_statistics.add_argument("function", choices=("average", "min", "max"))
+    dmm_calculation_statistics.add_argument(
+        "--calculation-active-confirmed",
+        action="store_true",
+        help="Confirm the selected calculation is already active; WaveBench will not enable it",
+    )
+    add_runtime_options(dmm_calculation_statistics)
 
     power_sub = power_parser.add_subparsers(dest="command", required=True)
     power_idn = power_sub.add_parser("idn", help="Query power supply *IDN?")

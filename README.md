@@ -12,7 +12,7 @@ WaveBench 是一个面向电子设计竞赛调试场景的轻量 Python 自动�
 WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202、DP800 和 DM3000/DM3058 系列驱动；首次使用无需安装外置插件，只需复制示例配置并填写实际仪器 resource。这五个仪器族没有从主包移除的计划；外置插件是显式选择、独立发布的可选升级或扩展，不会取代示例配置使用的内建短名。
 
 > [!IMPORTANT]
-> 当前开发版本是 `v0.8.9`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 acquisition/history 契约；`v0.8.3` 增加只读自动测量统计契约；`v0.8.4` 增加只读 math/FFT/reference/cursor 契约；`v0.8.5` 增加带配置恢复证据的受控平均采集契约；`v0.8.6` 增加选件门控的只读 MSO 数字通道状态契约；`v0.8.7` 增加只读数字波形及 Dn→uint16 bit n 合并契约；`v0.8.8` 增加选择性的只读 DMM 当前测量 profile 契约；`v0.8.9` 增加功能门控、回读确认和失败恢复的 DMM 电压量程及 DCV 输入阻抗配置契约。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
+> 当前开发版本是 `v0.8.10`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 acquisition/history 契约；`v0.8.3` 增加只读自动测量统计契约；`v0.8.4` 增加只读 math/FFT/reference/cursor 契约；`v0.8.5` 增加带配置恢复证据的受控平均采集契约；`v0.8.6` 增加选件门控的只读 MSO 数字通道状态契约；`v0.8.7` 增加只读数字波形及 Dn→uint16 bit n 合并契约；`v0.8.8` 增加选择性的只读 DMM 当前测量 profile 契约；`v0.8.9` 增加功能门控、回读确认和失败恢复的 DMM 电压量程及 DCV 输入阻抗配置契约；`v0.8.10` 增加只读 DMM 触发与已有 calculation 状态/统计契约。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
 
 ## 当前能力
 
@@ -62,6 +62,10 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 
 - `dmm idn`
 - `dmm read dcv|acv|dci|aci|res|fres|freq|period|continuity|diode|cap`
+- `dmm function status|set`、`dmm profile`：读取/设置当前测量功能，或只读当前量程码与 DCV 阻抗；不自动切换功能。
+- `dmm range set dcv|acv 0..4`、`dmm impedance set 10M|10G`：受控配置、回读和失败恢复；`10G` 仅允许 DCV 档位码 `0..2`。
+- `dmm trigger status`、`dmm calculation status`：只读当前触发与运算状态，不写设置、不清空统计、不触发测量。
+- `dmm calculation statistics average|min|max --calculation-active-confirmed`：仅读取已启用且当前模式匹配的统计；调用者确认后驱动仍会复核模式。
 - 支持 DM3058 LAN/VISA 与 RS232 读取；RS232 可配置行终止符和流控，DM3058 实机基线为 9600 8N1、写 CRLF、读 LF、无流控。设备 SCPI 保留在 DMM driver，不进入 CLI / service。
 - 可配置 DMM 正式读取前等待：`dmm.settle_ms_before_read`
 - 可用 `python scripts/dmm_dcv_staircase_smoke.py --config <toml>` 对 `DP800 -> DMM` 做保守 DCV 阶梯 smoke，并自动恢复电源输出。

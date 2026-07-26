@@ -901,6 +901,113 @@ class DmmMeasurementProfile:
 
 
 @dataclass(frozen=True)
+class DmmTriggerStatus:
+    source: str
+    auto_interval_s: float
+    auto_hold: bool
+    auto_hold_sensitivity: int
+    single_count: int
+    external_slope: str
+    vmc_polarity: str
+    vmc_pulse_width_s: float
+
+    def __post_init__(self) -> None:
+        if self.source not in {"AUTO", "SINGLE", "EXT"}:
+            raise ValueError("unsupported DMM trigger source")
+        if self.auto_interval_s not in {0.1, 0.2, 0.4}:
+            raise ValueError("DMM trigger auto interval must be 0.1, 0.2, or 0.4 seconds")
+        if not isinstance(self.auto_hold, bool):
+            raise ValueError("DMM trigger auto_hold must be boolean")
+        if (
+            isinstance(self.auto_hold_sensitivity, bool)
+            or self.auto_hold_sensitivity not in {0, 1, 2, 3}
+        ):
+            raise ValueError("DMM trigger auto hold sensitivity must be 0, 1, 2, or 3")
+        if (
+            isinstance(self.single_count, bool)
+            or not isinstance(self.single_count, int)
+            or not 1 <= self.single_count <= 5000
+        ):
+            raise ValueError("DMM trigger single count must be an integer from 1 to 5000")
+        if self.external_slope not in {"RISE", "FALL", "HIGH", "LOW"}:
+            raise ValueError("unsupported DMM external trigger type")
+        if self.vmc_polarity not in {"POS", "NEG"}:
+            raise ValueError("unsupported DMM VMC polarity")
+        if not isfinite(self.vmc_pulse_width_s) or not 0.001 <= self.vmc_pulse_width_s <= 1.0:
+            raise ValueError("DMM trigger VMC pulse width must be from 0.001 to 1.0 seconds")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "source": self.source,
+            "auto_interval_s": self.auto_interval_s,
+            "auto_hold": self.auto_hold,
+            "auto_hold_sensitivity": self.auto_hold_sensitivity,
+            "single_count": self.single_count,
+            "external_slope": self.external_slope,
+            "vmc_polarity": self.vmc_polarity,
+            "vmc_pulse_width_s": self.vmc_pulse_width_s,
+        }
+
+
+@dataclass(frozen=True)
+class DmmCalculationStatus:
+    function: str
+    statistic_count: int
+    db_reference: float
+    dbm_reference_ohm: float
+
+    def __post_init__(self) -> None:
+        if self.function not in {
+            "none",
+            "null",
+            "db",
+            "dbm",
+            "average",
+            "min",
+            "max",
+            "total",
+            "limit",
+        }:
+            raise ValueError("unsupported DMM calculation function")
+        if (
+            isinstance(self.statistic_count, bool)
+            or not isinstance(self.statistic_count, int)
+            or self.statistic_count < 0
+        ):
+            raise ValueError("DMM statistic_count must be a nonnegative integer")
+        if not isfinite(self.db_reference):
+            raise ValueError("DMM dB reference must be finite")
+        if not isfinite(self.dbm_reference_ohm) or self.dbm_reference_ohm <= 0:
+            raise ValueError("DMM dBm reference must be finite and positive")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "function": self.function,
+            "statistic_count": self.statistic_count,
+            "db_reference": self.db_reference,
+            "dbm_reference_ohm": self.dbm_reference_ohm,
+        }
+
+
+@dataclass(frozen=True)
+class DmmCalculationStatistics:
+    function: str
+    value: float
+    count: int
+
+    def __post_init__(self) -> None:
+        if self.function not in {"average", "min", "max"}:
+            raise ValueError("DMM calculation statistics function must be average, min, or max")
+        if not isfinite(self.value):
+            raise ValueError("DMM calculation statistic value must be finite")
+        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 0:
+            raise ValueError("DMM calculation statistic count must be a nonnegative integer")
+
+    def as_dict(self) -> dict[str, object]:
+        return {"function": self.function, "value": self.value, "count": self.count}
+
+
+@dataclass(frozen=True)
 class DmmVoltageRangeConfiguration:
     function: str
     previous_range_code: int

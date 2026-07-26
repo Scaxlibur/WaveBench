@@ -5,9 +5,12 @@ from typing import Any, Protocol, runtime_checkable
 
 from .models import (
     ArbitraryQueryProbeResult,
+    DmmCalculationStatistics,
+    DmmCalculationStatus,
     DmmDcvImpedanceConfiguration,
     DmmReading,
     DmmMeasurementProfile,
+    DmmTriggerStatus,
     DmmVoltageRangeConfiguration,
     PowerMeasurement,
     PowerProtectionStatus,
@@ -259,6 +262,24 @@ class DmmDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class DmmMeasurementProfileDriver(InstrumentDriver, Protocol):
     def measurement_profile(self) -> DmmMeasurementProfile: ...
+
+
+@runtime_checkable
+class DmmTriggerStatusDriver(InstrumentDriver, Protocol):
+    def trigger_status(self) -> DmmTriggerStatus: ...
+
+
+@runtime_checkable
+class DmmCalculationStatusDriver(InstrumentDriver, Protocol):
+    def calculation_status(self) -> DmmCalculationStatus: ...
+
+
+@runtime_checkable
+class DmmCalculationStatisticsDriver(InstrumentDriver, Protocol):
+    def calculation_statistics(
+        self,
+        expected_function: str,
+    ) -> DmmCalculationStatistics: ...
 
 
 @runtime_checkable

@@ -9,17 +9,23 @@ from typing import cast
 from wavebench.config import DmmConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
 from wavebench.instruments.contracts import (
+    DmmCalculationStatisticsDriver,
+    DmmCalculationStatusDriver,
     DmmDriver,
     DmmMeasurementProfileDriver,
+    DmmTriggerStatusDriver,
     DmmVoltageConfigurationDriver,
 )
 from wavebench.instruments.api import InstrumentDescriptor
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
+    DmmCalculationStatistics,
+    DmmCalculationStatus,
     DmmDcvImpedanceConfiguration,
     DmmMeasurementProfile,
     DmmReading,
+    DmmTriggerStatus,
     DmmVoltageRangeConfiguration,
 )
 from wavebench.logging import CommandLogger
@@ -97,6 +103,34 @@ class DmmService:
         self._require("dmm.measurement_profile", "dmm.measurement_profile")
         with self._dmm_session() as dmm:
             return cast(DmmMeasurementProfileDriver, dmm).measurement_profile()
+
+    def trigger_status(self) -> DmmTriggerStatus:
+        self._require("dmm.trigger_status", "dmm.trigger_status")
+        with self._dmm_session() as dmm:
+            return cast(DmmTriggerStatusDriver, dmm).trigger_status()
+
+    def calculation_status(self) -> DmmCalculationStatus:
+        self._require("dmm.calculation_status", "dmm.calculation_status")
+        with self._dmm_session() as dmm:
+            return cast(DmmCalculationStatusDriver, dmm).calculation_status()
+
+    def calculation_statistics(
+        self,
+        expected_function: str,
+        *,
+        calculation_active_confirmed: bool,
+    ) -> DmmCalculationStatistics:
+        expected = expected_function.strip().lower()
+        if expected not in {"average", "min", "max"}:
+            raise ConfigError("DMM calculation statistic must be average, min, or max")
+        if not calculation_active_confirmed:
+            raise ConfigError(
+                "DMM calculation statistics require explicit confirmation that the matching "
+                "calculation is already active"
+            )
+        self._require("dmm.calculation_statistics", "dmm.calculation_statistics")
+        with self._dmm_session() as dmm:
+            return cast(DmmCalculationStatisticsDriver, dmm).calculation_statistics(expected)
 
     def set_voltage_range(
         self,

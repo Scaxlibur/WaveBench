@@ -11,8 +11,11 @@ from wavebench.drivers.rtm2032 import (
     WaveformHeader as LegacyWaveformHeader,
 )
 from wavebench.instruments.contracts import (
+    DmmCalculationStatisticsDriver,
+    DmmCalculationStatusDriver,
     DmmDriver,
     DmmMeasurementProfileDriver,
+    DmmTriggerStatusDriver,
     DmmVoltageConfigurationDriver,
     PowerDriver,
     ScopeAcquisitionStatusDriver,
@@ -27,8 +30,11 @@ from wavebench.instruments.contracts import (
     SourceDriver,
 )
 from wavebench.instruments.models import (
+    DmmCalculationStatistics,
+    DmmCalculationStatus,
     DmmReading,
     DmmMeasurementProfile,
+    DmmTriggerStatus,
     DmmDcvImpedanceConfiguration,
     DmmVoltageRangeConfiguration,
     PowerStatus,
@@ -72,6 +78,14 @@ def test_shared_models_keep_serialization_and_waveform_behavior():
     assert range_result.as_dict()["changed"] is True
     impedance_result = DmmDcvImpedanceConfiguration("10M", "10G", 2)
     assert impedance_result.as_dict()["changed"] is True
+    trigger = DmmTriggerStatus("AUTO", 0.4, False, 1, 1, "RISE", "POS", 0.007)
+    assert trigger.as_dict()["auto_interval_s"] == 0.4
+    calculation = DmmCalculationStatus("limit", 3, 0.0, 600.0)
+    assert calculation.as_dict()["function"] == "limit"
+    calculation = DmmCalculationStatus("none", 0, 0.0, 600.0)
+    assert calculation.as_dict()["dbm_reference_ohm"] == 600.0
+    statistics = DmmCalculationStatistics("average", 1.25, 3)
+    assert statistics.as_dict()["count"] == 3
 
 
 def test_driver_contracts_are_runtime_checkable():
@@ -80,6 +94,9 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Power(), PowerDriver)
     assert isinstance(_Dmm(), DmmDriver)
     assert isinstance(_DmmMeasurementProfile(), DmmMeasurementProfileDriver)
+    assert isinstance(_DmmTriggerStatus(), DmmTriggerStatusDriver)
+    assert isinstance(_DmmCalculationStatus(), DmmCalculationStatusDriver)
+    assert isinstance(_DmmCalculationStatistics(), DmmCalculationStatisticsDriver)
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
@@ -133,6 +150,18 @@ class _Dmm(_DynamicDriver):
 
 class _DmmMeasurementProfile(_DynamicDriver):
     idn = close = measurement_profile = lambda *args, **kwargs: None
+
+
+class _DmmTriggerStatus(_DynamicDriver):
+    idn = close = trigger_status = lambda *args, **kwargs: None
+
+
+class _DmmCalculationStatus(_DynamicDriver):
+    idn = close = calculation_status = lambda *args, **kwargs: None
+
+
+class _DmmCalculationStatistics(_DynamicDriver):
+    idn = close = calculation_statistics = lambda *args, **kwargs: None
 
 
 class _DmmVoltageConfiguration(_DynamicDriver):

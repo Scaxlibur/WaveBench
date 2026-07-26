@@ -1,7 +1,10 @@
 from .api import DriverContext, InstrumentDescriptor, OptionSpec
 from .contracts import (
+    DmmCalculationStatisticsDriver,
+    DmmCalculationStatusDriver,
     DmmDriver,
     DmmMeasurementProfileDriver,
+    DmmTriggerStatusDriver,
     DmmVoltageConfigurationDriver,
     InstrumentDriver,
     PowerDriver,
@@ -21,8 +24,11 @@ from .dg4000 import DG4000ByteOrder, DG4000DacBlock
 from .factory import OpenedInstrument, open_instrument_driver
 from .models import (
     ArbitraryQueryProbeResult,
+    DmmCalculationStatistics,
+    DmmCalculationStatus,
     DmmReading,
     DmmMeasurementProfile,
+    DmmTriggerStatus,
     DmmDcvImpedanceConfiguration,
     DmmVoltageRangeConfiguration,
     FrequencyResponseTrace,
@@ -62,10 +68,16 @@ from .models import (
 
 __all__ = [
     "ArbitraryQueryProbeResult",
+    "DmmCalculationStatistics",
+    "DmmCalculationStatisticsDriver",
+    "DmmCalculationStatus",
+    "DmmCalculationStatusDriver",
     "DmmDriver",
     "DmmMeasurementProfileDriver",
     "DmmMeasurementProfile",
     "DmmReading",
+    "DmmTriggerStatus",
+    "DmmTriggerStatusDriver",
     "DmmDcvImpedanceConfiguration",
     "DmmVoltageConfigurationDriver",
     "DmmVoltageRangeConfiguration",

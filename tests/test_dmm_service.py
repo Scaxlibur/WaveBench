@@ -62,6 +62,18 @@ class FakeDmm:
             impedance="10M",
         )
 
+    def trigger_status(self):
+        self.events.append("trigger_status")
+        return SimpleNamespace(source="AUTO")
+
+    def calculation_status(self):
+        self.events.append("calculation_status")
+        return SimpleNamespace(function="none")
+
+    def calculation_statistics(self, expected_function: str):
+        self.events.append(f"calculation_statistics:{expected_function}")
+        return SimpleNamespace(function=expected_function, value=1.0, count=2)
+
     def set_voltage_range(self, function: str, range_code: int):
         self.events.append(f"set_voltage_range:{function}:{range_code}")
         return SimpleNamespace(function=function, previous_range_code=2, range_code=range_code)
@@ -135,6 +147,47 @@ class DmmServiceTests(unittest.TestCase):
 
         self.assertEqual(profile.function, "dcv")
         self.assertEqual(events, ["measurement_profile", "close"])
+
+    def test_trigger_status_closes_transport(self):
+        events: list[str] = []
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        with patch.object(service, "_require"), patch.object(
+            service, "_open_dmm", return_value=FakeDmm(events)
+        ):
+            status = service.trigger_status()
+        self.assertEqual(status.source, "AUTO")
+        self.assertEqual(events, ["trigger_status", "close"])
+
+    def test_calculation_status_closes_transport(self):
+        events: list[str] = []
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        with patch.object(service, "_require"), patch.object(
+            service, "_open_dmm", return_value=FakeDmm(events)
+        ):
+            status = service.calculation_status()
+        self.assertEqual(status.function, "none")
+        self.assertEqual(events, ["calculation_status", "close"])
+
+    def test_calculation_statistics_requires_explicit_confirmation_before_transport(self):
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        with patch.object(service, "_open_dmm") as open_dmm:
+            with self.assertRaisesRegex(ConfigError, "explicit confirmation"):
+                service.calculation_statistics(
+                    "average", calculation_active_confirmed=False
+                )
+        open_dmm.assert_not_called()
+
+    def test_calculation_statistics_closes_transport(self):
+        events: list[str] = []
+        service = DmmService(config=make_config(0), logger=CommandLogger())
+        with patch.object(service, "_require"), patch.object(
+            service, "_open_dmm", return_value=FakeDmm(events)
+        ):
+            result = service.calculation_statistics(
+                "max", calculation_active_confirmed=True
+            )
+        self.assertEqual(result.function, "max")
+        self.assertEqual(events, ["calculation_statistics:max", "close"])
 
     def test_voltage_range_closes_transport(self):
         events: list[str] = []

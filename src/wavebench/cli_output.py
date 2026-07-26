@@ -16,8 +16,11 @@ from .data.fft import analyze_fft, fft_harmonics
 from .errors import ConfigError
 from .instruments.api import InstrumentDescriptor
 from .instruments.models import (
+    DmmCalculationStatistics,
+    DmmCalculationStatus,
     DmmMeasurementProfile,
     DmmReading,
+    DmmTriggerStatus,
     DmmDcvImpedanceConfiguration,
     DmmVoltageRangeConfiguration,
     PowerProtectionStatus,
@@ -235,6 +238,30 @@ def _print_dmm_measurement_profile(profile: DmmMeasurementProfile) -> None:
     else:
         print(f"auto_range={'true' if profile.auto_range else 'false'}")
     print(f"impedance={profile.impedance if profile.impedance is not None else 'n/a'}")
+
+
+def _print_dmm_trigger_status(status: DmmTriggerStatus) -> None:
+    print(f"source={status.source}")
+    print(f"auto_interval_s={status.auto_interval_s:.12g}")
+    print(f"auto_hold={'true' if status.auto_hold else 'false'}")
+    print(f"auto_hold_sensitivity={status.auto_hold_sensitivity}")
+    print(f"single_count={status.single_count}")
+    print(f"external_slope={status.external_slope}")
+    print(f"vmc_polarity={status.vmc_polarity}")
+    print(f"vmc_pulse_width_s={status.vmc_pulse_width_s:.12g}")
+
+
+def _print_dmm_calculation_status(status: DmmCalculationStatus) -> None:
+    print(f"function={status.function}")
+    print(f"statistic_count={status.statistic_count}")
+    print(f"db_reference={status.db_reference:.12g}")
+    print(f"dbm_reference_ohm={status.dbm_reference_ohm:.12g}")
+
+
+def _print_dmm_calculation_statistics(result: DmmCalculationStatistics) -> None:
+    print(f"function={result.function}")
+    print(f"value={result.value:.12g}")
+    print(f"count={result.count}")
 
 
 def _print_dmm_voltage_range_configuration(

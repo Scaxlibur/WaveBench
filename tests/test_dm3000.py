@@ -11,6 +11,7 @@ class FakeTransport:
         self.dcv_range = "0"
         self.acv_range = "0"
         self.dcv_impedance = "10M"
+        self.calculation_function = "NONE"
 
     def query(self, command: str) -> str:
         self.commands.append(command)
@@ -28,6 +29,25 @@ class FakeTransport:
             return self.acv_range
         if command == ":MEASure:VOLTage:DC:IMPedance?":
             return self.dcv_impedance
+        trigger_responses = {
+            ":TRIGger:SOURce?": "AUTO",
+            ":TRIGger:AUTO:INTerval?": "400ms",
+            ":TRIGger:AUTO:HOLD?": "OFF",
+            ":TRIGger:AUTO:HOLD:SENSitivity?": "1",
+            ":TRIGger:SINGle?": "1",
+            ":TRIGger:EXT?": "RISE",
+            ":TRIGger:VMComplete:POLar?": "POS",
+            ":TRIGger:VMComplete:PULSewidth?": "7ms",
+            ":CALCulate:FUNCtion?": self.calculation_function,
+            ":CALCulate:STATistic:COUNt?": "0",
+            ":CALCulate:DB:REFerence?": "0",
+            ":CALCulate:DBM:REFerence?": "600",
+            ":CALCulate:STATistic:AVERage?": "1.25",
+            ":CALCulate:STATistic:MIN?": "1.0",
+            ":CALCulate:STATistic:MAX?": "1.5",
+        }
+        if command in trigger_responses:
+            return trigger_responses[command]
         if command == ":MEASure:RESistance:RANGe?":
             return "6"
         return "bad"
@@ -111,6 +131,120 @@ class DM3000DriverTests(unittest.TestCase):
         self.assertIsNone(profile.auto_range)
         self.assertIsNone(profile.impedance)
         self.assertEqual(transport.commands, [":FUNCtion?"])
+
+    def test_trigger_status_is_query_only_and_parses_units(self):
+        transport = FakeTransport()
+
+        status = DM3000Dmm(transport).trigger_status()
+
+        self.assertEqual(status.source, "AUTO")
+        self.assertEqual(status.auto_interval_s, 0.4)
+        self.assertFalse(status.auto_hold)
+        self.assertEqual(status.auto_hold_sensitivity, 1)
+        self.assertEqual(status.single_count, 1)
+        self.assertEqual(status.external_slope, "RISE")
+        self.assertEqual(status.vmc_polarity, "POS")
+        self.assertEqual(status.vmc_pulse_width_s, 0.007)
+        self.assertEqual(
+            transport.commands,
+            [
+                ":TRIGger:SOURce?",
+                ":TRIGger:AUTO:INTerval?",
+                ":TRIGger:AUTO:HOLD?",
+                ":TRIGger:AUTO:HOLD:SENSitivity?",
+                ":TRIGger:SINGle?",
+                ":TRIGger:EXT?",
+                ":TRIGger:VMComplete:POLar?",
+                ":TRIGger:VMComplete:PULSewidth?",
+            ],
+        )
+
+    def test_calculation_status_accepts_all_documented_modes(self):
+        for raw in ("NONE", "NULL", "DB", "DBM", "AVERAGE", "MIN", "MAX", "TOTAL", "LIMIT"):
+            with self.subTest(raw=raw):
+                transport = FakeTransport()
+                transport.calculation_function = raw
+
+                status = DM3000Dmm(transport).calculation_status()
+
+                self.assertEqual(status.function, raw.lower())
+                self.assertEqual(status.statistic_count, 0)
+                self.assertEqual(status.db_reference, 0.0)
+                self.assertEqual(status.dbm_reference_ohm, 600.0)
+                self.assertEqual(
+                    transport.commands,
+                    [
+                        ":CALCulate:FUNCtion?",
+                        ":CALCulate:STATistic:COUNt?",
+                        ":CALCulate:DB:REFerence?",
+                        ":CALCulate:DBM:REFerence?",
+                    ],
+                )
+
+    def test_calculation_statistics_requires_matching_active_calculation(self):
+        transport = FakeTransport()
+        transport.calculation_function = "AVERAGE"
+        original_query = transport.query
+
+        def query(command: str) -> str:
+            if command == ":CALCulate:STATistic:COUNt?":
+                transport.commands.append(command)
+                return "3"
+            return original_query(command)
+
+        transport.query = query
+
+        statistics = DM3000Dmm(transport).calculation_statistics("average")
+
+        self.assertEqual(statistics.function, "average")
+        self.assertEqual(statistics.value, 1.25)
+        self.assertEqual(statistics.count, 3)
+        self.assertEqual(
+            transport.commands,
+            [
+                ":CALCulate:FUNCtion?",
+                ":CALCulate:STATistic:AVERage?",
+                ":CALCulate:STATistic:COUNt?",
+            ],
+        )
+
+    def test_calculation_statistics_rejects_nonmatching_active_calculation_before_statistic_query(self):
+        transport = FakeTransport()
+
+        with self.assertRaisesRegex(InstrumentError, "requires active function average"):
+            DM3000Dmm(transport).calculation_statistics("average")
+
+        self.assertEqual(transport.commands, [":CALCulate:FUNCtion?"])
+
+    def test_trigger_status_rejects_invalid_unit_response(self):
+        transport = FakeTransport()
+        original_query = transport.query
+        transport.query = lambda command: (
+            "400" if command == ":TRIGger:AUTO:INTerval?" else original_query(command)
+        )
+
+        with self.assertRaisesRegex(DataError, "trigger auto interval"):
+            DM3000Dmm(transport).trigger_status()
+
+    def test_trigger_status_rejects_out_of_contract_discrete_response(self):
+        transport = FakeTransport()
+        original_query = transport.query
+        transport.query = lambda command: (
+            "UNKNOWN" if command == ":TRIGger:SOURce?" else original_query(command)
+        )
+
+        with self.assertRaisesRegex(DataError, "unsupported DMM trigger source"):
+            DM3000Dmm(transport).trigger_status()
+
+    def test_calculation_status_rejects_nonfinite_reference(self):
+        transport = FakeTransport()
+        original_query = transport.query
+        transport.query = lambda command: (
+            "nan" if command == ":CALCulate:DB:REFerence?" else original_query(command)
+        )
+
+        with self.assertRaisesRegex(DataError, "non-finite.*dB reference"):
+            DM3000Dmm(transport).calculation_status()
 
     def test_unsupported_function_is_rejected_before_io(self):
         with self.assertRaisesRegex(DataError, "unsupported DMM function"):

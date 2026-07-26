@@ -108,6 +108,87 @@ class CliTests(unittest.TestCase):
             ["function=dcv", "range_code=0", "auto_range=n/a", "impedance=10M"],
         )
 
+    def test_dmm_trigger_status_prints_stable_fields(self):
+        class StubDmmService:
+            def trigger_status(self):
+                from wavebench.instruments import DmmTriggerStatus
+
+                return DmmTriggerStatus("AUTO", 0.4, False, 1, 1, "RISE", "POS", 0.007)
+
+        stdout = io.StringIO()
+        with patch("wavebench.cli._load_dmm_service", return_value=StubDmmService()):
+            with redirect_stdout(stdout):
+                code = main(["dmm", "trigger", "status"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            [
+                "source=AUTO",
+                "auto_interval_s=0.4",
+                "auto_hold=false",
+                "auto_hold_sensitivity=1",
+                "single_count=1",
+                "external_slope=RISE",
+                "vmc_polarity=POS",
+                "vmc_pulse_width_s=0.007",
+            ],
+        )
+
+    def test_dmm_calculation_status_prints_stable_fields(self):
+        class StubDmmService:
+            def calculation_status(self):
+                from wavebench.instruments import DmmCalculationStatus
+
+                return DmmCalculationStatus("none", 0, 0.0, 600.0)
+
+        stdout = io.StringIO()
+        with patch("wavebench.cli._load_dmm_service", return_value=StubDmmService()):
+            with redirect_stdout(stdout):
+                code = main(["dmm", "calculation", "status"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            [
+                "function=none",
+                "statistic_count=0",
+                "db_reference=0",
+                "dbm_reference_ohm=600",
+            ],
+        )
+
+    def test_dmm_calculation_statistics_forwards_confirmation(self):
+        class StubDmmService:
+            def calculation_statistics(self, function, *, calculation_active_confirmed):
+                from wavebench.instruments import DmmCalculationStatistics
+
+                self.call = (function, calculation_active_confirmed)
+                return DmmCalculationStatistics(function, 1.25, 3)
+
+        service = StubDmmService()
+        stdout = io.StringIO()
+        with patch("wavebench.cli._load_dmm_service", return_value=service):
+            with redirect_stdout(stdout):
+                code = main(
+                    [
+                        "dmm",
+                        "calculation",
+                        "statistics",
+                        "average",
+                        "--calculation-active-confirmed",
+                    ]
+                )
+        self.assertEqual(code, 0)
+        self.assertEqual(service.call, ("average", True))
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            ["function=average", "value=1.25", "count=3"],
+        )
+
+    def test_dmm_calculation_statistics_requires_explicit_confirmation(self):
+        args = build_parser().parse_args(["dmm", "calculation", "statistics", "average"])
+
+        self.assertFalse(args.calculation_active_confirmed)
+
     def test_dmm_voltage_range_set_prints_stable_fields(self):
         class StubDmmService:
             def set_voltage_range(self, function, range_code):

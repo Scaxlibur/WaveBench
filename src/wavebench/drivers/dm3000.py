@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import re
 from threading import RLock
 
 from wavebench.errors import DataError, InstrumentError
@@ -10,9 +11,12 @@ from wavebench.instruments.dmm import (
     normalize_dmm_function as normalize_dmm_function,
 )
 from wavebench.instruments.models import (
+    DmmCalculationStatistics,
+    DmmCalculationStatus,
     DmmDcvImpedanceConfiguration,
     DmmMeasurementProfile,
     DmmReading,
+    DmmTriggerStatus,
     DmmVoltageRangeConfiguration,
 )
 
@@ -94,6 +98,65 @@ DMM_FUNCTION_QUERY_MAP = {
     "CAP": "cap",
 }
 
+_CALCULATION_FUNCTIONS = {
+    "NONE",
+    "NULL",
+    "DB",
+    "DBM",
+    "AVERAGE",
+    "MIN",
+    "MAX",
+    "TOTAL",
+    "LIMIT",
+}
+_CALCULATION_STATISTIC_QUERIES = {
+    "average": ":CALCulate:STATistic:AVERage?",
+    "min": ":CALCulate:STATistic:MIN?",
+    "max": ":CALCulate:STATistic:MAX?",
+}
+_TIME_RESPONSE = re.compile(
+    r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s*(ns|us|ms|s)$",
+    re.IGNORECASE,
+)
+
+
+def _finite_float(raw: str, field: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise DataError(f"unexpected DM3000 {field} response: {raw!r}") from exc
+    if not math.isfinite(value):
+        raise DataError(f"non-finite DM3000 {field} response: {raw!r}")
+    return value
+
+
+def _nonnegative_int(raw: str, field: str) -> int:
+    value = _finite_float(raw, field)
+    if value < 0 or not value.is_integer():
+        raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
+    return int(value)
+
+
+def _time_seconds(raw: str, field: str) -> float:
+    match = _TIME_RESPONSE.fullmatch(raw.strip())
+    if match is None:
+        raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
+    value = _finite_float(match.group(1), field)
+    factors = {"ns": 1.0e-9, "us": 1.0e-6, "ms": 1.0e-3, "s": 1.0}
+    seconds = value * factors[match.group(2).lower()]
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
+    return seconds
+
+
+def _on_off(raw: str, field: str) -> bool:
+    normalized = raw.strip().upper()
+    if normalized == "ON":
+        return True
+    if normalized == "OFF":
+        return False
+    raise DataError(f"unexpected DM3000 {field} response: {raw!r}")
+
 
 @dataclass
 class DM3000Dmm:
@@ -152,6 +215,100 @@ class DM3000Dmm:
                 auto_range=auto_range,
                 impedance=impedance,
             )
+
+    def trigger_status(self) -> DmmTriggerStatus:
+        with self._io_lock:
+            source = self.transport.query(":TRIGger:SOURce?").strip().upper()
+            if not source:
+                raise DataError("unexpected empty DM3000 trigger source response")
+            auto_interval_s = _time_seconds(
+                self.transport.query(":TRIGger:AUTO:INTerval?"),
+                "trigger auto interval",
+            )
+            auto_hold = _on_off(
+                self.transport.query(":TRIGger:AUTO:HOLD?"),
+                "trigger auto hold",
+            )
+            auto_hold_sensitivity = _nonnegative_int(
+                self.transport.query(":TRIGger:AUTO:HOLD:SENSitivity?"),
+                "trigger auto hold sensitivity",
+            )
+            single_count = _nonnegative_int(
+                self.transport.query(":TRIGger:SINGle?"),
+                "trigger single count",
+            )
+            external_slope = self.transport.query(":TRIGger:EXT?").strip().upper()
+            vmc_polarity = self.transport.query(":TRIGger:VMComplete:POLar?").strip().upper()
+            if not external_slope or not vmc_polarity:
+                raise DataError("unexpected empty DM3000 trigger edge or VMC polarity response")
+            vmc_pulse_width_s = _time_seconds(
+                self.transport.query(":TRIGger:VMComplete:PULSewidth?"),
+                "trigger VMC pulse width",
+            )
+            try:
+                return DmmTriggerStatus(
+                    source=source,
+                    auto_interval_s=auto_interval_s,
+                    auto_hold=auto_hold,
+                    auto_hold_sensitivity=auto_hold_sensitivity,
+                    single_count=single_count,
+                    external_slope=external_slope,
+                    vmc_polarity=vmc_polarity,
+                    vmc_pulse_width_s=vmc_pulse_width_s,
+                )
+            except ValueError as exc:
+                raise DataError(f"invalid DM3000 trigger status: {exc}") from exc
+
+    def _calculation_function(self) -> str:
+        raw = self.transport.query(":CALCulate:FUNCtion?").strip().strip('"').upper()
+        if raw not in _CALCULATION_FUNCTIONS:
+            raise DataError(f"unexpected DM3000 calculation function response: {raw!r}")
+        return raw.lower()
+
+    def calculation_status(self) -> DmmCalculationStatus:
+        with self._io_lock:
+            function = self._calculation_function()
+            statistic_count = _nonnegative_int(
+                self.transport.query(":CALCulate:STATistic:COUNt?"),
+                "calculation statistic count",
+            )
+            db_reference = _finite_float(
+                self.transport.query(":CALCulate:DB:REFerence?"),
+                "calculation dB reference",
+            )
+            dbm_reference_ohm = _finite_float(
+                self.transport.query(":CALCulate:DBM:REFerence?"),
+                "calculation dBm reference",
+            )
+            if dbm_reference_ohm <= 0:
+                raise DataError("DM3000 calculation dBm reference must be positive")
+            return DmmCalculationStatus(
+                function=function,
+                statistic_count=statistic_count,
+                db_reference=db_reference,
+                dbm_reference_ohm=dbm_reference_ohm,
+            )
+
+    def calculation_statistics(self, expected_function: str) -> DmmCalculationStatistics:
+        expected = expected_function.strip().lower()
+        if expected not in _CALCULATION_STATISTIC_QUERIES:
+            raise DataError("DM3000 calculation statistic must be average, min, or max")
+        with self._io_lock:
+            active = self._calculation_function()
+            if active != expected:
+                raise InstrumentError(
+                    f"DM3000 calculation statistics requires active function {expected}; "
+                    f"current function is {active}"
+                )
+            value = _finite_float(
+                self.transport.query(_CALCULATION_STATISTIC_QUERIES[expected]),
+                f"calculation {expected} statistic",
+            )
+            count = _nonnegative_int(
+                self.transport.query(":CALCulate:STATistic:COUNt?"),
+                "calculation statistic count",
+            )
+            return DmmCalculationStatistics(function=expected, value=value, count=count)
 
     @property
     def configuration_writes_blocked(self) -> bool:

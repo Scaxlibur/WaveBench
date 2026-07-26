@@ -24,9 +24,12 @@ from .cli_output import (
     _print_doctor_records,
     _print_dmm_function_set,
     _print_dmm_function_status,
+    _print_dmm_calculation_statistics,
+    _print_dmm_calculation_status,
     _print_dmm_dcv_impedance_configuration,
     _print_dmm_measurement_profile,
     _print_dmm_reading,
+    _print_dmm_trigger_status,
     _print_dmm_voltage_range_configuration,
     _print_market_plugin_info,
     _print_market_search_results,
@@ -465,6 +468,21 @@ def main(argv: list[str] | None = None) -> int:
                     service.set_dcv_impedance(args.impedance)
                 )
                 return 0
+            if args.command == "trigger" and args.dmm_trigger_command == "status":
+                _print_dmm_trigger_status(service.trigger_status())
+                return 0
+            if args.command == "calculation":
+                if args.dmm_calculation_command == "status":
+                    _print_dmm_calculation_status(service.calculation_status())
+                    return 0
+                if args.dmm_calculation_command == "statistics":
+                    _print_dmm_calculation_statistics(
+                        service.calculation_statistics(
+                            args.function,
+                            calculation_active_confirmed=args.calculation_active_confirmed,
+                        )
+                    )
+                    return 0
         if args.domain == "power":
             service = _load_power_service(args)
             if args.command == "idn":
