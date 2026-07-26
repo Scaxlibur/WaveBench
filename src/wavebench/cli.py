@@ -40,6 +40,7 @@ from .cli_output import (
     _print_run_plan_summary,
     _print_run_preflight,
     _print_scope_acquisition_status,
+    _print_scope_average_capture,
     _print_scope_history_timestamps,
     _print_scope_measurement_statistics,
     _print_scope_cursor_readout,
@@ -572,6 +573,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "acquisition-status":
                 _print_scope_acquisition_status(service.acquisition_status())
+                return 0
+            if args.command == "capture-average":
+                _print_scope_average_capture(
+                    service.capture_average(
+                        channels=tuple(args.channel),
+                        average_count=args.average_count,
+                        acquisition_stopped=args.acquisition_stopped,
+                        allow_50ohm=args.allow_50ohm,
+                    )
+                )
                 return 0
             if args.command == "history-timestamps":
                 channel = args.channel or service.config.scope.default_channel

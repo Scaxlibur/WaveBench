@@ -20,6 +20,7 @@ from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.contracts import (
     MultiChannelScopeDriver,
     ScopeAcquisitionStatusDriver,
+    ScopeAverageCaptureDriver,
     ScopeAnalysisReadDriver,
     ScopeDriver,
     ScopeHistoryTimestampsDriver,
@@ -29,6 +30,8 @@ from wavebench.instruments.contracts import (
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
+    ScopeAverageCaptureRequest,
+    ScopeAverageCaptureResult,
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeFftStatus,
@@ -172,6 +175,39 @@ class ScopeService:
         self._require("scope.acquisition_status", "scope.acquisition_status")
         with self._scope_session() as scope:
             return cast(ScopeAcquisitionStatusDriver, scope).get_acquisition_status()
+
+    def capture_average(
+        self,
+        *,
+        channels: tuple[int, ...],
+        average_count: int,
+        acquisition_stopped: bool,
+        allow_50ohm: bool = False,
+    ) -> ScopeAverageCaptureResult:
+        request = ScopeAverageCaptureRequest(
+            channels=channels,
+            average_count=average_count,
+            acquisition_stopped=acquisition_stopped,
+        )
+        self._require(
+            "scope.capture_average",
+            "scope.capture_average",
+            "scope.channel_coupling",
+        )
+        with self._scope_session() as scope:
+            descriptor = self.descriptor or resolve_instrument_descriptor(
+                self.config.scope.driver,
+                expected_kind="scope",
+            )
+            for channel in request.channels:
+                assert_scope_high_impedance(
+                    scope.channel_coupling(channel),
+                    channel=channel,
+                    allow_50ohm=allow_50ohm,
+                    driver=descriptor.driver_id,
+                    coupling_policy=descriptor.scope_coupling_policy,
+                )
+            return cast(ScopeAverageCaptureDriver, scope).capture_average(request)
 
     def history_timestamps(self, channel: int) -> ScopeHistoryTimestamps:
         self._require("scope.history_timestamps", "scope.history_timestamps")

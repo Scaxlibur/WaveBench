@@ -530,6 +530,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(acquisition_status)
 
+    capture_average = scope_sub.add_parser(
+        "capture-average",
+        help="Run a controlled average acquisition and restore its configuration",
+    )
+    capture_average.add_argument(
+        "--channel",
+        type=int,
+        action="append",
+        required=True,
+        help="Capture channel; repeat for multiple channels",
+    )
+    capture_average.add_argument(
+        "--average-count",
+        type=int,
+        required=True,
+        help="Power-of-two average count from 2 through 1024",
+    )
+    capture_average.add_argument(
+        "--allow-50ohm",
+        action="store_true",
+        help="Explicitly allow scope input coupling that may be 50 ohm",
+    )
+    capture_average.add_argument(
+        "--acquisition-stopped",
+        action="store_true",
+        help="Confirm acquisition is stopped before changing average settings",
+    )
+    add_runtime_options(capture_average)
+
     history_timestamps = scope_sub.add_parser(
         "history-timestamps",
         help="Query the read-only history timestamp table for one channel",

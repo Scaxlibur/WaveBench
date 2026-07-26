@@ -20,6 +20,7 @@ from .instruments.models import (
     PowerProtectionStatus,
     PowerStatus,
     ScopeAcquisitionStatus,
+    ScopeAverageCaptureResult,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
     ScopeCursorReadout,
@@ -263,6 +264,16 @@ def _print_scope_acquisition_status(status: ScopeAcquisitionStatus) -> None:
     print(f"segmented.maximum_enabled={scalar(status.segmented_maximum_enabled)}")
     print(f"segmented.capacity={scalar(status.segment_capacity)}")
     print(f"segmented.available={scalar(status.segments_available)}")
+
+
+def _print_scope_average_capture(result: ScopeAverageCaptureResult) -> None:
+    print("average.channels=" + ",".join(str(channel) for channel in result.request.channels))
+    print(f"average.count={result.request.average_count}")
+    print(f"average.complete={'true' if result.average_complete else 'false'}")
+    print("average.restored=true")
+    print("average.restored_fields=" + ",".join(result.restored_fields))
+    for waveform in result.waveforms:
+        print(f"average.channel.{waveform.channel}.samples={waveform.sample_count}")
 
 
 def _print_scope_history_timestamps(table: ScopeHistoryTimestamps) -> None:

@@ -3,18 +3,24 @@ from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from wavebench.cli import main
 from wavebench.errors import ConfigError
 from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
+    ScopeAverageCaptureRequest,
+    ScopeAverageCaptureResult,
+    ScopeAverageConfiguration,
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeFftStatus,
     ScopeHistoryTimestamp,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
+    WaveformData,
+    WaveformHeader,
 )
 from wavebench.services.scope_service import ScopeService
 
@@ -39,6 +45,181 @@ def test_scope_service_acquisition_status_uses_optional_capability():
     )
 
     assert service.acquisition_status() == expected
+
+
+def test_scope_service_average_capture_builds_request_and_uses_optional_capability():
+    request = ScopeAverageCaptureRequest((1, 2), 16, True)
+    configuration = ScopeAverageConfiguration(8, 1, ((1, "OFF"), (2, "OFF")))
+    waveforms = (SimpleNamespace(channel=1), SimpleNamespace(channel=2))
+    expected = ScopeAverageCaptureResult(
+        request=request,
+        waveforms=waveforms,
+        average_complete=True,
+        configuration_before=configuration,
+        configuration_after=configuration,
+        restored_fields=(
+            "ACQuire:AVERage:COUNt",
+            "ACQuire:NSINgle:COUNt",
+            "CHANnel:ARITHmetics",
+        ),
+    )
+    calls = []
+    driver = SimpleNamespace(
+        channel_coupling=lambda channel: calls.append(("coupling", channel)) or "DCL",
+        capture_average=lambda value: calls.append(("capture", value)) or expected,
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="example.scope")),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=SimpleNamespace(
+            driver_id="example.scope",
+            capabilities=("scope.capture_average", "scope.channel_coupling"),
+            scope_coupling_policy="switchable-termination",
+        ),
+    )
+
+    assert service.capture_average(
+        channels=(1, 2),
+        average_count=16,
+        acquisition_stopped=True,
+    ) == expected
+    assert calls == [("coupling", 1), ("coupling", 2), ("capture", request)]
+
+
+def test_scope_average_capture_fails_before_opening_without_capability():
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="minimal.scope")),
+        logger=SimpleNamespace(),
+        descriptor=SimpleNamespace(driver_id="minimal.scope", capabilities=("scope.idn",)),
+    )
+
+    with patch.object(service, "_open_scope") as open_scope:
+        with pytest.raises(ConfigError, match="scope.capture_average"):
+            service.capture_average(
+                channels=(1,),
+                average_count=8,
+                acquisition_stopped=True,
+            )
+
+    open_scope.assert_not_called()
+
+
+def test_scope_average_capture_checks_coupling_in_same_session_before_writes():
+    calls = []
+    driver = SimpleNamespace(
+        channel_coupling=lambda channel: calls.append(("coupling", channel)) or "DC",
+        capture_average=lambda request: calls.append(("capture", request)),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="example.scope")),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=SimpleNamespace(
+            driver_id="example.scope",
+            capabilities=("scope.capture_average", "scope.channel_coupling"),
+            scope_coupling_policy="switchable-termination",
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="50 ohm"):
+        service.capture_average(
+            channels=(1,),
+            average_count=8,
+            acquisition_stopped=True,
+        )
+
+    assert calls == [("coupling", 1)]
+
+
+@pytest.mark.parametrize(
+    ("channels", "average_count", "message"),
+    [
+        ((), 8, "at least one"),
+        ((1, 1), 8, "unique"),
+        ((0,), 8, "positive"),
+        ((1.5,), 8, "positive"),
+        ((1,), 3, "power of two"),
+        ((1,), 8.0, "power of two"),
+        ((1,), 2048, "power of two"),
+    ],
+)
+def test_scope_average_capture_request_rejects_invalid_values(
+    channels,
+    average_count,
+    message,
+):
+    with pytest.raises(ValueError, match=message):
+        ScopeAverageCaptureRequest(channels, average_count, True)
+
+
+def test_scope_average_capture_request_requires_stopped_confirmation():
+    with pytest.raises(ValueError, match="acquisition is stopped"):
+        ScopeAverageCaptureRequest((1,), 8, False)
+
+
+def test_scope_average_capture_cli_checks_inputs_and_prints_restore_evidence():
+    request = ScopeAverageCaptureRequest((1, 2), 16, True)
+    configuration = ScopeAverageConfiguration(8, 1, ((1, "OFF"), (2, "OFF")))
+    waveforms = tuple(
+        WaveformData(
+            channel=channel,
+            header=WaveformHeader(0.0, 1.0, 2),
+            voltages_v=np.array([0.0, 1.0]),
+        )
+        for channel in (1, 2)
+    )
+    result = ScopeAverageCaptureResult(
+        request=request,
+        waveforms=waveforms,
+        average_complete=True,
+        configuration_before=configuration,
+        configuration_after=configuration,
+        restored_fields=(
+            "ACQuire:AVERage:COUNt",
+            "ACQuire:NSINgle:COUNt",
+            "CHANnel:ARITHmetics",
+        ),
+    )
+    calls = []
+    service = SimpleNamespace(
+        capture_average=lambda **kwargs: calls.append(kwargs) or result,
+    )
+    stdout = io.StringIO()
+
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(
+            [
+                "scope",
+                "capture-average",
+                "--channel",
+                "1",
+                "--channel",
+                "2",
+                "--average-count",
+                "16",
+                "--acquisition-stopped",
+            ]
+        )
+
+    assert code == 0
+    assert calls == [
+        {
+            "channels": (1, 2),
+            "average_count": 16,
+            "acquisition_stopped": True,
+            "allow_50ohm": False,
+        }
+    ]
+    assert stdout.getvalue().splitlines() == [
+        "average.channels=1,2",
+        "average.count=16",
+        "average.complete=true",
+        "average.restored=true",
+        "average.restored_fields=ACQuire:AVERage:COUNt,ACQuire:NSINgle:COUNt,CHANnel:ARITHmetics",
+        "average.channel.1.samples=2",
+        "average.channel.2.samples=2",
+    ]
 
 
 def test_scope_service_history_timestamps_uses_optional_capability():

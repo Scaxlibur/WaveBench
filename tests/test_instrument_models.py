@@ -13,6 +13,7 @@ from wavebench.instruments.contracts import (
     DmmDriver,
     PowerDriver,
     ScopeAcquisitionStatusDriver,
+    ScopeAverageCaptureDriver,
     ScopeAnalysisReadDriver,
     ScopeDriver,
     ScopeHistoryTimestampsDriver,
@@ -64,6 +65,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Dmm(), DmmDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
+    assert isinstance(_ScopeAverageCapture(), ScopeAverageCaptureDriver)
     assert isinstance(_ScopeAnalysisRead(), ScopeAnalysisReadDriver)
     assert isinstance(_ScopeHistoryTimestamps(), ScopeHistoryTimestampsDriver)
     assert isinstance(_ScopeMeasurementStatistics(), ScopeMeasurementStatisticsDriver)
@@ -105,6 +107,10 @@ class _ScopeSnapshot(_DynamicDriver):
 
 class _ScopeAcquisitionStatus(_DynamicDriver):
     idn = close = get_acquisition_status = lambda *args, **kwargs: None
+
+
+class _ScopeAverageCapture(_DynamicDriver):
+    idn = close = capture_average = lambda *args, **kwargs: None
 
 
 class _ScopeAnalysisRead(_DynamicDriver):

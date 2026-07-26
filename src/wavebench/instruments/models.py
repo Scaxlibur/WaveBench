@@ -132,6 +132,76 @@ class ScopeAcquisitionStatus:
     segments_available: int | None
 
 
+ScopeChannelArithmetic = Literal["OFF", "ENVELOPE", "AVERAGE", "SMOOTH", "FILTER"]
+
+
+@dataclass(frozen=True)
+class ScopeAverageCaptureRequest:
+    channels: tuple[int, ...]
+    average_count: int
+    acquisition_stopped: bool
+
+    def __post_init__(self) -> None:
+        if not self.channels:
+            raise ValueError("average capture requires at least one channel")
+        if any(
+            isinstance(channel, bool) or not isinstance(channel, int) or channel < 1
+            for channel in self.channels
+        ):
+            raise ValueError("average capture channels must be positive integers")
+        if len(set(self.channels)) != len(self.channels):
+            raise ValueError("average capture channels must be unique")
+        if (
+            isinstance(self.average_count, bool)
+            or not isinstance(self.average_count, int)
+            or self.average_count < 2
+            or self.average_count > 1024
+            or self.average_count & (self.average_count - 1)
+        ):
+            raise ValueError("average_count must be a power of two from 2 through 1024")
+        if self.acquisition_stopped is not True:
+            raise ValueError(
+                "average capture requires explicit confirmation that acquisition is stopped"
+            )
+
+
+@dataclass(frozen=True)
+class ScopeAverageConfiguration:
+    average_count: int
+    single_count: int
+    channel_arithmetic: tuple[tuple[int, ScopeChannelArithmetic], ...]
+
+    def __post_init__(self) -> None:
+        if self.average_count < 2 or self.single_count < 1:
+            raise ValueError("average configuration counts are out of range")
+        channels = tuple(channel for channel, _ in self.channel_arithmetic)
+        if not channels or len(set(channels)) != len(channels):
+            raise ValueError("average configuration channels must be nonempty and unique")
+
+
+@dataclass(frozen=True)
+class ScopeAverageCaptureResult:
+    request: ScopeAverageCaptureRequest
+    waveforms: tuple["WaveformData", ...]
+    average_complete: bool
+    configuration_before: ScopeAverageConfiguration
+    configuration_after: ScopeAverageConfiguration
+    restored_fields: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        waveform_channels = tuple(waveform.channel for waveform in self.waveforms)
+        if waveform_channels != self.request.channels:
+            raise ValueError("average capture waveform channels must match the request")
+        if not self.average_complete:
+            raise ValueError("successful average capture must be complete")
+        if self.configuration_after != self.configuration_before:
+            raise ValueError("successful average capture must restore its configuration")
+        if not self.restored_fields or len(set(self.restored_fields)) != len(
+            self.restored_fields
+        ):
+            raise ValueError("successful average capture requires unique restored fields")
+
+
 @dataclass(frozen=True)
 class ScopeHistoryTimestamp:
     position: int

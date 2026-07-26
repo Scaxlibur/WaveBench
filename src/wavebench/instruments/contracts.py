@@ -12,6 +12,8 @@ from .models import (
     FrequencyResponseTrace,
     InstrumentMeasurementResult,
     MarkerReading,
+    ScopeAverageCaptureRequest,
+    ScopeAverageCaptureResult,
     ScopeAcquisitionStatus,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
@@ -88,6 +90,14 @@ class ScopeSnapshotDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class ScopeAcquisitionStatusDriver(InstrumentDriver, Protocol):
     def get_acquisition_status(self) -> ScopeAcquisitionStatus: ...
+
+
+@runtime_checkable
+class ScopeAverageCaptureDriver(InstrumentDriver, Protocol):
+    def capture_average(
+        self,
+        request: ScopeAverageCaptureRequest,
+    ) -> ScopeAverageCaptureResult: ...
 
 
 @runtime_checkable
