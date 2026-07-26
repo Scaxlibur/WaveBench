@@ -11,6 +11,7 @@ from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
     ScopeHistoryTimestamp,
     ScopeHistoryTimestamps,
+    ScopeMeasurementStatistics,
 )
 from wavebench.services.scope_service import ScopeService
 
@@ -116,3 +117,100 @@ def test_scope_history_timestamps_cli_uses_default_channel_and_stable_rows():
     assert "history.1.relative_s=-0.25\n" in output
     assert "history.1.date=2026-07-26\n" in output
     assert "history.1.time=10:30:1.25\n" in output
+
+
+def test_scope_service_measurement_statistics_forwards_explicit_guards():
+    expected = ScopeMeasurementStatistics(
+        2, "AMPT", 1.0, 0.9, 0.1, 0.7, 1.1, 42, (0.8, 1.0)
+    )
+    calls = []
+    driver = SimpleNamespace(
+        get_measurement_statistics=lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or expected
+        )
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="example.scope")),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=SimpleNamespace(
+            driver_id="example.scope",
+            capabilities=("scope.measurement_statistics",),
+        ),
+    )
+
+    assert service.measurement_statistics(
+        2,
+        configured_slot=True,
+        include_buffer=True,
+        acquisition_stopped=True,
+    ) == expected
+    assert calls == [
+        (
+            (2,),
+            {
+                "configured_slot": True,
+                "include_buffer": True,
+                "acquisition_stopped": True,
+            },
+        )
+    ]
+
+
+def test_scope_measurement_statistics_fails_before_opening_without_capability():
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="minimal.scope")),
+        logger=SimpleNamespace(),
+        descriptor=SimpleNamespace(driver_id="minimal.scope", capabilities=("scope.idn",)),
+    )
+
+    with patch.object(service, "_open_scope") as open_scope:
+        with pytest.raises(ConfigError, match="scope.measurement_statistics"):
+            service.measurement_statistics(1, configured_slot=True)
+
+    open_scope.assert_not_called()
+
+
+def test_scope_measurement_statistics_cli_forwards_guards_and_prints_nan_as_na():
+    stats = ScopeMeasurementStatistics(1, "AMPT", None, 2.0, 0.1, 1.5, 2.5, 20)
+    calls = []
+    service = SimpleNamespace(
+        measurement_statistics=lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or stats
+        )
+    )
+    stdout = io.StringIO()
+
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(
+            [
+                "scope",
+                "measurement-statistics",
+                "--slot",
+                "1",
+                "--configured-slot",
+            ]
+        )
+
+    assert code == 0
+    assert calls == [
+        (
+            (1,),
+            {
+                "configured_slot": True,
+                "include_buffer": False,
+                "acquisition_stopped": False,
+            },
+        )
+    ]
+    assert stdout.getvalue().splitlines() == [
+        "measurement.slot=1",
+        "measurement.category=AMPT",
+        "measurement.actual=n/a",
+        "measurement.average=2",
+        "measurement.standard_deviation=0.1",
+        "measurement.minimum=1.5",
+        "measurement.maximum=2.5",
+        "measurement.waveform_count=20",
+        "measurement.buffer=n/a",
+    ]

@@ -150,6 +150,19 @@ class ScopeHistoryTimestamps:
     entries: tuple[ScopeHistoryTimestamp, ...]
 
 
+@dataclass(frozen=True)
+class ScopeMeasurementStatistics:
+    slot: int
+    category: str
+    actual: float | None
+    average: float | None
+    standard_deviation: float | None
+    minimum: float | None
+    maximum: float | None
+    waveform_count: int
+    buffered_values: tuple[float, ...] | None = None
+
+
 def _validate_magnitude_unit_semantics(
     unit: MagnitudeUnit,
     semantics: MagnitudeSemantics,

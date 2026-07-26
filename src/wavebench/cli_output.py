@@ -21,6 +21,7 @@ from .instruments.models import (
     PowerStatus,
     ScopeAcquisitionStatus,
     ScopeHistoryTimestamps,
+    ScopeMeasurementStatistics,
     ScopeSnapshot,
     SourceStatus,
     WaveformData,
@@ -269,6 +270,24 @@ def _print_scope_history_timestamps(table: ScopeHistoryTimestamps) -> None:
         print(f"{prefix}.relative_s={entry.relative_s:.12g}")
         print(f"{prefix}.date={entry.year:04d}-{entry.month:02d}-{entry.day:02d}")
         print(f"{prefix}.time={entry.hour:02d}:{entry.minute:02d}:{entry.second:.12g}")
+
+
+def _print_scope_measurement_statistics(stats: ScopeMeasurementStatistics) -> None:
+    def number(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.12g}"
+
+    print(f"measurement.slot={stats.slot}")
+    print(f"measurement.category={stats.category}")
+    print(f"measurement.actual={number(stats.actual)}")
+    print(f"measurement.average={number(stats.average)}")
+    print(f"measurement.standard_deviation={number(stats.standard_deviation)}")
+    print(f"measurement.minimum={number(stats.minimum)}")
+    print(f"measurement.maximum={number(stats.maximum)}")
+    print(f"measurement.waveform_count={stats.waveform_count}")
+    if stats.buffered_values is None:
+        print("measurement.buffer=n/a")
+    else:
+        print("measurement.buffer=" + ",".join(number(value) for value in stats.buffered_values))
 
 def _print_dmm_function_status(function: str) -> None:
     print(f"功能 / Function: {function}")

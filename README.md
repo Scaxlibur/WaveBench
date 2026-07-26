@@ -12,14 +12,14 @@ WaveBench 是一个面向电子设计竞赛调试场景的轻量 Python 自动�
 WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202、DP800 和 DM3000/DM3058 系列驱动；首次使用无需安装外置插件，只需复制示例配置并填写实际仪器 resource。这五个仪器族没有从主包移除的计划；外置插件是显式选择、独立发布的可选升级或扩展，不会取代示例配置使用的内建短名。
 
 > [!IMPORTANT]
-> 当前开发版本是 `v0.8.2`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 `scope.acquisition_status` 与 `scope.history_timestamps` 契约。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
+> 当前开发版本是 `v0.8.3`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 acquisition/history 契约；`v0.8.3` 增加只读、显式预配置槽位的自动测量统计契约。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
 
 ## 当前能力
 
 ### 示波器：R&S RTM2032 与 RIGOL DS1104Z/DS1000Z
 
 - LAN VISA 连接
-- `scope idn`、`scope errors`；声明相应 capability 的驱动还支持只读 `scope status`、`scope acquisition-status` 与 `scope history-timestamps`
+- `scope idn`、`scope errors`；声明相应 capability 的驱动还支持只读 `scope status`、`scope acquisition-status`、`scope history-timestamps` 与 `scope measurement-statistics`
 - 显式 `scope auto` / `scope autoscale`
 - `scope fetch` 与 `scope capture`；默认先只读确认输入为高阻，50 Ω 需显式 `--allow-50ohm`
 - 通过重复 `--channel` 在一次 acquisition 中读取多通道；每个通道完成后立即原子落盘

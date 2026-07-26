@@ -19,6 +19,7 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "scope.snapshot": ("get_snapshot",),
     "scope.acquisition_status": ("get_acquisition_status",),
     "scope.history_timestamps": ("get_history_timestamps",),
+    "scope.measurement_statistics": ("get_measurement_statistics",),
     "source.idn": ("idn",),
     "source.errors": ("errors", "assert_no_errors"),
     "source.status": ("get_status",),

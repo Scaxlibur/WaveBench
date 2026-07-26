@@ -537,6 +537,28 @@ def build_parser() -> argparse.ArgumentParser:
     history_timestamps.add_argument("--channel", type=int, default=None)
     add_runtime_options(history_timestamps)
 
+    measurement_statistics = scope_sub.add_parser(
+        "measurement-statistics",
+        help="Read an explicitly preconfigured automatic-measurement slot",
+    )
+    measurement_statistics.add_argument("--slot", type=int, required=True)
+    measurement_statistics.add_argument(
+        "--configured-slot",
+        action="store_true",
+        help="Confirm the slot was configured before this command",
+    )
+    measurement_statistics.add_argument(
+        "--include-buffer",
+        action="store_true",
+        help="Include the statistics buffer (requires --acquisition-stopped)",
+    )
+    measurement_statistics.add_argument(
+        "--acquisition-stopped",
+        action="store_true",
+        help="Confirm acquisition is stopped before reading the statistics buffer",
+    )
+    add_runtime_options(measurement_statistics)
+
     auto = scope_sub.add_parser("auto", help="Run explicit AUToscale and wait for *OPC?")
     add_runtime_options(auto)
 

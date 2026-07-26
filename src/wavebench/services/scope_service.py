@@ -22,12 +22,14 @@ from wavebench.instruments.contracts import (
     ScopeAcquisitionStatusDriver,
     ScopeDriver,
     ScopeHistoryTimestampsDriver,
+    ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
 )
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
     ScopeHistoryTimestamps,
+    ScopeMeasurementStatistics,
     ScopeSnapshot,
     WaveformData,
 )
@@ -171,6 +173,23 @@ class ScopeService:
         self._require("scope.history_timestamps", "scope.history_timestamps")
         with self._scope_session() as scope:
             return cast(ScopeHistoryTimestampsDriver, scope).get_history_timestamps(channel)
+
+    def measurement_statistics(
+        self,
+        slot: int,
+        *,
+        configured_slot: bool,
+        include_buffer: bool = False,
+        acquisition_stopped: bool = False,
+    ) -> ScopeMeasurementStatistics:
+        self._require("scope.measurement_statistics", "scope.measurement_statistics")
+        with self._scope_session() as scope:
+            return cast(ScopeMeasurementStatisticsDriver, scope).get_measurement_statistics(
+                slot,
+                configured_slot=configured_slot,
+                include_buffer=include_buffer,
+                acquisition_stopped=acquisition_stopped,
+            )
 
     def channel_coupling(self, channel: int) -> str:
         self._require("scope.channel_coupling", "scope.channel_coupling")

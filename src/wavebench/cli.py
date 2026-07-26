@@ -41,6 +41,7 @@ from .cli_output import (
     _print_run_preflight,
     _print_scope_acquisition_status,
     _print_scope_history_timestamps,
+    _print_scope_measurement_statistics,
     _print_scope_snapshot,
     _print_source_status,
     _print_waveform_summary,
@@ -572,6 +573,16 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "history-timestamps":
                 channel = args.channel or service.config.scope.default_channel
                 _print_scope_history_timestamps(service.history_timestamps(channel=channel))
+                return 0
+            if args.command == "measurement-statistics":
+                _print_scope_measurement_statistics(
+                    service.measurement_statistics(
+                        args.slot,
+                        configured_slot=args.configured_slot,
+                        include_buffer=args.include_buffer,
+                        acquisition_stopped=args.acquisition_stopped,
+                    )
+                )
                 return 0
             if args.command in {"auto", "autoscale"}:
                 service.autoscale()

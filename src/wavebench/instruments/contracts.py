@@ -14,6 +14,7 @@ from .models import (
     MarkerReading,
     ScopeAcquisitionStatus,
     ScopeHistoryTimestamps,
+    ScopeMeasurementStatistics,
     ScopeSnapshot,
     SourceStatus,
     SweepAnalyzerSnapshot,
@@ -89,6 +90,18 @@ class ScopeAcquisitionStatusDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class ScopeHistoryTimestampsDriver(InstrumentDriver, Protocol):
     def get_history_timestamps(self, channel: int) -> ScopeHistoryTimestamps: ...
+
+
+@runtime_checkable
+class ScopeMeasurementStatisticsDriver(InstrumentDriver, Protocol):
+    def get_measurement_statistics(
+        self,
+        slot: int,
+        *,
+        configured_slot: bool,
+        include_buffer: bool = False,
+        acquisition_stopped: bool = False,
+    ) -> ScopeMeasurementStatistics: ...
 
 
 @runtime_checkable
