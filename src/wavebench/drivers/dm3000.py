@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from wavebench.errors import DataError
 from wavebench.instruments.dmm import (
@@ -115,6 +116,8 @@ class DM3000Dmm:
             value = float(raw)
         except ValueError as exc:
             raise DataError(f"unexpected DM3000 reading for {key}: {raw!r}") from exc
+        if not math.isfinite(value):
+            raise DataError(f"non-finite DM3000 reading for {key}: {raw!r}")
         return DmmReading(function=key, value=value, unit=DMM_FUNCTION_UNITS[key], raw=raw)
 
     def close(self) -> None:

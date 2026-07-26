@@ -100,6 +100,26 @@ class DM3000DriverTests(unittest.TestCase):
         self.assertEqual(status, "acv")
         self.assertEqual(transport.commands, [":FUNCtion:VOLTage:AC", ":FUNCtion?"])
 
+    def test_all_function_selectors_send_exact_scpi_and_read_back(self):
+        cases = {
+            "dcv": ":FUNCtion:VOLTage:DC",
+            "acv": ":FUNCtion:VOLTage:AC",
+            "dci": ":FUNCtion:CURRent:DC",
+            "aci": ":FUNCtion:CURRent:AC",
+            "res": ":FUNCtion:RESistance",
+            "fres": ":FUNCtion:FRESistance",
+            "freq": ":FUNCtion:FREQuency",
+            "period": ":FUNCtion:PERiod",
+            "continuity": ":FUNCtion:CONTinuity",
+            "diode": ":FUNCtion:DIODe",
+            "cap": ":FUNCtion:CAPacitance",
+        }
+        for requested, command in cases.items():
+            with self.subTest(requested=requested):
+                transport = FakeTransport()
+                self.assertEqual(DM3000Dmm(transport).set_function(requested), requested)
+                self.assertEqual(transport.commands, [command, ":FUNCtion?"])
+
     def test_set_function_rejects_unsupported_function_before_io(self):
         transport = FakeTransport()
         with self.assertRaisesRegex(DataError, "unsupported DMM function"):
@@ -111,6 +131,17 @@ class DM3000DriverTests(unittest.TestCase):
         transport.function_status = "MYSTERY"
         with self.assertRaisesRegex(DataError, "unexpected DMM function status"):
             DM3000Dmm(transport).function_status()
+
+    def test_read_rejects_nonfinite_values(self):
+        for raw in ("nan", "+inf", "-inf", "1e9999"):
+            with self.subTest(raw=raw):
+                transport = FakeTransport()
+                original_query = transport.query
+                transport.query = lambda command, raw=raw: (
+                    raw if command == ":MEASure:VOLTage:DC?" else original_query(command)
+                )
+                with self.assertRaisesRegex(DataError, "non-finite DM3000 reading"):
+                    DM3000Dmm(transport).read("dcv")
 
 
 if __name__ == "__main__":
