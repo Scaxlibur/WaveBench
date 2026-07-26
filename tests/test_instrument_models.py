@@ -1,6 +1,7 @@
 from dataclasses import asdict
 
 import numpy as np
+import pytest
 
 from wavebench.drivers.dg4202 import SourceStatus as LegacySourceStatus
 from wavebench.drivers.dm3000 import DmmReading as LegacyDmmReading
@@ -17,6 +18,7 @@ from wavebench.instruments.contracts import (
     ScopeAnalysisReadDriver,
     ScopeDriver,
     ScopeDigitalStatusDriver,
+    ScopeDigitalWaveformDriver,
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
@@ -28,6 +30,8 @@ from wavebench.instruments.models import (
     ScopeAnalogChannelSnapshot,
     ScopeEdgeTriggerSnapshot,
     ScopeHealthSnapshot,
+    ScopeDigitalWaveform,
+    ScopeDigitalWaveformRequest,
     ScopeIdentitySnapshot,
     ScopeProbeSnapshot,
     ScopeSnapshot,
@@ -68,6 +72,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
     assert isinstance(_ScopeAverageCapture(), ScopeAverageCaptureDriver)
     assert isinstance(_ScopeDigitalStatus(), ScopeDigitalStatusDriver)
+    assert isinstance(_ScopeDigitalWaveform(), ScopeDigitalWaveformDriver)
     assert isinstance(_ScopeAnalysisRead(), ScopeAnalysisReadDriver)
     assert isinstance(_ScopeHistoryTimestamps(), ScopeHistoryTimestampsDriver)
     assert isinstance(_ScopeMeasurementStatistics(), ScopeMeasurementStatisticsDriver)
@@ -88,19 +93,29 @@ class _DynamicDriver:
 
 
 class _Scope(_DynamicDriver):
-    idn = close = errors = channel_coupling = autoscale = fetch_waveform = capture_waveform = screenshot_png = lambda *args, **kwargs: None
+    idn = close = errors = channel_coupling = autoscale = fetch_waveform = capture_waveform = (
+        screenshot_png
+    ) = lambda *args, **kwargs: None
 
 
 class _Source(_DynamicDriver):
-    idn = close = errors = assert_no_errors = get_status = set_frequency = set_output = set_function = set_amplitude_vpp = set_square_duty_cycle = upload_dg4000_dac14_block = probe_arbitrary_queries = lambda *args, **kwargs: None
+    idn = close = errors = assert_no_errors = get_status = set_frequency = set_output = (
+        set_function
+    ) = set_amplitude_vpp = set_square_duty_cycle = upload_dg4000_dac14_block = (
+        probe_arbitrary_queries
+    ) = lambda *args, **kwargs: None
 
 
 class _Power(_DynamicDriver):
-    idn = close = get_status = get_measurement = get_protection_status = set_protection = set_voltage_current_limit = set_output = lambda *args, **kwargs: None
+    idn = close = get_status = get_measurement = get_protection_status = set_protection = (
+        set_voltage_current_limit
+    ) = set_output = lambda *args, **kwargs: None
 
 
 class _Dmm(_DynamicDriver):
-    idn = close = function_status = set_function = apply_function = read = lambda *args, **kwargs: None
+    idn = close = function_status = set_function = apply_function = read = lambda *args, **kwargs: (
+        None
+    )
 
 
 class _ScopeSnapshot(_DynamicDriver):
@@ -117,6 +132,74 @@ class _ScopeAverageCapture(_DynamicDriver):
 
 class _ScopeDigitalStatus(_DynamicDriver):
     idn = close = get_digital_status = lambda *args, **kwargs: None
+
+
+class _ScopeDigitalWaveform(_DynamicDriver):
+    idn = close = get_digital_waveform = lambda *args, **kwargs: None
+
+
+def test_digital_waveform_request_and_model_validate_packed_uint16_semantics():
+    request = ScopeDigitalWaveformRequest((0, 3, 15), True)
+    waveform = ScopeDigitalWaveform(
+        channels=request.channels,
+        x_start_s=-1e-6,
+        x_stop_s=1e-6,
+        x_increment_s=1e-6,
+        samples=np.array([0, 1, 9 | (1 << 15)], dtype=np.uint16),
+    )
+
+    assert waveform.sample_count == 3
+    assert waveform.samples.dtype == np.uint16
+    assert waveform.samples.flags.writeable is False
+    assert waveform.times_s.tolist() == [-1e-6, 0.0, 1e-6]
+
+
+@pytest.mark.parametrize("channels", [(), (0, 0), (-1,), (16,), (True,)])
+def test_digital_waveform_request_rejects_invalid_channels(channels):
+    with pytest.raises(ValueError):
+        ScopeDigitalWaveformRequest(channels, True)
+
+
+def test_digital_waveform_rejects_bits_outside_requested_channels():
+    with pytest.raises(ValueError, match="outside"):
+        ScopeDigitalWaveform(
+            channels=(0,),
+            x_start_s=0.0,
+            x_stop_s=0.0,
+            x_increment_s=1.0,
+            samples=np.array([2], dtype=np.uint16),
+        )
+
+
+def test_digital_waveform_rejects_axis_length_mismatch():
+    with pytest.raises(ValueError, match="sample count"):
+        ScopeDigitalWaveform(
+            channels=(0,),
+            x_start_s=0.0,
+            x_stop_s=5.0,
+            x_increment_s=1.0,
+            samples=np.array([0, 1], dtype=np.uint16),
+        )
+
+
+@pytest.mark.parametrize(
+    "samples, message",
+    [
+        (np.array([], dtype=np.uint16), "nonempty"),
+        (np.array([1.5]), "integers"),
+        (np.array([-1]), "uint16"),
+        (np.array([65536]), "uint16"),
+    ],
+)
+def test_digital_waveform_rejects_invalid_packed_samples(samples, message):
+    with pytest.raises(ValueError, match=message):
+        ScopeDigitalWaveform(
+            channels=tuple(range(16)),
+            x_start_s=0.0,
+            x_stop_s=0.0,
+            x_increment_s=1.0,
+            samples=samples,
+        )
 
 
 class _ScopeAnalysisRead(_DynamicDriver):
@@ -138,13 +221,34 @@ def _scope_snapshot() -> ScopeSnapshot:
         identity=ScopeIdentitySnapshot("Example", "EX1", "123", "1.0", ("OPT",)),
         health=ScopeHealthSnapshot(0, 0, 0, 1, 1, 1_000_000.0, False, False),
         channel=ScopeAnalogChannelSnapshot(
-            2, True, "DCL", 8.0, 1.0, 0.0, 0.0, None, "NORM", 0.0,
-            "input", True, False, "SAMPLE",
+            2,
+            True,
+            "DCL",
+            8.0,
+            1.0,
+            0.0,
+            0.0,
+            None,
+            "NORM",
+            0.0,
+            "input",
+            True,
+            False,
+            "SAMPLE",
         ),
         timebase=ScopeTimebaseSnapshot(0.001, 10, 0.0, 0.001, 50.0, 0.0001, False),
         probe=ScopeProbeSnapshot(2, 10.0, None, None, 10_000_000.0, "P10", "PASSIVE"),
         waveform=ScopeWaveformMetadataSnapshot(
-            2, -0.0005, 0.0005, 1000, 1, 1e-6, -0.0005, 0.001, 0.0, 8,
+            2,
+            -0.0005,
+            0.0005,
+            1000,
+            1,
+            1e-6,
+            -0.0005,
+            0.001,
+            0.0,
+            8,
         ),
         trigger=ScopeEdgeTriggerSnapshot("EDGE", 2, "AUTO", "POS", "DC", 0.1, "AUTO", "OFF", 1e-6),
     )

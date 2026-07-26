@@ -578,6 +578,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(digital_status)
 
+    digital_waveform = scope_sub.add_parser(
+        "digital-waveform",
+        help="Read existing MSO digital waveforms and merge Dn into uint16 bit n",
+    )
+    digital_waveform.add_argument(
+        "--channel",
+        type=int,
+        action="append",
+        required=True,
+        help="Zero-based digital channel; repeat for multiple channels",
+    )
+    digital_waveform.add_argument(
+        "--acquisition-stopped",
+        action="store_true",
+        help="Confirm acquisition is stopped so all channels refer to one stable record",
+    )
+    digital_waveform.add_argument(
+        "--output",
+        help="Optional .npy path for packed uint16 samples",
+    )
+    add_runtime_options(digital_waveform)
+
     measurement_statistics = scope_sub.add_parser(
         "measurement-statistics",
         help="Read an explicitly preconfigured automatic-measurement slot",

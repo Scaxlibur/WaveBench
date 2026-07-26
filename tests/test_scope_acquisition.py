@@ -1,7 +1,7 @@
 import io
 from contextlib import redirect_stdout
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -16,6 +16,7 @@ from wavebench.instruments.models import (
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalWaveform,
     ScopeFftStatus,
     ScopeHistoryTimestamp,
     ScopeHistoryTimestamps,
@@ -263,12 +264,49 @@ def test_scope_service_digital_status_uses_optional_capability():
     assert service.digital_status(channel=5) == expected
 
 
+def test_scope_service_digital_waveform_uses_typed_request():
+    expected = ScopeDigitalWaveform(
+        channels=(0, 5),
+        x_start_s=0.0,
+        x_stop_s=1e-6,
+        x_increment_s=1e-6,
+        samples=np.array([1, 32], dtype=np.uint16),
+    )
+    calls = []
+    driver = SimpleNamespace(
+        get_digital_waveform=lambda request: calls.append(request) or expected,
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="example.scope")),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=SimpleNamespace(
+            driver_id="example.scope",
+            capabilities=("scope.digital_waveform",),
+        ),
+    )
+
+    assert service.digital_waveform(
+        channels=(0, 5),
+        acquisition_stopped=True,
+    ) is expected
+    assert calls[0].channels == (0, 5)
+    assert calls[0].acquisition_stopped is True
+
+
 @pytest.mark.parametrize(
     ("capability", "call"),
     [
         ("scope.acquisition_status", lambda service: service.acquisition_status()),
         ("scope.history_timestamps", lambda service: service.history_timestamps(1)),
         ("scope.digital_status", lambda service: service.digital_status(0)),
+        (
+            "scope.digital_waveform",
+            lambda service: service.digital_waveform(
+                channels=(0,),
+                acquisition_stopped=True,
+            ),
+        ),
     ],
 )
 def test_scope_optional_queries_fail_before_opening(capability, call):
@@ -374,6 +412,139 @@ def test_scope_digital_status_cli_requires_explicit_zero_based_channel():
         "digital.label=CLK",
         "digital.label_enabled=false",
     ]
+
+
+def test_scope_digital_waveform_cli_prints_and_saves_packed_samples(tmp_path):
+    waveform = ScopeDigitalWaveform(
+        channels=(0, 15),
+        x_start_s=-1e-6,
+        x_stop_s=1e-6,
+        x_increment_s=1e-6,
+        samples=np.array([1, 0, 1 << 15], dtype=np.uint16),
+    )
+    calls = []
+    service = SimpleNamespace(
+        digital_waveform=lambda **kwargs: calls.append(kwargs) or waveform,
+    )
+    output_path = tmp_path / "digital.npy"
+    stdout = io.StringIO()
+
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(
+            [
+                "scope",
+                "digital-waveform",
+                "--channel",
+                "0",
+                "--channel",
+                "15",
+                "--acquisition-stopped",
+                "--output",
+                str(output_path),
+            ]
+        )
+
+    assert code == 0
+    assert calls == [{"channels": (0, 15), "acquisition_stopped": True}]
+    saved = np.load(output_path, allow_pickle=False)
+    assert saved.dtype == np.uint16
+    assert saved.tolist() == [1, 0, 1 << 15]
+    assert "digital_waveform.channels=0,15\n" in stdout.getvalue()
+    assert f"digital_waveform.output={output_path}\n" in stdout.getvalue()
+
+
+def test_scope_digital_waveform_cli_refuses_to_overwrite_output(tmp_path):
+    waveform = ScopeDigitalWaveform(
+        channels=(0,),
+        x_start_s=0.0,
+        x_stop_s=0.0,
+        x_increment_s=1e-6,
+        samples=np.array([1], dtype=np.uint16),
+    )
+    output_path = tmp_path / "digital.npy"
+    output_path.write_bytes(b"preserve")
+    service = SimpleNamespace(digital_waveform=Mock(return_value=waveform))
+
+    with patch("wavebench.cli._load_service", return_value=service):
+        code = main(
+            [
+                "scope",
+                "digital-waveform",
+                "--channel",
+                "0",
+                "--acquisition-stopped",
+                "--output",
+                str(output_path),
+            ]
+        )
+
+    assert code == 2
+    service.digital_waveform.assert_not_called()
+    assert output_path.read_bytes() == b"preserve"
+
+
+def test_scope_digital_waveform_cli_rejects_bad_suffix_before_instrument_io(tmp_path):
+    service = SimpleNamespace(digital_waveform=Mock())
+
+    with patch("wavebench.cli._load_service", return_value=service):
+        assert main(
+            [
+                "scope",
+                "digital-waveform",
+                "--channel",
+                "0",
+                "--acquisition-stopped",
+                "--output",
+                str(tmp_path / "digital.csv"),
+            ]
+        ) == 2
+
+    service.digital_waveform.assert_not_called()
+
+
+def test_scope_digital_waveform_cli_preflights_output_directory(tmp_path):
+    service = SimpleNamespace(digital_waveform=Mock())
+
+    with (
+        patch("wavebench.cli._load_service", return_value=service),
+        patch("wavebench.cli.TemporaryFile", side_effect=OSError("read only")),
+    ):
+        assert main(
+            [
+                "scope",
+                "digital-waveform",
+                "--channel",
+                "0",
+                "--acquisition-stopped",
+                "--output",
+                str(tmp_path / "digital.npy"),
+            ]
+        ) == 2
+
+    service.digital_waveform.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--channel", "16", "--acquisition-stopped"],
+        ["--channel", "0", "--channel", "0", "--acquisition-stopped"],
+        ["--channel", "0"],
+    ],
+)
+def test_scope_digital_waveform_cli_reports_request_validation_errors(arguments):
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="example.scope")),
+        logger=SimpleNamespace(),
+        session=SimpleNamespace(),
+        descriptor=SimpleNamespace(
+            driver_id="example.scope",
+            capabilities=("scope.digital_waveform",),
+        ),
+    )
+
+    with patch("wavebench.cli._load_service", return_value=service):
+        assert main(["scope", "digital-waveform", *arguments]) == 2
 
 
 def test_scope_service_measurement_statistics_forwards_explicit_guards():

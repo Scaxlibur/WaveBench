@@ -24,6 +24,7 @@ from wavebench.instruments.contracts import (
     ScopeAnalysisReadDriver,
     ScopeDriver,
     ScopeDigitalStatusDriver,
+    ScopeDigitalWaveformDriver,
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
@@ -36,6 +37,8 @@ from wavebench.instruments.models import (
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalWaveform,
+    ScopeDigitalWaveformRequest,
     ScopeFftStatus,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
@@ -220,6 +223,25 @@ class ScopeService:
         self._require("scope.digital_status", "scope.digital_status")
         with self._scope_session() as scope:
             return cast(ScopeDigitalStatusDriver, scope).get_digital_status(channel)
+
+    def digital_waveform(
+        self,
+        *,
+        channels: tuple[int, ...],
+        acquisition_stopped: bool,
+    ) -> ScopeDigitalWaveform:
+        try:
+            request = ScopeDigitalWaveformRequest(
+                channels=channels,
+                acquisition_stopped=acquisition_stopped,
+            )
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        self._require("scope.digital_waveform", "scope.digital_waveform")
+        with self._scope_session() as scope:
+            return cast(ScopeDigitalWaveformDriver, scope).get_digital_waveform(
+                request
+            )
 
     def measurement_statistics(
         self,

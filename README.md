@@ -12,7 +12,7 @@ WaveBench 是一个面向电子设计竞赛调试场景的轻量 Python 自动�
 WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202、DP800 和 DM3000/DM3058 系列驱动；首次使用无需安装外置插件，只需复制示例配置并填写实际仪器 resource。这五个仪器族没有从主包移除的计划；外置插件是显式选择、独立发布的可选升级或扩展，不会取代示例配置使用的内建短名。
 
 > [!IMPORTANT]
-> 当前开发版本是 `v0.8.6`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 acquisition/history 契约；`v0.8.3` 增加只读自动测量统计契约；`v0.8.4` 增加只读 math/FFT/reference/cursor 契约；`v0.8.5` 增加带配置恢复证据的受控平均采集契约；`v0.8.6` 增加选件门控的只读 MSO 数字通道状态契约。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
+> 当前开发版本是 `v0.8.7`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 acquisition/history 契约；`v0.8.3` 增加只读自动测量统计契约；`v0.8.4` 增加只读 math/FFT/reference/cursor 契约；`v0.8.5` 增加带配置恢复证据的受控平均采集契约；`v0.8.6` 增加选件门控的只读 MSO 数字通道状态契约；`v0.8.7` 增加只读数字波形及 Dn→uint16 bit n 合并契约。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
 
 ## 当前能力
 
@@ -24,6 +24,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - `scope fetch` 与 `scope capture`；默认先只读确认输入为高阻，50 Ω 需显式 `--allow-50ohm`
 - 声明 `scope.capture_average` 的驱动可执行受控平均采集；公共结果要求逐项恢复并返回恢复前后配置证据
 - 声明 `scope.digital_status` 的驱动可读取既有 MSO 数字通道状态；该能力不读取数字波形，也不隐式配置阈值、显示或传输格式
+- 声明 `scope.digital_waveform` 的驱动可在调用方明确确认采集已停止后读取既有数字轨迹；返回值按 Dn→bit n 合并为 `uint16`，驱动不得改点数、传输格式、显示、阈值或采集状态
 - 通过重复 `--channel` 在一次 acquisition 中读取多通道；每个通道完成后立即原子落盘
 - DS1104Z 支持 CH1–CH4、NORM 屏幕波形、RAW 存储波形分块读取和 PNG 截图
 - DS1104Z 使用 `:WAVeform:PREamble?` 将 BYTE 数据换算为时间/电压；RAW 每块最多读取 250000 点

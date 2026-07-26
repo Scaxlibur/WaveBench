@@ -20,6 +20,8 @@ from .models import (
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalWaveform,
+    ScopeDigitalWaveformRequest,
     ScopeFftStatus,
     ScopeSnapshot,
     SourceStatus,
@@ -104,6 +106,14 @@ class ScopeAverageCaptureDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class ScopeDigitalStatusDriver(InstrumentDriver, Protocol):
     def get_digital_status(self, channel: int) -> ScopeDigitalChannelStatus: ...
+
+
+@runtime_checkable
+class ScopeDigitalWaveformDriver(InstrumentDriver, Protocol):
+    def get_digital_waveform(
+        self,
+        request: ScopeDigitalWaveformRequest,
+    ) -> ScopeDigitalWaveform: ...
 
 
 @runtime_checkable

@@ -158,6 +158,99 @@ class ScopeDigitalChannelStatus:
 
 
 @dataclass(frozen=True)
+class ScopeDigitalWaveformRequest:
+    channels: tuple[int, ...]
+    acquisition_stopped: bool
+
+    def __post_init__(self) -> None:
+        if not self.channels:
+            raise ValueError("digital waveform requires at least one channel")
+        if any(
+            isinstance(channel, bool) or not isinstance(channel, int) or channel not in range(16)
+            for channel in self.channels
+        ):
+            raise ValueError("digital waveform channels must be integers from 0 through 15")
+        if len(set(self.channels)) != len(self.channels):
+            raise ValueError("digital waveform channels must be unique")
+        if self.acquisition_stopped is not True:
+            raise ValueError(
+                "digital waveform requires explicit confirmation that acquisition is stopped"
+            )
+
+
+@dataclass(frozen=True)
+class ScopeDigitalWaveform:
+    channels: tuple[int, ...]
+    x_start_s: float
+    x_stop_s: float
+    x_increment_s: float
+    samples: np.ndarray
+
+    def __post_init__(self) -> None:
+        if not self.channels or len(set(self.channels)) != len(self.channels):
+            raise ValueError("digital waveform channels must be nonempty and unique")
+        if any(
+            isinstance(channel, bool) or not isinstance(channel, int) or channel not in range(16)
+            for channel in self.channels
+        ):
+            raise ValueError("digital waveform channels must be integers from 0 through 15")
+        if not all(
+            isfinite(value) for value in (self.x_start_s, self.x_stop_s, self.x_increment_s)
+        ):
+            raise ValueError("digital waveform X-axis values must be finite")
+        raw_samples = np.asarray(self.samples)
+        if raw_samples.ndim != 1:
+            raise ValueError("digital waveform samples must be one-dimensional")
+        if raw_samples.size == 0:
+            raise ValueError("digital waveform samples must be nonempty")
+        if raw_samples.dtype.kind not in {"i", "u"}:
+            raise ValueError("digital waveform samples must be integers")
+        if np.any(raw_samples < 0) or np.any(raw_samples > np.iinfo(np.uint16).max):
+            raise ValueError("digital waveform samples must fit uint16")
+        normalized = np.array(raw_samples, dtype=np.uint16, copy=True)
+        if self.x_increment_s <= 0:
+            raise ValueError("digital waveform x_increment_s must be positive")
+        if normalized.size > 1 and self.x_stop_s <= self.x_start_s:
+            raise ValueError("digital waveform X axis must be increasing")
+        if normalized.size:
+            expected_stop_s = self.x_start_s + (normalized.size - 1) * self.x_increment_s
+            tolerance_s = max(
+                abs(self.x_increment_s) * 1.0e-6,
+                abs(self.x_stop_s) * 1.0e-12,
+                1.0e-18,
+            )
+            if not np.isclose(
+                expected_stop_s,
+                self.x_stop_s,
+                rtol=0.0,
+                atol=tolerance_s,
+            ):
+                raise ValueError("digital waveform X axis does not match sample count")
+        allowed_mask = sum(1 << channel for channel in self.channels)
+        if np.any(np.bitwise_and(normalized, np.uint16(~allowed_mask & 0xFFFF))):
+            raise ValueError("digital waveform contains bits outside the requested channels")
+        normalized.setflags(write=False)
+        object.__setattr__(self, "samples", normalized)
+
+    @property
+    def sample_count(self) -> int:
+        return int(self.samples.size)
+
+    @property
+    def times_s(self) -> np.ndarray:
+        if self.sample_count == 0:
+            return np.array([], dtype=np.float64)
+        return (
+            self.x_start_s
+            + np.arange(
+                self.sample_count,
+                dtype=np.float64,
+            )
+            * self.x_increment_s
+        )
+
+
+@dataclass(frozen=True)
 class ScopeAverageCaptureRequest:
     channels: tuple[int, ...]
     average_count: int

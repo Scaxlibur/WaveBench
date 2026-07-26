@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
+from tempfile import TemporaryFile
 
+import numpy as np
 
 from .config import load_config, vertical_scale_from_vpp
 from .data.packages import load_capture_package, load_run_package
@@ -43,6 +46,7 @@ from .cli_output import (
     _print_scope_average_capture,
     _print_scope_history_timestamps,
     _print_scope_digital_status,
+    _print_scope_digital_waveform,
     _print_scope_measurement_statistics,
     _print_scope_cursor_readout,
     _print_scope_derived_waveform_metadata,
@@ -591,6 +595,39 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "digital-status":
                 _print_scope_digital_status(service.digital_status(channel=args.channel))
+                return 0
+            if args.command == "digital-waveform":
+                output_path = None
+                if args.output:
+                    output_path = Path(args.output).expanduser()
+                    if output_path.suffix.lower() != ".npy":
+                        raise ConfigError("digital waveform --output must use the .npy suffix")
+                    if output_path.exists():
+                        raise ConfigError(
+                            f"digital waveform output already exists: {output_path}"
+                        )
+                    try:
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        with TemporaryFile(dir=output_path.parent):
+                            pass
+                    except OSError as exc:
+                        raise ConfigError(
+                            f"digital waveform output directory is not writable "
+                            f"{output_path.parent}: {exc}"
+                        ) from exc
+                waveform = service.digital_waveform(
+                    channels=tuple(args.channel),
+                    acquisition_stopped=args.acquisition_stopped,
+                )
+                if output_path is not None:
+                    try:
+                        with output_path.open("xb") as file:
+                            np.save(file, waveform.samples, allow_pickle=False)
+                    except OSError as exc:
+                        raise ConfigError(
+                            f"failed to write digital waveform output {output_path}: {exc}"
+                        ) from exc
+                _print_scope_digital_waveform(waveform, output_path=output_path)
                 return 0
             if args.command == "measurement-statistics":
                 _print_scope_measurement_statistics(

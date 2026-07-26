@@ -26,6 +26,7 @@ from .instruments.models import (
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalWaveform,
     ScopeFftStatus,
     ScopeSnapshot,
     SourceStatus,
@@ -301,6 +302,21 @@ def _print_scope_digital_status(status: ScopeDigitalChannelStatus) -> None:
     print(f"digital.position_div={status.position_div:.12g}")
     print(f"digital.label={status.label}")
     print(f"digital.label_enabled={'true' if status.label_enabled else 'false'}")
+
+
+def _print_scope_digital_waveform(
+    waveform: ScopeDigitalWaveform,
+    *,
+    output_path: Path | None = None,
+) -> None:
+    print("digital_waveform.channels=" + ",".join(str(item) for item in waveform.channels))
+    print(f"digital_waveform.samples={waveform.sample_count}")
+    print(f"digital_waveform.dtype={waveform.samples.dtype}")
+    print(f"digital_waveform.x_start_s={waveform.x_start_s:.12g}")
+    print(f"digital_waveform.x_stop_s={waveform.x_stop_s:.12g}")
+    print(f"digital_waveform.x_increment_s={waveform.x_increment_s:.12g}")
+    if output_path is not None:
+        print(f"digital_waveform.output={output_path}")
 
 
 def _print_scope_measurement_statistics(stats: ScopeMeasurementStatistics) -> None:
