@@ -163,6 +163,44 @@ class ScopeMeasurementStatistics:
     buffered_values: tuple[float, ...] | None = None
 
 
+@dataclass(frozen=True)
+class ScopeDerivedWaveformMetadata:
+    source_kind: Literal["math", "reference"]
+    index: int
+    source_catalog: str | None
+    x_start: float
+    x_stop: float
+    points: int
+    values_per_sample: int | None
+    x_increment: float
+    x_origin: float
+    y_increment: float
+    y_origin: float
+    y_resolution_bits: int
+
+
+@dataclass(frozen=True)
+class ScopeFftStatus:
+    math_index: int
+    average_complete: bool
+    resolution_bandwidth_hz: float
+    sample_rate_hz: float
+
+
+@dataclass(frozen=True)
+class ScopeCursorReadout:
+    cursor_index: int
+    source: str
+    function: str
+    result: float | None = None
+    x_delta_s: float | None = None
+    inverse_x_delta_hz: float | None = None
+    y_delta: float | None = None
+    inverse_y_delta: float | None = None
+    x_ratio: float | None = None
+    y_ratio: float | None = None
+
+
 def _validate_magnitude_unit_semantics(
     unit: MagnitudeUnit,
     semantics: MagnitudeSemantics,

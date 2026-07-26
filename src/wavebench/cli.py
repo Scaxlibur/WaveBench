@@ -42,6 +42,9 @@ from .cli_output import (
     _print_scope_acquisition_status,
     _print_scope_history_timestamps,
     _print_scope_measurement_statistics,
+    _print_scope_cursor_readout,
+    _print_scope_derived_waveform_metadata,
+    _print_scope_fft_status,
     _print_scope_snapshot,
     _print_source_status,
     _print_waveform_summary,
@@ -581,6 +584,32 @@ def main(argv: list[str] | None = None) -> int:
                         configured_slot=args.configured_slot,
                         include_buffer=args.include_buffer,
                         acquisition_stopped=args.acquisition_stopped,
+                    )
+                )
+                return 0
+            if args.command == "math-metadata":
+                _print_scope_derived_waveform_metadata(
+                    service.math_waveform_metadata(args.index)
+                )
+                return 0
+            if args.command == "fft-status":
+                _print_scope_fft_status(
+                    service.fft_status(
+                        args.index,
+                        configured_fft=args.configured_fft,
+                    )
+                )
+                return 0
+            if args.command == "reference-metadata":
+                _print_scope_derived_waveform_metadata(
+                    service.reference_waveform_metadata(args.index)
+                )
+                return 0
+            if args.command == "cursor-readout":
+                _print_scope_cursor_readout(
+                    service.cursor_readout(
+                        args.index,
+                        configured_cursor=args.configured_cursor,
                     )
                 )
                 return 0

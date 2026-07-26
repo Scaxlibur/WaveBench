@@ -559,6 +559,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(measurement_statistics)
 
+    math_metadata = scope_sub.add_parser(
+        "math-metadata",
+        help="Query metadata for an existing math waveform",
+    )
+    math_metadata.add_argument("--index", type=int, required=True)
+    add_runtime_options(math_metadata)
+
+    fft_status = scope_sub.add_parser(
+        "fft-status",
+        help="Query status for an existing FFT math waveform",
+    )
+    fft_status.add_argument("--index", type=int, required=True)
+    fft_status.add_argument(
+        "--configured-fft",
+        action="store_true",
+        help="Confirm the math waveform is already configured as FFT",
+    )
+    add_runtime_options(fft_status)
+
+    reference_metadata = scope_sub.add_parser(
+        "reference-metadata",
+        help="Query metadata for an existing reference waveform",
+    )
+    reference_metadata.add_argument("--index", type=int, required=True)
+    add_runtime_options(reference_metadata)
+
+    cursor_readout = scope_sub.add_parser(
+        "cursor-readout",
+        help="Read an explicitly preconfigured cursor result",
+    )
+    cursor_readout.add_argument("--index", type=int, default=1)
+    cursor_readout.add_argument(
+        "--configured-cursor",
+        action="store_true",
+        help="Confirm the cursor is already configured",
+    )
+    add_runtime_options(cursor_readout)
+
     auto = scope_sub.add_parser("auto", help="Run explicit AUToscale and wait for *OPC?")
     add_runtime_options(auto)
 

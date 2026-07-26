@@ -20,6 +20,7 @@ from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.contracts import (
     MultiChannelScopeDriver,
     ScopeAcquisitionStatusDriver,
+    ScopeAnalysisReadDriver,
     ScopeDriver,
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
@@ -28,6 +29,9 @@ from wavebench.instruments.contracts import (
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
+    ScopeCursorReadout,
+    ScopeDerivedWaveformMetadata,
+    ScopeFftStatus,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
     ScopeSnapshot,
@@ -189,6 +193,44 @@ class ScopeService:
                 configured_slot=configured_slot,
                 include_buffer=include_buffer,
                 acquisition_stopped=acquisition_stopped,
+            )
+
+    def math_waveform_metadata(self, math_index: int) -> ScopeDerivedWaveformMetadata:
+        self._require("scope.math_metadata", "scope.math_metadata")
+        with self._scope_session() as scope:
+            return cast(ScopeAnalysisReadDriver, scope).get_math_waveform_metadata(
+                math_index
+            )
+
+    def fft_status(self, math_index: int, *, configured_fft: bool) -> ScopeFftStatus:
+        self._require("scope.fft_status", "scope.fft_status")
+        with self._scope_session() as scope:
+            return cast(ScopeAnalysisReadDriver, scope).get_fft_status(
+                math_index,
+                configured_fft=configured_fft,
+            )
+
+    def reference_waveform_metadata(
+        self,
+        reference_index: int,
+    ) -> ScopeDerivedWaveformMetadata:
+        self._require("scope.reference_metadata", "scope.reference_metadata")
+        with self._scope_session() as scope:
+            return cast(ScopeAnalysisReadDriver, scope).get_reference_waveform_metadata(
+                reference_index
+            )
+
+    def cursor_readout(
+        self,
+        cursor_index: int,
+        *,
+        configured_cursor: bool,
+    ) -> ScopeCursorReadout:
+        self._require("scope.cursor_readout", "scope.cursor_readout")
+        with self._scope_session() as scope:
+            return cast(ScopeAnalysisReadDriver, scope).get_cursor_readout(
+                cursor_index,
+                configured_cursor=configured_cursor,
             )
 
     def channel_coupling(self, channel: int) -> str:

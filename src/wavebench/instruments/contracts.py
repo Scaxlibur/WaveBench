@@ -15,6 +15,9 @@ from .models import (
     ScopeAcquisitionStatus,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
+    ScopeCursorReadout,
+    ScopeDerivedWaveformMetadata,
+    ScopeFftStatus,
     ScopeSnapshot,
     SourceStatus,
     SweepAnalyzerSnapshot,
@@ -102,6 +105,30 @@ class ScopeMeasurementStatisticsDriver(InstrumentDriver, Protocol):
         include_buffer: bool = False,
         acquisition_stopped: bool = False,
     ) -> ScopeMeasurementStatistics: ...
+
+
+@runtime_checkable
+class ScopeAnalysisReadDriver(InstrumentDriver, Protocol):
+    def get_math_waveform_metadata(self, math_index: int) -> ScopeDerivedWaveformMetadata: ...
+
+    def get_fft_status(
+        self,
+        math_index: int,
+        *,
+        configured_fft: bool,
+    ) -> ScopeFftStatus: ...
+
+    def get_reference_waveform_metadata(
+        self,
+        reference_index: int,
+    ) -> ScopeDerivedWaveformMetadata: ...
+
+    def get_cursor_readout(
+        self,
+        cursor_index: int,
+        *,
+        configured_cursor: bool,
+    ) -> ScopeCursorReadout: ...
 
 
 @runtime_checkable

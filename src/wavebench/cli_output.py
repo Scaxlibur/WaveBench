@@ -22,6 +22,9 @@ from .instruments.models import (
     ScopeAcquisitionStatus,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
+    ScopeCursorReadout,
+    ScopeDerivedWaveformMetadata,
+    ScopeFftStatus,
     ScopeSnapshot,
     SourceStatus,
     WaveformData,
@@ -288,6 +291,49 @@ def _print_scope_measurement_statistics(stats: ScopeMeasurementStatistics) -> No
         print("measurement.buffer=n/a")
     else:
         print("measurement.buffer=" + ",".join(number(value) for value in stats.buffered_values))
+
+
+def _print_scope_derived_waveform_metadata(
+    metadata: ScopeDerivedWaveformMetadata,
+) -> None:
+    prefix = metadata.source_kind
+    print(f"{prefix}.index={metadata.index}")
+    print(f"{prefix}.source_catalog={metadata.source_catalog or 'n/a'}")
+    print(f"{prefix}.x_start={metadata.x_start:.12g}")
+    print(f"{prefix}.x_stop={metadata.x_stop:.12g}")
+    print(f"{prefix}.points={metadata.points}")
+    print(
+        f"{prefix}.values_per_sample="
+        + ("n/a" if metadata.values_per_sample is None else str(metadata.values_per_sample))
+    )
+    print(f"{prefix}.x_increment={metadata.x_increment:.12g}")
+    print(f"{prefix}.x_origin={metadata.x_origin:.12g}")
+    print(f"{prefix}.y_increment={metadata.y_increment:.12g}")
+    print(f"{prefix}.y_origin={metadata.y_origin:.12g}")
+    print(f"{prefix}.y_resolution_bits={metadata.y_resolution_bits}")
+
+
+def _print_scope_fft_status(status: ScopeFftStatus) -> None:
+    print(f"fft.math_index={status.math_index}")
+    print(f"fft.average_complete={'true' if status.average_complete else 'false'}")
+    print(f"fft.resolution_bandwidth_hz={status.resolution_bandwidth_hz:.12g}")
+    print(f"fft.sample_rate_hz={status.sample_rate_hz:.12g}")
+
+
+def _print_scope_cursor_readout(readout: ScopeCursorReadout) -> None:
+    def number(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.12g}"
+
+    print(f"cursor.index={readout.cursor_index}")
+    print(f"cursor.source={readout.source}")
+    print(f"cursor.function={readout.function}")
+    print(f"cursor.result={number(readout.result)}")
+    print(f"cursor.x_delta_s={number(readout.x_delta_s)}")
+    print(f"cursor.inverse_x_delta_hz={number(readout.inverse_x_delta_hz)}")
+    print(f"cursor.y_delta={number(readout.y_delta)}")
+    print(f"cursor.inverse_y_delta={number(readout.inverse_y_delta)}")
+    print(f"cursor.x_ratio={number(readout.x_ratio)}")
+    print(f"cursor.y_ratio={number(readout.y_ratio)}")
 
 def _print_dmm_function_status(function: str) -> None:
     print(f"功能 / Function: {function}")

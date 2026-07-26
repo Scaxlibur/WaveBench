@@ -9,6 +9,9 @@ from wavebench.cli import main
 from wavebench.errors import ConfigError
 from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
+    ScopeCursorReadout,
+    ScopeDerivedWaveformMetadata,
+    ScopeFftStatus,
     ScopeHistoryTimestamp,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
@@ -214,3 +217,94 @@ def test_scope_measurement_statistics_cli_forwards_guards_and_prints_nan_as_na()
         "measurement.waveform_count=20",
         "measurement.buffer=n/a",
     ]
+
+
+@pytest.mark.parametrize(
+    ("capability", "method_name", "service_call", "expected"),
+    [
+        (
+            "scope.math_metadata",
+            "get_math_waveform_metadata",
+            lambda service: service.math_waveform_metadata(2),
+            ScopeDerivedWaveformMetadata(
+                "math", 2, None, 0.0, 1.0, 2, 1, 1.0, 0.0, 0.5, 0.0, 32
+            ),
+        ),
+        (
+            "scope.fft_status",
+            "get_fft_status",
+            lambda service: service.fft_status(2, configured_fft=True),
+            ScopeFftStatus(2, True, 10.0, 1_000.0),
+        ),
+        (
+            "scope.reference_metadata",
+            "get_reference_waveform_metadata",
+            lambda service: service.reference_waveform_metadata(3),
+            ScopeDerivedWaveformMetadata(
+                "reference", 3, "CH1", 0.0, 1.0, 2, 1, 1.0, 0.0, 0.5, 0.0, 32
+            ),
+        ),
+        (
+            "scope.cursor_readout",
+            "get_cursor_readout",
+            lambda service: service.cursor_readout(1, configured_cursor=True),
+            ScopeCursorReadout(1, "CH1", "VERTICAL", x_delta_s=0.001),
+        ),
+    ],
+)
+def test_scope_analysis_services_use_optional_capabilities(
+    capability,
+    method_name,
+    service_call,
+    expected,
+):
+    service = _service(capability=capability, method_name=method_name, result=expected)
+    assert service_call(service) == expected
+
+
+def test_scope_math_metadata_cli_prints_stable_fields():
+    metadata = ScopeDerivedWaveformMetadata(
+        "math", 2, None, -1.0, 1.0, 3, 1, 1.0, -1.0, 0.5, 0.0, 32
+    )
+    service = SimpleNamespace(math_waveform_metadata=lambda index: metadata)
+    stdout = io.StringIO()
+
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(["scope", "math-metadata", "--index", "2"])
+
+    assert code == 0
+    assert "math.index=2\n" in stdout.getvalue()
+    assert "math.source_catalog=n/a\n" in stdout.getvalue()
+    assert "math.points=3\n" in stdout.getvalue()
+
+
+def test_scope_fft_status_cli_forwards_configured_guard():
+    status = ScopeFftStatus(2, True, 10.0, 1_000.0)
+    calls = []
+    service = SimpleNamespace(
+        fft_status=lambda *args, **kwargs: calls.append((args, kwargs)) or status
+    )
+    stdout = io.StringIO()
+
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(["scope", "fft-status", "--index", "2", "--configured-fft"])
+
+    assert code == 0
+    assert calls == [((2,), {"configured_fft": True})]
+    assert "fft.average_complete=true\n" in stdout.getvalue()
+
+
+def test_scope_cursor_readout_cli_forwards_configured_guard():
+    readout = ScopeCursorReadout(1, "CH1", "VERTICAL", x_delta_s=0.001)
+    calls = []
+    service = SimpleNamespace(
+        cursor_readout=lambda *args, **kwargs: calls.append((args, kwargs)) or readout
+    )
+    stdout = io.StringIO()
+
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(["scope", "cursor-readout", "--configured-cursor"])
+
+    assert code == 0
+    assert calls == [((1,), {"configured_cursor": True})]
+    assert "cursor.x_delta_s=0.001\n" in stdout.getvalue()
