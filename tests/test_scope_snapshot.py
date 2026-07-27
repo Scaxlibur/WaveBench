@@ -65,6 +65,108 @@ def test_scope_service_status_rejects_missing_capability_before_opening():
     open_scope.assert_not_called()
 
 
+def test_scope_service_channel_display_returns_mutation_manifest():
+    calls = []
+
+    def set_channel_display(channel, enabled, *, check_errors=True):
+        calls.append((channel, enabled, check_errors))
+
+    driver = SimpleNamespace(set_channel_display=set_channel_display)
+    descriptor = SimpleNamespace(
+        driver_id="example.scope",
+        capabilities=("scope.channel_display",),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(
+            scope=SimpleNamespace(driver="example.scope", check_errors=False)
+        ),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=descriptor,
+    )
+
+    manifest = service.set_channel_display(channel=3, enabled=False)
+
+    assert calls == [(3, False, False)]
+    assert manifest == {
+        "operation": "scope.channel_display",
+        "mutates_instrument": True,
+        "raw_scpi": False,
+        "channel": 3,
+        "display": "off",
+        "affected_settings": ["CH3.display"],
+    }
+
+
+def test_scope_service_focus_returns_auditable_mutation_manifest():
+    calls = []
+
+    def focus_channel(
+        channel,
+        *,
+        time_range_s=None,
+        vertical_scale_v_per_div=None,
+        hide_other_channels=False,
+        check_errors=True,
+    ):
+        calls.append(
+            {
+                "channel": channel,
+                "time_range_s": time_range_s,
+                "vertical_scale_v_per_div": vertical_scale_v_per_div,
+                "hide_other_channels": hide_other_channels,
+                "check_errors": check_errors,
+            }
+        )
+
+    driver = SimpleNamespace(focus_channel=focus_channel)
+    descriptor = SimpleNamespace(
+        driver_id="example.scope",
+        capabilities=("scope.focus_channel", "scope.errors"),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(
+            scope=SimpleNamespace(driver="example.scope", check_errors=True)
+        ),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=descriptor,
+    )
+
+    manifest = service.focus_channel(
+        channel=2,
+        time_range_s=0.01,
+        vertical_scale_v_per_div=0.2,
+        hide_other_channels=True,
+    )
+
+    assert calls == [
+        {
+            "channel": 2,
+            "time_range_s": 0.01,
+            "vertical_scale_v_per_div": 0.2,
+            "hide_other_channels": True,
+            "check_errors": True,
+        }
+    ]
+    assert manifest["operation"] == "scope.focus_channel"
+    assert manifest["mutates_instrument"] is True
+    assert manifest["raw_scpi"] is False
+    assert manifest["channel"] == 2
+    assert manifest["time_range_s"] == 0.01
+    assert manifest["vertical_scale_v_per_div"] == 0.2
+    assert manifest["hide_other_channels"] is True
+    assert manifest["affected_settings"] == [
+        "CH2.display",
+        "timebase.range",
+        "CH2.vertical_scale",
+        "CH2.offset",
+        "CH1.display",
+        "CH3.display",
+        "CH4.display",
+    ]
+
+
 def test_scope_status_cli_uses_default_channel_and_prints_stable_fields():
     service = SimpleNamespace(
         config=SimpleNamespace(scope=SimpleNamespace(default_channel=2)),

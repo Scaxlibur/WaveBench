@@ -21,6 +21,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - LAN VISA 连接
 - `scope idn`、`scope errors`；声明相应 capability 的驱动还支持只读 `scope status`、`scope acquisition-status`、`scope history-timestamps` 与 `scope measurement-statistics`
 - 显式 `scope auto` / `scope autoscale`
+- 显式 `scope display --channel N on|off` 与 `scope focus --channel N`，可审计地调整通道显示、时基窗口和垂直档位；不会控制信号源或电源
 - `scope fetch` 与 `scope capture`；默认先只读确认输入为高阻，50 Ω 需显式 `--allow-50ohm`
 - 声明 `scope.capture_average` 的驱动可执行受控平均采集；公共结果要求逐项恢复并返回恢复前后配置证据
 - 声明 `scope.digital_status` 的驱动可读取既有 MSO 数字通道状态；该能力不读取数字波形，也不隐式配置阈值、显示或传输格式
@@ -145,6 +146,9 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
   - `run.schema`：返回 run plan schema
   - `run.check`：只解析并检查 `plans/*.toml` 下的 run plan，不连接仪器
   - `capture.inspect`：读取 `data/raw/` 下的离线采集包摘要
+  - `scope.observe`：只读连接配置中的示波器，返回 IDN、状态快照（若驱动支持）和高阻安全判断；支持 CH1-CH4 多通道观察；可传 `fetch_waveform=true` 读取一个或多个通道的当前波形摘要，并对成功读取的通道生成 pairwise `relationships`（频率比、幅值/均值关系、相关性、延迟/相位、交点），但该模式可能改动示波器的波形传输源/模式
+  - `scope.advise`：基于 `scope.observe` 给出每通道时基/垂直档位/display 建议；只返回建议，不应用调整
+  - `doctor.config`：结构化返回配置中各仪器的只读可达性、IDN 和型号匹配检查结果
 - `/mcp` 与 `/call` 的 JSON 请求体有 1 MiB 上限；路径参数按工具限制在项目内固定目录
 
 ## 安全默认值
@@ -184,6 +188,28 @@ $env:PYTHONPATH = "src"
 python -m wavebench scope idn --config wavebench.toml
 ```
 
+### Windows + WSL 入口
+
+Windows 主机上可用 `scripts/wsl-run.ps1` 从 PowerShell 直接进入 WSL 的项目虚拟环境执行命令，适合把开发、测试和 LAN 仪器访问统一放在 WSL 中：
+
+```powershell
+.\scripts\wsl-run.ps1 wavebench scope idn --config wavebench.toml
+.\scripts\wsl-run.ps1 wavebench scope fetch --config wavebench.toml --channel 1
+.\scripts\wsl-run.ps1 pytest -q
+```
+
+脚本默认进入当前仓库对应的 WSL 路径并激活 `.venv-wsl`。如需指定发行版：
+
+```powershell
+.\scripts\wsl-run.ps1 -Distro Ubuntu wavebench doctor --config wavebench.toml
+```
+
+若只是想在 WSL 内跑系统命令而不激活 `.venv-wsl`：
+
+```powershell
+.\scripts\wsl-run.ps1 --no-venv python3 --version
+```
+
 ## 示例命令
 
 采集示波器波形：
@@ -191,6 +217,13 @@ python -m wavebench scope idn --config wavebench.toml
 ```powershell
 python -m wavebench scope capture --config wavebench.toml --channel 1 --label smoke --points def --window-frequency 1000 --target-cycles 10 --expect-frequency 1000 --frequency-tolerance 0.05 --target-vpp 1.0 --no-csv
 python -m wavebench scope capture --config wavebench.toml --channel 1 --label smoke_with_screen --points def --no-csv --screenshot
+```
+
+显式调整示波器显示：
+
+```powershell
+python -m wavebench scope display --config wavebench.toml --channel 2 off
+python -m wavebench scope focus --config wavebench.toml --channel 1 --time-range 0.01 --vertical-scale 0.2
 ```
 
 DS1104Z 配置示例：

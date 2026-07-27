@@ -12,7 +12,7 @@ wavebench.toml
 # Python
 __pycache__/
 *.py[cod]
-.venv/
+.venv*/
 .pytest_cache/
 .ruff_cache/
 dist/

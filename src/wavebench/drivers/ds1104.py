@@ -118,7 +118,43 @@ class DS1104Scope:
     def autoscale(self, wait_opc: bool = True, check_errors: bool = True) -> None:
         self.transport.write(":AUToscale")
         if wait_opc:
-            self.transport.query_opc()
+            self._record_telemetry(
+                "stage=autoscale wait_opc=skipped reason=ds1000z_socket_opc_response_can_desync"
+            )
+        if check_errors:
+            self.assert_no_errors()
+
+    def set_channel_display(
+        self,
+        channel: int,
+        enabled: bool,
+        *,
+        check_errors: bool = True,
+    ) -> None:
+        self._validate_channel(channel)
+        self.transport.write(f":CHANnel{channel}:DISPlay {'ON' if enabled else 'OFF'}")
+        if check_errors:
+            self.assert_no_errors()
+
+    def focus_channel(
+        self,
+        channel: int,
+        *,
+        time_range_s: float | None = None,
+        vertical_scale_v_per_div: float | None = None,
+        hide_other_channels: bool = False,
+        check_errors: bool = True,
+    ) -> None:
+        self._validate_channel(channel)
+        if hide_other_channels:
+            for other in range(1, 5):
+                if other != channel:
+                    self.transport.write(f":CHANnel{other}:DISPlay OFF")
+        self.transport.write(f":CHANnel{channel}:DISPlay ON")
+        if time_range_s is not None:
+            self.set_time_range(time_range_s)
+        if vertical_scale_v_per_div is not None:
+            self.set_vertical_scale(channel, vertical_scale_v_per_div)
         if check_errors:
             self.assert_no_errors()
 

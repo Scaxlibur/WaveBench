@@ -93,9 +93,9 @@ class _DynamicDriver:
 
 
 class _Scope(_DynamicDriver):
-    idn = close = errors = channel_coupling = autoscale = fetch_waveform = capture_waveform = (
-        screenshot_png
-    ) = lambda *args, **kwargs: None
+    idn = close = errors = channel_coupling = autoscale = set_channel_display = (
+        focus_channel
+    ) = fetch_waveform = capture_waveform = screenshot_png = lambda *args, **kwargs: None
 
 
 class _Source(_DynamicDriver):

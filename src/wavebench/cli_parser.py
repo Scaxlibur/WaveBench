@@ -666,6 +666,38 @@ def build_parser() -> argparse.ArgumentParser:
     autoscale = scope_sub.add_parser("autoscale", help="Alias of scope auto")
     add_runtime_options(autoscale)
 
+    display = scope_sub.add_parser(
+        "display",
+        help="Explicitly turn one analog channel display on or off",
+    )
+    display.add_argument("--channel", type=int, required=True)
+    display.add_argument("state", choices=["on", "off", "ON", "OFF"])
+    add_runtime_options(display)
+
+    focus = scope_sub.add_parser(
+        "focus",
+        help="Explicitly focus the scope display/acquisition window on one channel",
+    )
+    focus.add_argument("--channel", type=int, required=True)
+    focus.add_argument(
+        "--time-range",
+        type=float,
+        default=None,
+        help="Set total horizontal acquisition/display window in seconds",
+    )
+    focus.add_argument(
+        "--vertical-scale",
+        type=float,
+        default=None,
+        help="Set selected channel vertical scale in V/div",
+    )
+    focus.add_argument(
+        "--hide-other-channels",
+        action="store_true",
+        help="Turn CH1-CH4 displays off except the selected channel",
+    )
+    add_runtime_options(focus)
+
     fetch = scope_sub.add_parser("fetch", help="Fetch waveform data without creating full package")
     fetch.add_argument("--channel", type=int, default=None)
     fetch.add_argument("--points", default=None, help="Override waveform points: def, max, or dmax")

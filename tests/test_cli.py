@@ -74,6 +74,103 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "capture")
         self.assertEqual(args.channel, [1, 2])
 
+    def test_scope_display_accepts_channel_and_state(self):
+        args = build_parser().parse_args(["scope", "display", "--channel", "2", "off"])
+        self.assertEqual(args.domain, "scope")
+        self.assertEqual(args.command, "display")
+        self.assertEqual(args.channel, 2)
+        self.assertEqual(args.state, "off")
+
+    def test_scope_focus_accepts_display_adjustment_options(self):
+        args = build_parser().parse_args([
+            "scope",
+            "focus",
+            "--channel",
+            "1",
+            "--time-range",
+            "0.01",
+            "--vertical-scale",
+            "0.2",
+            "--hide-other-channels",
+        ])
+        self.assertEqual(args.domain, "scope")
+        self.assertEqual(args.command, "focus")
+        self.assertEqual(args.channel, 1)
+        self.assertEqual(args.time_range, 0.01)
+        self.assertEqual(args.vertical_scale, 0.2)
+        self.assertTrue(args.hide_other_channels)
+
+    def test_scope_display_prints_mutation_manifest(self):
+        service = Mock()
+        service.set_channel_display.return_value = {
+            "operation": "scope.channel_display",
+            "mutates_instrument": True,
+            "raw_scpi": False,
+            "channel": 2,
+            "display": "off",
+            "affected_settings": ["CH2.display"],
+        }
+        stdout = io.StringIO()
+
+        with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+            code = main(["scope", "display", "--channel", "2", "off"])
+
+        self.assertEqual(code, 0)
+        service.set_channel_display.assert_called_once_with(channel=2, enabled=False)
+        output = stdout.getvalue()
+        self.assertIn("operation=scope.channel_display\n", output)
+        self.assertIn("mutates_instrument=true\n", output)
+        self.assertIn("raw_scpi=false\n", output)
+        self.assertIn("affected_settings=CH2.display\n", output)
+
+    def test_scope_focus_prints_mutation_manifest(self):
+        service = Mock()
+        service.focus_channel.return_value = {
+            "operation": "scope.focus_channel",
+            "mutates_instrument": True,
+            "raw_scpi": False,
+            "channel": 1,
+            "time_range_s": 0.01,
+            "vertical_scale_v_per_div": 0.2,
+            "hide_other_channels": True,
+            "affected_settings": [
+                "CH1.display",
+                "timebase.range",
+                "CH1.vertical_scale",
+                "CH1.offset",
+                "CH2.display",
+                "CH3.display",
+                "CH4.display",
+            ],
+        }
+        stdout = io.StringIO()
+
+        with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+            code = main([
+                "scope",
+                "focus",
+                "--channel",
+                "1",
+                "--time-range",
+                "0.01",
+                "--vertical-scale",
+                "0.2",
+                "--hide-other-channels",
+            ])
+
+        self.assertEqual(code, 0)
+        service.focus_channel.assert_called_once_with(
+            channel=1,
+            time_range_s=0.01,
+            vertical_scale_v_per_div=0.2,
+            hide_other_channels=True,
+        )
+        output = stdout.getvalue()
+        self.assertIn("operation=scope.focus_channel\n", output)
+        self.assertIn("time_range_s=0.01\n", output)
+        self.assertIn("vertical_scale_v_per_div=0.2\n", output)
+        self.assertIn("hide_other_channels=true\n", output)
+
     def test_power_status_accepts_channel(self):
         args = build_parser().parse_args(["power", "status", "--channel", "1"])
         self.assertEqual(args.domain, "power")
