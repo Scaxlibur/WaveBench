@@ -220,6 +220,28 @@ class SafetyLimitsOutputTests(unittest.TestCase):
         open_power.assert_not_called()
         self.assertEqual(fake.protection_calls, [])
 
+    def test_power_setpoints_reject_nonfinite_values_before_open(self):
+        service = PowerService(config=make_config(), logger=CommandLogger())
+
+        with patch.object(service, "_open_power") as open_power:
+            with self.assertRaisesRegex(ConfigError, "电源电压必须是有限数"):
+                service.set_voltage_current_limit(1, float("nan"), 0.1)
+            with self.assertRaisesRegex(ConfigError, "电源限流必须是有限数"):
+                service.set_voltage_current_limit(1, 3.3, float("inf"))
+
+        open_power.assert_not_called()
+
+    def test_power_protection_rejects_nonfinite_thresholds_before_open(self):
+        service = PowerService(config=make_config(), logger=CommandLogger())
+
+        with patch.object(service, "_open_power") as open_power:
+            with self.assertRaisesRegex(ConfigError, "电源电压必须是有限数"):
+                service.set_protection(1, ovp_threshold_v=float("nan"))
+            with self.assertRaisesRegex(ConfigError, "电源限流必须是有限数"):
+                service.set_protection(1, ocp_threshold_a=float("inf"))
+
+        open_power.assert_not_called()
+
     def test_power_protection_allows_safe_write(self):
         fake = FakePower(power_status(3.3, 0.1))
         service = PowerService(config=make_config(), logger=CommandLogger())

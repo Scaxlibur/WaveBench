@@ -19,6 +19,7 @@ DP800_MODEL_CHANNELS = {
     "DP832": 3,
     "DP832A": 3,
 }
+DP800_WRITE_MODELS = {"DP832", "DP832A"}
 _APPLY_TARGET_PATTERN = re.compile(
     r"^CH(?P<channel>[1-3]):(?P<rating>(?:[PN]|-)?\d+(?:\.\d+)?V/\d+(?:\.\d+)?A)$",
     re.IGNORECASE,
@@ -58,15 +59,15 @@ def parse_apply_response(
     response: str,
     *,
     expected_channel: int | None = None,
+    allow_targetless: bool = False,
 ) -> tuple[str | None, float, float]:
     parts = [part.strip() for part in response.strip().split(",")]
     if len(parts) == 2:
         if ":" in parts[0]:
             raise DataError(f"unexpected DP800 APPL? response: {response!r}")
-        if expected_channel not in (None, 1):
+        if not allow_targetless or expected_channel not in (None, 1):
             raise DataError(
-                "unexpected DP800 APPL? response without channel target for "
-                f"CH{expected_channel}"
+                "unexpected DP800 APPL? response without a confirmed single-channel target"
             )
         return (
             None,
@@ -131,6 +132,21 @@ class DP800Power:
                 f"valid channels are 1..{self._channel_count}"
             )
 
+    def _validate_write_channel(self, channel: int) -> None:
+        self._validate_channel(channel)
+        if self._model not in DP800_WRITE_MODELS:
+            raise DataError(
+                f"DP800 writes are supported only on validated DP832/DP832A models; "
+                f"detected {self._model}"
+            )
+
+    def _check_errors_enabled(self, check_errors: bool | None) -> bool:
+        if check_errors is None:
+            return self.check_errors_after_ops
+        if type(check_errors) is not bool:
+            raise DataError("check_errors must be a boolean or None")
+        return check_errors
+
     def errors(self, limit: int = 8) -> list[str]:
         errors: list[str] = []
         for _ in range(limit):
@@ -152,6 +168,7 @@ class DP800Power:
         rating, set_voltage_v, set_current_a = parse_apply_response(
             self.transport.query(":APPL?" if single_channel else f":APPL? CH{channel}"),
             expected_channel=channel,
+            allow_targetless=single_channel,
         )
         measurement = self.get_measurement(channel)
         return PowerStatus(
@@ -222,9 +239,13 @@ class DP800Power:
         ovp_enabled: bool | None = None,
         ocp_threshold_a: float | None = None,
         ocp_enabled: bool | None = None,
-        check_errors: bool = True,
+        check_errors: bool | None = None,
     ) -> PowerProtectionStatus:
-        self._validate_channel(channel)
+        self._validate_write_channel(channel)
+        if ovp_threshold_v is not None:
+            _finite_float(str(ovp_threshold_v), field="OVP threshold")
+        if ocp_threshold_a is not None:
+            _finite_float(str(ocp_threshold_a), field="OCP threshold")
         if ovp_threshold_v is not None and ovp_threshold_v < 0:
             raise DataError("OVP threshold must be >= 0")
         if ocp_threshold_a is not None and ocp_threshold_a <= 0:
@@ -238,7 +259,7 @@ class DP800Power:
         if ocp_enabled is not None:
             self.transport.write(f":OUTP:OCP CH{channel},{'ON' if ocp_enabled else 'OFF'}")
         status = self.get_protection_status(channel)
-        if check_errors:
+        if self._check_errors_enabled(check_errors):
             self.assert_no_errors()
         return status
 
@@ -248,10 +269,12 @@ class DP800Power:
         voltage_v: float,
         current_limit_a: float,
         *,
-        check_errors: bool = True,
+        check_errors: bool | None = None,
         settle_ms_after_set: int = 0,
     ) -> PowerStatus:
-        self._validate_channel(channel)
+        self._validate_write_channel(channel)
+        _finite_float(str(voltage_v), field="set voltage")
+        _finite_float(str(current_limit_a), field="current limit")
         if voltage_v < 0:
             raise DataError("voltage must be >= 0")
         if current_limit_a <= 0:
@@ -260,7 +283,7 @@ class DP800Power:
         if settle_ms_after_set:
             time.sleep(settle_ms_after_set / 1000.0)
         status = self.get_status(channel)
-        if check_errors:
+        if self._check_errors_enabled(check_errors):
             self.assert_no_errors()
         return status
 
@@ -269,15 +292,15 @@ class DP800Power:
         channel: int,
         enabled: bool,
         *,
-        check_errors: bool = True,
+        check_errors: bool | None = None,
         settle_ms_after_output: int = 0,
     ) -> PowerStatus:
-        self._validate_channel(channel)
+        self._validate_write_channel(channel)
         self.transport.write(f":OUTP CH{channel},{'ON' if enabled else 'OFF'}")
         if settle_ms_after_output:
             time.sleep(settle_ms_after_output / 1000.0)
         status = self.get_status(channel)
-        if check_errors:
+        if self._check_errors_enabled(check_errors):
             self.assert_no_errors()
         return status
 

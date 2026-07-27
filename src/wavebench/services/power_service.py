@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+import math
 
 from wavebench.config import PowerConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
@@ -153,6 +154,10 @@ class PowerService:
             )
 
     def _check_power_limits(self, *, voltage_v: float | None, current_limit_a: float | None) -> None:
+        if voltage_v is not None and not math.isfinite(voltage_v):
+            raise ConfigError("power voltage must be finite / 电源电压必须是有限数")
+        if current_limit_a is not None and not math.isfinite(current_limit_a):
+            raise ConfigError("power current limit must be finite / 电源限流必须是有限数")
         max_voltage = self.config.safety_limits.max_power_voltage_v
         if max_voltage is not None and voltage_v is not None and voltage_v > max_voltage:
             raise ConfigError(

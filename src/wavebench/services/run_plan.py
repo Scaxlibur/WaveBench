@@ -497,6 +497,8 @@ def _positive_float(value: Any, name: str) -> float:
         result = float(value)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"{name} must be a positive number") from exc
+    if result != result or result in (float("inf"), float("-inf")):
+        raise ConfigError(f"{name} must be finite")
     if result <= 0:
         raise ConfigError(f"{name} must be > 0")
     return result

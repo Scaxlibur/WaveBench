@@ -102,6 +102,19 @@ voltage_v = 3.3
         with self.assertRaisesRegex(ConfigError, "Required fields: voltage_v, current_limit_a"):
             load_run_plan(path)
 
+    def test_power_set_rejects_nonfinite_values(self):
+        for field, value in (("voltage_v", "nan"), ("current_limit_a", "inf")):
+            with self.subTest(field=field):
+                path = self._write_plan(f"""
+[[steps]]
+kind = "power.set"
+channel = 1
+voltage_v = {value if field == "voltage_v" else "3.3"}
+current_limit_a = {value if field == "current_limit_a" else "0.1"}
+""")
+                with self.assertRaisesRegex(ConfigError, "must be finite"):
+                    load_run_plan(path)
+
 
     def test_unknown_step_field_is_rejected_with_suggestion(self):
         path = self._write_plan("""

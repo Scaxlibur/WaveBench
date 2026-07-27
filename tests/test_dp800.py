@@ -56,7 +56,10 @@ class DP800Tests(unittest.TestCase):
         self.assertEqual(rating, "30V/3A")
         self.assertEqual(voltage, 5.0)
         self.assertEqual(current, 0.1)
-        self.assertEqual(parse_apply_response("5.000,0.100", expected_channel=1), (None, 5.0, 0.1))
+        self.assertEqual(
+            parse_apply_response("5.000,0.100", expected_channel=1, allow_targetless=True),
+            (None, 5.0, 0.1),
+        )
 
     def test_parse_apply_response_rejects_unexpected_format(self):
         with self.assertRaisesRegex(DataError, "unexpected DP800 APPL"):
@@ -65,8 +68,10 @@ class DP800Tests(unittest.TestCase):
             parse_apply_response("CH1:30V/3A,5.000,0.100,extra")
         with self.assertRaisesRegex(DataError, "unexpected DP800 APPL.*channel"):
             parse_apply_response("CH2:30V/3A,5.000,0.100", expected_channel=1)
-        with self.assertRaisesRegex(DataError, "without channel target"):
+        with self.assertRaisesRegex(DataError, "confirmed single-channel target"):
             parse_apply_response("5.000,0.100", expected_channel=2)
+        with self.assertRaisesRegex(DataError, "confirmed single-channel target"):
+            parse_apply_response("5.000,0.100", expected_channel=1)
         with self.assertRaisesRegex(DataError, "unexpected DP800 APPL.*target"):
             parse_apply_response("CH1:bogus,5.000,0.100")
         with self.assertRaisesRegex(DataError, "must be finite"):
@@ -175,6 +180,10 @@ class DP800Tests(unittest.TestCase):
             driver.set_voltage_current_limit(1, -1.0, 0.1)
         with self.assertRaisesRegex(Exception, "current limit must be > 0"):
             driver.set_voltage_current_limit(1, 1.0, 0.0)
+        with self.assertRaisesRegex(DataError, "must be finite"):
+            driver.set_voltage_current_limit(1, float("nan"), 0.1)
+        with self.assertRaisesRegex(DataError, "must be finite"):
+            driver.set_voltage_current_limit(1, 1.0, float("inf"))
 
     def test_set_output_writes_output_only(self):
         transport = FakeTransport()
@@ -196,6 +205,40 @@ class DP800Tests(unittest.TestCase):
         with self.assertRaisesRegex(DataError, "CH3 is unavailable"):
             driver.get_status(3)
         self.assertEqual(transport.queries, ["*IDN?"])
+
+    def test_unaccepted_models_are_read_only(self):
+        transport = FakeTransport()
+        transport.responses["*IDN?"] = "RIGOL TECHNOLOGIES,DP811A,SN,FW"
+        transport.responses[":APPL?"] = "5.000,0.100"
+        driver = DP800Power(transport=transport)
+        self.assertEqual(driver.get_status(1).set_voltage_v, 5.0)
+        with self.assertRaisesRegex(DataError, "writes are supported only"):
+            driver.set_voltage_current_limit(1, 3.3, 0.2)
+        with self.assertRaisesRegex(DataError, "writes are supported only"):
+            driver.set_output(1, False)
+        with self.assertRaisesRegex(DataError, "writes are supported only"):
+            driver.set_protection(1, ovp_enabled=False)
+        self.assertEqual(transport.writes, [])
+
+    def test_protection_rejects_nonfinite_thresholds_before_write(self):
+        transport = FakeTransport()
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(DataError, "must be finite"):
+            driver.set_protection(1, ovp_threshold_v=float("nan"))
+        with self.assertRaisesRegex(DataError, "must be finite"):
+            driver.set_protection(1, ocp_threshold_a=float("inf"))
+        self.assertEqual(transport.writes, [])
+
+    def test_instance_error_check_default_is_honored(self):
+        transport = FakeTransport()
+        DP800Power(transport=transport, check_errors_after_ops=False).set_output(1, False)
+        self.assertNotIn("SYST:ERR?", transport.queries)
+
+        transport = FakeTransport()
+        DP800Power(transport=transport, check_errors_after_ops=False).set_output(
+            1, False, check_errors=True
+        )
+        self.assertIn("SYST:ERR?", transport.queries)
 
     def test_single_channel_status_uses_targetless_apply_query(self):
         transport = FakeTransport()
