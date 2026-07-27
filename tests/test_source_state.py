@@ -105,10 +105,10 @@ class RestorableSourceStateTests(unittest.TestCase):
 
 
 class SourceServiceSnapshotTests(unittest.TestCase):
-    def test_configure_sweep_checks_output_and_vpp_then_closes_transport(self):
+    def test_configure_non_manual_sweep_checks_output_and_vpp_then_closes_transport(self):
         events = []
-        configuration = make_sweep_configuration()
-        profile = make_sweep_profile()
+        configuration = make_sweep_configuration(trigger_source="INTERNAL")
+        profile = make_sweep_profile(trigger_source="INTERNAL")
 
         class FakeSource:
             def get_status(self, channel):
@@ -153,6 +153,70 @@ class SourceServiceSnapshotTests(unittest.TestCase):
             ],
         )
 
+    def test_configure_manual_sweep_requires_persistent_session_before_transport(self):
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="example",
+                default_channel=1,
+                check_errors=False,
+            ),
+            safety_limits=SimpleNamespace(max_source_vpp=2.0),
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source"
+        ) as open_source:
+            with self.assertRaisesRegex(ConfigError, "persistent source session"):
+                service.configure_sweep(make_sweep_configuration())
+
+        require.assert_called_once_with(
+            "source.sweep_configure",
+            "source.sweep_configure",
+            "source.status",
+        )
+        open_source.assert_not_called()
+
+    def test_configure_manual_sweep_reuses_persistent_session_without_closing_it(self):
+        events = []
+        configuration = make_sweep_configuration()
+        profile = make_sweep_profile()
+
+        class FakeSource:
+            def get_status(self, channel):
+                events.append(("get_status", channel))
+                return make_status(channel=channel, output="OFF", amplitude=1.0)
+
+            def configure_sweep(self, channel, target, *, check_errors):
+                events.append(("configure_sweep", channel, target, check_errors))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="example",
+                default_channel=2,
+                check_errors=True,
+            ),
+            safety_limits=SimpleNamespace(max_source_vpp=2.0),
+        )
+        source = FakeSource()
+        service = SourceService(config=config, logger=CommandLogger(), session=source)
+        with patch.object(service, "_require"):
+            result = service.configure_sweep(configuration)
+
+        self.assertIs(result, profile)
+        self.assertEqual(
+            events,
+            [
+                ("get_status", 2),
+                ("configure_sweep", 2, configuration, True),
+            ],
+        )
+
     def test_configure_sweep_rejects_active_output_without_driver_write(self):
         events = []
 
@@ -181,7 +245,9 @@ class SourceServiceSnapshotTests(unittest.TestCase):
             service, "_open_source", return_value=FakeSource()
         ):
             with self.assertRaisesRegex(ConfigError, "output OFF"):
-                service.configure_sweep(make_sweep_configuration())
+                service.configure_sweep(
+                    make_sweep_configuration(trigger_source="INTERNAL")
+                )
 
         self.assertEqual(events, [("get_status", 1), ("close",)])
 
@@ -210,7 +276,9 @@ class SourceServiceSnapshotTests(unittest.TestCase):
             service, "_open_source", return_value=FakeSource()
         ):
             with self.assertRaisesRegex(ConfigError, "安全上限"):
-                service.configure_sweep(make_sweep_configuration())
+                service.configure_sweep(
+                    make_sweep_configuration(trigger_source="INTERNAL")
+                )
 
     def test_configure_sweep_missing_capability_fails_before_transport(self):
         config = SimpleNamespace(
@@ -233,7 +301,28 @@ class SourceServiceSnapshotTests(unittest.TestCase):
 
         open_source.assert_not_called()
 
-    def test_trigger_sweep_uses_default_channel_and_closes_transport(self):
+    def test_trigger_sweep_requires_persistent_session_before_transport(self):
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="example",
+                default_channel=2,
+                check_errors=True,
+            )
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source"
+        ) as open_source:
+            with self.assertRaisesRegex(ConfigError, "persistent source session"):
+                service.trigger_sweep()
+
+        require.assert_called_once_with(
+            "source.sweep_trigger", "source.sweep_trigger", "source.errors"
+        )
+        open_source.assert_not_called()
+
+    def test_trigger_sweep_uses_default_channel_on_persistent_session(self):
         events = []
 
         class FakeSource:
@@ -251,16 +340,15 @@ class SourceServiceSnapshotTests(unittest.TestCase):
                 check_errors=True,
             )
         )
-        service = SourceService(config=config, logger=CommandLogger())
-        with patch.object(service, "_require") as require, patch.object(
-            service, "_open_source", return_value=FakeSource()
-        ):
+        source = FakeSource()
+        service = SourceService(config=config, logger=CommandLogger(), session=source)
+        with patch.object(service, "_require") as require:
             service.trigger_sweep()
 
         require.assert_called_once_with(
             "source.sweep_trigger", "source.sweep_trigger", "source.errors"
         )
-        self.assertEqual(events, [("trigger_sweep", 2, True), ("close",)])
+        self.assertEqual(events, [("trigger_sweep", 2, True)])
 
     def test_trigger_sweep_missing_capability_fails_before_transport(self):
         config = SimpleNamespace(

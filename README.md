@@ -37,7 +37,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - `source idn`、`source status`
 - `source profile`：只读查询 basic 状态之外的负载、极性、噪声、同步、burst、调制、marker 与 pulse hold 上下文
 - `source sweep-profile`：只读查询仪器当前内置 sweep 的频率、时序、触发与 marker 全量 profile；不启动、停止或触发 sweep
-- 公共 Python API 提供完整 sweep 配置事务与独立显式触发契约；具体驱动必须自行实施输出、负载、频率、回读、恢复与歧义写锁存边界
+- 公共 Python API 提供完整 sweep 配置事务与独立显式触发契约；具体驱动必须自行实施输出、负载、频率、回读、恢复与歧义写锁存边界。MANUAL 配置与触发必须通过同一个由调用方持有并关闭的持久 source session，临时会话会在连接仪器前拒绝这两种操作
 - `source counter-profile`：只读查询独立 counter 输入配置、统计状态及已有测量；不会自动启用 counter 或清除统计
 - `source set-freq`
 - `source set-func`：`sin`、`squ`、`ramp`/`triangle`、`puls`、`nois`、`dc`

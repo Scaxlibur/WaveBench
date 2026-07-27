@@ -244,7 +244,11 @@ class SourceSweepProfileDriver(InstrumentDriver, Protocol):
 
 @runtime_checkable
 class SourceSweepControlDriver(InstrumentDriver, Protocol):
-    """Fail-closed sweep configuration and explicit single-trigger operations."""
+    """Fail-closed sweep configuration and explicit single-trigger operations.
+
+    Manual-trigger authorization may be instance-bound. Callers must therefore configure and
+    trigger a manual sweep through the same live driver instance.
+    """
 
     def configure_sweep(
         self,
@@ -260,7 +264,7 @@ class SourceSweepControlDriver(InstrumentDriver, Protocol):
         *,
         check_errors: bool = True,
     ) -> None:
-        """Issue one manual sweep trigger after fresh state checks; never retry it."""
+        """Issue one authorized manual trigger after fresh checks; never retry it."""
         ...
 
 

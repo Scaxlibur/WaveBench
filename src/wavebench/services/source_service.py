@@ -134,6 +134,11 @@ class SourceService:
         if source_cfg.check_errors:
             required.append("source.errors")
         self._require("source.sweep_configure", *required)
+        if configuration.trigger_source == "MANUAL" and self.session is None:
+            raise ConfigError(
+                "manual source sweep configuration requires a persistent source session / "
+                "手动触发扫频配置要求持久信号源会话"
+            )
         with self._source_session() as source:
             status = source.get_status(channel)
             if status.output != "OFF":
@@ -163,11 +168,15 @@ class SourceService:
         if source_cfg.check_errors:
             required.append("source.errors")
         self._require("source.sweep_trigger", *required)
-        with self._source_session() as source:
-            cast(SourceSweepControlDriver, source).trigger_sweep(
-                channel,
-                check_errors=source_cfg.check_errors,
+        if self.session is None:
+            raise ConfigError(
+                "manual source sweep trigger requires the persistent source session that "
+                "configured it / 手动扫频触发必须复用执行配置的持久信号源会话"
             )
+        cast(SourceSweepControlDriver, self.session).trigger_sweep(
+            channel,
+            check_errors=source_cfg.check_errors,
+        )
 
     def snapshot_restorable_state(self, channel: int | None = None) -> RestorableSourceState:
         return RestorableSourceState.from_status(self.status(channel=channel))

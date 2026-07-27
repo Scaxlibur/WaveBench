@@ -8,6 +8,8 @@ The WaveBench distribution includes built-in drivers for the RTM2000/RTM2032, DS
 
 The current development version is `v0.8.18`. It adds a complete built-in source-sweep
 configuration model plus controlled configuration and explicit, non-retryable trigger contracts.
+Manual configuration and triggering must use the same caller-owned persistent source session;
+temporary-session calls reject both operations before connecting to an instrument.
 
 > [!IMPORTANT]
 > The current formal release is `v0.8.0`. This release introduces Instrument API V2, managed plugin lifecycle operations, canonical override slots, and the SocketIO backend; those capabilities are not part of `v0.7.0`. Users of other releases should follow the documentation stored in the matching tag.
