@@ -188,6 +188,39 @@ class SafetyLimitsOutputTests(unittest.TestCase):
 
         self.assertEqual(fake.output_calls, [(1, False, True, 0)])
 
+    def test_power_output_on_rejects_protection_threshold_below_setpoint(self):
+        fake = FakePower(
+            power_status(3.3, 0.1),
+            protection=protection_status(3.2, 0.2),
+        )
+        service = PowerService(config=make_config(), logger=CommandLogger())
+
+        with patch.object(service, "_open_power", return_value=fake):
+            with self.assertRaisesRegex(ConfigError, "保护阈值不安全"):
+                service.set_output(channel=1, enabled=True)
+
+        self.assertEqual(fake.output_calls, [])
+
+    def test_power_output_on_rejects_existing_trip(self):
+        protection = protection_status(4.0, 0.2)
+        protection = PowerProtectionStatus(
+            channel=protection.channel,
+            ovp_enabled=protection.ovp_enabled,
+            ovp_threshold_v=protection.ovp_threshold_v,
+            ovp_tripped="YES",
+            ocp_enabled=protection.ocp_enabled,
+            ocp_threshold_a=protection.ocp_threshold_a,
+            ocp_tripped=protection.ocp_tripped,
+        )
+        fake = FakePower(power_status(3.3, 0.1), protection=protection)
+        service = PowerService(config=make_config(), logger=CommandLogger())
+
+        with patch.object(service, "_open_power", return_value=fake):
+            with self.assertRaisesRegex(ConfigError, "保护已触发"):
+                service.set_output(channel=1, enabled=True)
+
+        self.assertEqual(fake.output_calls, [])
+
     def test_power_protection_rejects_ovp_below_current_set_voltage_before_write(self):
         fake = FakePower(power_status(5.0, 0.1))
         service = PowerService(config=make_config(), logger=CommandLogger())

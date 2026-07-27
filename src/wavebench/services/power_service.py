@@ -195,15 +195,27 @@ class PowerService:
         channel = power_cfg.default_channel if channel is None else channel
         required = ["power.output"]
         if enabled:
-            required.append("power.status")
+            required.extend(("power.status", "power.protection"))
         self._require("power.output", *required)
         with self._power_session() as power:
             if enabled:
                 status = power.get_status(channel)
+                protection = power.get_protection_status(channel)
                 self._check_power_limits(
                     voltage_v=status.set_voltage_v,
                     current_limit_a=status.set_current_a,
                 )
+                self._check_protection_relationship(
+                    set_voltage_v=status.set_voltage_v,
+                    set_current_a=status.set_current_a,
+                    ovp_threshold_v=protection.ovp_threshold_v,
+                    ocp_threshold_a=protection.ocp_threshold_a,
+                )
+                if protection.ovp_tripped != "NO" or protection.ocp_tripped != "NO":
+                    raise ConfigError(
+                        "power output ON rejected: protection trip is active / "
+                        "电源输出开启被拒绝：保护已触发"
+                    )
             return power.set_output(
                 channel,
                 enabled,

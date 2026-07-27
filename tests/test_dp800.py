@@ -1,4 +1,6 @@
 import unittest
+from threading import Barrier, Thread, get_ident
+import time
 
 from wavebench.errors import DataError, InstrumentError
 from wavebench.drivers.dp800 import (
@@ -15,6 +17,12 @@ class FakeTransport:
         self.queries = []
         self.writes = []
         self.fail_command = None
+        self.fail_query_once = None
+        self.fail_query_on_call = {}
+        self.query_counts = {}
+        self.fail_write_commands = set()
+        self.ignored_write_commands = set()
+        self.ignored_write_once = set()
         self.responses = {
             "*IDN?": "RIGOL TECHNOLOGIES,DP832A,SN,FW",
             ":APPL? CH1": "CH1:30V/3A,5.000,0.100",
@@ -32,11 +40,38 @@ class FakeTransport:
 
     def write(self, command: str) -> None:
         self.writes.append(command)
+        ignore_once = command in self.ignored_write_once
+        self.ignored_write_once.discard(command)
+        if command not in self.ignored_write_commands and not ignore_once:
+            self._apply_write(command)
+        if command in self.fail_write_commands:
+            raise InstrumentError(f"injected ambiguous write failure for {command}")
+
+    def _apply_write(self, command: str) -> None:
+        if command.startswith(":APPL CH1,"):
+            voltage, current = command.removeprefix(":APPL CH1,").split(",")
+            self.responses[":APPL? CH1"] = f"CH1:30V/3A,{voltage},{current}"
+        elif command.startswith(":OUTP CH1,"):
+            self.responses[":OUTP? CH1"] = command.rsplit(",", 1)[1]
+        elif command.startswith(":OUTP:OVP:VAL CH1,"):
+            self.responses[":OUTP:OVP:VAL? CH1"] = command.rsplit(",", 1)[1]
+        elif command.startswith(":OUTP:OVP CH1,"):
+            self.responses[":OUTP:OVP? CH1"] = command.rsplit(",", 1)[1]
+        elif command.startswith(":OUTP:OCP:VAL CH1,"):
+            self.responses[":OUTP:OCP:VAL? CH1"] = command.rsplit(",", 1)[1]
+        elif command.startswith(":OUTP:OCP CH1,"):
+            self.responses[":OUTP:OCP? CH1"] = command.rsplit(",", 1)[1]
 
     def query(self, command: str) -> str:
         self.queries.append(command)
+        self.query_counts[command] = self.query_counts.get(command, 0) + 1
         if command == self.fail_command:
             raise InstrumentError(f"injected failure for {command}")
+        if command == self.fail_query_once:
+            self.fail_query_once = None
+            raise InstrumentError(f"injected one-shot failure for {command}")
+        if self.query_counts[command] == self.fail_query_on_call.get(command):
+            raise InstrumentError(f"injected call-count failure for {command}")
         return self.responses[command]
 
     def close(self) -> None:
@@ -159,11 +194,12 @@ class DP800Tests(unittest.TestCase):
         )
         self.assertEqual(transport.writes, [
             ":OUTP:OVP:VAL CH1,6.5",
-            ":OUTP:OVP CH1,ON",
-            ":OUTP:OCP:VAL CH1,0.6",
             ":OUTP:OCP CH1,OFF",
+            ":OUTP:OCP:VAL CH1,0.6",
         ])
-        self.assertEqual(status.ovp_threshold_v, 6.0)
+        self.assertEqual(status.ovp_threshold_v, 6.5)
+        self.assertEqual(status.ocp_threshold_a, 0.6)
+        self.assertEqual(status.ocp_enabled, "OFF")
 
     def test_set_voltage_current_limit_writes_apply_only(self):
         transport = FakeTransport()
@@ -192,6 +228,125 @@ class DP800Tests(unittest.TestCase):
         self.assertEqual(transport.writes, [":OUTP CH1,OFF"])
         self.assertEqual(status.channel, 1)
         self.assertNotIn(":APPL CH1,3.3,0.2", transport.writes)
+
+    def test_appl_readback_failure_restores_without_latching(self):
+        transport = FakeTransport()
+        transport.fail_query_on_call[":APPL? CH1"] = 2
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "original setpoint was restored"):
+            driver.set_voltage_current_limit(1, 3.3, 0.2, check_errors=False)
+        self.assertFalse(driver.configuration_writes_blocked)
+        self.assertEqual(transport.responses[":APPL? CH1"], "CH1:30V/3A,5,0.1")
+
+    def test_appl_ambiguous_write_restores_and_latches(self):
+        transport = FakeTransport()
+        transport.fail_write_commands.add(":APPL CH1,3.3,0.2")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "write outcome is ambiguous"):
+            driver.set_voltage_current_limit(1, 3.3, 0.2, check_errors=False)
+        self.assertTrue(driver.configuration_writes_blocked)
+        self.assertEqual(transport.responses[":APPL? CH1"], "CH1:30V/3A,5,0.1")
+        with self.assertRaisesRegex(InstrumentError, "configuration writes are blocked"):
+            driver.set_output(1, False, check_errors=False)
+
+    def test_appl_restore_failure_latches(self):
+        transport = FakeTransport()
+        transport.fail_query_on_call[":APPL? CH1"] = 2
+        transport.fail_write_commands.add(":APPL CH1,5,0.1")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "restoration is ambiguous"):
+            driver.set_voltage_current_limit(1, 3.3, 0.2, check_errors=False)
+        self.assertTrue(driver.configuration_writes_blocked)
+
+    def test_output_failure_converges_to_off_without_latching(self):
+        transport = FakeTransport()
+        transport.ignored_write_once.add(":OUTP CH1,OFF")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "output was forced OFF"):
+            driver.set_output(1, False, check_errors=False)
+        self.assertFalse(driver.configuration_writes_blocked)
+        self.assertEqual(transport.responses[":OUTP? CH1"], "OFF")
+
+    def test_output_ambiguous_write_forces_off_and_latches(self):
+        transport = FakeTransport()
+        transport.responses[":OUTP? CH1"] = "OFF"
+        transport.fail_write_commands.add(":OUTP CH1,ON")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "write outcome is ambiguous"):
+            driver.set_output(1, True, check_errors=False)
+        self.assertEqual(transport.responses[":OUTP? CH1"], "OFF")
+        self.assertTrue(driver.configuration_writes_blocked)
+
+    def test_output_recovery_failure_latches(self):
+        transport = FakeTransport()
+        transport.responses[":OUTP? CH1"] = "OFF"
+        transport.ignored_write_commands.add(":OUTP CH1,ON")
+        transport.fail_write_commands.add(":OUTP CH1,OFF")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "OFF recovery is ambiguous"):
+            driver.set_output(1, True, check_errors=False)
+        self.assertTrue(driver.configuration_writes_blocked)
+
+    def test_protection_readback_failure_restores_without_latching(self):
+        transport = FakeTransport()
+        transport.ignored_write_commands.add(":OUTP:OCP:VAL CH1,0.6")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "original configuration was restored"):
+            driver.set_protection(1, ocp_threshold_a=0.6, check_errors=False)
+        self.assertFalse(driver.configuration_writes_blocked)
+        self.assertEqual(float(transport.responses[":OUTP:OCP:VAL? CH1"]), 0.5)
+
+    def test_protection_ambiguous_write_restores_and_latches(self):
+        transport = FakeTransport()
+        transport.fail_write_commands.add(":OUTP:OCP:VAL CH1,0.6")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "write outcome is ambiguous"):
+            driver.set_protection(1, ocp_threshold_a=0.6, check_errors=False)
+        self.assertTrue(driver.configuration_writes_blocked)
+        self.assertEqual(transport.responses[":OUTP:OCP:VAL? CH1"], "0.5")
+
+    def test_protection_later_write_failure_restores_all_fields_and_latches(self):
+        transport = FakeTransport()
+        transport.fail_write_commands.add(":OUTP:OCP:VAL CH1,0.6")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "write outcome is ambiguous"):
+            driver.set_protection(
+                1,
+                ovp_threshold_v=6.5,
+                ocp_threshold_a=0.6,
+                check_errors=False,
+            )
+        self.assertEqual(float(transport.responses[":OUTP:OVP:VAL? CH1"]), 6.0)
+        self.assertEqual(float(transport.responses[":OUTP:OCP:VAL? CH1"]), 0.5)
+        self.assertTrue(driver.configuration_writes_blocked)
+
+    def test_protection_restore_failure_latches(self):
+        transport = FakeTransport()
+        transport.ignored_write_commands.add(":OUTP:OCP:VAL CH1,0.6")
+        transport.fail_write_commands.add(":OUTP:OCP CH1,ON")
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "restoration is ambiguous"):
+            driver.set_protection(
+                1,
+                ocp_threshold_a=0.6,
+                ocp_enabled=False,
+                check_errors=False,
+            )
+        self.assertTrue(driver.configuration_writes_blocked)
+
+    def test_new_trip_is_never_cleared_and_latches(self):
+        class TripOnOvpWrite(FakeTransport):
+            def _apply_write(self, command: str) -> None:
+                super()._apply_write(command)
+                if command == ":OUTP:OVP:VAL CH1,6.5":
+                    self.responses[":OUTP:OVP:QUES? CH1"] = "YES"
+
+        transport = TripOnOvpWrite()
+        driver = DP800Power(transport=transport)
+        with self.assertRaisesRegex(InstrumentError, "restoration is ambiguous"):
+            driver.set_protection(1, ovp_threshold_v=6.5, check_errors=False)
+        self.assertTrue(driver.configuration_writes_blocked)
+        self.assertFalse(any("CLEAR" in command for command in transport.writes))
 
     def test_set_output_rejects_invalid_channel(self):
         driver = DP800Power(transport=FakeTransport())
@@ -279,6 +434,46 @@ class DP800Tests(unittest.TestCase):
                 with self.assertRaisesRegex(InstrumentError, "injected failure"):
                     DP800Power(transport=transport).get_status(1)
                 self.assertEqual(transport.writes, [])
+
+    def test_public_io_operations_do_not_interleave_between_threads(self):
+        class SlowTransport(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.query_threads = []
+
+            def query(self, command: str) -> str:
+                self.query_threads.append(get_ident())
+                time.sleep(0.001)
+                return super().query(command)
+
+        transport = SlowTransport()
+        driver = DP800Power(transport=transport)
+        barrier = Barrier(3)
+        errors = []
+
+        def run(operation):
+            barrier.wait()
+            try:
+                operation()
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        threads = [
+            Thread(target=run, args=(lambda: driver.get_status(1),)),
+            Thread(target=run, args=(lambda: driver.get_protection_status(1),)),
+        ]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join()
+
+        switches = sum(
+            current != following
+            for current, following in zip(transport.query_threads, transport.query_threads[1:])
+        )
+        self.assertEqual(errors, [])
+        self.assertLessEqual(switches, 1)
 
     def test_protection_snapshot_fails_at_every_query_without_writes(self):
         commands = (

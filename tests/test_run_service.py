@@ -170,6 +170,31 @@ screenshot = true
 
             open_services.assert_not_called()
 
+    def test_check_requires_protection_capability_for_power_output_on(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "power.output"
+state = "on"
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.power",
+                capabilities=("power.output", "power.status"),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ):
+                with self.assertRaisesRegex(ConfigError, "power.protection"):
+                    service.check(plan)
+
     def test_verify_queries_only_instruments_referenced_by_plan(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(

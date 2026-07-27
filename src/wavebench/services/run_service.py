@@ -167,7 +167,7 @@ class RunService:
             elif step.kind == "power.output":
                 add("power", "power.output")
                 if step.fields["state"] == "on":
-                    add("power", "power.status")
+                    add("power", "power.status", "power.protection")
             elif step.kind == "dmm.read":
                 add("dmm", "dmm.read")
 
