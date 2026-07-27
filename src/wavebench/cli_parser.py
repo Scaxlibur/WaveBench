@@ -507,6 +507,13 @@ def build_parser() -> argparse.ArgumentParser:
     source_status.add_argument("--channel", type=int, default=None)
     add_runtime_options(source_status)
 
+    source_profile = source_sub.add_parser(
+        "profile",
+        help="Query the complete read-only source channel profile",
+    )
+    source_profile.add_argument("--channel", type=int, default=None)
+    add_runtime_options(source_profile)
+
     source_set_freq = source_sub.add_parser("set-freq", help="Set source channel frequency in Hz")
     source_set_freq.add_argument("--channel", type=int, default=None)
     source_set_freq.add_argument("value_hz", type=float)
@@ -563,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep_discrete.add_argument("--frequency-tolerance", type=float, default=None)
     sweep_discrete.add_argument("--source-func", default=None, help="Optional source function to set once before sweep")
     sweep_discrete.add_argument("--source-vpp", type=float, default=None, help="Optional source amplitude in Vpp to set once before sweep")
-    sweep_discrete.add_argument("--restore-source-state", action="store_true", help="Restore source output/function/frequency/amplitude after sweep")
+    sweep_discrete.add_argument("--restore-source-state", action="store_true", help="Restore basic source output/function/frequency/amplitude/duty after sweep")
     sweep_discrete.add_argument("--allow-50ohm", action="store_true", help="Explicitly allow scope input coupling that may be 50 ohm; default requires high impedance")
     sweep_discrete.add_argument("--label", default="discrete_sweep")
     sweep_discrete.add_argument("--no-csv", action="store_true", help="Do not save per-point CSV waveform output")

@@ -451,6 +451,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "status")
         self.assertEqual(args.channel, 2)
 
+    def test_source_profile_accepts_channel(self):
+        args = build_parser().parse_args(["source", "profile", "--channel", "1"])
+        self.assertEqual(args.domain, "source")
+        self.assertEqual(args.command, "profile")
+        self.assertEqual(args.channel, 1)
+
+    def test_source_profile_uses_profile_formatter(self):
+        profile = object()
+
+        class StubSourceService:
+            def channel_profile(self, channel):
+                assert channel == 1
+                return profile
+
+        with patch("wavebench.cli._load_source_service", return_value=StubSourceService()), patch(
+            "wavebench.cli._print_source_channel_profile"
+        ) as print_profile:
+            code = main(["source", "profile", "--channel", "1"])
+
+        self.assertEqual(code, 0)
+        print_profile.assert_called_once_with(profile)
+
     def test_source_status_still_uses_source_formatter(self):
         class StubStatus:
             channel = 2

@@ -59,6 +59,7 @@ def write_run_files(
         channels = [state.channel for state in restore_state]
         run_data["restore"] = {
             "source_state": True,
+            "source_state_scope": "basic",
             "source_channels": channels,
             "snapshots": snapshots,
             "status": "failed" if restore_error is not None else "ok",
@@ -71,6 +72,7 @@ def write_run_files(
     elif plan.restore.source_state:
         run_data["restore"] = {
             "source_state": True,
+            "source_state_scope": "basic",
             "source_channels": list(plan.restore.source_channels),
             "status": "not_started",
         }

@@ -12,7 +12,7 @@ WaveBench 是一个面向电子设计竞赛调试场景的轻量 Python 自动�
 WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202、DP800 和 DM3000/DM3058 系列驱动；首次使用无需安装外置插件，只需复制示例配置并填写实际仪器 resource。这五个仪器族没有从主包移除的计划；外置插件是显式选择、独立发布的可选升级或扩展，不会取代示例配置使用的内建短名。
 
 > [!IMPORTANT]
-> 当前开发版本是 `v0.8.14`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 acquisition/history 契约；`v0.8.3` 增加只读自动测量统计契约；`v0.8.4` 增加只读 math/FFT/reference/cursor 契约；`v0.8.5` 增加带配置恢复证据的受控平均采集契约；`v0.8.6` 增加选件门控的只读 MSO 数字通道状态契约；`v0.8.7` 增加只读数字波形及 Dn→uint16 bit n 合并契约；`v0.8.8` 增加选择性的只读 DMM 当前测量 profile 契约；`v0.8.9` 增加功能门控、回读确认和失败恢复的 DMM 电压量程及 DCV 输入阻抗配置契约；`v0.8.10` 增加只读 DMM 触发与已有 calculation 状态/统计契约；`v0.8.11` 增加脱敏、只读的 DMM 系统与接口状态契约；`v0.8.12` 收紧 DP800 型号/通道识别、有限数、严格枚举和聚合查询失败语义；`v0.8.13` 将 DP800 设定值、输出和 OVP/OCP 写路径事务化，增加统一锁、逐步回读、保守恢复与状态不明锁存；`v0.8.14` 收紧 DG4000 型号、有限数与状态回包，事务化固定波写入与输出控制，并将 DAC14 上传限制为 OFF/FIX/非 sweep 的 fail-closed 路径。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
+> 当前开发版本是 `v0.8.15`。`v0.8.0` 首次发布 V2 可执行插件、受管安装/升级/卸载、覆盖槽位和 SocketIO 后端；`v0.8.1` 增加选择性 `scope.snapshot` 公共契约与 `scope status` CLI；`v0.8.2` 增加只读 acquisition/history 契约；`v0.8.3` 增加只读自动测量统计契约；`v0.8.4` 增加只读 math/FFT/reference/cursor 契约；`v0.8.5` 增加带配置恢复证据的受控平均采集契约；`v0.8.6` 增加选件门控的只读 MSO 数字通道状态契约；`v0.8.7` 增加只读数字波形及 Dn→uint16 bit n 合并契约；`v0.8.8` 增加选择性的只读 DMM 当前测量 profile 契约；`v0.8.9` 增加功能门控、回读确认和失败恢复的 DMM 电压量程及 DCV 输入阻抗配置契约；`v0.8.10` 增加只读 DMM 触发与已有 calculation 状态/统计契约；`v0.8.11` 增加脱敏、只读的 DMM 系统与接口状态契约；`v0.8.12` 收紧 DP800 型号/通道识别、有限数、严格枚举和聚合查询失败语义；`v0.8.13` 将 DP800 设定值、输出和 OVP/OCP 写路径事务化，增加统一锁、逐步回读、保守恢复与状态不明锁存；`v0.8.14` 收紧 DG4000 型号、有限数与状态回包，事务化固定波写入与输出控制，并将 DAC14 上传限制为 OFF/FIX/非 sweep 的 fail-closed 路径；`v0.8.15` 增加只读信号源通道 profile 契约与 CLI，并明确 run/sweep 恢复只覆盖 basic 状态。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
 
 ## 当前能力
 
@@ -35,6 +35,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 ### 信号源：RIGOL DG4202
 
 - `source idn`、`source status`
+- `source profile`：只读查询 basic 状态之外的负载、极性、噪声、同步、burst、调制、marker 与 pulse hold 上下文
 - `source set-freq`
 - `source set-func`：`sin`、`squ`、`ramp`/`triangle`、`puls`、`nois`、`dc`
 - `source set-vpp`
@@ -44,7 +45,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - `source arb-load --frequency ... --output-on`：已确认可用的 DG4202 `DATA:DAC VOLATILE` 任意波上传
 - `source output`
 - `sweep discrete`：信号源到示波器的离散扫频，默认同样检查示波器高阻输入
-- 离散扫频可选 `--restore-source-state` 恢复信号源状态
+- 离散扫频可选 `--restore-source-state` 恢复 basic 信号源状态（输出、函数、频率、Vpp、方波占空比）
 
 ### 电源：RIGOL DP800 系列
 
@@ -96,7 +97,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - `run report <run_dir>`：根据 `run.json` / `summary.csv` 生成静态离线 HTML 报告，包含信号分析指标、DMM 读数卡片、实验证据摘要、产物链接、证据时间线和截图
 - `capture inspect <capture_dir>`：打印离线采集包摘要
 - 默认示波器高阻保护：`scope.capture` / `scope.fetch` / `sweep discrete` / run-plan `scope.capture` 在采集前查询通道耦合。RTM2032 的 `DCL`/`ACL` 视为高阻，`DC`/`AC` 默认按可能的 50 Ω 拒绝；DS1000Z 输入固定为 1 MΩ，`AC`/`DC`/`GND` 只表示耦合方式，均按该机型语义检查。WaveBench 不会自动修改耦合或输入设置
-- 可选 `[restore] source_state = true`：在 `finally` 路径快照并恢复信号源通道状态
+- 可选 `[restore] source_state = true`：在 `finally` 路径快照并恢复 basic 信号源通道状态（输出、函数、频率、Vpp、方波占空比）。该选项不恢复 offset、phase、frequency mode、sweep、负载、极性、噪声、同步、burst、调制、marker、pulse hold 或易失任意波内存；run artifact 以 `source_state_scope = "basic"` 明示范围
 - run 输出位于 `data/runs/<timestamp>_<label>/`，包含 `run.json`、`summary.csv`、步骤记录、质量状态和普通采集包引用
 - `scope.capture` 可启用 `quality_gate = true`；配合 `auto_recover = true` 时，质量告警会触发最多 `[quality].auto_recover_attempts` 次 autoscale + 重采
 - 多次告警采集若测量结果在 `[quality]` 容差内保持稳定，可标记为 `ok_by_consistency`
@@ -162,7 +163,7 @@ WaveBench 避免隐藏的高影响动作：
 - `power set` 不会打开或关闭输出
 - `power output` 不会修改电压或电流限制
 - `power protection` 与普通电压/限流和输出控制分离；写入保护阈值前会检查当前设定值和安全上限
-- `sweep discrete` 不会恢复信号源函数/幅度，除非显式传入 `--restore-source-state`
+- `sweep discrete` 不会恢复 basic 信号源状态，除非显式传入 `--restore-source-state`；该选项不承诺恢复完整通道 profile 或易失任意波内存
 - `sweep discrete` 默认拒绝示波器 50 Ω 输入；确认安全后才可传 `--allow-50ohm`
 - 命令不应静默修改示波器输入阻抗
 - run-plan 安全保护可以查询仪器状态并拒绝执行，但不能自动修正硬件设置

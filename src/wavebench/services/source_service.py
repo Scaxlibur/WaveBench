@@ -5,15 +5,20 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from math import isfinite
 import time
+from typing import cast
 
 from wavebench.arbitrary import build_dg4000_dac14_binary_block, load_arbitrary_waveform
 from wavebench.config import SourceConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
-from wavebench.instruments.contracts import SourceDriver
+from wavebench.instruments.contracts import SourceChannelProfileDriver, SourceDriver
 from wavebench.instruments.api import InstrumentDescriptor
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.factory import open_instrument_driver
-from wavebench.instruments.models import ArbitraryQueryProbeResult, SourceStatus
+from wavebench.instruments.models import (
+    ArbitraryQueryProbeResult,
+    SourceChannelProfile,
+    SourceStatus,
+)
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.source_state import RestorableSourceState
@@ -87,6 +92,13 @@ class SourceService:
         self._require("source.status", "source.status")
         with self._source_session() as source:
             return source.get_status(channel)
+
+    def channel_profile(self, channel: int | None = None) -> SourceChannelProfile:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        self._require("source.channel_profile", "source.channel_profile")
+        with self._source_session() as source:
+            return cast(SourceChannelProfileDriver, source).get_channel_profile(channel)
 
     def snapshot_restorable_state(self, channel: int | None = None) -> RestorableSourceState:
         return RestorableSourceState.from_status(self.status(channel=channel))

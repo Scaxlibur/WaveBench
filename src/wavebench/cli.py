@@ -59,6 +59,7 @@ from .cli_output import (
     _print_scope_derived_waveform_metadata,
     _print_scope_fft_status,
     _print_scope_snapshot,
+    _print_source_channel_profile,
     _print_source_status,
     _print_waveform_summary,
 )
@@ -563,6 +564,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "status":
                 _print_source_status(service.status(channel=args.channel))
+                return 0
+            if args.command == "profile":
+                _print_source_channel_profile(service.channel_profile(channel=args.channel))
                 return 0
             if args.command == "set-freq":
                 _print_source_status(service.set_frequency(channel=args.channel, value_hz=args.value_hz))

@@ -1012,6 +1012,7 @@ function = "SQU"
                 source.restore_restorable_state.assert_called_once_with(fake_state)
                 run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
                 self.assertEqual(run_data["restore"]["status"], "ok")
+                self.assertEqual(run_data["restore"]["source_state_scope"], "basic")
                 self.assertEqual(run_data["restore"]["snapshot"]["square_duty_cycle_percent"], 50.0)
 
     def test_source_snapshot_step_and_restore_share_run_session(self):

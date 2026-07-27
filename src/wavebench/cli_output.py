@@ -36,6 +36,7 @@ from .instruments.models import (
     ScopeDigitalWaveform,
     ScopeFftStatus,
     ScopeSnapshot,
+    SourceChannelProfile,
     SourceStatus,
     WaveformData,
 )
@@ -213,7 +214,7 @@ def _print_run_plan_summary(plan: RunPlan) -> None:
             channels = ",".join(str(channel) for channel in plan.restore.source_channels)
         else:
             channels = "default"
-        print(f"restore: source state channels={channels}")
+        print(f"restore: basic source state channels={channels}")
     else:
         print("restore: none")
     print(f"steps={len(plan.steps)}")
@@ -478,6 +479,22 @@ def _print_source_status(status: SourceStatus) -> None:
     print(f"mode={status.frequency_mode} sweep={status.sweep_enabled}")
     if status.apply_raw is not None:
         print(f"apply={status.apply_raw}")
+
+
+def _print_source_channel_profile(profile: SourceChannelProfile) -> None:
+    _print_source_status(profile.status)
+    load = "high_impedance" if profile.load_ohm is None else f"{profile.load_ohm:.12g}"
+    print(f"load_ohm={load}")
+    print(f"polarity={profile.polarity}")
+    print(f"noise_enabled={str(profile.noise_enabled).lower()}")
+    print(f"noise_scale_percent={profile.noise_scale_percent:.12g}")
+    print(f"sync_enabled={str(profile.sync_enabled).lower()}")
+    print(f"sync_polarity={profile.sync_polarity}")
+    print(f"burst_enabled={str(profile.burst_enabled).lower()}")
+    print(f"modulation_enabled={str(profile.modulation_enabled).lower()}")
+    print(f"modulation_type={profile.modulation_type}")
+    print(f"marker_enabled={str(profile.marker_enabled).lower()}")
+    print(f"pulse_hold={profile.pulse_hold}")
 
 
 def _print_capture_package_summary(package) -> None:

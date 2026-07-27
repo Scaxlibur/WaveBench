@@ -1,7 +1,10 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from wavebench.drivers.dg4202 import SourceStatus
-from wavebench.errors import DataError
+from wavebench.errors import ConfigError, DataError
+from wavebench.instruments import SourceChannelProfile
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
 from wavebench.services.source_state import RestorableSourceState
@@ -53,6 +56,60 @@ class RestorableSourceStateTests(unittest.TestCase):
 
 
 class SourceServiceSnapshotTests(unittest.TestCase):
+    def test_channel_profile_uses_default_channel_and_closes_transport(self):
+        events = []
+        profile = SourceChannelProfile(
+            status=make_status(channel=2),
+            load_ohm=None,
+            polarity="NORMAL",
+            noise_enabled=False,
+            noise_scale_percent=10.0,
+            sync_enabled=True,
+            sync_polarity="POSITIVE",
+            burst_enabled=False,
+            modulation_enabled=False,
+            modulation_type="AM",
+            marker_enabled=False,
+            pulse_hold="DUTY",
+        )
+
+        class FakeSource:
+            def get_channel_profile(self, channel):
+                events.append(("get_channel_profile", channel))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(resource="TCPIP::source::INSTR", driver="example", default_channel=2)
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source", return_value=FakeSource()
+        ):
+            result = service.channel_profile()
+
+        self.assertIs(result, profile)
+        require.assert_called_once_with("source.channel_profile", "source.channel_profile")
+        self.assertEqual(events, [("get_channel_profile", 2), ("close",)])
+
+    def test_channel_profile_missing_capability_fails_before_transport(self):
+        config = SimpleNamespace(
+            source=SimpleNamespace(resource="TCPIP::source::INSTR", driver="legacy", default_channel=1)
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.source",
+            capabilities=("source.status",),
+        )
+
+        with patch.object(service, "_open_source") as open_source:
+            with self.assertRaisesRegex(ConfigError, "source.channel_profile"):
+                service.channel_profile()
+
+        open_source.assert_not_called()
+
     def test_snapshot_restorable_state_uses_status(self):
         service = SourceService(config=None, logger=CommandLogger())
         service.status = lambda channel=None: make_status(channel=channel or 2)
