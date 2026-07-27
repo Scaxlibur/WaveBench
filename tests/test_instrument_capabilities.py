@@ -31,6 +31,10 @@ def test_source_sweep_profile_has_a_runtime_method_mapping():
     assert CAPABILITY_METHODS["source.sweep_profile"] == ("get_sweep_profile",)
 
 
+def test_source_counter_profile_has_a_runtime_method_mapping():
+    assert CAPABILITY_METHODS["source.counter_profile"] == ("get_counter_profile",)
+
+
 def test_require_capabilities_names_driver_operation_and_missing_capability():
     descriptor = _scope_descriptor(capabilities=("scope.idn",))
 

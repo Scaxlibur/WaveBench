@@ -32,6 +32,7 @@ from .models import (
     ScopeFftStatus,
     ScopeSnapshot,
     SourceChannelProfile,
+    SourceCounterProfile,
     SourceSweepProfile,
     SourceStatus,
     SweepAnalyzerSnapshot,
@@ -238,6 +239,11 @@ class SourceChannelProfileDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class SourceSweepProfileDriver(InstrumentDriver, Protocol):
     def get_sweep_profile(self, channel: int) -> SourceSweepProfile: ...
+
+
+@runtime_checkable
+class SourceCounterProfileDriver(InstrumentDriver, Protocol):
+    def get_counter_profile(self) -> SourceCounterProfile: ...
 
 
 @runtime_checkable

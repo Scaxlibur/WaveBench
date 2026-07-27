@@ -29,6 +29,7 @@ from wavebench.instruments.contracts import (
     ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
     SourceChannelProfileDriver,
+    SourceCounterProfileDriver,
     SourceDriver,
     SourceSweepProfileDriver,
 )
@@ -53,6 +54,8 @@ from wavebench.instruments.models import (
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
     SourceChannelProfile,
+    SourceCounterMeasurement,
+    SourceCounterProfile,
     SourceSweepProfile,
     SourceStatus,
     WaveformData,
@@ -250,6 +253,101 @@ def test_source_sweep_profile_rejects_inconsistent_or_ambiguous_values(changes, 
         _source_sweep_profile(**changes)
 
 
+def _source_counter_measurement(**changes):
+    values = {
+        "frequency_hz": 1000.0,
+        "period_s": 0.001,
+        "duty_cycle_percent": 40.0,
+        "positive_width_s": 0.0004,
+        "negative_width_s": 0.0006,
+    }
+    values.update(changes)
+    return SourceCounterMeasurement(**values)
+
+
+def _source_counter_profile(**changes):
+    values = {
+        "enabled": False,
+        "measurement": None,
+        "coupling": "AC",
+        "impedance_ohm": 1_000_000.0,
+        "attenuation": 1,
+        "gate_time": "USER1",
+        "high_frequency_rejection_enabled": False,
+        "trigger_level_v": 0.0,
+        "sensitivity_percent": 50.0,
+        "statistics_enabled": False,
+        "statistics_display": "DIGITAL",
+    }
+    values.update(changes)
+    return SourceCounterProfile(**values)
+
+
+def test_source_counter_profile_serializes_off_state_without_measurement():
+    profile = _source_counter_profile()
+
+    assert profile.as_dict() == {
+        "enabled": False,
+        "measurement": None,
+        "coupling": "AC",
+        "impedance_ohm": 1_000_000.0,
+        "attenuation": 1,
+        "gate_time": "USER1",
+        "high_frequency_rejection_enabled": False,
+        "trigger_level_v": 0.0,
+        "sensitivity_percent": 50.0,
+        "statistics_enabled": False,
+        "statistics_display": "DIGITAL",
+    }
+
+
+def test_source_counter_profile_serializes_complete_enabled_measurement():
+    measurement = _source_counter_measurement()
+    profile = _source_counter_profile(enabled=True, measurement=measurement)
+
+    assert profile.as_dict()["measurement"] == measurement.as_dict()
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"frequency_hz": float("nan")}, "frequency_hz"),
+        ({"period_s": 0.0}, "positive"),
+        ({"duty_cycle_percent": 101.0}, "duty cycle"),
+        ({"positive_width_s": -1.0}, "pulse widths"),
+        ({"period_s": 0.002}, "frequency and period"),
+        ({"positive_width_s": 0.0005}, "pulse widths"),
+        ({"duty_cycle_percent": 50.0}, "duty cycle"),
+    ],
+)
+def test_source_counter_measurement_rejects_inconsistent_values(changes, message):
+    with pytest.raises(ValueError, match=message):
+        _source_counter_measurement(**changes)
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"enabled": 1}, "enabled"),
+        ({"enabled": True}, "measurement must be present"),
+        ({"measurement": _source_counter_measurement()}, "measurement must be present"),
+        ({"coupling": "GND"}, "coupling"),
+        ({"impedance_ohm": 51.0}, "impedance"),
+        ({"attenuation": 2}, "attenuation"),
+        ({"gate_time": "USER7"}, "gate time"),
+        ({"high_frequency_rejection_enabled": 1}, "high_frequency"),
+        ({"trigger_level_v": float("inf")}, "trigger level"),
+        ({"trigger_level_v": 2.51}, "trigger level"),
+        ({"sensitivity_percent": 100.1}, "sensitivity"),
+        ({"statistics_enabled": "OFF"}, "statistics_enabled"),
+        ({"statistics_display": "GRAPH"}, "statistics display"),
+    ],
+)
+def test_source_counter_profile_rejects_ambiguous_values(changes, message):
+    with pytest.raises(ValueError, match=message):
+        _source_counter_profile(**changes)
+
+
 def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Scope(), ScopeDriver)
     assert isinstance(_Source(), SourceDriver)
@@ -262,6 +360,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_DmmSystemInterfaceStatus(), DmmSystemInterfaceStatusDriver)
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_SourceChannelProfile(), SourceChannelProfileDriver)
+    assert isinstance(_SourceCounterProfile(), SourceCounterProfileDriver)
     assert isinstance(_SourceSweepProfile(), SourceSweepProfileDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
@@ -307,6 +406,10 @@ class _SourceChannelProfile(_DynamicDriver):
 
 class _SourceSweepProfile(_DynamicDriver):
     idn = close = get_sweep_profile = lambda *args, **kwargs: None
+
+
+class _SourceCounterProfile(_DynamicDriver):
+    idn = close = get_counter_profile = lambda *args, **kwargs: None
 
 
 def _source_status() -> SourceStatus:

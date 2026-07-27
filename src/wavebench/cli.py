@@ -60,6 +60,7 @@ from .cli_output import (
     _print_scope_fft_status,
     _print_scope_snapshot,
     _print_source_channel_profile,
+    _print_source_counter_profile,
     _print_source_sweep_profile,
     _print_source_status,
     _print_waveform_summary,
@@ -571,6 +572,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "sweep-profile":
                 _print_source_sweep_profile(service.sweep_profile(channel=args.channel))
+                return 0
+            if args.command == "counter-profile":
+                _print_source_counter_profile(service.counter_profile())
                 return 0
             if args.command == "set-freq":
                 _print_source_status(service.set_frequency(channel=args.channel, value_hz=args.value_hz))

@@ -37,6 +37,7 @@ from .instruments.models import (
     ScopeFftStatus,
     ScopeSnapshot,
     SourceChannelProfile,
+    SourceCounterProfile,
     SourceSweepProfile,
     SourceStatus,
     WaveformData,
@@ -519,6 +520,31 @@ def _print_source_sweep_profile(profile: SourceSweepProfile) -> None:
         f"marker_enabled={str(profile.marker_enabled).lower()} "
         f"marker_frequency_hz={profile.marker_frequency_hz:.12g}"
     )
+
+
+def _print_source_counter_profile(profile: SourceCounterProfile) -> None:
+    print(f"counter_enabled={str(profile.enabled).lower()}")
+    if profile.measurement is None:
+        print("measurement=none")
+    else:
+        measurement = profile.measurement
+        print(f"frequency_hz={measurement.frequency_hz:.12g}")
+        print(f"period_s={measurement.period_s:.12g}")
+        print(f"duty_cycle_percent={measurement.duty_cycle_percent:.12g}")
+        print(f"positive_width_s={measurement.positive_width_s:.12g}")
+        print(f"negative_width_s={measurement.negative_width_s:.12g}")
+    print(f"coupling={profile.coupling}")
+    print(f"impedance_ohm={profile.impedance_ohm:.12g}")
+    print(f"attenuation={profile.attenuation}")
+    print(f"gate_time={profile.gate_time}")
+    print(
+        "high_frequency_rejection_enabled="
+        f"{str(profile.high_frequency_rejection_enabled).lower()}"
+    )
+    print(f"trigger_level_v={profile.trigger_level_v:.12g}")
+    print(f"sensitivity_percent={profile.sensitivity_percent:.12g}")
+    print(f"statistics_enabled={str(profile.statistics_enabled).lower()}")
+    print(f"statistics_display={profile.statistics_display}")
 
 
 def _print_capture_package_summary(package) -> None:

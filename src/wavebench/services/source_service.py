@@ -12,6 +12,7 @@ from wavebench.config import SourceConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
 from wavebench.instruments.contracts import (
     SourceChannelProfileDriver,
+    SourceCounterProfileDriver,
     SourceDriver,
     SourceSweepProfileDriver,
 )
@@ -21,6 +22,7 @@ from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
     ArbitraryQueryProbeResult,
     SourceChannelProfile,
+    SourceCounterProfile,
     SourceSweepProfile,
     SourceStatus,
 )
@@ -111,6 +113,11 @@ class SourceService:
         self._require("source.sweep_profile", "source.sweep_profile")
         with self._source_session() as source:
             return cast(SourceSweepProfileDriver, source).get_sweep_profile(channel)
+
+    def counter_profile(self) -> SourceCounterProfile:
+        self._require("source.counter_profile", "source.counter_profile")
+        with self._source_session() as source:
+            return cast(SourceCounterProfileDriver, source).get_counter_profile()
 
     def snapshot_restorable_state(self, channel: int | None = None) -> RestorableSourceState:
         return RestorableSourceState.from_status(self.status(channel=channel))

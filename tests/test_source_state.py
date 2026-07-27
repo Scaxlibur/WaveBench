@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 from wavebench.drivers.dg4202 import SourceStatus
 from wavebench.errors import ConfigError, DataError
-from wavebench.instruments import SourceChannelProfile, SourceSweepProfile
+from wavebench.instruments import (
+    SourceChannelProfile,
+    SourceCounterProfile,
+    SourceSweepProfile,
+)
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
 from wavebench.services.source_state import RestorableSourceState
@@ -56,6 +60,59 @@ class RestorableSourceStateTests(unittest.TestCase):
 
 
 class SourceServiceSnapshotTests(unittest.TestCase):
+    def test_counter_profile_closes_transport(self):
+        events = []
+        profile = SourceCounterProfile(
+            enabled=False,
+            measurement=None,
+            coupling="AC",
+            impedance_ohm=1_000_000.0,
+            attenuation=1,
+            gate_time="USER1",
+            high_frequency_rejection_enabled=False,
+            trigger_level_v=0.0,
+            sensitivity_percent=50.0,
+            statistics_enabled=False,
+            statistics_display="DIGITAL",
+        )
+
+        class FakeSource:
+            def get_counter_profile(self):
+                events.append(("get_counter_profile",))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(resource="TCPIP::source::INSTR", driver="example")
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source", return_value=FakeSource()
+        ):
+            result = service.counter_profile()
+
+        self.assertIs(result, profile)
+        require.assert_called_once_with("source.counter_profile", "source.counter_profile")
+        self.assertEqual(events, [("get_counter_profile",), ("close",)])
+
+    def test_counter_profile_missing_capability_fails_before_transport(self):
+        config = SimpleNamespace(
+            source=SimpleNamespace(resource="TCPIP::source::INSTR", driver="legacy")
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.source",
+            capabilities=("source.status",),
+        )
+
+        with patch.object(service, "_open_source") as open_source:
+            with self.assertRaisesRegex(ConfigError, "source.counter_profile"):
+                service.counter_profile()
+
+        open_source.assert_not_called()
+
     def test_sweep_profile_uses_default_channel_and_closes_transport(self):
         events = []
         profile = SourceSweepProfile(

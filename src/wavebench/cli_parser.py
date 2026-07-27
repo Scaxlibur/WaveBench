@@ -521,6 +521,12 @@ def build_parser() -> argparse.ArgumentParser:
     source_sweep_profile.add_argument("--channel", type=int, default=None)
     add_runtime_options(source_sweep_profile)
 
+    source_counter_profile = source_sub.add_parser(
+        "counter-profile",
+        help="Query the non-destructive frequency-counter profile without enabling or clearing it",
+    )
+    add_runtime_options(source_counter_profile)
+
     source_set_freq = source_sub.add_parser("set-freq", help="Set source channel frequency in Hz")
     source_set_freq.add_argument("--channel", type=int, default=None)
     source_set_freq.add_argument("value_hz", type=float)

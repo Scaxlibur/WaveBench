@@ -972,6 +972,148 @@ class SourceSweepProfile:
 
 
 @dataclass(frozen=True)
+class SourceCounterMeasurement:
+    """One complete frequency-counter result returned by a source instrument."""
+
+    frequency_hz: float
+    period_s: float
+    duty_cycle_percent: float
+    positive_width_s: float
+    negative_width_s: float
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("frequency_hz", self.frequency_hz),
+            ("period_s", self.period_s),
+            ("duty_cycle_percent", self.duty_cycle_percent),
+            ("positive_width_s", self.positive_width_s),
+            ("negative_width_s", self.negative_width_s),
+        ):
+            if isinstance(value, bool) or not isfinite(value):
+                raise ValueError(f"source counter {name} must be finite")
+        if self.frequency_hz <= 0 or self.period_s <= 0:
+            raise ValueError("source counter frequency and period must be positive")
+        if not 0 <= self.duty_cycle_percent <= 100:
+            raise ValueError("source counter duty cycle must be from 0 to 100 percent")
+        if self.positive_width_s < 0 or self.negative_width_s < 0:
+            raise ValueError("source counter pulse widths must be non-negative")
+        if not isclose(
+            self.frequency_hz * self.period_s,
+            1.0,
+            rel_tol=1.0e-3,
+            abs_tol=1.0e-6,
+        ):
+            raise ValueError("source counter frequency and period are inconsistent")
+        if not isclose(
+            self.positive_width_s + self.negative_width_s,
+            self.period_s,
+            rel_tol=1.0e-3,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError("source counter pulse widths are inconsistent with period")
+        expected_duty = self.positive_width_s / self.period_s * 100.0
+        if not isclose(
+            self.duty_cycle_percent,
+            expected_duty,
+            rel_tol=1.0e-3,
+            abs_tol=1.0e-3,
+        ):
+            raise ValueError("source counter duty cycle is inconsistent with pulse widths")
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            "frequency_hz": self.frequency_hz,
+            "period_s": self.period_s,
+            "duty_cycle_percent": self.duty_cycle_percent,
+            "positive_width_s": self.positive_width_s,
+            "negative_width_s": self.negative_width_s,
+        }
+
+
+@dataclass(frozen=True)
+class SourceCounterProfile:
+    """Non-destructive snapshot of a source instrument's counter input."""
+
+    enabled: bool
+    measurement: SourceCounterMeasurement | None
+    coupling: str
+    impedance_ohm: float
+    attenuation: int
+    gate_time: str
+    high_frequency_rejection_enabled: bool
+    trigger_level_v: float
+    sensitivity_percent: float
+    statistics_enabled: bool
+    statistics_display: str
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("enabled", self.enabled),
+            ("high_frequency_rejection_enabled", self.high_frequency_rejection_enabled),
+            ("statistics_enabled", self.statistics_enabled),
+        ):
+            if not isinstance(value, bool):
+                raise ValueError(f"source counter {name} must be boolean")
+        if self.enabled != (self.measurement is not None):
+            raise ValueError(
+                "source counter measurement must be present exactly when the counter is enabled"
+            )
+        if self.measurement is not None and not isinstance(
+            self.measurement, SourceCounterMeasurement
+        ):
+            raise ValueError("source counter measurement must be SourceCounterMeasurement")
+        if self.coupling not in {"AC", "DC"}:
+            raise ValueError("unsupported source counter coupling")
+        if (
+            isinstance(self.impedance_ohm, bool)
+            or not isfinite(self.impedance_ohm)
+            or self.impedance_ohm not in {50.0, 1_000_000.0}
+        ):
+            raise ValueError("source counter impedance must be 50 or 1000000 ohms")
+        if isinstance(self.attenuation, bool) or self.attenuation not in {1, 10}:
+            raise ValueError("source counter attenuation must be 1 or 10")
+        if self.gate_time not in {
+            "AUTO",
+            "USER1",
+            "USER2",
+            "USER3",
+            "USER4",
+            "USER5",
+            "USER6",
+        }:
+            raise ValueError("unsupported source counter gate time")
+        if (
+            isinstance(self.trigger_level_v, bool)
+            or not isfinite(self.trigger_level_v)
+            or not -2.5 <= self.trigger_level_v <= 2.5
+        ):
+            raise ValueError("source counter trigger level must be from -2.5 to 2.5 volts")
+        if (
+            isinstance(self.sensitivity_percent, bool)
+            or not isfinite(self.sensitivity_percent)
+            or not 0 <= self.sensitivity_percent <= 100
+        ):
+            raise ValueError("source counter sensitivity must be from 0 to 100 percent")
+        if self.statistics_display not in {"DIGITAL", "CURVE"}:
+            raise ValueError("unsupported source counter statistics display")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "measurement": None if self.measurement is None else self.measurement.as_dict(),
+            "coupling": self.coupling,
+            "impedance_ohm": self.impedance_ohm,
+            "attenuation": self.attenuation,
+            "gate_time": self.gate_time,
+            "high_frequency_rejection_enabled": self.high_frequency_rejection_enabled,
+            "trigger_level_v": self.trigger_level_v,
+            "sensitivity_percent": self.sensitivity_percent,
+            "statistics_enabled": self.statistics_enabled,
+            "statistics_display": self.statistics_display,
+        }
+
+
+@dataclass(frozen=True)
 class ArbitraryQueryProbeResult:
     label: str
     command: str
