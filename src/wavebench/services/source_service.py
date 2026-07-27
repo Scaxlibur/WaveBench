@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from math import isfinite
 import time
 
 from wavebench.arbitrary import build_dg4000_dac14_binary_block, load_arbitrary_waveform
@@ -91,6 +92,7 @@ class SourceService:
         return RestorableSourceState.from_status(self.status(channel=channel))
 
     def restore_restorable_state(self, state: RestorableSourceState) -> SourceStatus:
+        self.set_output(channel=state.channel, enabled=False)
         self.set_function(channel=state.channel, function=state.function)
         self.set_amplitude_vpp(channel=state.channel, value_vpp=state.amplitude_vpp)
         self.set_frequency(channel=state.channel, value_hz=state.frequency_hz)
@@ -174,6 +176,11 @@ class SourceService:
         output_on: bool = False,
     ) -> SourceStatus:
         source_cfg = self._source_config()
+        self._require_finite(
+            playback_frequency_hz,
+            field="arbitrary waveform playback frequency / 任意波播放频率",
+        )
+        self._require_finite(offset_v, field="arbitrary waveform offset / 任意波偏置")
         self._check_source_vpp(amplitude_vpp, field="arbitrary waveform amplitude / 任意波幅度")
         channel = source_cfg.default_channel if channel is None else channel
         waveform = load_arbitrary_waveform(
@@ -195,11 +202,19 @@ class SourceService:
             )
 
     def _check_source_vpp(self, value_vpp: float, *, field: str) -> None:
+        self._require_finite(value_vpp, field=field)
         limit = self.config.safety_limits.max_source_vpp
         if limit is not None and value_vpp > limit:
             raise ConfigError(
                 f"safety limit exceeded / 安全上限已超出: {field} {value_vpp:.12g} Vpp "
                 f"> max_source_vpp {limit:.12g} Vpp"
+            )
+
+    @staticmethod
+    def _require_finite(value: float, *, field: str) -> None:
+        if not isfinite(value):
+            raise ConfigError(
+                f"finite value required / 必须为有限数: {field}"
             )
 
     def probe_arbitrary_queries(self, channel: int | None = None) -> list[ArbitraryQueryProbeResult]:

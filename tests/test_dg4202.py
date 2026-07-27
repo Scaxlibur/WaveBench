@@ -1,7 +1,7 @@
 import unittest
 
 from wavebench.drivers.dg4202 import DG4202Source
-from wavebench.errors import DataError
+from wavebench.errors import DataError, InstrumentError
 
 
 class FakeTransport:
@@ -116,6 +116,37 @@ class DG4202Tests(unittest.TestCase):
         self.assertEqual(transport.writes[0], ":OUTP2 OFF")
         self.assertEqual(status.output, "OFF")
 
+    def test_output_on_rejects_preexisting_error_before_any_write(self):
+        transport = FakeTransport()
+        transport.error_queue = ['-222,"Data out of range"', '0,"No error"']
+        driver = DG4202Source(transport=transport, check_errors_after_ops=True)
+
+        with self.assertRaisesRegex(InstrumentError, "Data out of range"):
+            driver.set_output(2, True, check_errors=True)
+
+        self.assertEqual(transport.state["out"], "ON")
+        self.assertEqual(transport.writes, [])
+
+    def test_latched_emergency_output_off_does_not_require_full_status_snapshot(self):
+        transport = FakeTransport()
+        driver = DG4202Source(transport=transport, check_errors_after_ops=True)
+        driver._configuration_writes_blocked = True
+
+        original_query = transport.query
+
+        def query(command: str) -> str:
+            if command == ":SOUR2:FUNC?":
+                raise InstrumentError("injected query failure")
+            return original_query(command)
+
+        transport.query = query
+
+        with self.assertRaisesRegex(InstrumentError, "injected query failure"):
+            driver.set_output(2, False, check_errors=True)
+
+        self.assertEqual(transport.state["out"], "OFF")
+        self.assertIn(":OUTP2 OFF", transport.writes)
+
     def test_set_function_writes_normalized_function(self):
         transport = FakeTransport()
         driver = DG4202Source(transport=transport, check_errors_after_ops=True)
@@ -160,6 +191,9 @@ class DG4202Tests(unittest.TestCase):
             waveform = load_arbitrary_waveform(path)
             block = build_dg4000_dac14_binary_block(waveform)
             transport = FakeTransport()
+            transport.state["out"] = "OFF"
+            transport.state["mode"] = "FIX"
+            transport.state["swe"] = "OFF"
             driver = DG4202Source(transport=transport, check_errors_after_ops=True)
 
             status = driver.upload_dg4000_dac14_block(

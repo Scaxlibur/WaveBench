@@ -1,4 +1,5 @@
 from pathlib import Path
+from math import inf, nan
 from unittest.mock import patch
 import unittest
 
@@ -148,6 +149,36 @@ class FakePower:
 
 
 class SafetyLimitsOutputTests(unittest.TestCase):
+    def test_source_amplitude_rejects_nonfinite_values(self):
+        service = SourceService(config=make_config(), logger=CommandLogger())
+
+        for value in (nan, inf, -inf):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ConfigError, "必须为有限数"):
+                    service.set_amplitude_vpp(channel=2, value_vpp=value)
+
+    def test_arbitrary_parameters_reject_nonfinite_values_before_opening_source(self):
+        service = SourceService(config=make_config(), logger=CommandLogger())
+
+        for field, value in (
+            ("playback_frequency_hz", nan),
+            ("amplitude_vpp", inf),
+            ("offset_v", -inf),
+        ):
+            values = {
+                "playback_frequency_hz": 1000.0,
+                "amplitude_vpp": 1.0,
+                "offset_v": 0.0,
+            }
+            values[field] = value
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ConfigError, "必须为有限数"):
+                    service.upload_arbitrary_waveform(
+                        channel=2,
+                        file_path="unused.npy",
+                        **values,
+                    )
+
     def test_source_output_on_rejects_current_amplitude_over_limit(self):
         fake = FakeSource(source_status(5.0))
         service = SourceService(config=make_config(), logger=CommandLogger())

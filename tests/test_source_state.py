@@ -105,6 +105,7 @@ class SourceServiceSnapshotTests(unittest.TestCase):
 
         self.assertIs(result, final_status)
         self.assertEqual(calls, [
+            ("set_output", 2, False),
             ("set_function", 2, "SIN"),
             ("set_amplitude_vpp", 2, 5.0),
             ("set_frequency", 2, 5000.0),
@@ -124,6 +125,7 @@ class SourceServiceSnapshotTests(unittest.TestCase):
 
         service.restore_restorable_state(state)
 
+        self.assertEqual(calls[0], ("set_output", 2, False))
         self.assertEqual(calls[-1], ("set_output", 2, True))
 
 
