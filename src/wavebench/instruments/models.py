@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from math import isfinite
+from math import isclose, isfinite
 from typing import Literal
 
 import numpy as np
@@ -863,6 +863,111 @@ class SourceChannelProfile:
             "modulation_type": self.modulation_type,
             "marker_enabled": self.marker_enabled,
             "pulse_hold": self.pulse_hold,
+        }
+
+
+@dataclass(frozen=True)
+class SourceSweepProfile:
+    """Complete, query-only snapshot of one source channel's built-in sweep."""
+
+    channel: int
+    enabled: bool
+    start_hz: float
+    stop_hz: float
+    center_hz: float
+    span_hz: float
+    spacing: str
+    steps: int
+    sweep_time_s: float
+    start_hold_s: float
+    stop_hold_s: float
+    return_time_s: float
+    trigger_source: str
+    trigger_slope: str
+    trigger_out: str
+    marker_enabled: bool
+    marker_frequency_hz: float
+
+    def __post_init__(self) -> None:
+        if isinstance(self.channel, bool) or not isinstance(self.channel, int) or self.channel < 1:
+            raise ValueError("source sweep channel must be a positive integer")
+        for name, value in (("enabled", self.enabled), ("marker_enabled", self.marker_enabled)):
+            if not isinstance(value, bool):
+                raise ValueError(f"source sweep {name} must be boolean")
+        numeric = (
+            ("start_hz", self.start_hz),
+            ("stop_hz", self.stop_hz),
+            ("center_hz", self.center_hz),
+            ("span_hz", self.span_hz),
+            ("sweep_time_s", self.sweep_time_s),
+            ("start_hold_s", self.start_hold_s),
+            ("stop_hold_s", self.stop_hold_s),
+            ("return_time_s", self.return_time_s),
+            ("marker_frequency_hz", self.marker_frequency_hz),
+        )
+        for name, value in numeric:
+            if isinstance(value, bool) or not isfinite(value):
+                raise ValueError(f"source sweep {name} must be finite")
+        if self.start_hz <= 0 or self.stop_hz <= 0:
+            raise ValueError("source sweep start and stop frequencies must be positive")
+        if self.start_hz > self.stop_hz:
+            raise ValueError("source sweep start frequency must not exceed stop frequency")
+        if not self.start_hz <= self.center_hz <= self.stop_hz:
+            raise ValueError("source sweep center frequency must be within start and stop")
+        expected_center = (self.start_hz + self.stop_hz) / 2.0
+        if not isclose(self.center_hz, expected_center, rel_tol=1.0e-6, abs_tol=1.0e-6):
+            raise ValueError("source sweep center frequency is inconsistent with start and stop")
+        expected_span = self.stop_hz - self.start_hz
+        if self.span_hz < 0 or not isclose(
+            self.span_hz,
+            expected_span,
+            rel_tol=1.0e-6,
+            abs_tol=1.0e-6,
+        ):
+            raise ValueError("source sweep span is inconsistent with start and stop")
+        if self.spacing not in {"LINEAR", "LOGARITHMIC", "STEP"}:
+            raise ValueError("unsupported source sweep spacing")
+        if isinstance(self.steps, bool) or not isinstance(self.steps, int) or not 2 <= self.steps <= 2048:
+            raise ValueError("source sweep steps must be an integer from 2 to 2048")
+        if not 0.001 <= self.sweep_time_s <= 300:
+            raise ValueError("source sweep time must be from 0.001 to 300 seconds")
+        for name, value in (
+            ("start hold", self.start_hold_s),
+            ("stop hold", self.stop_hold_s),
+            ("return time", self.return_time_s),
+        ):
+            if not 0 <= value <= 300:
+                raise ValueError(f"source sweep {name} must be from 0 to 300 seconds")
+        if self.trigger_source not in {"INTERNAL", "EXTERNAL", "MANUAL"}:
+            raise ValueError("unsupported source sweep trigger source")
+        if self.trigger_slope not in {"POSITIVE", "NEGATIVE"}:
+            raise ValueError("unsupported source sweep trigger slope")
+        if self.trigger_out not in {"OFF", "POSITIVE", "NEGATIVE"}:
+            raise ValueError("unsupported source sweep trigger output")
+        if not self.start_hz <= self.marker_frequency_hz <= self.stop_hz:
+            raise ValueError("source sweep marker frequency must be within start and stop")
+        if self.marker_enabled and self.spacing == "STEP":
+            raise ValueError("source sweep marker cannot be enabled with step spacing")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "enabled": self.enabled,
+            "start_hz": self.start_hz,
+            "stop_hz": self.stop_hz,
+            "center_hz": self.center_hz,
+            "span_hz": self.span_hz,
+            "spacing": self.spacing,
+            "steps": self.steps,
+            "sweep_time_s": self.sweep_time_s,
+            "start_hold_s": self.start_hold_s,
+            "stop_hold_s": self.stop_hold_s,
+            "return_time_s": self.return_time_s,
+            "trigger_source": self.trigger_source,
+            "trigger_slope": self.trigger_slope,
+            "trigger_out": self.trigger_out,
+            "marker_enabled": self.marker_enabled,
+            "marker_frequency_hz": self.marker_frequency_hz,
         }
 
 

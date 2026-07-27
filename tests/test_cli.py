@@ -457,6 +457,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "profile")
         self.assertEqual(args.channel, 1)
 
+    def test_source_sweep_profile_accepts_channel(self):
+        args = build_parser().parse_args(["source", "sweep-profile", "--channel", "2"])
+        self.assertEqual(args.domain, "source")
+        self.assertEqual(args.command, "sweep-profile")
+        self.assertEqual(args.channel, 2)
+
+    def test_source_sweep_profile_uses_sweep_formatter(self):
+        profile = object()
+
+        class StubSourceService:
+            def sweep_profile(self, channel):
+                assert channel == 2
+                return profile
+
+        with patch("wavebench.cli._load_source_service", return_value=StubSourceService()), patch(
+            "wavebench.cli._print_source_sweep_profile"
+        ) as print_profile:
+            code = main(["source", "sweep-profile", "--channel", "2"])
+
+        self.assertEqual(code, 0)
+        print_profile.assert_called_once_with(profile)
+
     def test_source_profile_uses_profile_formatter(self):
         profile = object()
 

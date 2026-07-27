@@ -20,6 +20,7 @@ from .contracts import (
     ScopeSnapshotDriver,
     SourceChannelProfileDriver,
     SourceDriver,
+    SourceSweepProfileDriver,
     SweepAnalyzerDriver,
 )
 from .dg4000 import DG4000ByteOrder, DG4000DacBlock
@@ -62,6 +63,7 @@ from .models import (
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
     SourceChannelProfile,
+    SourceSweepProfile,
     SourceStatus,
     SweepAnalyzerSnapshot,
     SweepPlan,
@@ -134,6 +136,8 @@ __all__ = [
     "SourceChannelProfile",
     "SourceChannelProfileDriver",
     "SourceDriver",
+    "SourceSweepProfile",
+    "SourceSweepProfileDriver",
     "SourceStatus",
     "SweepAnalyzerDriver",
     "SweepAnalyzerSnapshot",

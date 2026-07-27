@@ -37,6 +37,7 @@ from .instruments.models import (
     ScopeFftStatus,
     ScopeSnapshot,
     SourceChannelProfile,
+    SourceSweepProfile,
     SourceStatus,
     WaveformData,
 )
@@ -495,6 +496,29 @@ def _print_source_channel_profile(profile: SourceChannelProfile) -> None:
     print(f"modulation_type={profile.modulation_type}")
     print(f"marker_enabled={str(profile.marker_enabled).lower()}")
     print(f"pulse_hold={profile.pulse_hold}")
+
+
+def _print_source_sweep_profile(profile: SourceSweepProfile) -> None:
+    print(f"CH{profile.channel}: sweep_enabled={str(profile.enabled).lower()}")
+    print(
+        f"start_hz={profile.start_hz:.12g} stop_hz={profile.stop_hz:.12g} "
+        f"center_hz={profile.center_hz:.12g} span_hz={profile.span_hz:.12g}"
+    )
+    print(f"spacing={profile.spacing} steps={profile.steps}")
+    print(
+        f"sweep_time_s={profile.sweep_time_s:.12g} "
+        f"start_hold_s={profile.start_hold_s:.12g} "
+        f"stop_hold_s={profile.stop_hold_s:.12g} "
+        f"return_time_s={profile.return_time_s:.12g}"
+    )
+    print(
+        f"trigger_source={profile.trigger_source} "
+        f"trigger_slope={profile.trigger_slope} trigger_out={profile.trigger_out}"
+    )
+    print(
+        f"marker_enabled={str(profile.marker_enabled).lower()} "
+        f"marker_frequency_hz={profile.marker_frequency_hz:.12g}"
+    )
 
 
 def _print_capture_package_summary(package) -> None:

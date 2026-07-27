@@ -514,6 +514,13 @@ def build_parser() -> argparse.ArgumentParser:
     source_profile.add_argument("--channel", type=int, default=None)
     add_runtime_options(source_profile)
 
+    source_sweep_profile = source_sub.add_parser(
+        "sweep-profile",
+        help="Query the complete built-in sweep profile without changing or triggering it",
+    )
+    source_sweep_profile.add_argument("--channel", type=int, default=None)
+    add_runtime_options(source_sweep_profile)
+
     source_set_freq = source_sub.add_parser("set-freq", help="Set source channel frequency in Hz")
     source_set_freq.add_argument("--channel", type=int, default=None)
     source_set_freq.add_argument("value_hz", type=float)

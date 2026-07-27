@@ -30,6 +30,7 @@ from wavebench.instruments.contracts import (
     ScopeSnapshotDriver,
     SourceChannelProfileDriver,
     SourceDriver,
+    SourceSweepProfileDriver,
 )
 from wavebench.instruments.models import (
     DmmCalculationStatistics,
@@ -52,6 +53,7 @@ from wavebench.instruments.models import (
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
     SourceChannelProfile,
+    SourceSweepProfile,
     SourceStatus,
     WaveformData,
     WaveformHeader,
@@ -172,6 +174,82 @@ def test_source_channel_profile_rejects_ambiguous_context(changes, message):
         SourceChannelProfile(**values)
 
 
+def _source_sweep_profile(**changes):
+    values = {
+        "channel": 1,
+        "enabled": False,
+        "start_hz": 100.0,
+        "stop_hz": 1000.0,
+        "center_hz": 550.0,
+        "span_hz": 900.0,
+        "spacing": "LINEAR",
+        "steps": 101,
+        "sweep_time_s": 1.0,
+        "start_hold_s": 0.0,
+        "stop_hold_s": 0.0,
+        "return_time_s": 0.0,
+        "trigger_source": "INTERNAL",
+        "trigger_slope": "POSITIVE",
+        "trigger_out": "OFF",
+        "marker_enabled": False,
+        "marker_frequency_hz": 550.0,
+    }
+    values.update(changes)
+    return SourceSweepProfile(**values)
+
+
+def test_source_sweep_profile_serializes_complete_query_only_snapshot():
+    profile = _source_sweep_profile()
+
+    assert profile.as_dict() == {
+        "channel": 1,
+        "enabled": False,
+        "start_hz": 100.0,
+        "stop_hz": 1000.0,
+        "center_hz": 550.0,
+        "span_hz": 900.0,
+        "spacing": "LINEAR",
+        "steps": 101,
+        "sweep_time_s": 1.0,
+        "start_hold_s": 0.0,
+        "stop_hold_s": 0.0,
+        "return_time_s": 0.0,
+        "trigger_source": "INTERNAL",
+        "trigger_slope": "POSITIVE",
+        "trigger_out": "OFF",
+        "marker_enabled": False,
+        "marker_frequency_hz": 550.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"channel": True}, "channel"),
+        ({"enabled": 1}, "enabled"),
+        ({"start_hz": float("nan")}, "start_hz"),
+        ({"start_hz": 0.0}, "positive"),
+        ({"start_hz": 1001.0}, "must not exceed"),
+        ({"center_hz": 600.0}, "center frequency is inconsistent"),
+        ({"span_hz": 901.0}, "span is inconsistent"),
+        ({"spacing": "RANDOM"}, "spacing"),
+        ({"steps": 2.0}, "steps"),
+        ({"steps": 1}, "steps"),
+        ({"sweep_time_s": 0.0}, "sweep time"),
+        ({"start_hold_s": -1.0}, "start hold"),
+        ({"return_time_s": 301.0}, "return time"),
+        ({"trigger_source": "BUS"}, "trigger source"),
+        ({"trigger_slope": "BOTH"}, "trigger slope"),
+        ({"trigger_out": "HIGH"}, "trigger output"),
+        ({"marker_frequency_hz": 1001.0}, "marker frequency"),
+        ({"spacing": "STEP", "marker_enabled": True}, "step spacing"),
+    ],
+)
+def test_source_sweep_profile_rejects_inconsistent_or_ambiguous_values(changes, message):
+    with pytest.raises(ValueError, match=message):
+        _source_sweep_profile(**changes)
+
+
 def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Scope(), ScopeDriver)
     assert isinstance(_Source(), SourceDriver)
@@ -184,6 +262,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_DmmSystemInterfaceStatus(), DmmSystemInterfaceStatusDriver)
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_SourceChannelProfile(), SourceChannelProfileDriver)
+    assert isinstance(_SourceSweepProfile(), SourceSweepProfileDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
     assert isinstance(_ScopeAverageCapture(), ScopeAverageCaptureDriver)
@@ -224,6 +303,10 @@ class _Source(_DynamicDriver):
 
 class _SourceChannelProfile(_DynamicDriver):
     idn = close = get_channel_profile = lambda *args, **kwargs: None
+
+
+class _SourceSweepProfile(_DynamicDriver):
+    idn = close = get_sweep_profile = lambda *args, **kwargs: None
 
 
 def _source_status() -> SourceStatus:

@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from wavebench.drivers.dg4202 import SourceStatus
 from wavebench.errors import ConfigError, DataError
-from wavebench.instruments import SourceChannelProfile
+from wavebench.instruments import SourceChannelProfile, SourceSweepProfile
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
 from wavebench.services.source_state import RestorableSourceState
@@ -56,6 +56,65 @@ class RestorableSourceStateTests(unittest.TestCase):
 
 
 class SourceServiceSnapshotTests(unittest.TestCase):
+    def test_sweep_profile_uses_default_channel_and_closes_transport(self):
+        events = []
+        profile = SourceSweepProfile(
+            channel=2,
+            enabled=False,
+            start_hz=100.0,
+            stop_hz=1000.0,
+            center_hz=550.0,
+            span_hz=900.0,
+            spacing="LINEAR",
+            steps=101,
+            sweep_time_s=1.0,
+            start_hold_s=0.0,
+            stop_hold_s=0.0,
+            return_time_s=0.0,
+            trigger_source="INTERNAL",
+            trigger_slope="POSITIVE",
+            trigger_out="OFF",
+            marker_enabled=False,
+            marker_frequency_hz=550.0,
+        )
+
+        class FakeSource:
+            def get_sweep_profile(self, channel):
+                events.append(("get_sweep_profile", channel))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(resource="TCPIP::source::INSTR", driver="example", default_channel=2)
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source", return_value=FakeSource()
+        ):
+            result = service.sweep_profile()
+
+        self.assertIs(result, profile)
+        require.assert_called_once_with("source.sweep_profile", "source.sweep_profile")
+        self.assertEqual(events, [("get_sweep_profile", 2), ("close",)])
+
+    def test_sweep_profile_missing_capability_fails_before_transport(self):
+        config = SimpleNamespace(
+            source=SimpleNamespace(resource="TCPIP::source::INSTR", driver="legacy", default_channel=1)
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.source",
+            capabilities=("source.status",),
+        )
+
+        with patch.object(service, "_open_source") as open_source:
+            with self.assertRaisesRegex(ConfigError, "source.sweep_profile"):
+                service.sweep_profile()
+
+        open_source.assert_not_called()
+
     def test_channel_profile_uses_default_channel_and_closes_transport(self):
         events = []
         profile = SourceChannelProfile(
