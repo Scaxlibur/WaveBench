@@ -28,6 +28,7 @@ from wavebench.instruments.contracts import (
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
+    SourceChannelProfileDriver,
     SourceDriver,
 )
 from wavebench.instruments.models import (
@@ -50,6 +51,7 @@ from wavebench.instruments.models import (
     ScopeSnapshot,
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
+    SourceChannelProfile,
     SourceStatus,
     WaveformData,
     WaveformHeader,
@@ -104,6 +106,72 @@ def test_shared_models_keep_serialization_and_waveform_behavior():
     assert system_status.as_dict()["gpib_address"] == 22
 
 
+def test_source_channel_profile_serializes_strict_read_only_context():
+    profile = SourceChannelProfile(
+        status=_source_status(),
+        load_ohm=None,
+        polarity="NORMAL",
+        noise_enabled=False,
+        noise_scale_percent=10.0,
+        sync_enabled=True,
+        sync_polarity="POSITIVE",
+        burst_enabled=False,
+        modulation_enabled=False,
+        modulation_type="AM",
+        marker_enabled=False,
+        pulse_hold="DUTY",
+    )
+
+    assert profile.as_dict() == {
+        "status": _source_status().as_dict(),
+        "load_ohm": None,
+        "polarity": "NORMAL",
+        "noise_enabled": False,
+        "noise_scale_percent": 10.0,
+        "sync_enabled": True,
+        "sync_polarity": "POSITIVE",
+        "burst_enabled": False,
+        "modulation_enabled": False,
+        "modulation_type": "AM",
+        "marker_enabled": False,
+        "pulse_hold": "DUTY",
+    }
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"load_ohm": True}, "source load"),
+        ({"load_ohm": float("inf")}, "source load"),
+        ({"polarity": "SIDEWAYS"}, "output polarity"),
+        ({"noise_enabled": 1}, "noise_enabled"),
+        ({"noise_scale_percent": float("nan")}, "noise scale"),
+        ({"sync_polarity": "BOTH"}, "sync polarity"),
+        ({"modulation_type": "UNKNOWN"}, "modulation type"),
+        ({"pulse_hold": "BOTH"}, "pulse hold"),
+    ],
+)
+def test_source_channel_profile_rejects_ambiguous_context(changes, message):
+    values = {
+        "status": _source_status(),
+        "load_ohm": 50.0,
+        "polarity": "NORMAL",
+        "noise_enabled": False,
+        "noise_scale_percent": 10.0,
+        "sync_enabled": True,
+        "sync_polarity": "POSITIVE",
+        "burst_enabled": False,
+        "modulation_enabled": False,
+        "modulation_type": "AM",
+        "marker_enabled": False,
+        "pulse_hold": "DUTY",
+    }
+    values.update(changes)
+
+    with pytest.raises(ValueError, match=message):
+        SourceChannelProfile(**values)
+
+
 def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_Scope(), ScopeDriver)
     assert isinstance(_Source(), SourceDriver)
@@ -115,6 +183,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_DmmCalculationStatistics(), DmmCalculationStatisticsDriver)
     assert isinstance(_DmmSystemInterfaceStatus(), DmmSystemInterfaceStatusDriver)
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
+    assert isinstance(_SourceChannelProfile(), SourceChannelProfileDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
     assert isinstance(_ScopeAverageCapture(), ScopeAverageCaptureDriver)
@@ -151,6 +220,26 @@ class _Source(_DynamicDriver):
     ) = set_amplitude_vpp = set_square_duty_cycle = upload_dg4000_dac14_block = (
         probe_arbitrary_queries
     ) = lambda *args, **kwargs: None
+
+
+class _SourceChannelProfile(_DynamicDriver):
+    idn = close = get_channel_profile = lambda *args, **kwargs: None
+
+
+def _source_status() -> SourceStatus:
+    return SourceStatus(
+        channel=1,
+        output="OFF",
+        function="SIN",
+        frequency_hz=1_000.0,
+        amplitude=2.0,
+        amplitude_unit="VPP",
+        offset_v=0.0,
+        phase_deg=0.0,
+        frequency_mode="FIX",
+        sweep_enabled="OFF",
+        apply_raw='"SIN,1000,2,0,0"',
+    )
 
 
 class _Power(_DynamicDriver):

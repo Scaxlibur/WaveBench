@@ -778,6 +778,95 @@ class SourceStatus:
 
 
 @dataclass(frozen=True)
+class SourceChannelProfile:
+    """Read-only source-channel context outside the basic restorable state."""
+
+    status: SourceStatus
+    load_ohm: float | None
+    polarity: str
+    noise_enabled: bool
+    noise_scale_percent: float
+    sync_enabled: bool
+    sync_polarity: str
+    burst_enabled: bool
+    modulation_enabled: bool
+    modulation_type: str
+    marker_enabled: bool
+    pulse_hold: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, SourceStatus):
+            raise ValueError("source channel profile status must be SourceStatus")
+        if (
+            isinstance(self.status.channel, bool)
+            or not isinstance(self.status.channel, int)
+            or self.status.channel < 1
+        ):
+            raise ValueError("source channel must be a positive integer")
+        if self.load_ohm is not None:
+            if isinstance(self.load_ohm, bool) or not isfinite(self.load_ohm):
+                raise ValueError(
+                    "source load must be finite and positive, or None for high impedance"
+                )
+            if self.load_ohm <= 0:
+                raise ValueError(
+                    "source load must be finite and positive, or None for high impedance"
+                )
+        if self.polarity not in {"NORMAL", "INVERTED"}:
+            raise ValueError("unsupported source output polarity")
+        for name, value in (
+            ("noise_enabled", self.noise_enabled),
+            ("sync_enabled", self.sync_enabled),
+            ("burst_enabled", self.burst_enabled),
+            ("modulation_enabled", self.modulation_enabled),
+            ("marker_enabled", self.marker_enabled),
+        ):
+            if not isinstance(value, bool):
+                raise ValueError(f"source {name} must be boolean")
+        if (
+            isinstance(self.noise_scale_percent, bool)
+            or not isfinite(self.noise_scale_percent)
+            or not 0 <= self.noise_scale_percent <= 50
+        ):
+            raise ValueError("source noise scale must be finite and from 0 to 50 percent")
+        if self.sync_polarity not in {"POSITIVE", "NEGATIVE"}:
+            raise ValueError("unsupported source sync polarity")
+        if self.modulation_type not in {
+            "AM",
+            "FM",
+            "PM",
+            "ASK",
+            "FSK",
+            "PSK",
+            "PWM",
+            "BPSK",
+            "QPSK",
+            "3FSK",
+            "4FSK",
+            "OSK",
+        }:
+            raise ValueError("unsupported source modulation type")
+        if self.pulse_hold not in {"DUTY", "WIDTH"}:
+            raise ValueError("unsupported source pulse hold mode")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status.as_dict(),
+            "load_ohm": self.load_ohm,
+            "polarity": self.polarity,
+            "noise_enabled": self.noise_enabled,
+            "noise_scale_percent": self.noise_scale_percent,
+            "sync_enabled": self.sync_enabled,
+            "sync_polarity": self.sync_polarity,
+            "burst_enabled": self.burst_enabled,
+            "modulation_enabled": self.modulation_enabled,
+            "modulation_type": self.modulation_type,
+            "marker_enabled": self.marker_enabled,
+            "pulse_hold": self.pulse_hold,
+        }
+
+
+@dataclass(frozen=True)
 class ArbitraryQueryProbeResult:
     label: str
     command: str

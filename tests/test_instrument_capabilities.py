@@ -23,6 +23,10 @@ def test_all_builtin_capabilities_have_runtime_method_mappings():
         assert set(descriptor.capabilities) <= set(CAPABILITY_METHODS)
 
 
+def test_source_channel_profile_has_a_runtime_method_mapping():
+    assert CAPABILITY_METHODS["source.channel_profile"] == ("get_channel_profile",)
+
+
 def test_require_capabilities_names_driver_operation_and_missing_capability():
     descriptor = _scope_descriptor(capabilities=("scope.idn",))
 

@@ -31,6 +31,7 @@ from .models import (
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
     ScopeSnapshot,
+    SourceChannelProfile,
     SourceStatus,
     SweepAnalyzerSnapshot,
     SweepPlan,
@@ -226,6 +227,11 @@ class SourceDriver(InstrumentDriver, Protocol):
     ) -> SourceStatus: ...
 
     def probe_arbitrary_queries(self, channel: int) -> list[ArbitraryQueryProbeResult]: ...
+
+
+@runtime_checkable
+class SourceChannelProfileDriver(InstrumentDriver, Protocol):
+    def get_channel_profile(self, channel: int) -> SourceChannelProfile: ...
 
 
 @runtime_checkable

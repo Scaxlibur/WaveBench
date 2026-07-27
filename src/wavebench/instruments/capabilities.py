@@ -30,6 +30,7 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "source.idn": ("idn",),
     "source.errors": ("errors", "assert_no_errors"),
     "source.status": ("get_status",),
+    "source.channel_profile": ("get_channel_profile",),
     "source.set_frequency": ("set_frequency",),
     "source.set_function": ("set_function",),
     "source.set_amplitude_vpp": ("set_amplitude_vpp",),
