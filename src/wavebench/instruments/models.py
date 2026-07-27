@@ -972,6 +972,134 @@ class SourceSweepProfile:
 
 
 @dataclass(frozen=True)
+class SourceSweepConfiguration:
+    """Complete target for one controlled built-in source sweep transaction."""
+
+    enabled: bool
+    spacing: str
+    steps: int
+    sweep_time_s: float
+    start_hold_s: float
+    stop_hold_s: float
+    return_time_s: float
+    trigger_source: str
+    trigger_slope: str
+    trigger_out: str
+    marker_enabled: bool
+    marker_frequency_hz: float
+    start_hz: float | None = None
+    stop_hz: float | None = None
+    center_hz: float | None = None
+    span_hz: float | None = None
+
+    def __post_init__(self) -> None:
+        has_start_stop = self.start_hz is not None or self.stop_hz is not None
+        has_center_span = self.center_hz is not None or self.span_hz is not None
+        if has_start_stop == has_center_span:
+            raise ValueError(
+                "source sweep configuration requires exactly one frequency window: "
+                "start/stop or center/span"
+            )
+        if has_start_stop and (self.start_hz is None or self.stop_hz is None):
+            raise ValueError("source sweep configuration requires both start_hz and stop_hz")
+        if has_center_span and (self.center_hz is None or self.span_hz is None):
+            raise ValueError("source sweep configuration requires both center_hz and span_hz")
+
+        for name, value in (
+            ("start_hz", self.start_hz),
+            ("stop_hz", self.stop_hz),
+            ("center_hz", self.center_hz),
+            ("span_hz", self.span_hz),
+        ):
+            if value is not None and (isinstance(value, bool) or not isfinite(value)):
+                raise ValueError(f"source sweep configuration {name} must be finite")
+
+        start_hz = self.effective_start_hz
+        stop_hz = self.effective_stop_hz
+        center_hz = (start_hz + stop_hz) / 2.0
+        span_hz = stop_hz - start_hz
+        SourceSweepProfile(
+            channel=1,
+            enabled=self.enabled,
+            start_hz=start_hz,
+            stop_hz=stop_hz,
+            center_hz=center_hz,
+            span_hz=span_hz,
+            spacing=self.spacing,
+            steps=self.steps,
+            sweep_time_s=self.sweep_time_s,
+            start_hold_s=self.start_hold_s,
+            stop_hold_s=self.stop_hold_s,
+            return_time_s=self.return_time_s,
+            trigger_source=self.trigger_source,
+            trigger_slope=self.trigger_slope,
+            trigger_out=self.trigger_out,
+            marker_enabled=self.marker_enabled,
+            marker_frequency_hz=self.marker_frequency_hz,
+        )
+
+    @property
+    def frequency_basis(self) -> str:
+        return "START_STOP" if self.start_hz is not None else "CENTER_SPAN"
+
+    @property
+    def effective_start_hz(self) -> float:
+        if self.start_hz is not None:
+            return self.start_hz
+        assert self.center_hz is not None and self.span_hz is not None
+        return self.center_hz - self.span_hz / 2.0
+
+    @property
+    def effective_stop_hz(self) -> float:
+        if self.stop_hz is not None:
+            return self.stop_hz
+        assert self.center_hz is not None and self.span_hz is not None
+        return self.center_hz + self.span_hz / 2.0
+
+    @classmethod
+    def from_profile(cls, profile: SourceSweepProfile) -> "SourceSweepConfiguration":
+        if not isinstance(profile, SourceSweepProfile):
+            raise ValueError("source sweep configuration requires SourceSweepProfile")
+        return cls(
+            enabled=profile.enabled,
+            start_hz=profile.start_hz,
+            stop_hz=profile.stop_hz,
+            spacing=profile.spacing,
+            steps=profile.steps,
+            sweep_time_s=profile.sweep_time_s,
+            start_hold_s=profile.start_hold_s,
+            stop_hold_s=profile.stop_hold_s,
+            return_time_s=profile.return_time_s,
+            trigger_source=profile.trigger_source,
+            trigger_slope=profile.trigger_slope,
+            trigger_out=profile.trigger_out,
+            marker_enabled=profile.marker_enabled,
+            marker_frequency_hz=profile.marker_frequency_hz,
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "frequency_basis": self.frequency_basis,
+            "start_hz": self.start_hz,
+            "stop_hz": self.stop_hz,
+            "center_hz": self.center_hz,
+            "span_hz": self.span_hz,
+            "spacing": self.spacing,
+            "steps": self.steps,
+            "sweep_time_s": self.sweep_time_s,
+            "start_hold_s": self.start_hold_s,
+            "stop_hold_s": self.stop_hold_s,
+            "return_time_s": self.return_time_s,
+            "trigger_source": self.trigger_source,
+            "trigger_slope": self.trigger_slope,
+            "trigger_out": self.trigger_out,
+            "marker_enabled": self.marker_enabled,
+            "marker_frequency_hz": self.marker_frequency_hz,
+        }
+
+
+@dataclass(frozen=True)
 class SourceCounterMeasurement:
     """One complete frequency-counter result returned by a source instrument."""
 

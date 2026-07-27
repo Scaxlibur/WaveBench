@@ -31,6 +31,7 @@ from wavebench.instruments.contracts import (
     SourceChannelProfileDriver,
     SourceCounterProfileDriver,
     SourceDriver,
+    SourceSweepControlDriver,
     SourceSweepProfileDriver,
 )
 from wavebench.instruments.models import (
@@ -56,6 +57,7 @@ from wavebench.instruments.models import (
     SourceChannelProfile,
     SourceCounterMeasurement,
     SourceCounterProfile,
+    SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
     WaveformData,
@@ -253,6 +255,132 @@ def test_source_sweep_profile_rejects_inconsistent_or_ambiguous_values(changes, 
         _source_sweep_profile(**changes)
 
 
+def _source_sweep_configuration(**changes):
+    values = {
+        "enabled": False,
+        "start_hz": 100.0,
+        "stop_hz": 1000.0,
+        "spacing": "LINEAR",
+        "steps": 101,
+        "sweep_time_s": 1.0,
+        "start_hold_s": 0.0,
+        "stop_hold_s": 0.0,
+        "return_time_s": 0.0,
+        "trigger_source": "INTERNAL",
+        "trigger_slope": "POSITIVE",
+        "trigger_out": "OFF",
+        "marker_enabled": False,
+        "marker_frequency_hz": 550.0,
+    }
+    values.update(changes)
+    return SourceSweepConfiguration(**values)
+
+
+def test_source_sweep_configuration_serializes_one_start_stop_window():
+    configuration = _source_sweep_configuration()
+
+    assert configuration.frequency_basis == "START_STOP"
+    assert configuration.effective_start_hz == 100.0
+    assert configuration.effective_stop_hz == 1000.0
+    assert configuration.as_dict() == {
+        "enabled": False,
+        "frequency_basis": "START_STOP",
+        "start_hz": 100.0,
+        "stop_hz": 1000.0,
+        "center_hz": None,
+        "span_hz": None,
+        "spacing": "LINEAR",
+        "steps": 101,
+        "sweep_time_s": 1.0,
+        "start_hold_s": 0.0,
+        "stop_hold_s": 0.0,
+        "return_time_s": 0.0,
+        "trigger_source": "INTERNAL",
+        "trigger_slope": "POSITIVE",
+        "trigger_out": "OFF",
+        "marker_enabled": False,
+        "marker_frequency_hz": 550.0,
+    }
+
+
+def test_source_sweep_configuration_accepts_center_span_without_duplicate_window():
+    configuration = _source_sweep_configuration(
+        start_hz=None,
+        stop_hz=None,
+        center_hz=550.0,
+        span_hz=900.0,
+    )
+
+    assert configuration.frequency_basis == "CENTER_SPAN"
+    assert configuration.effective_start_hz == 100.0
+    assert configuration.effective_stop_hz == 1000.0
+
+
+def test_source_sweep_configuration_accepts_a_restorable_zero_span_window():
+    configuration = _source_sweep_configuration(
+        start_hz=1000.0,
+        stop_hz=1000.0,
+        marker_frequency_hz=1000.0,
+    )
+
+    assert configuration.effective_start_hz == 1000.0
+    assert configuration.effective_stop_hz == 1000.0
+
+
+def test_source_sweep_configuration_can_restore_a_complete_profile():
+    profile = _source_sweep_profile(enabled=True, spacing="LOGARITHMIC")
+
+    configuration = SourceSweepConfiguration.from_profile(profile)
+
+    assert configuration.enabled is True
+    assert configuration.frequency_basis == "START_STOP"
+    assert configuration.spacing == "LOGARITHMIC"
+    assert configuration.effective_start_hz == profile.start_hz
+    assert configuration.effective_stop_hz == profile.stop_hz
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"start_hz": None, "stop_hz": None}, "exactly one frequency window"),
+        ({"stop_hz": None}, "both start_hz and stop_hz"),
+        (
+            {"center_hz": 550.0, "span_hz": 900.0},
+            "exactly one frequency window",
+        ),
+        (
+            {"start_hz": None, "stop_hz": None, "center_hz": 550.0},
+            "both center_hz and span_hz",
+        ),
+        ({"start_hz": float("nan")}, "start_hz must be finite"),
+        ({"start_hz": True}, "start_hz must be finite"),
+        ({"start_hz": 1001.0, "stop_hz": 1000.0}, "must not exceed"),
+        (
+            {
+                "start_hz": None,
+                "stop_hz": None,
+                "center_hz": 100.0,
+                "span_hz": 200.0,
+            },
+            "positive",
+        ),
+        ({"spacing": "STEP", "marker_enabled": True}, "step spacing"),
+        ({"steps": 1}, "steps"),
+        ({"sweep_time_s": 0.0}, "sweep time"),
+        ({"trigger_source": "BUS"}, "trigger source"),
+        ({"marker_frequency_hz": 1001.0}, "marker frequency"),
+    ],
+)
+def test_source_sweep_configuration_rejects_ambiguous_or_unsafe_targets(changes, message):
+    with pytest.raises(ValueError, match=message):
+        _source_sweep_configuration(**changes)
+
+
+def test_source_sweep_configuration_rejects_non_profile_restore_source():
+    with pytest.raises(ValueError, match="SourceSweepProfile"):
+        SourceSweepConfiguration.from_profile(object())
+
+
 def _source_counter_measurement(**changes):
     values = {
         "frequency_hz": 1000.0,
@@ -362,6 +490,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_SourceChannelProfile(), SourceChannelProfileDriver)
     assert isinstance(_SourceCounterProfile(), SourceCounterProfileDriver)
     assert isinstance(_SourceSweepProfile(), SourceSweepProfileDriver)
+    assert isinstance(_SourceSweepControl(), SourceSweepControlDriver)
     assert isinstance(_ScopeSnapshot(), ScopeSnapshotDriver)
     assert isinstance(_ScopeAcquisitionStatus(), ScopeAcquisitionStatusDriver)
     assert isinstance(_ScopeAverageCapture(), ScopeAverageCaptureDriver)
@@ -406,6 +535,10 @@ class _SourceChannelProfile(_DynamicDriver):
 
 class _SourceSweepProfile(_DynamicDriver):
     idn = close = get_sweep_profile = lambda *args, **kwargs: None
+
+
+class _SourceSweepControl(_DynamicDriver):
+    idn = close = configure_sweep = trigger_sweep = lambda *args, **kwargs: None
 
 
 class _SourceCounterProfile(_DynamicDriver):

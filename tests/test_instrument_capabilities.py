@@ -31,6 +31,11 @@ def test_source_sweep_profile_has_a_runtime_method_mapping():
     assert CAPABILITY_METHODS["source.sweep_profile"] == ("get_sweep_profile",)
 
 
+def test_source_sweep_control_has_runtime_method_mappings():
+    assert CAPABILITY_METHODS["source.sweep_configure"] == ("configure_sweep",)
+    assert CAPABILITY_METHODS["source.sweep_trigger"] == ("trigger_sweep",)
+
+
 def test_source_counter_profile_has_a_runtime_method_mapping():
     assert CAPABILITY_METHODS["source.counter_profile"] == ("get_counter_profile",)
 

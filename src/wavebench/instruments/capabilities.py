@@ -32,6 +32,8 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "source.status": ("get_status",),
     "source.channel_profile": ("get_channel_profile",),
     "source.sweep_profile": ("get_sweep_profile",),
+    "source.sweep_configure": ("configure_sweep",),
+    "source.sweep_trigger": ("trigger_sweep",),
     "source.counter_profile": ("get_counter_profile",),
     "source.set_frequency": ("set_frequency",),
     "source.set_function": ("set_function",),

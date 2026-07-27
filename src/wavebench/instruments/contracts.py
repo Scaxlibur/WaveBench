@@ -33,6 +33,7 @@ from .models import (
     ScopeSnapshot,
     SourceChannelProfile,
     SourceCounterProfile,
+    SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
     SweepAnalyzerSnapshot,
@@ -239,6 +240,28 @@ class SourceChannelProfileDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class SourceSweepProfileDriver(InstrumentDriver, Protocol):
     def get_sweep_profile(self, channel: int) -> SourceSweepProfile: ...
+
+
+@runtime_checkable
+class SourceSweepControlDriver(InstrumentDriver, Protocol):
+    """Fail-closed sweep configuration and explicit single-trigger operations."""
+
+    def configure_sweep(
+        self,
+        channel: int,
+        configuration: SourceSweepConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourceSweepProfile: ...
+
+    def trigger_sweep(
+        self,
+        channel: int,
+        *,
+        check_errors: bool = True,
+    ) -> None:
+        """Issue one manual sweep trigger after fresh state checks; never retry it."""
+        ...
 
 
 @runtime_checkable

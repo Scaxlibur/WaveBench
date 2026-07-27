@@ -14,6 +14,7 @@ from wavebench.instruments.contracts import (
     SourceChannelProfileDriver,
     SourceCounterProfileDriver,
     SourceDriver,
+    SourceSweepControlDriver,
     SourceSweepProfileDriver,
 )
 from wavebench.instruments.api import InstrumentDescriptor
@@ -23,6 +24,7 @@ from wavebench.instruments.models import (
     ArbitraryQueryProbeResult,
     SourceChannelProfile,
     SourceCounterProfile,
+    SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
 )
@@ -118,6 +120,54 @@ class SourceService:
         self._require("source.counter_profile", "source.counter_profile")
         with self._source_session() as source:
             return cast(SourceCounterProfileDriver, source).get_counter_profile()
+
+    def configure_sweep(
+        self,
+        configuration: SourceSweepConfiguration,
+        channel: int | None = None,
+    ) -> SourceSweepProfile:
+        if not isinstance(configuration, SourceSweepConfiguration):
+            raise ConfigError("source sweep configuration must be SourceSweepConfiguration")
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.sweep_configure", "source.status"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.sweep_configure", *required)
+        with self._source_session() as source:
+            status = source.get_status(channel)
+            if status.output != "OFF":
+                raise ConfigError(
+                    "controlled source sweep configuration requires output OFF / "
+                    "受控信号源扫频配置要求输出为 OFF"
+                )
+            if status.amplitude is None or status.amplitude_unit != "VPP":
+                raise ConfigError(
+                    "controlled source sweep requires a readable VPP amplitude / "
+                    "受控信号源扫频要求可读的 VPP 幅度"
+                )
+            self._check_source_vpp(
+                status.amplitude,
+                field="source sweep amplitude / 信号源扫频幅度",
+            )
+            return cast(SourceSweepControlDriver, source).configure_sweep(
+                channel,
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
+
+    def trigger_sweep(self, channel: int | None = None) -> None:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.sweep_trigger"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.sweep_trigger", *required)
+        with self._source_session() as source:
+            cast(SourceSweepControlDriver, source).trigger_sweep(
+                channel,
+                check_errors=source_cfg.check_errors,
+            )
 
     def snapshot_restorable_state(self, channel: int | None = None) -> RestorableSourceState:
         return RestorableSourceState.from_status(self.status(channel=channel))
