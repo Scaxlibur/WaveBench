@@ -14,6 +14,7 @@ from wavebench.instruments.contracts import (
     SourceBurstControlDriver,
     SourceBurstProfileDriver,
     SourceChannelProfileDriver,
+    SourceCouplingDriver,
     SourceCounterProfileDriver,
     SourceDriver,
     SourcePulseControlDriver,
@@ -29,6 +30,8 @@ from wavebench.instruments.models import (
     SourceBurstConfiguration,
     SourceBurstProfile,
     SourceChannelProfile,
+    SourceCouplingConfiguration,
+    SourceCouplingProfile,
     SourceCounterProfile,
     SourcePulseConfiguration,
     SourcePulseProfile,
@@ -116,6 +119,28 @@ class SourceService:
         self._require("source.channel_profile", "source.channel_profile")
         with self._source_session() as source:
             return cast(SourceChannelProfileDriver, source).get_channel_profile(channel)
+
+    def coupling_profile(self) -> SourceCouplingProfile:
+        self._require("source.coupling_profile", "source.coupling_profile")
+        with self._source_session() as source:
+            return cast(SourceCouplingDriver, source).get_coupling_profile()
+
+    def configure_coupling(
+        self,
+        configuration: SourceCouplingConfiguration,
+    ) -> SourceCouplingProfile:
+        if not isinstance(configuration, SourceCouplingConfiguration):
+            raise ConfigError("source coupling configuration must be SourceCouplingConfiguration")
+        source_cfg = self._source_config()
+        required = ["source.coupling_configure"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.coupling_configure", *required)
+        with self._source_session() as source:
+            return cast(SourceCouplingDriver, source).configure_coupling(
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
 
     def pulse_profile(self, channel: int | None = None) -> SourcePulseProfile:
         source_cfg = self._source_config()

@@ -8,6 +8,8 @@ from wavebench.instruments import (
     SourceBurstConfiguration,
     SourceBurstProfile,
     SourceChannelProfile,
+    SourceCouplingConfiguration,
+    SourceCouplingProfile,
     SourceCounterProfile,
     SourcePulseConfiguration,
     SourcePulseProfile,
@@ -105,6 +107,20 @@ def make_burst_configuration():
         trigger_slope="POSITIVE",
         trigger_out="OFF",
     )
+
+
+def make_coupling_configuration(**overrides):
+    values = {
+        "base_channel": 1,
+        "frequency_enabled": True,
+        "frequency_deviation_hz": 1_000.0,
+        "phase_enabled": True,
+        "phase_deviation_deg": 90.0,
+        "amplitude_enabled": False,
+        "amplitude_deviation_vpp": 2.0,
+    }
+    values.update(overrides)
+    return SourceCouplingConfiguration(**values)
 
 
 class RestorableSourceStateTests(unittest.TestCase):
@@ -563,6 +579,98 @@ class SourceServiceSnapshotTests(unittest.TestCase):
         with patch.object(service, "_open_source") as open_source:
             with self.assertRaisesRegex(ConfigError, "source.channel_profile"):
                 service.channel_profile()
+
+        open_source.assert_not_called()
+
+    def test_coupling_profile_is_global_and_closes_transport(self):
+        events = []
+        profile = SourceCouplingProfile(**make_coupling_configuration().as_dict())
+
+        class FakeSource:
+            def get_coupling_profile(self):
+                events.append(("get_coupling_profile",))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(resource="TCPIP::source::INSTR", driver="example")
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source", return_value=FakeSource()
+        ):
+            result = service.coupling_profile()
+
+        self.assertIs(result, profile)
+        require.assert_called_once_with("source.coupling_profile", "source.coupling_profile")
+        self.assertEqual(events, [("get_coupling_profile",), ("close",)])
+
+    def test_configure_coupling_has_no_channel_or_output_precondition(self):
+        events = []
+        configuration = make_coupling_configuration()
+        profile = SourceCouplingProfile(**configuration.as_dict())
+
+        class FakeSource:
+            def configure_coupling(self, target, *, check_errors):
+                events.append(("configure_coupling", target, check_errors))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="example",
+                default_channel=2,
+                check_errors=True,
+            )
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source", return_value=FakeSource()
+        ):
+            result = service.configure_coupling(configuration)
+
+        self.assertIs(result, profile)
+        require.assert_called_once_with(
+            "source.coupling_configure",
+            "source.coupling_configure",
+            "source.errors",
+        )
+        self.assertEqual(
+            events,
+            [("configure_coupling", configuration, True), ("close",)],
+        )
+
+    def test_configure_coupling_rejects_wrong_configuration_before_transport(self):
+        service = SourceService(config=None, logger=CommandLogger())
+        service._open_source = lambda: self.fail("transport must not open")
+
+        with self.assertRaisesRegex(ConfigError, "SourceCouplingConfiguration"):
+            service.configure_coupling(object())
+
+    def test_coupling_operations_require_declared_capabilities_before_transport(self):
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="legacy",
+                check_errors=False,
+            )
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.source",
+            capabilities=("source.status",),
+        )
+
+        with patch.object(service, "_open_source") as open_source:
+            with self.assertRaisesRegex(ConfigError, "source.coupling_profile"):
+                service.coupling_profile()
+            with self.assertRaisesRegex(ConfigError, "source.coupling_configure"):
+                service.configure_coupling(make_coupling_configuration())
 
         open_source.assert_not_called()
 

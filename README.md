@@ -12,7 +12,7 @@ WaveBench 是一个面向电子设计竞赛调试场景的轻量 Python 自动�
 WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202、DP800 和 DM3000/DM3058 系列驱动；首次使用无需安装外置插件，只需复制示例配置并填写实际仪器 resource。这五个仪器族没有从主包移除的计划；外置插件是显式选择、独立发布的可选升级或扩展，不会取代示例配置使用的内建短名。
 
 > [!IMPORTANT]
-> 当前开发版本是 `v0.8.19`。`v0.8.19` 增加完整 pulse/burst profile、配置模型、受控写入与显式不可重试 burst 触发契约，并提供只读 `source pulse-profile` / `source burst-profile` CLI。marker 仍属于 sweep 子系统，不并入 burst profile；harmonic 继续由离线 FFT 契约覆盖。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
+> 当前开发版本是 `v0.8.20`。`v0.8.20` 增加 fail-closed 双通道 coupling profile/configuration 模型、驱动协议和 capability-gated service 入口；只有实现完整双通道恢复与写入锁存的外置插件才能声明这些能力，内建 DG4202 fallback 保持不声明。marker 仍属于 sweep 子系统，不并入 burst profile；harmonic 继续由离线 FFT 契约覆盖。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
 
 ## 当前能力
 

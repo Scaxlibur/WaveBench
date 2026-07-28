@@ -778,6 +778,115 @@ class SourceStatus:
 
 
 @dataclass(frozen=True)
+class SourceCouplingProfile:
+    """Complete, query-only snapshot of the DG4000 channel-coupling state."""
+
+    base_channel: int
+    frequency_enabled: bool
+    frequency_deviation_hz: float
+    phase_enabled: bool
+    phase_deviation_deg: float
+    amplitude_enabled: bool
+    amplitude_deviation_vpp: float
+
+    def __post_init__(self) -> None:
+        _validate_source_coupling_values(
+            base_channel=self.base_channel,
+            frequency_enabled=self.frequency_enabled,
+            frequency_deviation_hz=self.frequency_deviation_hz,
+            phase_enabled=self.phase_enabled,
+            phase_deviation_deg=self.phase_deviation_deg,
+            amplitude_enabled=self.amplitude_enabled,
+            amplitude_deviation_vpp=self.amplitude_deviation_vpp,
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "base_channel": self.base_channel,
+            "frequency_enabled": self.frequency_enabled,
+            "frequency_deviation_hz": self.frequency_deviation_hz,
+            "phase_enabled": self.phase_enabled,
+            "phase_deviation_deg": self.phase_deviation_deg,
+            "amplitude_enabled": self.amplitude_enabled,
+            "amplitude_deviation_vpp": self.amplitude_deviation_vpp,
+        }
+
+
+@dataclass(frozen=True)
+class SourceCouplingConfiguration:
+    """Complete target for one controlled DG4000 channel-coupling transaction."""
+
+    base_channel: int
+    frequency_enabled: bool
+    frequency_deviation_hz: float
+    phase_enabled: bool
+    phase_deviation_deg: float
+    amplitude_enabled: bool
+    amplitude_deviation_vpp: float
+
+    def __post_init__(self) -> None:
+        _validate_source_coupling_values(
+            base_channel=self.base_channel,
+            frequency_enabled=self.frequency_enabled,
+            frequency_deviation_hz=self.frequency_deviation_hz,
+            phase_enabled=self.phase_enabled,
+            phase_deviation_deg=self.phase_deviation_deg,
+            amplitude_enabled=self.amplitude_enabled,
+            amplitude_deviation_vpp=self.amplitude_deviation_vpp,
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "base_channel": self.base_channel,
+            "frequency_enabled": self.frequency_enabled,
+            "frequency_deviation_hz": self.frequency_deviation_hz,
+            "phase_enabled": self.phase_enabled,
+            "phase_deviation_deg": self.phase_deviation_deg,
+            "amplitude_enabled": self.amplitude_enabled,
+            "amplitude_deviation_vpp": self.amplitude_deviation_vpp,
+        }
+
+
+def _validate_source_coupling_values(
+    *,
+    base_channel: int,
+    frequency_enabled: bool,
+    frequency_deviation_hz: float,
+    phase_enabled: bool,
+    phase_deviation_deg: float,
+    amplitude_enabled: bool,
+    amplitude_deviation_vpp: float,
+) -> None:
+    if (
+        isinstance(base_channel, bool)
+        or not isinstance(base_channel, int)
+        or base_channel not in {1, 2}
+    ):
+        raise ValueError("source coupling base channel must be 1 or 2")
+    for name, value in (
+        ("frequency_enabled", frequency_enabled),
+        ("phase_enabled", phase_enabled),
+        ("amplitude_enabled", amplitude_enabled),
+    ):
+        if not isinstance(value, bool):
+            raise ValueError(f"source coupling {name} must be boolean")
+    for name, value, limit, unit in (
+        ("frequency_deviation_hz", frequency_deviation_hz, 160.0e6, "Hz"),
+        ("phase_deviation_deg", phase_deviation_deg, 360.0, "degrees"),
+        ("amplitude_deviation_vpp", amplitude_deviation_vpp, 20.0, "Vpp"),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            or not 0 <= value <= limit
+        ):
+            raise ValueError(
+                f"source coupling {name} must be finite and from 0 to {limit:g} {unit}"
+            )
+
+
+@dataclass(frozen=True)
 class SourceChannelProfile:
     """Read-only source-channel context outside the basic restorable state."""
 

@@ -29,6 +29,7 @@ from wavebench.instruments.contracts import (
     ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
     SourceChannelProfileDriver,
+    SourceCouplingDriver,
     SourceCounterProfileDriver,
     SourceDriver,
     SourceSweepControlDriver,
@@ -55,6 +56,8 @@ from wavebench.instruments.models import (
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
     SourceChannelProfile,
+    SourceCouplingConfiguration,
+    SourceCouplingProfile,
     SourceBurstConfiguration,
     SourceBurstProfile,
     SourceCounterMeasurement,
@@ -181,6 +184,57 @@ def test_source_channel_profile_rejects_ambiguous_context(changes, message):
 
     with pytest.raises(ValueError, match=message):
         SourceChannelProfile(**values)
+
+
+def _source_coupling_values(**changes):
+    values = {
+        "base_channel": 1,
+        "frequency_enabled": True,
+        "frequency_deviation_hz": 1_000.0,
+        "phase_enabled": True,
+        "phase_deviation_deg": 90.0,
+        "amplitude_enabled": False,
+        "amplitude_deviation_vpp": 2.0,
+    }
+    values.update(changes)
+    return values
+
+
+def test_source_coupling_models_serialize_complete_global_state():
+    values = _source_coupling_values()
+    profile = SourceCouplingProfile(**values)
+    configuration = SourceCouplingConfiguration(**values)
+
+    assert profile.as_dict() == values
+    assert configuration.as_dict() == values
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"base_channel": True}, "base channel"),
+        ({"base_channel": 3}, "base channel"),
+        ({"frequency_enabled": 1}, "frequency_enabled"),
+        ({"frequency_deviation_hz": "1000"}, "frequency_deviation_hz"),
+        ({"frequency_deviation_hz": float("nan")}, "frequency_deviation_hz"),
+        ({"frequency_deviation_hz": -0.1}, "frequency_deviation_hz"),
+        ({"frequency_deviation_hz": 160.0e6 + 0.1}, "frequency_deviation_hz"),
+        ({"phase_enabled": 1}, "phase_enabled"),
+        ({"phase_deviation_deg": float("inf")}, "phase_deviation_deg"),
+        ({"phase_deviation_deg": -0.1}, "phase_deviation_deg"),
+        ({"phase_deviation_deg": 360.1}, "phase_deviation_deg"),
+        ({"amplitude_enabled": 1}, "amplitude_enabled"),
+        ({"amplitude_deviation_vpp": False}, "amplitude_deviation_vpp"),
+        ({"amplitude_deviation_vpp": -0.1}, "amplitude_deviation_vpp"),
+        ({"amplitude_deviation_vpp": 20.1}, "amplitude_deviation_vpp"),
+    ],
+)
+def test_source_coupling_models_reject_invalid_values(changes, message):
+    values = _source_coupling_values(**changes)
+
+    for model in (SourceCouplingProfile, SourceCouplingConfiguration):
+        with pytest.raises(ValueError, match=message):
+            model(**values)
 
 
 def _source_sweep_profile(**changes):
@@ -562,6 +616,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_DmmSystemInterfaceStatus(), DmmSystemInterfaceStatusDriver)
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_SourceChannelProfile(), SourceChannelProfileDriver)
+    assert isinstance(_SourceCoupling(), SourceCouplingDriver)
     assert isinstance(_SourceCounterProfile(), SourceCounterProfileDriver)
     assert isinstance(_SourceSweepProfile(), SourceSweepProfileDriver)
     assert isinstance(_SourceSweepControl(), SourceSweepControlDriver)
@@ -605,6 +660,10 @@ class _Source(_DynamicDriver):
 
 class _SourceChannelProfile(_DynamicDriver):
     idn = close = get_channel_profile = lambda *args, **kwargs: None
+
+
+class _SourceCoupling(_DynamicDriver):
+    idn = close = get_coupling_profile = configure_coupling = lambda *args, **kwargs: None
 
 
 class _SourceSweepProfile(_DynamicDriver):

@@ -27,6 +27,11 @@ def test_source_channel_profile_has_a_runtime_method_mapping():
     assert CAPABILITY_METHODS["source.channel_profile"] == ("get_channel_profile",)
 
 
+def test_source_coupling_has_runtime_method_mappings():
+    assert CAPABILITY_METHODS["source.coupling_profile"] == ("get_coupling_profile",)
+    assert CAPABILITY_METHODS["source.coupling_configure"] == ("configure_coupling",)
+
+
 def test_source_sweep_profile_has_a_runtime_method_mapping():
     assert CAPABILITY_METHODS["source.sweep_profile"] == ("get_sweep_profile",)
 

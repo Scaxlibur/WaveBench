@@ -31,6 +31,8 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "source.errors": ("errors", "assert_no_errors"),
     "source.status": ("get_status",),
     "source.channel_profile": ("get_channel_profile",),
+    "source.coupling_profile": ("get_coupling_profile",),
+    "source.coupling_configure": ("configure_coupling",),
     "source.pulse_profile": ("get_pulse_profile",),
     "source.pulse_configure": ("configure_pulse",),
     "source.burst_profile": ("get_burst_profile",),

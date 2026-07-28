@@ -34,6 +34,8 @@ from .models import (
     SourceBurstConfiguration,
     SourceBurstProfile,
     SourceChannelProfile,
+    SourceCouplingConfiguration,
+    SourceCouplingProfile,
     SourceCounterProfile,
     SourcePulseConfiguration,
     SourcePulseProfile,
@@ -239,6 +241,18 @@ class SourceDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class SourceChannelProfileDriver(InstrumentDriver, Protocol):
     def get_channel_profile(self, channel: int) -> SourceChannelProfile: ...
+
+
+@runtime_checkable
+class SourceCouplingDriver(InstrumentDriver, Protocol):
+    def get_coupling_profile(self) -> SourceCouplingProfile: ...
+
+    def configure_coupling(
+        self,
+        configuration: SourceCouplingConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourceCouplingProfile: ...
 
 
 @runtime_checkable
