@@ -36,8 +36,10 @@ from .instruments.models import (
     ScopeDigitalWaveform,
     ScopeFftStatus,
     ScopeSnapshot,
+    SourceBurstProfile,
     SourceChannelProfile,
     SourceCounterProfile,
+    SourcePulseProfile,
     SourceSweepProfile,
     SourceStatus,
     WaveformData,
@@ -497,6 +499,36 @@ def _print_source_channel_profile(profile: SourceChannelProfile) -> None:
     print(f"modulation_type={profile.modulation_type}")
     print(f"marker_enabled={str(profile.marker_enabled).lower()}")
     print(f"pulse_hold={profile.pulse_hold}")
+
+
+def _print_source_pulse_profile(profile: SourcePulseProfile) -> None:
+    print(f"CH{profile.channel}: pulse_hold={profile.hold}")
+    print(
+        f"width_s={profile.width_s:.12g} "
+        f"duty_cycle_percent={profile.duty_cycle_percent:.12g} "
+        f"delay_s={profile.delay_s:.12g}"
+    )
+    print(
+        f"leading_transition_s={profile.leading_transition_s:.12g} "
+        f"trailing_transition_s={profile.trailing_transition_s:.12g}"
+    )
+
+
+def _print_source_burst_profile(profile: SourceBurstProfile) -> None:
+    print(
+        f"CH{profile.channel}: burst_enabled={str(profile.enabled).lower()} "
+        f"mode={profile.mode} cycles={profile.cycles}"
+    )
+    print(
+        f"phase_deg={profile.phase_deg:.12g} "
+        f"internal_period_s={profile.internal_period_s:.12g} "
+        f"delay_s={profile.delay_s:.12g}"
+    )
+    print(f"gate_polarity={profile.gate_polarity}")
+    print(
+        f"trigger_source={profile.trigger_source} "
+        f"trigger_slope={profile.trigger_slope} trigger_out={profile.trigger_out}"
+    )
 
 
 def _print_source_sweep_profile(profile: SourceSweepProfile) -> None:

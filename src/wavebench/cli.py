@@ -60,7 +60,9 @@ from .cli_output import (
     _print_scope_fft_status,
     _print_scope_snapshot,
     _print_source_channel_profile,
+    _print_source_burst_profile,
     _print_source_counter_profile,
+    _print_source_pulse_profile,
     _print_source_sweep_profile,
     _print_source_status,
     _print_waveform_summary,
@@ -569,6 +571,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "profile":
                 _print_source_channel_profile(service.channel_profile(channel=args.channel))
+                return 0
+            if args.command == "pulse-profile":
+                _print_source_pulse_profile(service.pulse_profile(channel=args.channel))
+                return 0
+            if args.command == "burst-profile":
+                _print_source_burst_profile(service.burst_profile(channel=args.channel))
                 return 0
             if args.command == "sweep-profile":
                 _print_source_sweep_profile(service.sweep_profile(channel=args.channel))

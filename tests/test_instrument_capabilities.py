@@ -36,6 +36,14 @@ def test_source_sweep_control_has_runtime_method_mappings():
     assert CAPABILITY_METHODS["source.sweep_trigger"] == ("trigger_sweep",)
 
 
+def test_source_pulse_and_burst_have_runtime_method_mappings():
+    assert CAPABILITY_METHODS["source.pulse_profile"] == ("get_pulse_profile",)
+    assert CAPABILITY_METHODS["source.pulse_configure"] == ("configure_pulse",)
+    assert CAPABILITY_METHODS["source.burst_profile"] == ("get_burst_profile",)
+    assert CAPABILITY_METHODS["source.burst_configure"] == ("configure_burst",)
+    assert CAPABILITY_METHODS["source.burst_trigger"] == ("trigger_burst",)
+
+
 def test_source_counter_profile_has_a_runtime_method_mapping():
     assert CAPABILITY_METHODS["source.counter_profile"] == ("get_counter_profile",)
 

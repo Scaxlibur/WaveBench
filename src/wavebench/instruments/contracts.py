@@ -31,8 +31,12 @@ from .models import (
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
     ScopeSnapshot,
+    SourceBurstConfiguration,
+    SourceBurstProfile,
     SourceChannelProfile,
     SourceCounterProfile,
+    SourcePulseConfiguration,
+    SourcePulseProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
@@ -235,6 +239,47 @@ class SourceDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class SourceChannelProfileDriver(InstrumentDriver, Protocol):
     def get_channel_profile(self, channel: int) -> SourceChannelProfile: ...
+
+
+@runtime_checkable
+class SourcePulseProfileDriver(InstrumentDriver, Protocol):
+    def get_pulse_profile(self, channel: int) -> SourcePulseProfile: ...
+
+
+@runtime_checkable
+class SourcePulseControlDriver(SourcePulseProfileDriver, Protocol):
+    def configure_pulse(
+        self,
+        channel: int,
+        configuration: SourcePulseConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourcePulseProfile: ...
+
+
+@runtime_checkable
+class SourceBurstProfileDriver(InstrumentDriver, Protocol):
+    def get_burst_profile(self, channel: int) -> SourceBurstProfile: ...
+
+
+@runtime_checkable
+class SourceBurstControlDriver(SourceBurstProfileDriver, Protocol):
+    """Fail-closed burst configuration plus explicit non-retryable manual trigger."""
+
+    def configure_burst(
+        self,
+        channel: int,
+        configuration: SourceBurstConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourceBurstProfile: ...
+
+    def trigger_burst(
+        self,
+        channel: int,
+        *,
+        check_errors: bool = True,
+    ) -> None: ...
 
 
 @runtime_checkable

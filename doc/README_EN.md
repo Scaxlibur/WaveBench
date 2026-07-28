@@ -6,10 +6,10 @@ WaveBench is a lightweight Python measurement bench for explicit, reproducible c
 
 The WaveBench distribution includes built-in drivers for the RTM2000/RTM2032, DS1104Z/DS1000Z, DG4000/DG4202, DP800, and DM3000/DM3058 families. These five families are the permanent bundled baseline: first use does not require an external plugin, and they are not scheduled for removal from the main package. External packages are optional, independently released upgrades or extensions. A narrowly allowlisted package may take over a canonical ID, while built-in short names remain pinned to the bundled implementation and uninstalling the package restores the bundled canonical implementation where the IDs are shared.
 
-The current development version is `v0.8.18`. It adds a complete built-in source-sweep
-configuration model plus controlled configuration and explicit, non-retryable trigger contracts.
-Manual configuration and triggering must use the same caller-owned persistent source session;
-temporary-session calls reject both operations before connecting to an instrument.
+The current development version is `v0.8.19`. It adds complete pulse and burst profiles,
+configuration models, controlled writes, and an explicit non-retryable burst trigger contract.
+Read-only `source pulse-profile` and `source burst-profile` commands expose the new snapshots.
+Marker remains part of the sweep subsystem, while harmonic analysis remains an offline FFT concern.
 
 > [!IMPORTANT]
 > The current formal release is `v0.8.0`. This release introduces Instrument API V2, managed plugin lifecycle operations, canonical override slots, and the SocketIO backend; those capabilities are not part of `v0.7.0`. Users of other releases should follow the documentation stored in the matching tag.

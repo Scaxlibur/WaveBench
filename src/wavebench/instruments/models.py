@@ -1100,6 +1100,231 @@ class SourceSweepConfiguration:
 
 
 @dataclass(frozen=True)
+class SourcePulseProfile:
+    """Complete, query-only snapshot of one source channel's pulse shape."""
+
+    channel: int
+    hold: str
+    width_s: float
+    duty_cycle_percent: float
+    delay_s: float
+    leading_transition_s: float
+    trailing_transition_s: float
+
+    def __post_init__(self) -> None:
+        if isinstance(self.channel, bool) or not isinstance(self.channel, int) or self.channel < 1:
+            raise ValueError("source pulse channel must be a positive integer")
+        if self.hold not in {"WIDTH", "DUTY"}:
+            raise ValueError("unsupported source pulse hold mode")
+        for name, value in (
+            ("width_s", self.width_s),
+            ("duty_cycle_percent", self.duty_cycle_percent),
+            ("delay_s", self.delay_s),
+            ("leading_transition_s", self.leading_transition_s),
+            ("trailing_transition_s", self.trailing_transition_s),
+        ):
+            if isinstance(value, bool) or not isfinite(value):
+                raise ValueError(f"source pulse {name} must be finite")
+        if self.width_s < 4.0e-9:
+            raise ValueError("source pulse width must be at least 4 ns")
+        if not 0 < self.duty_cycle_percent < 100:
+            raise ValueError("source pulse duty cycle must be between 0 and 100 percent")
+        if self.delay_s < 0:
+            raise ValueError("source pulse delay must be non-negative")
+        for name, value in (
+            ("leading transition", self.leading_transition_s),
+            ("trailing transition", self.trailing_transition_s),
+        ):
+            if value <= 0:
+                raise ValueError(f"source pulse {name} must be positive")
+            if value > 0.625 * self.width_s:
+                raise ValueError(f"source pulse {name} must not exceed 0.625 times the pulse width")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "hold": self.hold,
+            "width_s": self.width_s,
+            "duty_cycle_percent": self.duty_cycle_percent,
+            "delay_s": self.delay_s,
+            "leading_transition_s": self.leading_transition_s,
+            "trailing_transition_s": self.trailing_transition_s,
+        }
+
+
+@dataclass(frozen=True)
+class SourcePulseConfiguration:
+    """Complete target for one controlled source pulse-shape transaction."""
+
+    hold: str
+    delay_s: float
+    leading_transition_s: float
+    trailing_transition_s: float
+    width_s: float | None = None
+    duty_cycle_percent: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.hold == "WIDTH":
+            if self.width_s is None or self.duty_cycle_percent is not None:
+                raise ValueError("WIDTH hold requires width_s and forbids duty_cycle_percent")
+            width_s = self.width_s
+            duty_cycle_percent = 50.0
+        elif self.hold == "DUTY":
+            if self.duty_cycle_percent is None or self.width_s is not None:
+                raise ValueError("DUTY hold requires duty_cycle_percent and forbids width_s")
+            width_s = (
+                max(
+                    self.leading_transition_s,
+                    self.trailing_transition_s,
+                )
+                / 0.625
+            )
+            duty_cycle_percent = self.duty_cycle_percent
+        else:
+            raise ValueError("unsupported source pulse hold mode")
+        SourcePulseProfile(
+            channel=1,
+            hold=self.hold,
+            width_s=width_s,
+            duty_cycle_percent=duty_cycle_percent,
+            delay_s=self.delay_s,
+            leading_transition_s=self.leading_transition_s,
+            trailing_transition_s=self.trailing_transition_s,
+        )
+
+    @classmethod
+    def from_profile(cls, profile: SourcePulseProfile) -> "SourcePulseConfiguration":
+        if not isinstance(profile, SourcePulseProfile):
+            raise ValueError("source pulse configuration requires SourcePulseProfile")
+        return cls(
+            hold=profile.hold,
+            width_s=profile.width_s if profile.hold == "WIDTH" else None,
+            duty_cycle_percent=(profile.duty_cycle_percent if profile.hold == "DUTY" else None),
+            delay_s=profile.delay_s,
+            leading_transition_s=profile.leading_transition_s,
+            trailing_transition_s=profile.trailing_transition_s,
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "hold": self.hold,
+            "width_s": self.width_s,
+            "duty_cycle_percent": self.duty_cycle_percent,
+            "delay_s": self.delay_s,
+            "leading_transition_s": self.leading_transition_s,
+            "trailing_transition_s": self.trailing_transition_s,
+        }
+
+
+@dataclass(frozen=True)
+class SourceBurstProfile:
+    """Complete, query-only snapshot of one source channel's burst subsystem."""
+
+    channel: int
+    enabled: bool
+    mode: str
+    cycles: int
+    phase_deg: float
+    internal_period_s: float
+    delay_s: float
+    gate_polarity: str
+    trigger_source: str
+    trigger_slope: str
+    trigger_out: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.channel, bool) or not isinstance(self.channel, int) or self.channel < 1:
+            raise ValueError("source burst channel must be a positive integer")
+        if not isinstance(self.enabled, bool):
+            raise ValueError("source burst enabled must be boolean")
+        if self.mode not in {"TRIGGERED", "GATED", "INFINITY"}:
+            raise ValueError("unsupported source burst mode")
+        if isinstance(self.cycles, bool) or not isinstance(self.cycles, int):
+            raise ValueError("source burst cycles must be an integer")
+        if not 1 <= self.cycles <= 1_000_000:
+            raise ValueError("source burst cycles must be from 1 to 1000000")
+        if self.trigger_source == "INTERNAL" and self.cycles > 500_000:
+            raise ValueError("internal-trigger source burst cycles must not exceed 500000")
+        for name, value in (
+            ("phase_deg", self.phase_deg),
+            ("internal_period_s", self.internal_period_s),
+            ("delay_s", self.delay_s),
+        ):
+            if isinstance(value, bool) or not isfinite(value):
+                raise ValueError(f"source burst {name} must be finite")
+        if not 0 <= self.phase_deg <= 360:
+            raise ValueError("source burst phase must be from 0 to 360 degrees")
+        if self.internal_period_s <= 0:
+            raise ValueError("source burst internal period must be positive")
+        if not 0 <= self.delay_s <= 85:
+            raise ValueError("source burst delay must be from 0 to 85 seconds")
+        if self.gate_polarity not in {"NORMAL", "INVERTED"}:
+            raise ValueError("unsupported source burst gate polarity")
+        if self.trigger_source not in {"INTERNAL", "EXTERNAL", "MANUAL"}:
+            raise ValueError("unsupported source burst trigger source")
+        if self.trigger_slope not in {"POSITIVE", "NEGATIVE"}:
+            raise ValueError("unsupported source burst trigger slope")
+        if self.trigger_out not in {"OFF", "POSITIVE", "NEGATIVE"}:
+            raise ValueError("unsupported source burst trigger output")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "enabled": self.enabled,
+            "mode": self.mode,
+            "cycles": self.cycles,
+            "phase_deg": self.phase_deg,
+            "internal_period_s": self.internal_period_s,
+            "delay_s": self.delay_s,
+            "gate_polarity": self.gate_polarity,
+            "trigger_source": self.trigger_source,
+            "trigger_slope": self.trigger_slope,
+            "trigger_out": self.trigger_out,
+        }
+
+
+@dataclass(frozen=True)
+class SourceBurstConfiguration:
+    """Complete target for one controlled source burst transaction."""
+
+    enabled: bool
+    mode: str
+    cycles: int
+    phase_deg: float
+    internal_period_s: float
+    delay_s: float
+    gate_polarity: str
+    trigger_source: str
+    trigger_slope: str
+    trigger_out: str
+
+    def __post_init__(self) -> None:
+        SourceBurstProfile(channel=1, **self.as_dict())
+
+    @classmethod
+    def from_profile(cls, profile: SourceBurstProfile) -> "SourceBurstConfiguration":
+        if not isinstance(profile, SourceBurstProfile):
+            raise ValueError("source burst configuration requires SourceBurstProfile")
+        values = profile.as_dict()
+        values.pop("channel")
+        return cls(**values)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "mode": self.mode,
+            "cycles": self.cycles,
+            "phase_deg": self.phase_deg,
+            "internal_period_s": self.internal_period_s,
+            "delay_s": self.delay_s,
+            "gate_polarity": self.gate_polarity,
+            "trigger_source": self.trigger_source,
+            "trigger_slope": self.trigger_slope,
+            "trigger_out": self.trigger_out,
+        }
+
+
+@dataclass(frozen=True)
 class SourceCounterMeasurement:
     """One complete frequency-counter result returned by a source instrument."""
 

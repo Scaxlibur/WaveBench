@@ -11,9 +11,13 @@ from wavebench.arbitrary import build_dg4000_dac14_binary_block, load_arbitrary_
 from wavebench.config import SourceConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
 from wavebench.instruments.contracts import (
+    SourceBurstControlDriver,
+    SourceBurstProfileDriver,
     SourceChannelProfileDriver,
     SourceCounterProfileDriver,
     SourceDriver,
+    SourcePulseControlDriver,
+    SourcePulseProfileDriver,
     SourceSweepControlDriver,
     SourceSweepProfileDriver,
 )
@@ -22,8 +26,12 @@ from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
     ArbitraryQueryProbeResult,
+    SourceBurstConfiguration,
+    SourceBurstProfile,
     SourceChannelProfile,
     SourceCounterProfile,
+    SourcePulseConfiguration,
+    SourcePulseProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
@@ -109,6 +117,20 @@ class SourceService:
         with self._source_session() as source:
             return cast(SourceChannelProfileDriver, source).get_channel_profile(channel)
 
+    def pulse_profile(self, channel: int | None = None) -> SourcePulseProfile:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        self._require("source.pulse_profile", "source.pulse_profile")
+        with self._source_session() as source:
+            return cast(SourcePulseProfileDriver, source).get_pulse_profile(channel)
+
+    def burst_profile(self, channel: int | None = None) -> SourceBurstProfile:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        self._require("source.burst_profile", "source.burst_profile")
+        with self._source_session() as source:
+            return cast(SourceBurstProfileDriver, source).get_burst_profile(channel)
+
     def sweep_profile(self, channel: int | None = None) -> SourceSweepProfile:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
@@ -120,6 +142,78 @@ class SourceService:
         self._require("source.counter_profile", "source.counter_profile")
         with self._source_session() as source:
             return cast(SourceCounterProfileDriver, source).get_counter_profile()
+
+    def configure_pulse(
+        self,
+        configuration: SourcePulseConfiguration,
+        channel: int | None = None,
+    ) -> SourcePulseProfile:
+        if not isinstance(configuration, SourcePulseConfiguration):
+            raise ConfigError("source pulse configuration must be SourcePulseConfiguration")
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.pulse_configure", "source.status"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.pulse_configure", *required)
+        with self._source_session() as source:
+            if source.get_status(channel).output != "OFF":
+                raise ConfigError(
+                    "controlled source pulse configuration requires output OFF / "
+                    "受控信号源脉冲配置要求输出为 OFF"
+                )
+            return cast(SourcePulseControlDriver, source).configure_pulse(
+                channel,
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
+
+    def configure_burst(
+        self,
+        configuration: SourceBurstConfiguration,
+        channel: int | None = None,
+    ) -> SourceBurstProfile:
+        if not isinstance(configuration, SourceBurstConfiguration):
+            raise ConfigError("source burst configuration must be SourceBurstConfiguration")
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.burst_configure", "source.status"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.burst_configure", *required)
+        if configuration.trigger_source == "MANUAL" and self.session is None:
+            raise ConfigError(
+                "manual source burst configuration requires a persistent source session / "
+                "手动触发突发配置要求持久信号源会话"
+            )
+        with self._source_session() as source:
+            if source.get_status(channel).output != "OFF":
+                raise ConfigError(
+                    "controlled source burst configuration requires output OFF / "
+                    "受控信号源突发配置要求输出为 OFF"
+                )
+            return cast(SourceBurstControlDriver, source).configure_burst(
+                channel,
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
+
+    def trigger_burst(self, channel: int | None = None) -> None:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.burst_trigger"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.burst_trigger", *required)
+        if self.session is None:
+            raise ConfigError(
+                "manual source burst trigger requires the persistent source session that "
+                "configured it / 手动突发触发必须复用执行配置的持久信号源会话"
+            )
+        cast(SourceBurstControlDriver, self.session).trigger_burst(
+            channel,
+            check_errors=source_cfg.check_errors,
+        )
 
     def configure_sweep(
         self,

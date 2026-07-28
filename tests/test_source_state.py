@@ -5,8 +5,12 @@ from unittest.mock import patch
 from wavebench.drivers.dg4202 import SourceStatus
 from wavebench.errors import ConfigError, DataError
 from wavebench.instruments import (
+    SourceBurstConfiguration,
+    SourceBurstProfile,
     SourceChannelProfile,
     SourceCounterProfile,
+    SourcePulseConfiguration,
+    SourcePulseProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
 )
@@ -75,6 +79,31 @@ def make_sweep_profile(**overrides):
         trigger_out=configuration.trigger_out,
         marker_enabled=configuration.marker_enabled,
         marker_frequency_hz=configuration.marker_frequency_hz,
+    )
+
+
+def make_pulse_configuration():
+    return SourcePulseConfiguration(
+        hold="WIDTH",
+        width_s=1.0e-6,
+        delay_s=0.0,
+        leading_transition_s=8.0e-9,
+        trailing_transition_s=8.0e-9,
+    )
+
+
+def make_burst_configuration():
+    return SourceBurstConfiguration(
+        enabled=False,
+        mode="TRIGGERED",
+        cycles=10,
+        phase_deg=0.0,
+        internal_period_s=0.01,
+        delay_s=0.0,
+        gate_polarity="NORMAL",
+        trigger_source="MANUAL",
+        trigger_slope="POSITIVE",
+        trigger_out="OFF",
     )
 
 
@@ -611,6 +640,105 @@ class SourceServiceSnapshotTests(unittest.TestCase):
 
         self.assertEqual(calls[0], ("set_output", 2, False))
         self.assertEqual(calls[-1], ("set_output", 2, True))
+
+    def test_pulse_profile_is_read_only_and_uses_default_channel(self):
+        profile = SourcePulseProfile(
+            channel=2,
+            hold="WIDTH",
+            width_s=1.0e-6,
+            duty_cycle_percent=20.0,
+            delay_s=0.0,
+            leading_transition_s=8.0e-9,
+            trailing_transition_s=8.0e-9,
+        )
+        events = []
+
+        class Driver:
+            def get_pulse_profile(self, channel):
+                events.append(("get_pulse_profile", channel))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        service = SourceService(config=None, logger=CommandLogger())
+        service._source_config = lambda: SimpleNamespace(default_channel=2)
+        service._require = lambda *args: None
+        service._open_source = Driver
+
+        self.assertIs(service.pulse_profile(), profile)
+        self.assertEqual(events, [("get_pulse_profile", 2), ("close",)])
+
+    def test_configure_pulse_requires_output_off_before_driver_write(self):
+        events = []
+
+        class Driver:
+            def get_status(self, channel):
+                events.append(("get_status", channel))
+                return make_status(output="ON")
+
+            def configure_pulse(self, *args, **kwargs):
+                events.append(("configure_pulse",))
+
+            def close(self):
+                events.append(("close",))
+
+        service = SourceService(config=None, logger=CommandLogger())
+        service._source_config = lambda: SimpleNamespace(
+            default_channel=2,
+            check_errors=True,
+        )
+        service._require = lambda *args: None
+        service._open_source = Driver
+
+        with self.assertRaisesRegex(ConfigError, "output OFF"):
+            service.configure_pulse(make_pulse_configuration())
+        self.assertNotIn(("configure_pulse",), events)
+
+    def test_manual_burst_configuration_and_trigger_reuse_persistent_session(self):
+        configuration = make_burst_configuration()
+        profile = SourceBurstProfile(channel=2, **configuration.as_dict())
+        events = []
+
+        class Driver:
+            def get_status(self, channel):
+                events.append(("get_status", channel))
+                return make_status(output="OFF")
+
+            def configure_burst(self, channel, target, *, check_errors):
+                events.append(("configure_burst", channel, target, check_errors))
+                return profile
+
+            def trigger_burst(self, channel, *, check_errors):
+                events.append(("trigger_burst", channel, check_errors))
+
+        driver = Driver()
+        service = SourceService(config=None, logger=CommandLogger(), session=driver)
+        service._source_config = lambda: SimpleNamespace(
+            default_channel=2,
+            check_errors=True,
+        )
+        service._require = lambda *args: None
+
+        self.assertIs(service.configure_burst(configuration), profile)
+        service.trigger_burst()
+        self.assertEqual(events, [
+            ("get_status", 2),
+            ("configure_burst", 2, configuration, True),
+            ("trigger_burst", 2, True),
+        ])
+
+    def test_manual_burst_configuration_rejects_temporary_session_before_transport(self):
+        service = SourceService(config=None, logger=CommandLogger())
+        service._source_config = lambda: SimpleNamespace(
+            default_channel=2,
+            check_errors=True,
+        )
+        service._require = lambda *args: None
+        service._open_source = lambda: self.fail("transport must not open")
+
+        with self.assertRaisesRegex(ConfigError, "persistent source session"):
+            service.configure_burst(make_burst_configuration())
 
 
 if __name__ == "__main__":

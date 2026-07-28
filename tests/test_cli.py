@@ -463,6 +463,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "sweep-profile")
         self.assertEqual(args.channel, 2)
 
+    def test_source_pulse_and_burst_profiles_accept_channel(self):
+        pulse = build_parser().parse_args(["source", "pulse-profile", "--channel", "1"])
+        burst = build_parser().parse_args(["source", "burst-profile", "--channel", "2"])
+        self.assertEqual((pulse.command, pulse.channel), ("pulse-profile", 1))
+        self.assertEqual((burst.command, burst.channel), ("burst-profile", 2))
+
     def test_source_counter_profile_has_no_channel_argument(self):
         args = build_parser().parse_args(["source", "counter-profile"])
         self.assertEqual(args.domain, "source")
@@ -496,6 +502,38 @@ class CliTests(unittest.TestCase):
             "wavebench.cli._print_source_sweep_profile"
         ) as print_profile:
             code = main(["source", "sweep-profile", "--channel", "2"])
+
+        self.assertEqual(code, 0)
+        print_profile.assert_called_once_with(profile)
+
+    def test_source_pulse_profile_uses_pulse_formatter(self):
+        profile = object()
+
+        class StubSourceService:
+            def pulse_profile(self, channel):
+                assert channel == 1
+                return profile
+
+        with patch("wavebench.cli._load_source_service", return_value=StubSourceService()), patch(
+            "wavebench.cli._print_source_pulse_profile"
+        ) as print_profile:
+            code = main(["source", "pulse-profile", "--channel", "1"])
+
+        self.assertEqual(code, 0)
+        print_profile.assert_called_once_with(profile)
+
+    def test_source_burst_profile_uses_burst_formatter(self):
+        profile = object()
+
+        class StubSourceService:
+            def burst_profile(self, channel):
+                assert channel == 2
+                return profile
+
+        with patch("wavebench.cli._load_source_service", return_value=StubSourceService()), patch(
+            "wavebench.cli._print_source_burst_profile"
+        ) as print_profile:
+            code = main(["source", "burst-profile", "--channel", "2"])
 
         self.assertEqual(code, 0)
         print_profile.assert_called_once_with(profile)

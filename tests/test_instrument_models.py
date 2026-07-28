@@ -55,8 +55,12 @@ from wavebench.instruments.models import (
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
     SourceChannelProfile,
+    SourceBurstConfiguration,
+    SourceBurstProfile,
     SourceCounterMeasurement,
     SourceCounterProfile,
+    SourcePulseConfiguration,
+    SourcePulseProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
@@ -474,6 +478,76 @@ def test_source_counter_measurement_rejects_inconsistent_values(changes, message
 def test_source_counter_profile_rejects_ambiguous_values(changes, message):
     with pytest.raises(ValueError, match=message):
         _source_counter_profile(**changes)
+
+
+def test_source_pulse_models_preserve_hold_basis_and_validate_shape():
+    profile = SourcePulseProfile(
+        channel=2,
+        hold="WIDTH",
+        width_s=1.0e-6,
+        duty_cycle_percent=20.0,
+        delay_s=0.0,
+        leading_transition_s=8.0e-9,
+        trailing_transition_s=9.0e-9,
+    )
+    configuration = SourcePulseConfiguration.from_profile(profile)
+
+    assert configuration.hold == "WIDTH"
+    assert configuration.width_s == 1.0e-6
+    assert configuration.duty_cycle_percent is None
+    with pytest.raises(ValueError, match="forbids duty_cycle_percent"):
+        SourcePulseConfiguration(
+            hold="WIDTH",
+            width_s=1.0e-6,
+            duty_cycle_percent=20.0,
+            delay_s=0.0,
+            leading_transition_s=8.0e-9,
+            trailing_transition_s=8.0e-9,
+        )
+    with pytest.raises(ValueError, match="0.625 times"):
+        SourcePulseProfile(
+            channel=1,
+            hold="WIDTH",
+            width_s=4.0e-9,
+            duty_cycle_percent=50.0,
+            delay_s=0.0,
+            leading_transition_s=4.0e-9,
+            trailing_transition_s=1.0e-9,
+        )
+
+
+def test_source_burst_models_round_trip_and_reject_internal_cycle_overflow():
+    profile = SourceBurstProfile(
+        channel=1,
+        enabled=False,
+        mode="TRIGGERED",
+        cycles=10,
+        phase_deg=0.0,
+        internal_period_s=0.01,
+        delay_s=0.0,
+        gate_polarity="NORMAL",
+        trigger_source="MANUAL",
+        trigger_slope="POSITIVE",
+        trigger_out="OFF",
+    )
+
+    assert SourceBurstConfiguration.from_profile(profile).as_dict() == {
+        key: value for key, value in profile.as_dict().items() if key != "channel"
+    }
+    with pytest.raises(ValueError, match="500000"):
+        SourceBurstProfile(
+            channel=1,
+            enabled=False,
+            mode="TRIGGERED",
+            cycles=500_001,
+            phase_deg=0.0,
+            internal_period_s=0.01,
+            delay_s=0.0,
+            gate_polarity="NORMAL",
+            trigger_source="INTERNAL",
+            trigger_slope="POSITIVE",
+            trigger_out="OFF",
+        )
 
 
 def test_driver_contracts_are_runtime_checkable():
