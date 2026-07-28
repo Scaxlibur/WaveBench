@@ -178,42 +178,144 @@ WaveBench 避免隐藏的高影响动作：
 
 用示波器测量电源时，请保持示波器输入在安全的高阻模式。除非已经确认电压和仪器限制，否则不要切换到 50 Ω 端接。
 
-## 快速开始
+## 部署与首次配置
 
-```powershell
-python -m pip install -e .
-copy wavebench.example.toml wavebench.toml
-python -m wavebench scope idn --config wavebench.toml
+WaveBench 当前以源码仓库部署为主，要求 Python 3.11 或更高版本。推荐为每套实验环境建立独立虚拟环境，使 WaveBench、仪器插件和厂商 SDK 的版本彼此隔离。主包已经包含五个常用仪器族的内建驱动；如果内建驱动满足需求，可以跳过后面的“安装外置仪器插件”。
+
+### Linux / WSL 推荐部署
+
+克隆仓库并在仓库根目录创建虚拟环境：
+
+```bash
+git clone https://github.com/Scaxlibur/wavebench.git
+cd wavebench
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+cp wavebench.example.toml wavebench.toml
 ```
 
-如果没有 editable install，也可以在项目根目录运行：
+需要运行测试和代码检查时安装开发依赖；需要终端 TUI 时安装 `tui` extra：
 
-```powershell
-$env:PYTHONPATH = "src"
-python -m wavebench scope idn --config wavebench.toml
+```bash
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pip install -e ".[tui]"
 ```
 
-### Windows + WSL 入口
+编辑 `wavebench.toml`，填写实际使用的 VISA/串口 resource，并删除或禁用不属于当前实验台的仪器段。示例配置使用内建短名：
 
-Windows 主机上可用 `scripts/wsl-run.ps1` 从 PowerShell 直接进入 WSL 的项目虚拟环境执行命令，适合把开发、测试和 LAN 仪器访问统一放在 WSL 中：
+| 仪器族 | 内建 `driver` 短名 |
+|---|---|
+| R&S RTM2000 / RTM2032 | `rtm2032` |
+| RIGOL DS1000Z / DS1104Z | `ds1104` 或 `ds1000z` |
+| RIGOL DG4000 / DG4202 | `dg4202` |
+| RIGOL DP800 | `dp800` |
+| RIGOL DM3000 / DM3058 | `dm3000` 或 `dm3058` |
+
+先列出保守 run-plan 模板，生成一份不会覆盖已有文件的本地 plan，再执行不连接仪器的解析检查。之后执行只读身份和安全预检：
+
+```bash
+.venv/bin/wavebench run template --list
+.venv/bin/wavebench run template source-scope-sine --output local-source-scope.toml
+.venv/bin/wavebench run check --plan local-source-scope.toml
+.venv/bin/wavebench doctor --config wavebench.toml
+.venv/bin/wavebench scope idn --config wavebench.toml
+```
+
+`run check` 只读取本地 plan。`doctor` 和 `scope idn` 会连接配置中的仪器并执行只读查询，但不会打开输出或修改配置。首次执行任何写命令前，应在仪器面板上再次确认接线、输入阻抗、输出状态和保护限值。
+
+如果只想临时从源码树运行，不安装 editable package，可在仓库根目录设置 `PYTHONPATH=src`；这种方式不适合安装受管仪器插件，也不建议作为长期部署：
+
+```bash
+PYTHONPATH=src python -m wavebench plugin list
+```
+
+### Windows + WSL 部署
+
+推荐把 Python 环境、测试和 LAN 仪器访问统一放在 WSL 中。首次在 WSL 终端进入仓库后，建立脚本默认使用的 `.venv-wsl`：
+
+```bash
+python3 -m venv .venv-wsl
+.venv-wsl/bin/python -m pip install -e .
+cp wavebench.example.toml wavebench.toml
+```
+
+随后可在 Windows PowerShell 中通过 `scripts/wsl-run.ps1` 执行 WaveBench 或测试：
 
 ```powershell
+.\scripts\wsl-run.ps1 wavebench doctor --config wavebench.toml
 .\scripts\wsl-run.ps1 wavebench scope idn --config wavebench.toml
-.\scripts\wsl-run.ps1 wavebench scope fetch --config wavebench.toml --channel 1
 .\scripts\wsl-run.ps1 pytest -q
 ```
 
-脚本默认进入当前仓库对应的 WSL 路径并激活 `.venv-wsl`。如需指定发行版：
+指定 WSL 发行版或跳过虚拟环境激活：
 
 ```powershell
 .\scripts\wsl-run.ps1 -Distro Ubuntu wavebench doctor --config wavebench.toml
-```
-
-若只是想在 WSL 内跑系统命令而不激活 `.venv-wsl`：
-
-```powershell
 .\scripts\wsl-run.ps1 --no-venv python3 --version
 ```
+
+原生 Windows 可以导入和运行不依赖 POSIX 文件锁的 CLI 路径，但受管插件安装、升级、卸载和恢复需要 `fcntl` 文件锁，因此不支持原生 Windows。需要外置仪器插件时请使用 WSL 或 Linux 虚拟环境。
+
+### 安装外置仪器插件（可选）
+
+外置插件不是 WaveBench 的部署前置条件。它用于独立升级某个仪器族、选择特定 transport，或增加主包没有的仪器。插件是以当前用户权限运行的可信 Python 代码，只应安装已经审查并确认来源的本地源码目录或 wheel。
+
+插件必须安装到运行 WaveBench 的同一个虚拟环境。受管安装器拒绝系统 Python，不联网解析依赖，并固定使用 `pip --no-deps --no-index`；因此 WaveBench 和插件声明的额外依赖必须事先存在于该环境。源码目录在检查和 dry-run 时也会执行其 build backend；若只希望做静态包检查，请使用来源已核验的 wheel。
+
+如果插件仓库与主仓库放在同一父目录，可按以下顺序检查并安装 DS1000Z 插件：
+
+```bash
+git clone https://github.com/Scaxlibur/wavebench-instrument-plugins.git ../wavebench-instrument-plugins
+
+.venv/bin/wavebench plugin package check \
+  ../wavebench-instrument-plugins/packages/wavebench-rigol-ds1000z
+.venv/bin/wavebench plugin install \
+  ../wavebench-instrument-plugins/packages/wavebench-rigol-ds1000z --dry-run
+.venv/bin/wavebench plugin install \
+  ../wavebench-instrument-plugins/packages/wavebench-rigol-ds1000z
+```
+
+安装 wheel 时，把最后一个参数替换为 wheel 路径即可。安装完成后检查受管账本、文件摘要、descriptor 和 capability：
+
+```bash
+.venv/bin/wavebench plugin installed
+.venv/bin/wavebench plugin info rigol.ds1000z --installed
+.venv/bin/wavebench plugin info rigol.ds1000z --load
+.venv/bin/wavebench plugin doctor --load
+```
+
+外置实现必须通过 canonical driver ID 显式选择；仅安装插件不会修改 `wavebench.toml`，也不会改变内建短名的解析结果：
+
+| 外置 distribution | 配置中的 canonical `driver` | 内建短名仍指向 |
+|---|---|---|
+| `wavebench-rigol-ds1000z` | `rigol.ds1000z` | `ds1104` / `ds1000z` |
+| `wavebench-rigol-dg4000` | `rigol.dg4202` | `dg4202` |
+| `wavebench-rigol-dm3000` | `rigol.dm3000` | `dm3000` / `dm3058` |
+| `wavebench-rigol-dp800` | `rigol.dp800` | `dp800` |
+| `wavebench-rohde-schwarz-rtm2000` | `rohde-schwarz.rtm2032` | `rtm2032` |
+| `wavebench-shengpu-sp3000a` | `shengpu.sp30120` | 无内建实现 |
+
+例如，安装 DS1000Z 插件后，需要显式修改配置才能选择外置实现：
+
+```toml
+[scope]
+driver = "rigol.ds1000z"
+model_hint = "DS1104Z Plus"
+default_channel = 1
+check_errors = true
+```
+
+DG4000、DM3000、DP800 和 RTM2000 的 canonical ID 是受限覆盖槽位：卸载对应外置包后会回退到主包内建实现。`rigol.ds1000z` 和 `shengpu.sp30120` 是独立 canonical ID，卸载后必须重新安装插件，或手工把配置改回可用的内建 driver。不要假设外置插件与任意 WaveBench 版本兼容；源码部署时优先使用同一开发线，并以插件 `pyproject.toml` 和 descriptor 声明的版本范围为准。
+
+升级、卸载或中断恢复同样先做 dry-run，并继续使用同一个虚拟环境：
+
+```bash
+.venv/bin/wavebench plugin upgrade <folder-or-wheel> --dry-run
+.venv/bin/wavebench plugin remove rigol.ds1000z --dry-run
+.venv/bin/wavebench plugin recover
+```
+
+完整的覆盖槽位、后端选择、升级/降级、事务恢复和故障排查规则见[可安装仪器插件用户指南](doc/project/WaveBench_可安装仪器插件.md)。开发新插件见[插件开发指南](doc/project/WaveBench_插件开发指南.md)。
 
 ## 示例命令
 
