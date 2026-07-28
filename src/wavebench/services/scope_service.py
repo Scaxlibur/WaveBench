@@ -328,6 +328,65 @@ class ScopeService:
                 check_errors=self.config.autoscale.check_errors,
             )
 
+    def set_channel_display(self, channel: int, enabled: bool) -> dict[str, Any]:
+        required = ["scope.channel_display"]
+        if self.config.scope.check_errors:
+            required.append("scope.errors")
+        self._require("scope.channel_display", *required)
+        with self._scope_session() as scope:
+            scope.set_channel_display(
+                channel,
+                enabled,
+                check_errors=self.config.scope.check_errors,
+            )
+        return {
+            "operation": "scope.channel_display",
+            "mutates_instrument": True,
+            "raw_scpi": False,
+            "channel": channel,
+            "display": "on" if enabled else "off",
+            "affected_settings": [f"CH{channel}.display"],
+        }
+
+    def focus_channel(
+        self,
+        *,
+        channel: int,
+        time_range_s: float | None = None,
+        vertical_scale_v_per_div: float | None = None,
+        hide_other_channels: bool = False,
+    ) -> dict[str, Any]:
+        required = ["scope.focus_channel"]
+        if self.config.scope.check_errors:
+            required.append("scope.errors")
+        self._require("scope.focus_channel", *required)
+        with self._scope_session() as scope:
+            scope.focus_channel(
+                channel,
+                time_range_s=time_range_s,
+                vertical_scale_v_per_div=vertical_scale_v_per_div,
+                hide_other_channels=hide_other_channels,
+                check_errors=self.config.scope.check_errors,
+            )
+        affected = [f"CH{channel}.display"]
+        if time_range_s is not None:
+            affected.append("timebase.range")
+        if vertical_scale_v_per_div is not None:
+            affected.append(f"CH{channel}.vertical_scale")
+            affected.append(f"CH{channel}.offset")
+        if hide_other_channels:
+            affected.extend(f"CH{other}.display" for other in range(1, 5) if other != channel)
+        return {
+            "operation": "scope.focus_channel",
+            "mutates_instrument": True,
+            "raw_scpi": False,
+            "channel": channel,
+            "time_range_s": time_range_s,
+            "vertical_scale_v_per_div": vertical_scale_v_per_div,
+            "hide_other_channels": hide_other_channels,
+            "affected_settings": affected,
+        }
+
     def fetch_waveform(self, channel: int) -> WaveformData:
         if self.config.waveform.format.lower() != "real":
             raise ConfigError("MVP-1 only supports waveform.format = 'real'")

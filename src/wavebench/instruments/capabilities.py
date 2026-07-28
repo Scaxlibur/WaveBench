@@ -11,6 +11,8 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "scope.idn": ("idn",),
     "scope.errors": ("errors",),
     "scope.autoscale": ("autoscale",),
+    "scope.channel_display": ("set_channel_display",),
+    "scope.focus_channel": ("focus_channel",),
     "scope.fetch_waveform": ("fetch_waveform",),
     "scope.capture_waveform": ("capture_waveform",),
     "scope.capture_waveforms": ("capture_waveforms",),

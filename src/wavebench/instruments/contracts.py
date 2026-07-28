@@ -58,6 +58,24 @@ class ScopeDriver(InstrumentDriver, Protocol):
 
     def autoscale(self, wait_opc: bool = True, check_errors: bool = True) -> None: ...
 
+    def set_channel_display(
+        self,
+        channel: int,
+        enabled: bool,
+        *,
+        check_errors: bool = True,
+    ) -> None: ...
+
+    def focus_channel(
+        self,
+        channel: int,
+        *,
+        time_range_s: float | None = None,
+        vertical_scale_v_per_div: float | None = None,
+        hide_other_channels: bool = False,
+        check_errors: bool = True,
+    ) -> None: ...
+
     def fetch_waveform(
         self,
         channel: int,

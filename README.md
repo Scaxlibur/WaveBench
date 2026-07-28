@@ -21,6 +21,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - LAN VISA 连接
 - `scope idn`、`scope errors`；声明相应 capability 的驱动还支持只读 `scope status`、`scope acquisition-status`、`scope history-timestamps` 与 `scope measurement-statistics`
 - 显式 `scope auto` / `scope autoscale`
+- 显式 `scope display --channel N on|off` 与 `scope focus --channel N`，可审计地调整通道显示、时基窗口和垂直档位；不会控制信号源或电源
 - `scope fetch` 与 `scope capture`；默认先只读确认输入为高阻，50 Ω 需显式 `--allow-50ohm`
 - 声明 `scope.capture_average` 的驱动可执行受控平均采集；公共结果要求逐项恢复并返回恢复前后配置证据
 - 声明 `scope.digital_status` 的驱动可读取既有 MSO 数字通道状态；该能力不读取数字波形，也不隐式配置阈值、显示或传输格式
@@ -324,6 +325,13 @@ DG4000、DM3000、DP800 和 RTM2000 的 canonical ID 是受限覆盖槽位：卸
 ```powershell
 python -m wavebench scope capture --config wavebench.toml --channel 1 --label smoke --points def --window-frequency 1000 --target-cycles 10 --expect-frequency 1000 --frequency-tolerance 0.05 --target-vpp 1.0 --no-csv
 python -m wavebench scope capture --config wavebench.toml --channel 1 --label smoke_with_screen --points def --no-csv --screenshot
+```
+
+显式调整示波器显示：
+
+```powershell
+python -m wavebench scope display --config wavebench.toml --channel 2 off
+python -m wavebench scope focus --config wavebench.toml --channel 1 --time-range 0.01 --vertical-scale 0.2
 ```
 
 DS1104Z 配置示例：

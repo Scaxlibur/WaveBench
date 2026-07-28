@@ -55,6 +55,7 @@ from .cli_output import (
     _print_scope_digital_status,
     _print_scope_digital_waveform,
     _print_scope_measurement_statistics,
+    _print_scope_mutation_manifest,
     _print_scope_cursor_readout,
     _print_scope_derived_waveform_metadata,
     _print_scope_fft_status,
@@ -724,6 +725,26 @@ def main(argv: list[str] | None = None) -> int:
             if args.command in {"auto", "autoscale"}:
                 service.autoscale()
                 print("AUToscale completed")
+                return 0
+            if args.command == "display":
+                result = service.set_channel_display(
+                    channel=args.channel,
+                    enabled=args.state.lower() == "on",
+                )
+                _print_scope_mutation_manifest(result)
+                return 0
+            if args.command == "focus":
+                if args.time_range is not None and args.time_range <= 0:
+                    raise ConfigError("--time-range must be > 0")
+                if args.vertical_scale is not None and args.vertical_scale <= 0:
+                    raise ConfigError("--vertical-scale must be > 0")
+                result = service.focus_channel(
+                    channel=args.channel,
+                    time_range_s=args.time_range,
+                    vertical_scale_v_per_div=args.vertical_scale,
+                    hide_other_channels=args.hide_other_channels,
+                )
+                _print_scope_mutation_manifest(result)
                 return 0
             if args.command == "fetch":
                 channel = args.channel or service.config.scope.default_channel

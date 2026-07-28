@@ -455,6 +455,20 @@ def _print_scope_cursor_readout(readout: ScopeCursorReadout) -> None:
     print(f"cursor.x_ratio={number(readout.x_ratio)}")
     print(f"cursor.y_ratio={number(readout.y_ratio)}")
 
+
+def _print_scope_mutation_manifest(manifest: dict[str, Any]) -> None:
+    print(f"operation={manifest['operation']}")
+    print(f"mutates_instrument={str(bool(manifest['mutates_instrument'])).lower()}")
+    print(f"raw_scpi={str(bool(manifest['raw_scpi'])).lower()}")
+    print(f"channel={manifest['channel']}")
+    for key in ("display", "time_range_s", "vertical_scale_v_per_div", "hide_other_channels"):
+        if key in manifest and manifest[key] is not None:
+            value = manifest[key]
+            if isinstance(value, bool):
+                value = str(value).lower()
+            print(f"{key}={value}")
+    print("affected_settings=" + ",".join(str(item) for item in manifest["affected_settings"]))
+
 def _print_dmm_function_status(function: str) -> None:
     print(f"功能 / Function: {function}")
 
