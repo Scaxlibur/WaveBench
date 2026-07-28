@@ -5,14 +5,22 @@ from unittest.mock import patch
 from wavebench.drivers.dg4202 import SourceStatus
 from wavebench.errors import ConfigError, DataError
 from wavebench.instruments import (
+    SourceAmModulationConfiguration,
+    SourceAmModulationProfile,
     SourceBurstConfiguration,
     SourceBurstProfile,
     SourceChannelProfile,
     SourceCouplingConfiguration,
     SourceCouplingProfile,
     SourceCounterProfile,
+    SourceFmModulationConfiguration,
+    SourceFmModulationProfile,
+    SourcePmModulationConfiguration,
+    SourcePmModulationProfile,
     SourcePulseConfiguration,
     SourcePulseProfile,
+    SourcePwmModulationConfiguration,
+    SourcePwmModulationProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
 )
@@ -671,6 +679,196 @@ class SourceServiceSnapshotTests(unittest.TestCase):
                 service.coupling_profile()
             with self.assertRaisesRegex(ConfigError, "source.coupling_configure"):
                 service.configure_coupling(make_coupling_configuration())
+
+        open_source.assert_not_called()
+
+    def test_basic_modulation_profiles_use_default_channel_and_close_transport(self):
+        cases = (
+            (
+                "am_modulation_profile",
+                "get_am_modulation_profile",
+                "source.modulation_am_profile",
+                SourceAmModulationProfile(2, False, 80.0, 25.0, "SINE"),
+            ),
+            (
+                "fm_modulation_profile",
+                "get_fm_modulation_profile",
+                "source.modulation_fm_profile",
+                SourceFmModulationProfile(2, False, 250.0, 25.0, "SQUARE"),
+            ),
+            (
+                "pm_modulation_profile",
+                "get_pm_modulation_profile",
+                "source.modulation_pm_profile",
+                SourcePmModulationProfile(2, False, 90.0, 25.0, "TRIANGLE"),
+            ),
+            (
+                "pwm_modulation_profile",
+                "get_pwm_modulation_profile",
+                "source.modulation_pwm_profile",
+                SourcePwmModulationProfile(2, False, "DUTY", 20.0, 25.0, "RAMP"),
+            ),
+        )
+        for service_method, driver_method, capability, profile in cases:
+            with self.subTest(capability=capability):
+                events = []
+
+                class FakeSource:
+                    def __getattr__(self, name):
+                        if name == driver_method:
+                            return lambda channel: events.append((name, channel)) or profile
+                        raise AttributeError(name)
+
+                    def close(self):
+                        events.append(("close",))
+
+                config = SimpleNamespace(
+                    source=SimpleNamespace(
+                        resource="TCPIP::source::INSTR",
+                        driver="example",
+                        default_channel=2,
+                    )
+                )
+                service = SourceService(config=config, logger=CommandLogger())
+                with patch.object(service, "_require") as require, patch.object(
+                    service, "_open_source", return_value=FakeSource()
+                ):
+                    result = getattr(service, service_method)()
+
+                self.assertIs(result, profile)
+                require.assert_called_once_with(capability, capability)
+                self.assertEqual(events, [(driver_method, 2), ("close",)])
+
+    def test_basic_modulation_configure_is_gated_and_passes_check_errors(self):
+        cases = (
+            (
+                "configure_am_modulation",
+                "configure_am_modulation",
+                "source.modulation_am_configure",
+                SourceAmModulationConfiguration(True, 80.0, 25.0, "SINE"),
+                SourceAmModulationProfile(2, True, 80.0, 25.0, "SINE"),
+            ),
+            (
+                "configure_fm_modulation",
+                "configure_fm_modulation",
+                "source.modulation_fm_configure",
+                SourceFmModulationConfiguration(True, 250.0, 25.0, "SINE"),
+                SourceFmModulationProfile(2, True, 250.0, 25.0, "SINE"),
+            ),
+            (
+                "configure_pm_modulation",
+                "configure_pm_modulation",
+                "source.modulation_pm_configure",
+                SourcePmModulationConfiguration(True, 90.0, 25.0, "SINE"),
+                SourcePmModulationProfile(2, True, 90.0, 25.0, "SINE"),
+            ),
+            (
+                "configure_pwm_modulation",
+                "configure_pwm_modulation",
+                "source.modulation_pwm_configure",
+                SourcePwmModulationConfiguration(True, "WIDTH", 0.001, 25.0, "SINE"),
+                SourcePwmModulationProfile(2, True, "WIDTH", 0.001, 25.0, "SINE"),
+            ),
+        )
+        for service_method, driver_method, capability, configuration, profile in cases:
+            with self.subTest(capability=capability):
+                events = []
+
+                class FakeSource:
+                    def __getattr__(self, name):
+                        if name == driver_method:
+                            return lambda channel, target, *, check_errors: (
+                                events.append((name, channel, target, check_errors)) or profile
+                            )
+                        raise AttributeError(name)
+
+                    def close(self):
+                        events.append(("close",))
+
+                config = SimpleNamespace(
+                    source=SimpleNamespace(
+                        resource="TCPIP::source::INSTR",
+                        driver="example",
+                        default_channel=2,
+                        check_errors=True,
+                    )
+                )
+                service = SourceService(config=config, logger=CommandLogger())
+                with patch.object(service, "_require") as require, patch.object(
+                    service, "_open_source", return_value=FakeSource()
+                ):
+                    result = getattr(service, service_method)(configuration)
+
+                self.assertIs(result, profile)
+                require.assert_called_once_with(capability, capability, "source.errors")
+                self.assertEqual(
+                    events,
+                    [(driver_method, 2, configuration, True), ("close",)],
+                )
+
+    def test_basic_modulation_wrong_types_fail_before_transport(self):
+        service = SourceService(config=None, logger=CommandLogger())
+        service._open_source = lambda: self.fail("transport must not open")
+
+        for method, expected in (
+            ("configure_am_modulation", "SourceAmModulationConfiguration"),
+            ("configure_fm_modulation", "SourceFmModulationConfiguration"),
+            ("configure_pm_modulation", "SourcePmModulationConfiguration"),
+            ("configure_pwm_modulation", "SourcePwmModulationConfiguration"),
+        ):
+            with self.subTest(method=method):
+                with self.assertRaisesRegex(ConfigError, expected):
+                    getattr(service, method)(object())
+
+    def test_basic_modulation_missing_capabilities_fail_before_transport(self):
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="legacy",
+                default_channel=1,
+                check_errors=False,
+            )
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.source",
+            capabilities=("source.status",),
+        )
+
+        operations = (
+            ("am_modulation_profile", None, "source.modulation_am_profile"),
+            (
+                "configure_am_modulation",
+                SourceAmModulationConfiguration(False, 50.0, 10.0, "SINE"),
+                "source.modulation_am_configure",
+            ),
+            ("fm_modulation_profile", None, "source.modulation_fm_profile"),
+            (
+                "configure_fm_modulation",
+                SourceFmModulationConfiguration(False, 100.0, 10.0, "SINE"),
+                "source.modulation_fm_configure",
+            ),
+            ("pm_modulation_profile", None, "source.modulation_pm_profile"),
+            (
+                "configure_pm_modulation",
+                SourcePmModulationConfiguration(False, 90.0, 10.0, "SINE"),
+                "source.modulation_pm_configure",
+            ),
+            ("pwm_modulation_profile", None, "source.modulation_pwm_profile"),
+            (
+                "configure_pwm_modulation",
+                SourcePwmModulationConfiguration(False, "DUTY", 10.0, 10.0, "SINE"),
+                "source.modulation_pwm_configure",
+            ),
+        )
+        with patch.object(service, "_open_source") as open_source:
+            for method, argument, capability in operations:
+                with self.subTest(method=method):
+                    with self.assertRaisesRegex(ConfigError, capability):
+                        if argument is None:
+                            getattr(service, method)()
+                        else:
+                            getattr(service, method)(argument)
 
         open_source.assert_not_called()
 

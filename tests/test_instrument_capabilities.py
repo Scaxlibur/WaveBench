@@ -32,6 +32,33 @@ def test_source_coupling_has_runtime_method_mappings():
     assert CAPABILITY_METHODS["source.coupling_configure"] == ("configure_coupling",)
 
 
+def test_source_basic_modulation_has_mode_specific_runtime_method_mappings():
+    assert CAPABILITY_METHODS["source.modulation_am_profile"] == (
+        "get_am_modulation_profile",
+    )
+    assert CAPABILITY_METHODS["source.modulation_am_configure"] == (
+        "configure_am_modulation",
+    )
+    assert CAPABILITY_METHODS["source.modulation_fm_profile"] == (
+        "get_fm_modulation_profile",
+    )
+    assert CAPABILITY_METHODS["source.modulation_fm_configure"] == (
+        "configure_fm_modulation",
+    )
+    assert CAPABILITY_METHODS["source.modulation_pm_profile"] == (
+        "get_pm_modulation_profile",
+    )
+    assert CAPABILITY_METHODS["source.modulation_pm_configure"] == (
+        "configure_pm_modulation",
+    )
+    assert CAPABILITY_METHODS["source.modulation_pwm_profile"] == (
+        "get_pwm_modulation_profile",
+    )
+    assert CAPABILITY_METHODS["source.modulation_pwm_configure"] == (
+        "configure_pwm_modulation",
+    )
+
+
 def test_source_sweep_profile_has_a_runtime_method_mapping():
     assert CAPABILITY_METHODS["source.sweep_profile"] == ("get_sweep_profile",)
 

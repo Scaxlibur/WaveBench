@@ -11,14 +11,22 @@ from wavebench.arbitrary import build_dg4000_dac14_binary_block, load_arbitrary_
 from wavebench.config import SourceConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
 from wavebench.instruments.contracts import (
+    SourceAmModulationControlDriver,
+    SourceAmModulationProfileDriver,
     SourceBurstControlDriver,
     SourceBurstProfileDriver,
     SourceChannelProfileDriver,
     SourceCouplingDriver,
     SourceCounterProfileDriver,
     SourceDriver,
+    SourceFmModulationControlDriver,
+    SourceFmModulationProfileDriver,
+    SourcePmModulationControlDriver,
+    SourcePmModulationProfileDriver,
     SourcePulseControlDriver,
     SourcePulseProfileDriver,
+    SourcePwmModulationControlDriver,
+    SourcePwmModulationProfileDriver,
     SourceSweepControlDriver,
     SourceSweepProfileDriver,
 )
@@ -27,14 +35,22 @@ from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
     ArbitraryQueryProbeResult,
+    SourceAmModulationConfiguration,
+    SourceAmModulationProfile,
     SourceBurstConfiguration,
     SourceBurstProfile,
     SourceChannelProfile,
     SourceCouplingConfiguration,
     SourceCouplingProfile,
     SourceCounterProfile,
+    SourceFmModulationConfiguration,
+    SourceFmModulationProfile,
+    SourcePmModulationConfiguration,
+    SourcePmModulationProfile,
     SourcePulseConfiguration,
     SourcePulseProfile,
+    SourcePwmModulationConfiguration,
+    SourcePwmModulationProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
@@ -138,6 +154,124 @@ class SourceService:
         self._require("source.coupling_configure", *required)
         with self._source_session() as source:
             return cast(SourceCouplingDriver, source).configure_coupling(
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
+
+    def am_modulation_profile(self, channel: int | None = None) -> SourceAmModulationProfile:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        self._require("source.modulation_am_profile", "source.modulation_am_profile")
+        with self._source_session() as source:
+            return cast(SourceAmModulationProfileDriver, source).get_am_modulation_profile(channel)
+
+    def configure_am_modulation(
+        self,
+        configuration: SourceAmModulationConfiguration,
+        channel: int | None = None,
+    ) -> SourceAmModulationProfile:
+        if not isinstance(configuration, SourceAmModulationConfiguration):
+            raise ConfigError(
+                "source AM modulation configuration must be SourceAmModulationConfiguration"
+            )
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.modulation_am_configure"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.modulation_am_configure", *required)
+        with self._source_session() as source:
+            return cast(SourceAmModulationControlDriver, source).configure_am_modulation(
+                channel,
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
+
+    def fm_modulation_profile(self, channel: int | None = None) -> SourceFmModulationProfile:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        self._require("source.modulation_fm_profile", "source.modulation_fm_profile")
+        with self._source_session() as source:
+            return cast(SourceFmModulationProfileDriver, source).get_fm_modulation_profile(channel)
+
+    def configure_fm_modulation(
+        self,
+        configuration: SourceFmModulationConfiguration,
+        channel: int | None = None,
+    ) -> SourceFmModulationProfile:
+        if not isinstance(configuration, SourceFmModulationConfiguration):
+            raise ConfigError(
+                "source FM modulation configuration must be SourceFmModulationConfiguration"
+            )
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.modulation_fm_configure"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.modulation_fm_configure", *required)
+        with self._source_session() as source:
+            return cast(SourceFmModulationControlDriver, source).configure_fm_modulation(
+                channel,
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
+
+    def pm_modulation_profile(self, channel: int | None = None) -> SourcePmModulationProfile:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        self._require("source.modulation_pm_profile", "source.modulation_pm_profile")
+        with self._source_session() as source:
+            return cast(SourcePmModulationProfileDriver, source).get_pm_modulation_profile(channel)
+
+    def configure_pm_modulation(
+        self,
+        configuration: SourcePmModulationConfiguration,
+        channel: int | None = None,
+    ) -> SourcePmModulationProfile:
+        if not isinstance(configuration, SourcePmModulationConfiguration):
+            raise ConfigError(
+                "source PM modulation configuration must be SourcePmModulationConfiguration"
+            )
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.modulation_pm_configure"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.modulation_pm_configure", *required)
+        with self._source_session() as source:
+            return cast(SourcePmModulationControlDriver, source).configure_pm_modulation(
+                channel,
+                configuration,
+                check_errors=source_cfg.check_errors,
+            )
+
+    def pwm_modulation_profile(self, channel: int | None = None) -> SourcePwmModulationProfile:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        self._require("source.modulation_pwm_profile", "source.modulation_pwm_profile")
+        with self._source_session() as source:
+            return cast(SourcePwmModulationProfileDriver, source).get_pwm_modulation_profile(
+                channel
+            )
+
+    def configure_pwm_modulation(
+        self,
+        configuration: SourcePwmModulationConfiguration,
+        channel: int | None = None,
+    ) -> SourcePwmModulationProfile:
+        if not isinstance(configuration, SourcePwmModulationConfiguration):
+            raise ConfigError(
+                "source PWM modulation configuration must be SourcePwmModulationConfiguration"
+            )
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        required = ["source.modulation_pwm_configure"]
+        if source_cfg.check_errors:
+            required.append("source.errors")
+        self._require("source.modulation_pwm_configure", *required)
+        with self._source_session() as source:
+            return cast(SourcePwmModulationControlDriver, source).configure_pwm_modulation(
+                channel,
                 configuration,
                 check_errors=source_cfg.check_errors,
             )

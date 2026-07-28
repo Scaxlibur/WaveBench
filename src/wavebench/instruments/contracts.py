@@ -31,14 +31,22 @@ from .models import (
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
     ScopeSnapshot,
+    SourceAmModulationConfiguration,
+    SourceAmModulationProfile,
     SourceBurstConfiguration,
     SourceBurstProfile,
     SourceChannelProfile,
     SourceCouplingConfiguration,
     SourceCouplingProfile,
     SourceCounterProfile,
+    SourceFmModulationConfiguration,
+    SourceFmModulationProfile,
+    SourcePmModulationConfiguration,
+    SourcePmModulationProfile,
     SourcePulseConfiguration,
     SourcePulseProfile,
+    SourcePwmModulationConfiguration,
+    SourcePwmModulationProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
@@ -253,6 +261,70 @@ class SourceCouplingDriver(InstrumentDriver, Protocol):
         *,
         check_errors: bool = True,
     ) -> SourceCouplingProfile: ...
+
+
+@runtime_checkable
+class SourceAmModulationProfileDriver(InstrumentDriver, Protocol):
+    def get_am_modulation_profile(self, channel: int) -> SourceAmModulationProfile: ...
+
+
+@runtime_checkable
+class SourceAmModulationControlDriver(SourceAmModulationProfileDriver, Protocol):
+    def configure_am_modulation(
+        self,
+        channel: int,
+        configuration: SourceAmModulationConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourceAmModulationProfile: ...
+
+
+@runtime_checkable
+class SourceFmModulationProfileDriver(InstrumentDriver, Protocol):
+    def get_fm_modulation_profile(self, channel: int) -> SourceFmModulationProfile: ...
+
+
+@runtime_checkable
+class SourceFmModulationControlDriver(SourceFmModulationProfileDriver, Protocol):
+    def configure_fm_modulation(
+        self,
+        channel: int,
+        configuration: SourceFmModulationConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourceFmModulationProfile: ...
+
+
+@runtime_checkable
+class SourcePmModulationProfileDriver(InstrumentDriver, Protocol):
+    def get_pm_modulation_profile(self, channel: int) -> SourcePmModulationProfile: ...
+
+
+@runtime_checkable
+class SourcePmModulationControlDriver(SourcePmModulationProfileDriver, Protocol):
+    def configure_pm_modulation(
+        self,
+        channel: int,
+        configuration: SourcePmModulationConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourcePmModulationProfile: ...
+
+
+@runtime_checkable
+class SourcePwmModulationProfileDriver(InstrumentDriver, Protocol):
+    def get_pwm_modulation_profile(self, channel: int) -> SourcePwmModulationProfile: ...
+
+
+@runtime_checkable
+class SourcePwmModulationControlDriver(SourcePwmModulationProfileDriver, Protocol):
+    def configure_pwm_modulation(
+        self,
+        channel: int,
+        configuration: SourcePwmModulationConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourcePwmModulationProfile: ...
 
 
 @runtime_checkable

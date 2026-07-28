@@ -886,6 +886,346 @@ def _validate_source_coupling_values(
             )
 
 
+_SOURCE_INTERNAL_MODULATION_FUNCTIONS = {
+    "SINE",
+    "SQUARE",
+    "TRIANGLE",
+    "RAMP",
+    "NEGATIVE_RAMP",
+    "NOISE",
+}
+
+
+def _validate_source_modulation_common(
+    *,
+    channel: int | None,
+    enabled: bool,
+    internal_frequency_hz: float,
+    internal_function: str,
+) -> None:
+    if channel is not None and (
+        isinstance(channel, bool) or not isinstance(channel, int) or channel < 1
+    ):
+        raise ValueError("source modulation channel must be a positive integer")
+    if not isinstance(enabled, bool):
+        raise ValueError("source modulation enabled must be boolean")
+    if (
+        isinstance(internal_frequency_hz, bool)
+        or not isinstance(internal_frequency_hz, (int, float))
+        or not isfinite(internal_frequency_hz)
+        or not 0.002 <= internal_frequency_hz <= 50_000.0
+    ):
+        raise ValueError(
+            "source internal modulation frequency must be finite and from 0.002 to 50000 Hz"
+        )
+    if internal_function not in _SOURCE_INTERNAL_MODULATION_FUNCTIONS:
+        raise ValueError("unsupported source internal modulation function")
+
+
+def _validate_source_modulation_value(
+    *,
+    name: str,
+    value: float,
+    minimum: float,
+    maximum: float | None,
+    unit: str,
+) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(value)
+        or value < minimum
+        or (maximum is not None and value > maximum)
+    ):
+        if maximum is None:
+            requirement = f"at least {minimum:g} {unit}"
+        else:
+            requirement = f"from {minimum:g} to {maximum:g} {unit}"
+        raise ValueError(f"source modulation {name} must be finite and {requirement}")
+
+
+@dataclass(frozen=True)
+class SourceAmModulationProfile:
+    """Complete internal-source AM snapshot for one source channel."""
+
+    channel: int
+    enabled: bool
+    depth_percent: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=self.channel,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_modulation_value(
+            name="AM depth",
+            value=self.depth_percent,
+            minimum=0.0,
+            maximum=120.0,
+            unit="percent",
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "enabled": self.enabled,
+            "depth_percent": self.depth_percent,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
+@dataclass(frozen=True)
+class SourceAmModulationConfiguration:
+    """Complete internal-source AM target for one controlled transaction."""
+
+    enabled: bool
+    depth_percent: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=None,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_modulation_value(
+            name="AM depth",
+            value=self.depth_percent,
+            minimum=0.0,
+            maximum=120.0,
+            unit="percent",
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "depth_percent": self.depth_percent,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
+@dataclass(frozen=True)
+class SourceFmModulationProfile:
+    """Complete internal-source FM snapshot for one source channel."""
+
+    channel: int
+    enabled: bool
+    deviation_hz: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=self.channel,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_modulation_value(
+            name="FM deviation", value=self.deviation_hz, minimum=0.0, maximum=None, unit="Hz"
+        )
+        if self.deviation_hz == 0:
+            raise ValueError("source modulation FM deviation must be positive")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "enabled": self.enabled,
+            "deviation_hz": self.deviation_hz,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
+@dataclass(frozen=True)
+class SourceFmModulationConfiguration:
+    """Complete internal-source FM target for one controlled transaction."""
+
+    enabled: bool
+    deviation_hz: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=None,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_modulation_value(
+            name="FM deviation", value=self.deviation_hz, minimum=0.0, maximum=None, unit="Hz"
+        )
+        if self.deviation_hz == 0:
+            raise ValueError("source modulation FM deviation must be positive")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "deviation_hz": self.deviation_hz,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
+@dataclass(frozen=True)
+class SourcePmModulationProfile:
+    """Complete internal-source PM snapshot for one source channel."""
+
+    channel: int
+    enabled: bool
+    deviation_deg: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=self.channel,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_modulation_value(
+            name="PM deviation",
+            value=self.deviation_deg,
+            minimum=0.0,
+            maximum=360.0,
+            unit="degrees",
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "enabled": self.enabled,
+            "deviation_deg": self.deviation_deg,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
+@dataclass(frozen=True)
+class SourcePmModulationConfiguration:
+    """Complete internal-source PM target for one controlled transaction."""
+
+    enabled: bool
+    deviation_deg: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=None,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_modulation_value(
+            name="PM deviation",
+            value=self.deviation_deg,
+            minimum=0.0,
+            maximum=360.0,
+            unit="degrees",
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "deviation_deg": self.deviation_deg,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
+def _validate_source_pwm_deviation(mode: str, value: float) -> None:
+    if mode == "DUTY":
+        _validate_source_modulation_value(
+            name="PWM duty deviation",
+            value=value,
+            minimum=0.0,
+            maximum=50.0,
+            unit="percent",
+        )
+        return
+    if mode == "WIDTH":
+        _validate_source_modulation_value(
+            name="PWM width deviation",
+            value=value,
+            minimum=0.0,
+            maximum=500_000.0,
+            unit="seconds",
+        )
+        return
+    raise ValueError("source PWM deviation mode must be DUTY or WIDTH")
+
+
+@dataclass(frozen=True)
+class SourcePwmModulationProfile:
+    """Complete internal-source PWM snapshot with one explicit deviation branch."""
+
+    channel: int
+    enabled: bool
+    deviation_mode: str
+    deviation_value: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=self.channel,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_pwm_deviation(self.deviation_mode, self.deviation_value)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "enabled": self.enabled,
+            "deviation_mode": self.deviation_mode,
+            "deviation_value": self.deviation_value,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
+@dataclass(frozen=True)
+class SourcePwmModulationConfiguration:
+    """Complete internal-source PWM target with one explicit deviation branch."""
+
+    enabled: bool
+    deviation_mode: str
+    deviation_value: float
+    internal_frequency_hz: float
+    internal_function: str
+
+    def __post_init__(self) -> None:
+        _validate_source_modulation_common(
+            channel=None,
+            enabled=self.enabled,
+            internal_frequency_hz=self.internal_frequency_hz,
+            internal_function=self.internal_function,
+        )
+        _validate_source_pwm_deviation(self.deviation_mode, self.deviation_value)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "deviation_mode": self.deviation_mode,
+            "deviation_value": self.deviation_value,
+            "internal_frequency_hz": self.internal_frequency_hz,
+            "internal_function": self.internal_function,
+        }
+
+
 @dataclass(frozen=True)
 class SourceChannelProfile:
     """Read-only source-channel context outside the basic restorable state."""

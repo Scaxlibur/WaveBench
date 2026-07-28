@@ -6,11 +6,13 @@ WaveBench is a lightweight Python measurement bench for explicit, reproducible c
 
 The WaveBench distribution includes built-in drivers for the RTM2000/RTM2032, DS1104Z/DS1000Z, DG4000/DG4202, DP800, and DM3000/DM3058 families. These five families are the permanent bundled baseline: first use does not require an external plugin, and they are not scheduled for removal from the main package. External packages are optional, independently released upgrades or extensions. A narrowly allowlisted package may take over a canonical ID, while built-in short names remain pinned to the bundled implementation and uninstalling the package restores the bundled canonical implementation where the IDs are shared.
 
-The current development version is `v0.8.20`. It adds fail-closed dual-channel coupling
-profile/configuration models, a driver protocol, and capability-gated service entry points. Only
-external plugins with complete dual-channel restoration and ambiguous-write latching may declare
-these capabilities; the built-in DG4202 fallback does not. Marker remains part of the sweep
-subsystem, while harmonic analysis remains an offline FFT concern.
+The current development version is `v0.8.21`. It adds independent internal-source profile and
+configuration models, driver protocols, and capability-gated service entry points for AM, FM, PM,
+and PWM. PWM duty and width deviations are strictly exclusive branches, so a profile cannot leak
+mode-inapplicable fields from an earlier mode. Only external plugins with per-field readback,
+complete restoration, and ambiguous-write latching may declare these capabilities; the built-in
+DG4202 fallback does not. External modulation sources, advanced digital modulation, generator
+harmonics, and DAC16 remain outside the public surface.
 
 > [!IMPORTANT]
 > The current formal release is `v0.8.0`. This release introduces Instrument API V2, managed plugin lifecycle operations, canonical override slots, and the SocketIO backend; those capabilities are not part of `v0.7.0`. Users of other releases should follow the documentation stored in the matching tag.

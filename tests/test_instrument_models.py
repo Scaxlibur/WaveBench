@@ -28,10 +28,14 @@ from wavebench.instruments.contracts import (
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
+    SourceAmModulationControlDriver,
     SourceChannelProfileDriver,
     SourceCouplingDriver,
     SourceCounterProfileDriver,
     SourceDriver,
+    SourceFmModulationControlDriver,
+    SourcePmModulationControlDriver,
+    SourcePwmModulationControlDriver,
     SourceSweepControlDriver,
     SourceSweepProfileDriver,
 )
@@ -55,6 +59,8 @@ from wavebench.instruments.models import (
     ScopeSnapshot,
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
+    SourceAmModulationConfiguration,
+    SourceAmModulationProfile,
     SourceChannelProfile,
     SourceCouplingConfiguration,
     SourceCouplingProfile,
@@ -62,8 +68,14 @@ from wavebench.instruments.models import (
     SourceBurstProfile,
     SourceCounterMeasurement,
     SourceCounterProfile,
+    SourceFmModulationConfiguration,
+    SourceFmModulationProfile,
+    SourcePmModulationConfiguration,
+    SourcePmModulationProfile,
     SourcePulseConfiguration,
     SourcePulseProfile,
+    SourcePwmModulationConfiguration,
+    SourcePwmModulationProfile,
     SourceSweepConfiguration,
     SourceSweepProfile,
     SourceStatus,
@@ -235,6 +247,130 @@ def test_source_coupling_models_reject_invalid_values(changes, message):
     for model in (SourceCouplingProfile, SourceCouplingConfiguration):
         with pytest.raises(ValueError, match=message):
             model(**values)
+
+
+@pytest.mark.parametrize(
+    "profile_type, configuration_type, value_name, value",
+    [
+        (SourceAmModulationProfile, SourceAmModulationConfiguration, "depth_percent", 80.0),
+        (SourceFmModulationProfile, SourceFmModulationConfiguration, "deviation_hz", 250.0),
+        (SourcePmModulationProfile, SourcePmModulationConfiguration, "deviation_deg", 90.0),
+    ],
+)
+def test_source_modulation_models_are_mode_specific_and_serialize_complete_state(
+    profile_type,
+    configuration_type,
+    value_name,
+    value,
+):
+    target = {
+        "enabled": True,
+        value_name: value,
+        "internal_frequency_hz": 25.0,
+        "internal_function": "SINE",
+    }
+
+    configuration = configuration_type(**target)
+    profile = profile_type(channel=2, **target)
+
+    assert configuration.as_dict() == target
+    assert profile.as_dict() == {"channel": 2, **target}
+
+
+@pytest.mark.parametrize(
+    "profile_type, value_name, value, message",
+    [
+        (SourceAmModulationProfile, "depth_percent", 120.1, "AM depth"),
+        (SourceFmModulationProfile, "deviation_hz", 0.0, "positive"),
+        (SourcePmModulationProfile, "deviation_deg", 360.1, "PM deviation"),
+    ],
+)
+def test_source_modulation_models_reject_mode_specific_invalid_values(
+    profile_type,
+    value_name,
+    value,
+    message,
+):
+    values = {
+        "channel": 1,
+        "enabled": False,
+        value_name: value,
+        "internal_frequency_hz": 10.0,
+        "internal_function": "SINE",
+    }
+
+    with pytest.raises(ValueError, match=message):
+        profile_type(**values)
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"channel": True}, "channel"),
+        ({"enabled": 1}, "enabled"),
+        ({"internal_frequency_hz": 0.001}, "frequency"),
+        ({"internal_frequency_hz": 50_000.1}, "frequency"),
+        ({"internal_frequency_hz": float("nan")}, "frequency"),
+        ({"internal_function": "USER"}, "function"),
+    ],
+)
+def test_source_modulation_profiles_reject_ambiguous_common_context(changes, message):
+    values = {
+        "channel": 1,
+        "enabled": False,
+        "depth_percent": 50.0,
+        "internal_frequency_hz": 10.0,
+        "internal_function": "SQUARE",
+    }
+    values.update(changes)
+
+    with pytest.raises(ValueError, match=message):
+        SourceAmModulationProfile(**values)
+
+
+def test_source_pwm_models_use_one_discriminated_deviation_value():
+    duty = SourcePwmModulationConfiguration(
+        enabled=True,
+        deviation_mode="DUTY",
+        deviation_value=20.0,
+        internal_frequency_hz=100.0,
+        internal_function="TRIANGLE",
+    )
+    width = SourcePwmModulationProfile(
+        channel=1,
+        enabled=False,
+        deviation_mode="WIDTH",
+        deviation_value=0.001,
+        internal_frequency_hz=100.0,
+        internal_function="NEGATIVE_RAMP",
+    )
+
+    assert duty.as_dict()["deviation_mode"] == "DUTY"
+    assert duty.as_dict()["deviation_value"] == 20.0
+    assert width.as_dict()["deviation_mode"] == "WIDTH"
+    assert width.as_dict()["deviation_value"] == 0.001
+    assert "duty_deviation_percent" not in duty.as_dict()
+    assert "width_deviation_s" not in duty.as_dict()
+
+
+@pytest.mark.parametrize(
+    "mode, value, message",
+    [
+        ("UNKNOWN", 1.0, "DUTY or WIDTH"),
+        ("DUTY", 50.1, "duty deviation"),
+        ("WIDTH", 500_000.1, "width deviation"),
+        ("WIDTH", float("inf"), "width deviation"),
+    ],
+)
+def test_source_pwm_models_reject_invalid_discriminated_deviation(mode, value, message):
+    with pytest.raises(ValueError, match=message):
+        SourcePwmModulationConfiguration(
+            enabled=False,
+            deviation_mode=mode,
+            deviation_value=value,
+            internal_frequency_hz=10.0,
+            internal_function="NOISE",
+        )
 
 
 def _source_sweep_profile(**changes):
@@ -617,6 +753,10 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_SourceChannelProfile(), SourceChannelProfileDriver)
     assert isinstance(_SourceCoupling(), SourceCouplingDriver)
+    assert isinstance(_SourceAmModulation(), SourceAmModulationControlDriver)
+    assert isinstance(_SourceFmModulation(), SourceFmModulationControlDriver)
+    assert isinstance(_SourcePmModulation(), SourcePmModulationControlDriver)
+    assert isinstance(_SourcePwmModulation(), SourcePwmModulationControlDriver)
     assert isinstance(_SourceCounterProfile(), SourceCounterProfileDriver)
     assert isinstance(_SourceSweepProfile(), SourceSweepProfileDriver)
     assert isinstance(_SourceSweepControl(), SourceSweepControlDriver)
@@ -664,6 +804,30 @@ class _SourceChannelProfile(_DynamicDriver):
 
 class _SourceCoupling(_DynamicDriver):
     idn = close = get_coupling_profile = configure_coupling = lambda *args, **kwargs: None
+
+
+class _SourceAmModulation(_DynamicDriver):
+    idn = close = get_am_modulation_profile = configure_am_modulation = (
+        lambda *args, **kwargs: None
+    )
+
+
+class _SourceFmModulation(_DynamicDriver):
+    idn = close = get_fm_modulation_profile = configure_fm_modulation = (
+        lambda *args, **kwargs: None
+    )
+
+
+class _SourcePmModulation(_DynamicDriver):
+    idn = close = get_pm_modulation_profile = configure_pm_modulation = (
+        lambda *args, **kwargs: None
+    )
+
+
+class _SourcePwmModulation(_DynamicDriver):
+    idn = close = get_pwm_modulation_profile = configure_pwm_modulation = (
+        lambda *args, **kwargs: None
+    )
 
 
 class _SourceSweepProfile(_DynamicDriver):
