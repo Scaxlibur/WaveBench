@@ -193,6 +193,28 @@ $env:PYTHONPATH = "src"
 python -m wavebench scope idn --config wavebench.toml
 ```
 
+### Windows + WSL 入口
+
+Windows 主机上可用 `scripts/wsl-run.ps1` 从 PowerShell 直接进入 WSL 的项目虚拟环境执行命令，适合把开发、测试和 LAN 仪器访问统一放在 WSL 中：
+
+```powershell
+.\scripts\wsl-run.ps1 wavebench scope idn --config wavebench.toml
+.\scripts\wsl-run.ps1 wavebench scope fetch --config wavebench.toml --channel 1
+.\scripts\wsl-run.ps1 pytest -q
+```
+
+脚本默认进入当前仓库对应的 WSL 路径并激活 `.venv-wsl`。如需指定发行版：
+
+```powershell
+.\scripts\wsl-run.ps1 -Distro Ubuntu wavebench doctor --config wavebench.toml
+```
+
+若只是想在 WSL 内跑系统命令而不激活 `.venv-wsl`：
+
+```powershell
+.\scripts\wsl-run.ps1 --no-venv python3 --version
+```
+
 ## 示例命令
 
 采集示波器波形：

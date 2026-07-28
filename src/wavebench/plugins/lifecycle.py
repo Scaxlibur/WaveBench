@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-import fcntl
+try:
+    import fcntl
+except ModuleNotFoundError:
+    fcntl = None
 from hashlib import sha256
 import json
 import os
@@ -1089,6 +1092,11 @@ print(json.dumps({
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
+        if fcntl is None:
+            raise ConfigError(
+                "plugin lifecycle is not supported on Windows / "
+                "插件生命周期暂不支持 Windows"
+            )
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
