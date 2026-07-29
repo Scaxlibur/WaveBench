@@ -311,7 +311,7 @@ def test_source_modulation_models_reject_mode_specific_invalid_values(
         ({"internal_frequency_hz": 0.001}, "frequency"),
         ({"internal_frequency_hz": 50_000.1}, "frequency"),
         ({"internal_frequency_hz": float("nan")}, "frequency"),
-        ({"internal_function": "USER"}, "function"),
+        ({"internal_function": "ARBITRARY"}, "function"),
     ],
 )
 def test_source_modulation_profiles_reject_ambiguous_common_context(changes, message):
@@ -326,6 +326,18 @@ def test_source_modulation_profiles_reject_ambiguous_common_context(changes, mes
 
     with pytest.raises(ValueError, match=message):
         SourceAmModulationProfile(**values)
+
+
+def test_source_modulation_models_accept_user_defined_internal_function():
+    profile = SourceAmModulationProfile(
+        channel=1,
+        enabled=False,
+        depth_percent=50.0,
+        internal_frequency_hz=10.0,
+        internal_function="USER",
+    )
+
+    assert profile.internal_function == "USER"
 
 
 def test_source_pwm_models_use_one_discriminated_deviation_value():
