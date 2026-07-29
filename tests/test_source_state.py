@@ -15,6 +15,9 @@ from wavebench.instruments import (
     SourceCounterProfile,
     SourceFmModulationConfiguration,
     SourceFmModulationProfile,
+    SourceHarmonicComponent,
+    SourceHarmonicConfiguration,
+    SourceHarmonicProfile,
     SourcePmModulationConfiguration,
     SourcePmModulationProfile,
     SourcePulseConfiguration,
@@ -129,6 +132,27 @@ def make_coupling_configuration(**overrides):
     }
     values.update(overrides)
     return SourceCouplingConfiguration(**values)
+
+
+def make_harmonic_configuration(**overrides):
+    values = {"order": 8, "preset": "ODD"}
+    values.update(overrides)
+    return SourceHarmonicConfiguration(**values)
+
+
+def make_harmonic_profile(**overrides):
+    values = {
+        "channel": 2,
+        "order": 8,
+        "preset": "ODD",
+        "user_mask": "X010101010101010",
+        "components": tuple(
+            SourceHarmonicComponent(order, 0.1 * order, 10.0 * order)
+            for order in range(2, 17)
+        ),
+    }
+    values.update(overrides)
+    return SourceHarmonicProfile(**values)
 
 
 class RestorableSourceStateTests(unittest.TestCase):
@@ -679,6 +703,99 @@ class SourceServiceSnapshotTests(unittest.TestCase):
                 service.coupling_profile()
             with self.assertRaisesRegex(ConfigError, "source.coupling_configure"):
                 service.configure_coupling(make_coupling_configuration())
+
+        open_source.assert_not_called()
+
+    def test_harmonic_profile_uses_given_channel_and_closes_transport(self):
+        events = []
+        profile = make_harmonic_profile()
+
+        class FakeSource:
+            def get_harmonic_profile(self, channel):
+                events.append(("get_harmonic_profile", channel))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="example",
+            )
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source", return_value=FakeSource()
+        ):
+            result = service.harmonic_profile(2)
+
+        self.assertIs(result, profile)
+        require.assert_called_once_with("source.harmonic_profile", "source.harmonic_profile")
+        self.assertEqual(events, [("get_harmonic_profile", 2), ("close",)])
+
+    def test_configure_harmonics_is_gated_and_passes_explicit_check_errors(self):
+        events = []
+        configuration = make_harmonic_configuration()
+        profile = make_harmonic_profile()
+
+        class FakeSource:
+            def configure_harmonics(self, channel, target, *, check_errors):
+                events.append(("configure_harmonics", channel, target, check_errors))
+                return profile
+
+            def close(self):
+                events.append(("close",))
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="example",
+            )
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        with patch.object(service, "_require") as require, patch.object(
+            service, "_open_source", return_value=FakeSource()
+        ):
+            result = service.configure_harmonics(2, configuration, check_errors=True)
+
+        self.assertIs(result, profile)
+        require.assert_called_once_with(
+            "source.harmonic_configure",
+            "source.harmonic_configure",
+            "source.errors",
+        )
+        self.assertEqual(
+            events,
+            [("configure_harmonics", 2, configuration, True), ("close",)],
+        )
+
+    def test_harmonic_operations_reject_wrong_configuration_or_missing_capabilities_before_transport(
+        self,
+    ):
+        service = SourceService(config=None, logger=CommandLogger())
+        service._open_source = lambda: self.fail("transport must not open")
+        with self.assertRaisesRegex(ConfigError, "SourceHarmonicConfiguration"):
+            service.configure_harmonics(1, object())
+
+        config = SimpleNamespace(
+            source=SimpleNamespace(
+                resource="TCPIP::source::INSTR",
+                driver="legacy",
+                default_channel=1,
+                check_errors=False,
+            )
+        )
+        service = SourceService(config=config, logger=CommandLogger())
+        service.descriptor = SimpleNamespace(
+            driver_id="legacy.source",
+            capabilities=("source.status",),
+        )
+        with patch.object(service, "_open_source") as open_source:
+            with self.assertRaisesRegex(ConfigError, "source.harmonic_profile"):
+                service.harmonic_profile(1)
+            with self.assertRaisesRegex(ConfigError, "source.harmonic_configure"):
+                service.configure_harmonics(1, make_harmonic_configuration(), check_errors=False)
 
         open_source.assert_not_called()
 

@@ -34,6 +34,7 @@ from wavebench.instruments.contracts import (
     SourceCounterProfileDriver,
     SourceDriver,
     SourceFmModulationControlDriver,
+    SourceHarmonicControlDriver,
     SourcePmModulationControlDriver,
     SourcePwmModulationControlDriver,
     SourceSweepControlDriver,
@@ -70,6 +71,9 @@ from wavebench.instruments.models import (
     SourceCounterProfile,
     SourceFmModulationConfiguration,
     SourceFmModulationProfile,
+    SourceHarmonicComponent,
+    SourceHarmonicConfiguration,
+    SourceHarmonicProfile,
     SourcePmModulationConfiguration,
     SourcePmModulationProfile,
     SourcePulseConfiguration,
@@ -587,6 +591,112 @@ def test_source_sweep_configuration_rejects_non_profile_restore_source():
         SourceSweepConfiguration.from_profile(object())
 
 
+def _source_harmonic_components():
+    return tuple(
+        SourceHarmonicComponent(
+            order=order,
+            amplitude_vpp=0.1 * order,
+            phase_deg=10.0 * order,
+        )
+        for order in range(2, 17)
+    )
+
+
+def _source_harmonic_profile(**changes):
+    values = {
+        "channel": 1,
+        "order": 8,
+        "preset": "USER",
+        "user_mask": "X010101010101010",
+        "components": _source_harmonic_components(),
+    }
+    values.update(changes)
+    return SourceHarmonicProfile(**values)
+
+
+def test_source_harmonic_profile_serializes_the_complete_h2_through_h16_snapshot():
+    profile = _source_harmonic_profile()
+
+    assert profile.as_dict() == {
+        "channel": 1,
+        "order": 8,
+        "preset": "USER",
+        "user_mask": "X010101010101010",
+        "components": tuple(component.as_dict() for component in profile.components),
+    }
+    assert profile.components[0].as_dict() == {
+        "order": 2,
+        "amplitude_vpp": 0.2,
+        "phase_deg": 20.0,
+    }
+    assert profile.components[-1].as_dict() == {
+        "order": 16,
+        "amplitude_vpp": 1.6,
+        "phase_deg": 160.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "factory, changes, message",
+    [
+        (SourceHarmonicComponent, {"order": True}, "component order"),
+        (SourceHarmonicComponent, {"order": 17}, "component order"),
+        (SourceHarmonicComponent, {"amplitude_vpp": -0.01}, "amplitude"),
+        (SourceHarmonicComponent, {"amplitude_vpp": float("nan")}, "amplitude"),
+        (SourceHarmonicComponent, {"phase_deg": -0.01}, "phase"),
+        (SourceHarmonicComponent, {"phase_deg": float("inf")}, "phase"),
+        (SourceHarmonicProfile, {"channel": 0}, "channel"),
+        (SourceHarmonicProfile, {"order": 1}, "harmonic order"),
+        (SourceHarmonicProfile, {"preset": "CUSTOM"}, "preset"),
+        (SourceHarmonicProfile, {"user_mask": "X0101"}, "user mask"),
+        (SourceHarmonicProfile, {"user_mask": "1010101010101010"}, "user mask"),
+        (SourceHarmonicProfile, {"components": _source_harmonic_components()[:-1]}, "exactly one"),
+        (
+            SourceHarmonicProfile,
+            {
+                "components": (SourceHarmonicComponent(2, 0.2, 20.0),)
+                + tuple(
+                    SourceHarmonicComponent(order, 0.1 * order, 10.0 * order)
+                    for order in range(2, 16)
+                )
+            },
+            "cover every order",
+        ),
+    ],
+)
+def test_source_harmonic_models_reject_ambiguous_or_incomplete_values(factory, changes, message):
+    if factory is SourceHarmonicComponent:
+        values = {"order": 2, "amplitude_vpp": 1.0, "phase_deg": 0.0}
+        values.update(changes)
+        with pytest.raises(ValueError, match=message):
+            factory(**values)
+    else:
+        with pytest.raises(ValueError, match=message):
+            _source_harmonic_profile(**changes)
+
+
+@pytest.mark.parametrize(
+    "order, preset, message",
+    [
+        (True, "EVEN", "harmonic order"),
+        (1, "EVEN", "harmonic order"),
+        (17, "EVEN", "harmonic order"),
+        (2, "USER", "preset"),
+    ],
+)
+def test_source_harmonic_configuration_allows_only_low_order_public_presets(
+    order, preset, message
+):
+    with pytest.raises(ValueError, match=message):
+        SourceHarmonicConfiguration(order=order, preset=preset)
+
+
+def test_source_harmonic_configuration_serializes_public_preset_target():
+    configuration = SourceHarmonicConfiguration(order=16, preset="ALL")
+
+    assert configuration.as_dict() == {"order": 16, "preset": "ALL"}
+
+
 def _source_counter_measurement(**changes):
     values = {
         "frequency_hz": 1000.0,
@@ -765,6 +875,7 @@ def test_driver_contracts_are_runtime_checkable():
     assert isinstance(_DmmVoltageConfiguration(), DmmVoltageConfigurationDriver)
     assert isinstance(_SourceChannelProfile(), SourceChannelProfileDriver)
     assert isinstance(_SourceCoupling(), SourceCouplingDriver)
+    assert isinstance(_SourceHarmonic(), SourceHarmonicControlDriver)
     assert isinstance(_SourceAmModulation(), SourceAmModulationControlDriver)
     assert isinstance(_SourceFmModulation(), SourceFmModulationControlDriver)
     assert isinstance(_SourcePmModulation(), SourcePmModulationControlDriver)
@@ -816,6 +927,10 @@ class _SourceChannelProfile(_DynamicDriver):
 
 class _SourceCoupling(_DynamicDriver):
     idn = close = get_coupling_profile = configure_coupling = lambda *args, **kwargs: None
+
+
+class _SourceHarmonic(_DynamicDriver):
+    idn = close = get_harmonic_profile = configure_harmonics = lambda *args, **kwargs: None
 
 
 class _SourceAmModulation(_DynamicDriver):

@@ -21,6 +21,8 @@ from wavebench.instruments.contracts import (
     SourceDriver,
     SourceFmModulationControlDriver,
     SourceFmModulationProfileDriver,
+    SourceHarmonicControlDriver,
+    SourceHarmonicProfileDriver,
     SourcePmModulationControlDriver,
     SourcePmModulationProfileDriver,
     SourcePulseControlDriver,
@@ -45,6 +47,8 @@ from wavebench.instruments.models import (
     SourceCounterProfile,
     SourceFmModulationConfiguration,
     SourceFmModulationProfile,
+    SourceHarmonicConfiguration,
+    SourceHarmonicProfile,
     SourcePmModulationConfiguration,
     SourcePmModulationProfile,
     SourcePulseConfiguration,
@@ -156,6 +160,31 @@ class SourceService:
             return cast(SourceCouplingDriver, source).configure_coupling(
                 configuration,
                 check_errors=source_cfg.check_errors,
+            )
+
+    def harmonic_profile(self, channel: int) -> SourceHarmonicProfile:
+        self._require("source.harmonic_profile", "source.harmonic_profile")
+        with self._source_session() as source:
+            return cast(SourceHarmonicProfileDriver, source).get_harmonic_profile(channel)
+
+    def configure_harmonics(
+        self,
+        channel: int,
+        configuration: SourceHarmonicConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourceHarmonicProfile:
+        if not isinstance(configuration, SourceHarmonicConfiguration):
+            raise ConfigError("source harmonic configuration must be SourceHarmonicConfiguration")
+        required = ["source.harmonic_configure"]
+        if check_errors:
+            required.append("source.errors")
+        self._require("source.harmonic_configure", *required)
+        with self._source_session() as source:
+            return cast(SourceHarmonicControlDriver, source).configure_harmonics(
+                channel,
+                configuration,
+                check_errors=check_errors,
             )
 
     def am_modulation_profile(self, channel: int | None = None) -> SourceAmModulationProfile:

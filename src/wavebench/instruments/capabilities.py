@@ -33,6 +33,8 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "source.channel_profile": ("get_channel_profile",),
     "source.coupling_profile": ("get_coupling_profile",),
     "source.coupling_configure": ("configure_coupling",),
+    "source.harmonic_profile": ("get_harmonic_profile",),
+    "source.harmonic_configure": ("configure_harmonics",),
     "source.modulation_am_profile": ("get_am_modulation_profile",),
     "source.modulation_am_configure": ("configure_am_modulation",),
     "source.modulation_fm_profile": ("get_fm_modulation_profile",),

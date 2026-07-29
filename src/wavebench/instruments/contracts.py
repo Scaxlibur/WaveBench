@@ -41,6 +41,8 @@ from .models import (
     SourceCounterProfile,
     SourceFmModulationConfiguration,
     SourceFmModulationProfile,
+    SourceHarmonicConfiguration,
+    SourceHarmonicProfile,
     SourcePmModulationConfiguration,
     SourcePmModulationProfile,
     SourcePulseConfiguration,
@@ -261,6 +263,22 @@ class SourceCouplingDriver(InstrumentDriver, Protocol):
         *,
         check_errors: bool = True,
     ) -> SourceCouplingProfile: ...
+
+
+@runtime_checkable
+class SourceHarmonicProfileDriver(InstrumentDriver, Protocol):
+    def get_harmonic_profile(self, channel: int) -> SourceHarmonicProfile: ...
+
+
+@runtime_checkable
+class SourceHarmonicControlDriver(SourceHarmonicProfileDriver, Protocol):
+    def configure_harmonics(
+        self,
+        channel: int,
+        configuration: SourceHarmonicConfiguration,
+        *,
+        check_errors: bool = True,
+    ) -> SourceHarmonicProfile: ...
 
 
 @runtime_checkable

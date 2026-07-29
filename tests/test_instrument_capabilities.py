@@ -32,6 +32,11 @@ def test_source_coupling_has_runtime_method_mappings():
     assert CAPABILITY_METHODS["source.coupling_configure"] == ("configure_coupling",)
 
 
+def test_source_harmonic_has_runtime_method_mappings():
+    assert CAPABILITY_METHODS["source.harmonic_profile"] == ("get_harmonic_profile",)
+    assert CAPABILITY_METHODS["source.harmonic_configure"] == ("configure_harmonics",)
+
+
 def test_source_basic_modulation_has_mode_specific_runtime_method_mappings():
     assert CAPABILITY_METHODS["source.modulation_am_profile"] == (
         "get_am_modulation_profile",

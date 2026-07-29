@@ -12,7 +12,7 @@ WaveBench 是一个面向电子设计竞赛调试场景的轻量 Python 自动�
 WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202、DP800 和 DM3000/DM3058 系列驱动；首次使用无需安装外置插件，只需复制示例配置并填写实际仪器 resource。这五个仪器族没有从主包移除的计划；外置插件是显式选择、独立发布的可选升级或扩展，不会取代示例配置使用的内建短名。
 
 > [!IMPORTANT]
-> 当前开发版本是 `v0.8.21`。`v0.8.21` 为 AM、FM、PM、PWM 增加相互独立的 internal-source profile/configuration 模型、驱动协议和 capability-gated service 入口；PWM 的 DUTY/WIDTH deviation 是严格互斥分支，不会泄漏上一个模式的不适用字段。只有具备逐字段回读、完整恢复和歧义写入锁存的外置插件才能声明这些能力，内建 DG4202 fallback 保持不声明；external modulation source、advanced digital modulation、generator harmonic 与 DAC16 仍未公开。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
+> 当前开发版本是 `v0.8.22`。`v0.8.22` 增加低阶预设谐波的 profile/configuration 模型、驱动协议和 capability-gated service 入口：公开写入仅限 EVEN、ODD、ALL；USER 位图与 H2–H16 幅度/相位仅供完整回读和恢复。只有具备逐字段回读、完整恢复和歧义写入锁存的外置插件才能声明这些能力，内建 DG4202 fallback 保持不声明；external modulation source、advanced digital modulation、用户自定义谐波与 DAC16 仍未公开。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
 
 ## 当前能力
 

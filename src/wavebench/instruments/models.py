@@ -847,6 +847,104 @@ class SourceCouplingConfiguration:
         }
 
 
+@dataclass(frozen=True)
+class SourceHarmonicComponent:
+    """Read-only amplitude and phase of one H2 through H16 component."""
+
+    order: int
+    amplitude_vpp: float
+    phase_deg: float
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.order, bool)
+            or not isinstance(self.order, int)
+            or not 2 <= self.order <= 16
+        ):
+            raise ValueError("source harmonic component order must be an integer from 2 to 16")
+        if (
+            isinstance(self.amplitude_vpp, bool)
+            or not isinstance(self.amplitude_vpp, (int, float))
+            or not isfinite(self.amplitude_vpp)
+            or self.amplitude_vpp < 0
+        ):
+            raise ValueError("source harmonic component amplitude must be finite and non-negative Vpp")
+        if (
+            isinstance(self.phase_deg, bool)
+            or not isinstance(self.phase_deg, (int, float))
+            or not isfinite(self.phase_deg)
+            or not 0 <= self.phase_deg <= 360
+        ):
+            raise ValueError(
+                "source harmonic component phase must be finite and from 0 to 360 degrees"
+            )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "order": self.order,
+            "amplitude_vpp": self.amplitude_vpp,
+            "phase_deg": self.phase_deg,
+        }
+
+
+@dataclass(frozen=True)
+class SourceHarmonicProfile:
+    """Complete, query-only snapshot of one source channel's harmonic generator."""
+
+    channel: int
+    order: int
+    preset: str
+    user_mask: str
+    components: tuple[SourceHarmonicComponent, ...]
+
+    def __post_init__(self) -> None:
+        if isinstance(self.channel, bool) or not isinstance(self.channel, int) or self.channel < 1:
+            raise ValueError("source harmonic channel must be a positive integer")
+        _validate_source_harmonic_order(self.order)
+        if self.preset not in {"EVEN", "ODD", "ALL", "USER"}:
+            raise ValueError("unsupported source harmonic preset")
+        if not isinstance(self.user_mask, str) or len(self.user_mask) != 16:
+            raise ValueError("source harmonic user mask must be a 16-character X[01]{15} string")
+        if self.user_mask[0] != "X" or any(bit not in {"0", "1"} for bit in self.user_mask[1:]):
+            raise ValueError("source harmonic user mask must be a 16-character X[01]{15} string")
+        if not isinstance(self.components, tuple) or len(self.components) != 15:
+            raise ValueError("source harmonic profile requires exactly one component for every H2 to H16")
+        if not all(isinstance(component, SourceHarmonicComponent) for component in self.components):
+            raise ValueError("source harmonic profile components must be SourceHarmonicComponent")
+        if {component.order for component in self.components} != set(range(2, 17)):
+            raise ValueError("source harmonic profile components must cover every order from H2 to H16")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "order": self.order,
+            "preset": self.preset,
+            "user_mask": self.user_mask,
+            "components": tuple(component.as_dict() for component in self.components),
+        }
+
+
+@dataclass(frozen=True)
+class SourceHarmonicConfiguration:
+    """Low-order preset target for one controlled harmonic configuration transaction."""
+
+    order: int
+    preset: str
+
+    def __post_init__(self) -> None:
+        _validate_source_harmonic_order(self.order)
+        if self.preset not in {"EVEN", "ODD", "ALL"}:
+            raise ValueError("source harmonic configuration preset must be EVEN, ODD, or ALL")
+
+    def as_dict(self) -> dict[str, object]:
+        return {"order": self.order, "preset": self.preset}
+
+
+def _validate_source_harmonic_order(order: int) -> None:
+    if isinstance(order, bool) or not isinstance(order, int) or not 2 <= order <= 16:
+        raise ValueError("source harmonic order must be an integer from 2 to 16")
+
+
 def _validate_source_coupling_values(
     *,
     base_channel: int,
