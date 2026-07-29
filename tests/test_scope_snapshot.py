@@ -1,4 +1,5 @@
 import io
+import math
 from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -70,6 +71,15 @@ def test_scope_service_channel_display_returns_mutation_manifest():
 
     def set_channel_display(channel, enabled, *, check_errors=True):
         calls.append((channel, enabled, check_errors))
+        return {
+            "operation": "scope.channel_display",
+            "mutates_instrument": True,
+            "raw_scpi": False,
+            "channel": channel,
+            "display": "off",
+            "affected_settings": ["CH3.display"],
+            "driver_manifest": True,
+        }
 
     driver = SimpleNamespace(set_channel_display=set_channel_display)
     descriptor = SimpleNamespace(
@@ -95,6 +105,7 @@ def test_scope_service_channel_display_returns_mutation_manifest():
         "channel": 3,
         "display": "off",
         "affected_settings": ["CH3.display"],
+        "driver_manifest": True,
     }
 
 
@@ -118,6 +129,22 @@ def test_scope_service_focus_returns_auditable_mutation_manifest():
                 "check_errors": check_errors,
             }
         )
+        return {
+            "operation": "scope.focus_channel",
+            "mutates_instrument": True,
+            "raw_scpi": False,
+            "channel": channel,
+            "time_range_s": time_range_s,
+            "vertical_scale_v_per_div": vertical_scale_v_per_div,
+            "hide_other_channels": hide_other_channels,
+            "affected_settings": [
+                "CH2.display",
+                "timebase.range",
+                "CH2.vertical_scale",
+                "CH1.display",
+            ],
+            "driver_manifest": True,
+        }
 
     driver = SimpleNamespace(focus_channel=focus_channel)
     descriptor = SimpleNamespace(
@@ -160,11 +187,77 @@ def test_scope_service_focus_returns_auditable_mutation_manifest():
         "CH2.display",
         "timebase.range",
         "CH2.vertical_scale",
-        "CH2.offset",
         "CH1.display",
-        "CH3.display",
-        "CH4.display",
     ]
+    assert manifest["driver_manifest"] is True
+
+
+@pytest.mark.parametrize("bad_channel", [0, -1, True, 1.5, "1"])
+def test_scope_service_display_rejects_invalid_channel_before_opening(bad_channel):
+    descriptor = SimpleNamespace(
+        driver_id="example.scope",
+        capabilities=("scope.channel_display",),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(
+            scope=SimpleNamespace(driver="example.scope", check_errors=False)
+        ),
+        logger=SimpleNamespace(),
+        descriptor=descriptor,
+    )
+
+    with patch.object(service, "_open_scope") as open_scope:
+        with pytest.raises(ConfigError, match="positive integer"):
+            service.set_channel_display(channel=bad_channel, enabled=True)
+
+    open_scope.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_value", [math.nan, math.inf, -math.inf, 0.0, -1.0])
+def test_scope_service_focus_rejects_invalid_time_range_before_opening(bad_value):
+    descriptor = SimpleNamespace(
+        driver_id="example.scope",
+        capabilities=("scope.focus_channel",),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(
+            scope=SimpleNamespace(driver="example.scope", check_errors=False)
+        ),
+        logger=SimpleNamespace(),
+        descriptor=descriptor,
+    )
+
+    with patch.object(service, "_open_scope") as open_scope:
+        with pytest.raises(ConfigError, match="finite number > 0"):
+            service.focus_channel(channel=1, time_range_s=bad_value)
+
+    open_scope.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_value", [math.nan, math.inf, -math.inf, 0.0, -1.0])
+def test_scope_service_focus_rejects_invalid_vertical_scale_before_driver_call(bad_value):
+    calls = []
+
+    def focus_channel(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    descriptor = SimpleNamespace(
+        driver_id="example.scope",
+        capabilities=("scope.focus_channel",),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(
+            scope=SimpleNamespace(driver="example.scope", check_errors=False)
+        ),
+        logger=SimpleNamespace(),
+        session=SimpleNamespace(focus_channel=focus_channel),
+        descriptor=descriptor,
+    )
+
+    with pytest.raises(ConfigError, match="finite number > 0"):
+        service.focus_channel(channel=1, vertical_scale_v_per_div=bad_value)
+
+    assert calls == []
 
 
 def test_scope_status_cli_uses_default_channel_and_prints_stable_fields():

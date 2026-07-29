@@ -64,7 +64,7 @@ class ScopeDriver(InstrumentDriver, Protocol):
         enabled: bool,
         *,
         check_errors: bool = True,
-    ) -> None: ...
+    ) -> dict[str, Any] | None: ...
 
     def focus_channel(
         self,
@@ -74,7 +74,7 @@ class ScopeDriver(InstrumentDriver, Protocol):
         vertical_scale_v_per_div: float | None = None,
         hide_other_channels: bool = False,
         check_errors: bool = True,
-    ) -> None: ...
+    ) -> dict[str, Any] | None: ...
 
     def fetch_waveform(
         self,

@@ -62,42 +62,6 @@ class RTM2032Scope:
         if check_errors:
             self.assert_no_errors()
 
-    def set_channel_display(
-        self,
-        channel: int,
-        enabled: bool,
-        *,
-        check_errors: bool = True,
-    ) -> None:
-        if channel < 1:
-            raise DataError("channel must be >= 1")
-        self.transport.write(f"CHAN{channel}:STAT {'ON' if enabled else 'OFF'}")
-        if check_errors:
-            self.assert_no_errors()
-
-    def focus_channel(
-        self,
-        channel: int,
-        *,
-        time_range_s: float | None = None,
-        vertical_scale_v_per_div: float | None = None,
-        hide_other_channels: bool = False,
-        check_errors: bool = True,
-    ) -> None:
-        if channel < 1:
-            raise DataError("channel must be >= 1")
-        if hide_other_channels:
-            for other in range(1, 3):
-                if other != channel:
-                    self.transport.write(f"CHAN{other}:STAT OFF")
-        self.transport.write(f"CHAN{channel}:STAT ON")
-        if time_range_s is not None:
-            self.set_time_range(time_range_s)
-        if vertical_scale_v_per_div is not None:
-            self.set_vertical_scale(channel, vertical_scale_v_per_div)
-        if check_errors:
-            self.assert_no_errors()
-
     def set_time_range(self, time_range_s: float) -> None:
         if time_range_s <= 0:
             raise DataError("time range must be > 0")

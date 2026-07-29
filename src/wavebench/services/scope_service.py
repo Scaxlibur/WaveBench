@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import traceback
 from collections.abc import Iterator
@@ -115,6 +116,33 @@ class MultiCaptureResult:
     files: dict[str, dict[str, str]]
     screenshot_path: Path | None
     commands_log_path: Path | None
+
+
+def _validate_scope_channel(channel: int) -> None:
+    if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+        raise ConfigError("scope channel must be a positive integer")
+
+
+def _validate_optional_positive_finite(value: float | None, name: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{name} must be a finite number > 0")
+    if not math.isfinite(float(value)) or float(value) <= 0:
+        raise ConfigError(f"{name} must be a finite number > 0")
+
+
+def _scope_mutation_manifest(
+    result: object,
+    default: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return default
+    merged = dict(default)
+    merged.update(result)
+    merged.setdefault("affected_settings", default["affected_settings"])
+    return merged
+
 
 @dataclass
 class ScopeService:
@@ -329,17 +357,18 @@ class ScopeService:
             )
 
     def set_channel_display(self, channel: int, enabled: bool) -> dict[str, Any]:
+        _validate_scope_channel(channel)
         required = ["scope.channel_display"]
         if self.config.scope.check_errors:
             required.append("scope.errors")
         self._require("scope.channel_display", *required)
         with self._scope_session() as scope:
-            scope.set_channel_display(
+            result = scope.set_channel_display(
                 channel,
                 enabled,
                 check_errors=self.config.scope.check_errors,
             )
-        return {
+        default = {
             "operation": "scope.channel_display",
             "mutates_instrument": True,
             "raw_scpi": False,
@@ -347,6 +376,7 @@ class ScopeService:
             "display": "on" if enabled else "off",
             "affected_settings": [f"CH{channel}.display"],
         }
+        return _scope_mutation_manifest(result, default)
 
     def focus_channel(
         self,
@@ -356,12 +386,18 @@ class ScopeService:
         vertical_scale_v_per_div: float | None = None,
         hide_other_channels: bool = False,
     ) -> dict[str, Any]:
+        _validate_scope_channel(channel)
+        _validate_optional_positive_finite(time_range_s, "time_range_s")
+        _validate_optional_positive_finite(
+            vertical_scale_v_per_div,
+            "vertical_scale_v_per_div",
+        )
         required = ["scope.focus_channel"]
         if self.config.scope.check_errors:
             required.append("scope.errors")
         self._require("scope.focus_channel", *required)
         with self._scope_session() as scope:
-            scope.focus_channel(
+            result = scope.focus_channel(
                 channel,
                 time_range_s=time_range_s,
                 vertical_scale_v_per_div=vertical_scale_v_per_div,
@@ -373,10 +409,9 @@ class ScopeService:
             affected.append("timebase.range")
         if vertical_scale_v_per_div is not None:
             affected.append(f"CH{channel}.vertical_scale")
-            affected.append(f"CH{channel}.offset")
         if hide_other_channels:
-            affected.extend(f"CH{other}.display" for other in range(1, 5) if other != channel)
-        return {
+            affected.append("other_channels.display")
+        default = {
             "operation": "scope.focus_channel",
             "mutates_instrument": True,
             "raw_scpi": False,
@@ -386,6 +421,7 @@ class ScopeService:
             "hide_other_channels": hide_other_channels,
             "affected_settings": affected,
         }
+        return _scope_mutation_manifest(result, default)
 
     def fetch_waveform(self, channel: int) -> WaveformData:
         if self.config.waveform.format.lower() != "real":

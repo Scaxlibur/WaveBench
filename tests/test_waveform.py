@@ -88,30 +88,6 @@ class WaveformHeaderTests(unittest.TestCase):
         with self.assertRaises(DataError):
             scope.screenshot_png()
 
-    def test_scope_focus_hides_only_rtm2032_analog_channels(self):
-        transport = FakeTransport({})
-        scope = RTM2032Scope(transport=transport)
-
-        scope.focus_channel(
-            2,
-            time_range_s=0.012,
-            vertical_scale_v_per_div=0.2,
-            hide_other_channels=True,
-            check_errors=False,
-        )
-
-        self.assertEqual(
-            transport.writes,
-            [
-                "CHAN1:STAT OFF",
-                "CHAN2:STAT ON",
-                "TIMebase:RANGe 0.012",
-                "CHAN2:STAT ON",
-                "CHAN2:SCAL 0.2",
-                "CHAN2:POS 0",
-            ],
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

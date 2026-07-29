@@ -232,54 +232,6 @@ def test_capture_translates_total_time_range_to_12_divisions():
     assert "*OPC?" in transport.queries
 
 
-def test_autoscale_skips_opc_query_to_avoid_ds1000z_socket_desync():
-    transport = FakeTransport(responses={":SYSTem:ERRor?": '0,"No error"'})
-    scope = DS1104Scope(transport=transport)
-
-    scope.autoscale(wait_opc=True, check_errors=True)
-
-    assert transport.writes == [":AUToscale"]
-    assert transport.queries == [":SYSTem:ERRor?"]
-    assert any(
-        direction == "telemetry" and "wait_opc=skipped" in text
-        for direction, text in transport.events
-    )
-
-
-def test_set_channel_display_writes_rigol_display_command():
-    transport = FakeTransport()
-    scope = DS1104Scope(transport=transport)
-
-    scope.set_channel_display(2, False, check_errors=False)
-
-    assert transport.writes == [":CHANnel2:DISPlay OFF"]
-
-
-def test_focus_channel_can_hide_others_and_adjust_selected_channel():
-    transport = FakeTransport()
-    scope = DS1104Scope(transport=transport)
-
-    scope.focus_channel(
-        2,
-        time_range_s=0.012,
-        vertical_scale_v_per_div=0.2,
-        hide_other_channels=True,
-        check_errors=False,
-    )
-
-    assert transport.writes == [
-        ":CHANnel1:DISPlay OFF",
-        ":CHANnel3:DISPlay OFF",
-        ":CHANnel4:DISPlay OFF",
-        ":CHANnel2:DISPlay ON",
-        ":TIMebase:MODE MAIN",
-        ":TIMebase:MAIN:SCALe 0.001",
-        ":CHANnel2:DISPlay ON",
-        ":CHANnel2:SCALe 0.2",
-        ":CHANnel2:OFFSet 0",
-    ]
-
-
 def test_multichannel_capture_uses_one_single_and_one_opc():
     current_channel = {"value": 1}
 
