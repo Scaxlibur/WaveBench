@@ -145,7 +145,7 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
   - `run.schema`：返回 run plan schema
   - `run.check`：只解析并检查 `plans/*.toml` 下的 run plan，不连接仪器
   - `capture.inspect`：读取 `data/raw/` 下的离线采集包摘要
-  - `scope.observe`：只读连接配置中的示波器，返回 IDN、状态快照（若驱动支持）和高阻安全判断；支持 CH1-CH4 多通道观察；可传 `fetch_waveform=true` 读取一个或多个通道的当前波形摘要，并对成功读取的通道生成 pairwise `relationships`（频率比、幅值/均值关系、相关性、延迟/相位、交点），但该模式可能改动示波器的波形传输源/模式
+  - `scope.observe`：默认只读连接配置中的示波器，返回 IDN、状态快照（若驱动支持）和高阻安全判断；支持 CH1-CH4 多通道观察；可传 `fetch_waveform=true` 读取一个或多个通道的当前波形摘要，但该模式可能改动示波器的波形传输源/模式，响应会标注 `read_only=false`。多通道 fetch 生成的 pairwise `relationships` 会标注 `same_acquisition=false`，相位等时序关系只作为建议线索
   - `scope.advise`：基于 `scope.observe` 给出每通道时基/垂直档位/display 建议；只返回建议，不应用调整
   - `doctor.config`：结构化返回配置中各仪器的只读可达性、IDN 和型号匹配检查结果
 - `/mcp` 与 `/call` 的 JSON 请求体有 1 MiB 上限；路径参数按工具限制在项目内固定目录

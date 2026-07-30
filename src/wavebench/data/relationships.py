@@ -11,6 +11,7 @@ from wavebench.instruments.models import WaveformData
 def analyze_waveform_relationships(
     waveforms: dict[int, WaveformData],
     *,
+    same_acquisition: bool = True,
     max_correlation_points: int = 4096,
     max_intersections: int = 64,
 ) -> list[dict[str, Any]]:
@@ -20,6 +21,7 @@ def analyze_waveform_relationships(
             analyze_waveform_pair(
                 waveforms[left_channel],
                 waveforms[right_channel],
+                same_acquisition=same_acquisition,
                 max_correlation_points=max_correlation_points,
                 max_intersections=max_intersections,
             )
@@ -31,6 +33,7 @@ def analyze_waveform_pair(
     left: WaveformData,
     right: WaveformData,
     *,
+    same_acquisition: bool = True,
     max_correlation_points: int = 4096,
     max_intersections: int = 64,
 ) -> dict[str, Any]:
@@ -44,6 +47,8 @@ def analyze_waveform_pair(
         warnings=warnings,
         max_intersections=max_intersections,
     )
+    if not same_acquisition:
+        warnings.append("not_same_acquisition_timing_relationships_are_advisory")
     left_frequency = _trusted_frequency(left_summary, warnings=warnings, label=f"CH{left.channel}")
     right_frequency = _trusted_frequency(right_summary, warnings=warnings, label=f"CH{right.channel}")
     frequency_ratio = None
@@ -54,6 +59,8 @@ def analyze_waveform_pair(
         if lower > 0:
             frequency_ratio = float(upper / lower)
         if (
+            same_acquisition
+            and
             correlation.get("lag_at_max_correlation_s") is not None
             and abs(left_frequency - right_frequency) / max(left_frequency, right_frequency) <= 0.01
         ):
@@ -66,7 +73,7 @@ def analyze_waveform_pair(
         "channels": [left.channel, right.channel],
         "left_channel": left.channel,
         "right_channel": right.channel,
-        "common_time": common["metadata"],
+        "common_time": {**common["metadata"], "same_acquisition": same_acquisition},
         "frequency": {
             "left_hz": left_frequency,
             "right_hz": right_frequency,

@@ -38,7 +38,8 @@ class _NoWaveformFakeScopeService:
 def _observation(*, fetch_waveform: bool = True) -> dict:
     return {
         "status": "ok",
-        "read_only": True,
+        "read_only": not fetch_waveform,
+        "query_only": not fetch_waveform,
         "mutates_instrument": fetch_waveform,
         "raw_scpi": False,
         "instrument_state_effects": ["waveform transfer source/mode/format may be changed"]
@@ -113,12 +114,14 @@ def test_scope_advise_recommends_per_channel_focus_and_separate_timebases():
                 fetch_waveform=True,
             )
 
-    assert payload["read_only"] is True
+    assert payload["read_only"] is False
+    assert payload["query_only"] is False
     assert payload["mutates_instrument"] is True
     assert payload["applies_recommendations"] is False
     focus = [item for item in payload["recommendations"] if item["id"] == "focus_channel"]
     assert [item["channel"] for item in focus] == [1, 2]
     assert focus[0]["parameters"]["time_range_s"] == pytest.approx(0.01)
+    assert focus[0]["parameters"]["frequency_confidence"] == "low"
     assert focus[0]["parameters"]["vertical_scale_v_per_div"] == pytest.approx(0.2)
     assert focus[1]["parameters"]["time_range_s"] == pytest.approx(0.0002)
     span = payload["recommendations"][-1]
@@ -151,8 +154,10 @@ def test_scope_advise_can_use_expected_frequency_without_waveform_fetch():
     observe.assert_called_once()
     assert observe.call_args.kwargs["expectations"] is None
     assert payload["mutates_instrument"] is False
+    assert payload["query_only"] is True
     focus = [item for item in payload["recommendations"] if item["id"] == "focus_channel"]
     assert focus[0]["parameters"]["time_range_s"] == pytest.approx(0.01)
+    assert focus[0]["parameters"]["frequency_confidence"] == "configured"
     assert focus[1]["parameters"]["time_range_s"] == pytest.approx(0.0002)
     assert payload["recommendations"][-1]["id"] == "separate_timebase_profiles"
 
@@ -175,6 +180,7 @@ def test_scope_advise_expected_frequency_without_fetch_uses_real_observe_path():
             )
 
     assert payload["mutates_instrument"] is False
+    assert payload["query_only"] is True
     focus = [item for item in payload["recommendations"] if item["id"] == "focus_channel"]
     assert [item["channel"] for item in focus] == [1, 2]
     assert focus[0]["parameters"]["time_range_s"] == pytest.approx(0.01)

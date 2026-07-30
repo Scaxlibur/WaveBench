@@ -58,7 +58,8 @@ def scope_observe_payload(
 
     return {
         "status": "ok" if not warnings else "partial",
-        "read_only": True,
+        "read_only": not fetch_waveform,
+        "query_only": not fetch_waveform,
         "mutates_instrument": fetch_waveform,
         "raw_scpi": False,
         "instrument_state_effects": _instrument_state_effects(fetch_waveform),
@@ -80,7 +81,7 @@ def scope_observe_payload(
         **sections,
         "channels": channel_sections,
         "relationships": (
-            analyze_waveform_relationships(fetched_waveforms)
+            analyze_waveform_relationships(fetched_waveforms, same_acquisition=False)
             if len(fetched_waveforms) >= 2
             else []
         ),

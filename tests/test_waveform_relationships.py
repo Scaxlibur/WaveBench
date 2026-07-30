@@ -30,6 +30,18 @@ def test_waveform_pair_reports_frequency_voltage_and_phase_for_related_signals()
     assert relationship["phase_degrees_at_left_frequency"] is not None
 
 
+def test_waveform_pair_suppresses_phase_when_not_same_acquisition():
+    t = np.linspace(0.0, 0.009, 1000)
+    left = _waveform(1, np.sin(2 * np.pi * 1000 * t), stop=float(t[-1]))
+    right = _waveform(2, np.sin(2 * np.pi * 1000 * (t - 0.00025)), stop=float(t[-1]))
+
+    relationship = analyze_waveform_pair(left, right, same_acquisition=False)
+
+    assert relationship["common_time"]["same_acquisition"] is False
+    assert relationship["phase_degrees_at_left_frequency"] is None
+    assert "not_same_acquisition_timing_relationships_are_advisory" in relationship["warnings"]
+
+
 def test_waveform_relationships_report_all_pairs_for_four_channels():
     t = np.linspace(0.0, 0.004, 500)
     waveforms = {

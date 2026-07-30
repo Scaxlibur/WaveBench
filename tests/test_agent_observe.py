@@ -106,7 +106,8 @@ def test_scope_observe_payload_returns_structured_read_only_context():
             payload = scope_observe_payload(config_path=config, channel=2, fetch_waveform=True)
 
     assert payload["status"] == "ok"
-    assert payload["read_only"] is True
+    assert payload["read_only"] is False
+    assert payload["query_only"] is False
     assert payload["mutates_instrument"] is True
     assert payload["raw_scpi"] is False
     assert payload["observation"]["channel"] == 2
@@ -127,6 +128,8 @@ def test_scope_observe_can_skip_waveform_fetch():
             payload = scope_observe_payload(config_path=config, fetch_waveform=False)
 
     assert payload["waveform"]["status"] == "skipped"
+    assert payload["read_only"] is True
+    assert payload["query_only"] is True
     assert payload["mutates_instrument"] is False
     assert payload["instrument_state_effects"] == []
 
@@ -143,6 +146,8 @@ def test_scope_observe_payload_supports_multiple_channels():
     assert payload["channels"][1]["waveform"]["data"]["summary"]["channel"] == 2
     assert payload["relationships"][0]["channels"] == [1, 2]
     assert payload["relationships"][0]["common_time"]["overlap"] is True
+    assert payload["relationships"][0]["common_time"]["same_acquisition"] is False
+    assert payload["relationships"][0]["phase_degrees_at_left_frequency"] is None
 
 
 def test_scope_observe_payload_evaluates_channel_expectations():

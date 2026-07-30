@@ -53,12 +53,19 @@ class ToolSpec:
     description: str
     arguments: dict[str, Any]
     handler: Callable[[dict[str, Any], Path], dict[str, Any]]
+    read_only: bool = True
+    mutates_instrument: bool = False
+    raw_scpi: bool = False
+    instrument_state_effects: tuple[str, ...] = ()
 
     def public_payload(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
-            "read_only": True,
+            "read_only": self.read_only,
+            "mutates_instrument": self.mutates_instrument,
+            "raw_scpi": self.raw_scpi,
+            "instrument_state_effects": list(self.instrument_state_effects),
             "arguments": self.arguments,
         }
 
@@ -365,8 +372,8 @@ READ_ONLY_TOOLS: dict[str, ToolSpec] = {
     "scope.observe": ToolSpec(
         name="scope.observe",
         description=(
-            "Read configured scope identity, state, coupling safety, and waveform summary without "
-            "changing instrument state / 只读观察配置中的示波器身份、状态、高阻安全与波形摘要"
+            "Read configured scope identity, state, and coupling safety. With fetch_waveform=true, "
+            "also read waveform summaries, which may change waveform-transfer source/mode/format."
         ),
         arguments={
             "type": "object",
@@ -407,6 +414,12 @@ READ_ONLY_TOOLS: dict[str, ToolSpec] = {
             "additionalProperties": False,
         },
         handler=_scope_observe_tool,
+        read_only=False,
+        mutates_instrument=True,
+        instrument_state_effects=(
+            "fetch_waveform=true may change waveform transfer source/mode/format",
+            "fetch_waveform=true may enable the requested channel display on some drivers",
+        ),
     ),
     "doctor.config": ToolSpec(
         name="doctor.config",
@@ -426,8 +439,8 @@ READ_ONLY_TOOLS: dict[str, ToolSpec] = {
     "scope.advise": ToolSpec(
         name="scope.advise",
         description=(
-            "Observe the configured scope and recommend display/acquisition settings without applying them / "
-            "观察配置中的示波器并建议显示/采集参数，但不应用建议"
+            "Observe the configured scope and recommend display/acquisition settings without applying "
+            "recommendations. With fetch_waveform=true, waveform reads may change transfer state."
         ),
         arguments={
             "type": "object",
@@ -474,6 +487,12 @@ READ_ONLY_TOOLS: dict[str, ToolSpec] = {
             "additionalProperties": False,
         },
         handler=_scope_advise_tool,
+        read_only=False,
+        mutates_instrument=True,
+        instrument_state_effects=(
+            "fetch_waveform=true may change waveform transfer source/mode/format",
+            "fetch_waveform=true may enable the requested channel display on some drivers",
+        ),
     ),
 }
 

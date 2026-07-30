@@ -178,6 +178,10 @@ value_vpp = 1.0
             self.assertFalse(any("raw" in name.lower() for name in names))
             self.assertFalse(any("output" in name.lower() for name in names))
             self.assertFalse(any(name.lower().endswith((".on", ".off")) for name in names))
+            by_name = {tool["name"]: tool for tool in payload["tools"]}
+            self.assertFalse(by_name["scope.observe"]["read_only"])
+            self.assertTrue(by_name["scope.observe"]["mutates_instrument"])
+            self.assertTrue(by_name["scope.observe"]["instrument_state_effects"])
 
     def test_call_run_schema_succeeds(self):
         with TemporaryDirectory() as tmp:
@@ -385,8 +389,8 @@ value_vpp = 1.0
                 "wavebench.mcp_http.scope_observe_payload",
                 return_value={
                     "status": "ok",
-                    "read_only": True,
-                    "mutates_instrument": False,
+                    "read_only": False,
+                    "mutates_instrument": True,
                     "raw_scpi": False,
                     "observation": {"channel": 2, "channels": [2, 3]},
                 },
@@ -408,7 +412,8 @@ value_vpp = 1.0
 
             self.assertEqual(status, 200)
             self.assertEqual(payload["result"]["status"], "ok")
-            self.assertFalse(payload["result"]["mutates_instrument"])
+            self.assertFalse(payload["result"]["read_only"])
+            self.assertTrue(payload["result"]["mutates_instrument"])
             observe.assert_called_once()
             self.assertIsNone(observe.call_args.kwargs["channel"])
             self.assertEqual(observe.call_args.kwargs["channels"], (2, 3))

@@ -38,7 +38,8 @@ def scope_advise_payload(
     )
     return {
         "status": observation["status"],
-        "read_only": True,
+        "read_only": observation["read_only"],
+        "query_only": observation.get("query_only", observation["read_only"]),
         "mutates_instrument": observation["mutates_instrument"],
         "raw_scpi": False,
         "applies_recommendations": False,
@@ -71,11 +72,10 @@ def _recommendations(
             continue
         summary = _waveform_summary(channel_section)
         snapshot = _scope_status_data(channel_section)
-        frequency_hz = _summary_frequency(summary)
-        source = "measured"
-        if frequency_hz is None:
-            frequency_hz = expected_frequencies.get(channel)
-            source = "expected"
+        frequency_hz, source, confidence = _frequency_for_advice(
+            summary,
+            expected_frequencies.get(channel),
+        )
         vertical_scale = _recommended_vertical_scale(
             summary,
             snapshot,
@@ -90,6 +90,7 @@ def _recommendations(
             "channel": channel,
             "frequency_hz": frequency_hz,
             "frequency_source": source if frequency_hz is not None else None,
+            "frequency_confidence": confidence,
             "time_range_s": time_range,
             "vertical_scale_v_per_div": vertical_scale,
         }
@@ -123,6 +124,7 @@ def _recommendations(
                         "channel": channel,
                         "time_range_s": time_range,
                         "vertical_scale_v_per_div": vertical_scale,
+                        "frequency_confidence": confidence,
                         "hide_other_channels": False,
                     },
                 )
@@ -185,6 +187,30 @@ def _summary_frequency(summary: dict[str, Any] | None) -> float | None:
     return float(value)
 
 
+def _summary_frequency_confidence(summary: dict[str, Any] | None) -> str | None:
+    if summary is None or _summary_frequency(summary) is None:
+        return None
+    warnings = summary.get("quality_warnings", [])
+    if any(str(item).startswith("low_cycle_count") for item in warnings):
+        return "low"
+    return "measured"
+
+
+def _frequency_for_advice(
+    summary: dict[str, Any] | None,
+    expected_frequency_hz: float | None,
+) -> tuple[float | None, str | None, str | None]:
+    measured = _summary_frequency(summary)
+    confidence = _summary_frequency_confidence(summary)
+    if expected_frequency_hz is not None and confidence == "low":
+        return expected_frequency_hz, "expected", "configured"
+    if measured is not None:
+        return measured, "measured", confidence
+    if expected_frequency_hz is not None:
+        return expected_frequency_hz, "expected", "configured"
+    return None, None, None
+
+
 def _expected_frequencies(expectations: dict[int, dict[str, Any]]) -> dict[int, float]:
     values: dict[int, float] = {}
     for channel, expectation in expectations.items():
@@ -243,8 +269,14 @@ def _focus_reason(
 ) -> str:
     parts: list[str] = []
     if frequency_hz is not None:
+        confidence_note = (
+            " (low-confidence estimate)"
+            if frequency_source == "measured" and _summary_frequency_confidence(summary) == "low"
+            else ""
+        )
         parts.append(
-            f"use {frequency_source} frequency {frequency_hz:.6g} Hz to show about {target_cycles:.3g} cycles"
+            f"use {frequency_source} frequency {frequency_hz:.6g} Hz{confidence_note} "
+            f"to show about {target_cycles:.3g} cycles"
         )
     if summary is not None:
         cycles = summary.get("estimated_cycles")
