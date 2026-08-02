@@ -14,6 +14,15 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 > [!IMPORTANT]
 > 当前开发版本是 `v0.8.22`。`v0.8.22` 增加低阶预设谐波的 profile/configuration 模型、驱动协议和 capability-gated service 入口：公开写入仅限 EVEN、ODD、ALL；USER 位图与 H2–H16 幅度/相位仅供完整回读和恢复。只有具备逐字段回读、完整恢复和歧义写入锁存的外置插件才能声明这些能力，内建 DG4202 fallback 保持不声明；external modulation source、advanced digital modulation、用户自定义谐波与 DAC16 仍未公开。使用其他 Release 的读者应以对应 tag 内的文档和命令为准。
 
+## 🌟 特别鸣谢
+
+<p align="center">
+  <a href="https://linux.do">
+    <img src="doc/images/linuxdo.png" alt="LINUX DO" width="420" />
+  </a>
+</p>
+<p align="center"><b>学AI，上L站！祝小破站越来越好～</b></p>
+
 ## 当前能力
 
 ### 示波器：R&S RTM2032 与 RIGOL DS1104Z/DS1000Z
