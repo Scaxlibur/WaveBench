@@ -965,12 +965,20 @@ def _response_svg(
         pad_y = (y_max - y_min) * 0.08
         y_min -= pad_y
         y_max += pad_y
-    width, height, pad_left, pad_right, pad_top, pad_bottom = 680, 270, 58, 20, 28, 42
+    width, pad_left, pad_right, pad_top = 680, 58, 20, 28
+    legend_items = [(actual_label, "#2563eb"), *[(name, color) for name, color, _values in series]]
+    legend_columns = 2
+    legend_row_height = 15
+    legend_rows = max(1, (len(legend_items) + legend_columns - 1) // legend_columns)
+    legend_footer = 34
+    pad_bottom = legend_footer + legend_rows * legend_row_height
+    height = 270 + max(0, legend_rows - 2) * legend_row_height
+    axis_y = height - pad_bottom
 
     def position(point: tuple[float, float]) -> tuple[float, float]:
         x_value = np.log10(point[0])
         px = pad_left + (x_value - x_min) / (x_max - x_min) * (width - pad_left - pad_right)
-        py = height - pad_bottom - (point[1] - y_min) / (y_max - y_min) * (height - pad_top - pad_bottom)
+        py = axis_y - (point[1] - y_min) / (y_max - y_min) * (axis_y - pad_top)
         return float(px), float(py)
 
     polylines = []
@@ -980,31 +988,44 @@ def _response_svg(
         points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in block))
         polylines.append(f'<polyline points="{points}" fill="none" stroke="#2563eb" stroke-width="1.8"/>')
     fit_lines = []
-    legends = []
-    for legend_index, (name, color, values) in enumerate(series):
+    for name, color, values in series:
         points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in values))
         fit_lines.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.8"/>')
-        legends.append(
-            f'<text x="{pad_left + legend_index * 150}" y="{height - 8}" font-size="11" fill="{color}">{escape(name)}</text>'
-        )
     circles = "".join(
         f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3" fill="#2563eb"/>'
         for x, y in (position(point) for point in actual)
     )
-    actual_legend = (
-        f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="#2563eb">{escape(actual_label)}</text>'
-    )
+    legend_column_width = (width - pad_left - pad_right) / legend_columns
+    legend_base_y = axis_y + 38
+    legends = []
+    for index, (name, color) in enumerate(legend_items):
+        row, column = divmod(index, legend_columns)
+        marker_x = pad_left + column * legend_column_width
+        legend_y = legend_base_y + row * legend_row_height
+        legends.append(
+            f'<g class="legend-item" data-label="{escape(name, quote=True)}">'
+            f'<line x1="{marker_x:.2f}" y1="{legend_y - 3:.2f}" '
+            f'x2="{marker_x + 12:.2f}" y2="{legend_y - 3:.2f}" '
+            f'stroke="{color}" stroke-width="1.8"/>'
+            f'<text x="{marker_x + 17:.2f}" y="{legend_y:.2f}" font-size="10" fill="{color}">'
+            f'{escape(_short_svg_legend_label(name))}</text></g>'
+        )
     return (
         f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{escape(title, quote=True)}">'
         f'<rect x="0" y="0" width="{width}" height="{height}" fill="#f8fafc"/>'
-        f'<line x1="{pad_left}" y1="{height - pad_bottom}" x2="{width - pad_right}" y2="{height - pad_bottom}" stroke="#9fb3c8"/>'
-        f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{height - pad_bottom}" stroke="#9fb3c8"/>'
+        f'<line x1="{pad_left}" y1="{axis_y}" x2="{width - pad_right}" y2="{axis_y}" stroke="#9fb3c8"/>'
+        f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{axis_y}" stroke="#9fb3c8"/>'
         f'<text x="{pad_left}" y="16" font-size="12" fill="#334e68">{escape(title)}</text>'
-        f'<text x="{pad_left}" y="{height - 26}" font-size="10" fill="#627d98">log10(f / Hz): {x_min:.3g} .. {x_max:.3g}</text>'
+        f'<text x="{pad_left}" y="{axis_y + 20}" font-size="10" fill="#627d98">log10(f / Hz): {x_min:.3g} .. {x_max:.3g}</text>'
         f'<text x="{pad_left + 4}" y="{pad_top + 14}" font-size="10" fill="#627d98">{escape(y_label)}: {y_min:.4g} .. {y_max:.4g}</text>'
-        f'{"".join(polylines)}{circles}{"".join(fit_lines)}{actual_legend}{"".join(legends)}'
+        f'{"".join(polylines)}{circles}{"".join(fit_lines)}{"".join(legends)}'
         '</svg>'
     )
+
+
+def _short_svg_legend_label(label: str, *, limit: int = 30) -> str:
+    normalized = " ".join(label.split())
+    return normalized if len(normalized) <= limit else normalized[: limit - 1] + "…"
 
 
 def _finite_float(value: Any) -> float | None:

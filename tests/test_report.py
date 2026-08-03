@@ -1,6 +1,7 @@
 import base64
 import importlib.util
 import json
+import re
 import sys
 import types
 import unittest
@@ -12,10 +13,35 @@ import numpy as np
 
 from wavebench.data.packages import load_run_package
 from wavebench.errors import ConfigError
-from wavebench.report.html import render_run_report_html, write_run_report_html, write_run_report_pdf
+from wavebench.report.html import _response_svg, render_run_report_html, write_run_report_html, write_run_report_pdf
 
 
 class RunReportTests(unittest.TestCase):
+    def test_response_svg_uses_a_separate_two_column_legend_area(self):
+        svg = _response_svg(
+            [[(100.0, 1.0), (1000.0, 2.0)]],
+            title="Fit comparison",
+            y_label="Linear gain",
+            actual_label="Measured",
+            series=[
+                ("Frequency piecewise linear interpolation", "#7c3aed", [(100.0, 1.0), (1000.0, 2.0)]),
+                ("Degree-3 polynomial in log frequency", "#dc2626", [(100.0, 1.2), (1000.0, 1.8)]),
+                ("PCHIP shape-preserving cubic interpolation", "#0891b2", [(100.0, 1.1), (1000.0, 1.9)]),
+            ],
+        )
+
+        positions = re.findall(
+            r'<g class="legend-item" data-label="[^"]+"><line x1="([0-9.]+)" y1="([0-9.]+)"',
+            svg,
+        )
+        self.assertEqual(len(positions), 4)
+        self.assertEqual(len(set(positions)), 4)
+        self.assertEqual({position[0] for position in positions}, {"58.00", "359.00"})
+        self.assertEqual(len({position[1] for position in positions}), 2)
+        self.assertIn(">Measured</text>", svg)
+        self.assertIn("…</text>", svg)
+        self.assertNotIn("Frequency piecewise linear interpolation</text>", svg)
+
     def test_run_report_embeds_capture_screenshot_relative_to_report(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
