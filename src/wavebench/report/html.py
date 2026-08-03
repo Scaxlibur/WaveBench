@@ -205,12 +205,14 @@ def render_run_report_html(
     artifact_links_block = "" if compact else _artifact_links_block(artifact_links)
     signals_block = "" if compact else _signals_block(signals)
     waveform_previews_block = "" if compact else _waveform_previews_block(waveform_previews)
+    evidence_summary_block = "" if compact else _evidence_summary_block(evidence)
     summary_note = "present" if run.summary_csv_path is not None else "missing"
     compact_note = (
-        '<p class="muted">PDF 精简为结果摘要、Bode 曲线、拟合与逐点表；完整原始证据保留在 run 目录。</p>'
+        '<p class="muted">PDF 精简为结果摘要、Bode 曲线与拟合；逐点 CSV 和完整原始证据保留在 run 目录。</p>'
         if compact
         else ""
     )
+    body_class = "pdf-compact" if compact else ""
     error_block = ""
     if error:
         error_block = f"<h2>运行错误 / Run error</h2><pre>{escape(str(error))}</pre>"
@@ -302,16 +304,23 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
   .compact-table table {{ font-size: 7pt; }}
   .compact-table th, .compact-table td {{ padding: 0.25rem 0.3rem; }}
   .frequency-response-grid {{ grid-template-columns: 1fr; }}
+  body.pdf-compact h1 {{ font-size: 17pt; margin: 0 0 0.15rem; }}
+  body.pdf-compact h2 {{ margin: 0.65rem 0 0.3rem; font-size: 13pt; }}
+  body.pdf-compact .summary-grid {{ display: block; margin: 0.35rem 0 0.55rem; padding: 0; break-inside: avoid; page-break-inside: avoid; }}
+  body.pdf-compact .summary-card {{ box-sizing: border-box; display: inline-block; vertical-align: top; width: 24%; min-height: 0; margin: 0.2% 0.35%; padding: 0.38rem 0.45rem; border-radius: 7px; break-inside: avoid; page-break-inside: avoid; }}
+  body.pdf-compact .summary-card .label {{ font-size: 7.5pt; line-height: 1.25; }}
+  body.pdf-compact .summary-card .value {{ font-size: 10.5pt; line-height: 1.22; margin-top: 0.08rem; }}
+  body.pdf-compact .summary-card .value.ok, body.pdf-compact .summary-card .value.failed, body.pdf-compact .summary-card .value.warning {{ font-size: 8.5pt; padding: 0.04rem 0.3rem; }}
 }}
 </style>
 </head>
-<body>
+<body class="{body_class}">
 <main>
 <h1>WaveBench 运行报告 <span class="muted">Run report</span></h1>
 <p class="muted">A static offline hardware validation report.</p>
 {compact_note}
-{_summary_block(summary)}
-{_evidence_summary_block(evidence)}
+{_summary_block(summary, compact=compact)}
+{evidence_summary_block}
 {evidence_timeline_block}
 {artifact_links_block}
 <article class="card meta-card">
@@ -431,9 +440,10 @@ def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Pa
     }
 
 
-def _summary_block(summary: ReportSummary) -> str:
+def _summary_block(summary: ReportSummary, *, compact: bool = False) -> str:
+    css_class = "summary-grid pdf-summary-grid" if compact else "summary-grid"
     return f"""<h2>摘要 / Summary</h2>
-<section class="summary-grid">
+<section class="{css_class}">
 {_summary_card("状态 / Status", summary.status, css_class=summary.status)}
 {_summary_card("实验 / Experiment", summary.experiment_label)}
 {_summary_card("步骤 / Steps", str(summary.total_steps))}

@@ -838,7 +838,32 @@ class RunReportTests(unittest.TestCase):
 
             self.assertEqual(result, pdf_path)
             self.assertEqual(html_factory.call_args.kwargs["base_url"], pdf_path.parent.resolve().as_uri() + "/")
+            compact_html = html_factory.call_args.kwargs["string"]
+            self.assertIn('<body class="pdf-compact">', compact_html)
+            self.assertIn('<section class="summary-grid pdf-summary-grid">', compact_html)
+            self.assertIn("width: 24%;", compact_html)
+            self.assertIn("page-break-inside: avoid;", compact_html)
+            self.assertNotIn("<h2>实验证据摘要 / Run evidence summary</h2>", compact_html)
             renderer.write_pdf.assert_called_once_with(str(pdf_path))
+
+    def test_compact_pdf_html_keeps_summary_and_omits_nonessential_evidence(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(
+                json.dumps({"status": "ok", "steps": [{"index": 0, "kind": "sleep", "status": "ok"}]}),
+                encoding="utf-8",
+            )
+
+            html = render_run_report_html(load_run_package(run_dir), compact=True)
+
+            self.assertIn('<body class="pdf-compact">', html)
+            self.assertIn('<section class="summary-grid pdf-summary-grid">', html)
+            self.assertIn("PDF 精简为结果摘要、Bode 曲线与拟合", html)
+            self.assertIn("width: 24%;", html)
+            self.assertIn("page-break-inside: avoid;", html)
+            self.assertNotIn("<h2>实验证据摘要 / Run evidence summary</h2>", html)
+            self.assertNotIn("<h2>证据时间线 / Evidence timeline</h2>", html)
 
     def test_pdf_report_turns_renderer_failures_into_config_errors(self):
         with TemporaryDirectory() as tmp:
