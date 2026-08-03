@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,11 @@ class RunPackage:
     run: dict[str, Any]
     summary_csv_path: Path | None
     summary_rows: list[dict[str, str]]
+    frequency_response_csv_path: Path | None = None
+    frequency_response_rows: list[dict[str, str]] = field(default_factory=list)
+    frequency_response_fit_path: Path | None = None
+    frequency_response_fit: dict[str, Any] | None = None
+    frequency_response_fit_error: str | None = None
 
     @property
     def status(self) -> str:
@@ -137,12 +142,33 @@ def load_run_package(path: str | Path) -> RunPackage:
         present_summary_path = summary_path
         with summary_path.open(newline="", encoding="utf-8") as file:
             rows = [dict(row) for row in csv.DictReader(file)]
+    response_path = run_dir / "frequency_response.csv"
+    response_rows: list[dict[str, str]] = []
+    present_response_path: Path | None = None
+    if response_path.exists():
+        present_response_path = response_path
+        with response_path.open(newline="", encoding="utf-8") as file:
+            response_rows = [dict(row) for row in csv.DictReader(file)]
+    fit_path = run_dir / "frequency_response_fit.json"
+    present_fit_path: Path | None = fit_path if fit_path.exists() else None
+    fit: dict[str, Any] | None = None
+    fit_error: str | None = None
+    if present_fit_path is not None:
+        try:
+            fit = _read_json_object(present_fit_path, label="frequency response fit JSON")
+        except ConfigError as exc:
+            fit_error = str(exc)
     return RunPackage(
         path=run_dir,
         run_json_path=run_json_path,
         run=run_data,
         summary_csv_path=present_summary_path,
         summary_rows=rows,
+        frequency_response_csv_path=present_response_path,
+        frequency_response_rows=response_rows,
+        frequency_response_fit_path=present_fit_path,
+        frequency_response_fit=fit,
+        frequency_response_fit_error=fit_error,
     )
 
 

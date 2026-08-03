@@ -630,3 +630,30 @@ step_index,kind,status,package,metadata,quality_status,quality_warnings,expect_s
 ```
 
 断言失败时，run 会标记为 `failed`，但采集包仍会保留。这样失败结果也能被复盘，而不是只得到一条错误消息。
+
+## 双通道频率响应产物
+
+`sweep.frequency_response` 在本次 run 根目录额外写入下列产物，不覆盖普通 `scope.capture` 包：
+
+```text
+data/runs/YYYYMMDD_HHMMSS_<label>/
+├─ frequency_response.csv
+└─ frequency_response_fit.json   # 仅配置 [steps.fit] 时存在
+```
+
+`frequency_response.csv` 每请求一个频点就原子刷新一次，因此 source 设频失败、scope 采集失败或分析失败时，前序记录和当前失败行仍会保留。稳定基础列为：
+
+```text
+index,requested_frequency_hz,reference_frequency_hz,response_frequency_hz,
+reference_amplitude_peak_v,response_amplitude_peak_v,reference_vpp_v,response_vpp_v,
+gain_linear,gain_db,phase_wrapped_deg,phase_unwrapped_deg,status,warnings,error,
+capture_package,metadata_path
+```
+
+- `gain_linear` 是输出基波峰值 / 输入基波峰值；`gain_db = 20 * log10(gain_linear)`。
+- `phase_wrapped_deg` 在 `[-180, 180)`；`phase_unwrapped_deg` 对连续成功点展开，绝不跨失败点连接。
+- `status` 为 `ok`、`warning` 或 `failed`。失败行的数值字段为空，`error` 保存可读错误，不能被误当作零增益或零相位。
+- `capture_package` / `metadata_path` 指向每个成功的同步双通道原始证据。频响采集强制写入两路 NPY 与 metadata，普通可选 CSV 和截图仍遵循该 step 的 `save_csv` / `screenshot` 设置。
+- 开启拟合后，CSV 还会增加 `fit_<method>_gain_linear` 与 `fit_<method>_residual` 列；这些值只对应实际有效频点。
+
+`frequency_response_fit.json` 是供报告、调试脚本和复算使用的 JSON 文档。它声明 `x_transform = "log10(frequency_hz / Hz)"`、有效范围、被排除的点、拟合公式、参数、误差指标和用于图表的频率/线性增益曲线。它不在定义域外外推：调试脚本应先检查 `valid_domain_hz`。

@@ -9,12 +9,21 @@ from typing import Any, Iterator
 
 from wavebench.config import WaveBenchConfig
 from wavebench.data.package import new_package_dir
-from wavebench.errors import ConfigError, WaveBenchError
+from wavebench.errors import ConfigError
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
 from wavebench.services.power_service import PowerService
 from wavebench.services.dmm_service import DmmService
+from wavebench.services.frequency_response import (
+    analyze_frequency_response_point,
+    build_fit_document,
+    ensure_fit_dependencies,
+    failed_frequency_response_point,
+    unwrap_frequency_response_phase,
+    write_fit_document,
+    write_frequency_response_csv,
+)
 from wavebench.services.run_artifacts import RunStepRecord, write_run_files, write_step_record
 from wavebench.services.run_analysis import (
     capture_consistency,
@@ -56,6 +65,15 @@ class RunInstrumentServices:
     source: SourceService | None = None
     power: PowerService | None = None
     dmm: DmmService | None = None
+
+
+class _FrequencyResponseExecutionError(Exception):
+    """Carry the partial sweep artifact so a fatal source failure remains auditable."""
+
+    def __init__(self, record: RunStepRecord, cause: Exception) -> None:
+        self.record = record
+        self.cause = cause
+        super().__init__(str(cause))
 
 
 def run_output_base(config: WaveBenchConfig) -> Path:
@@ -139,6 +157,17 @@ class RunService:
                     add("scope", "scope.screenshot")
                 if step.fields.get("autoscale_before_capture") or step.fields.get("auto_recover"):
                     add("scope", "scope.autoscale")
+            elif step.kind == "sweep.frequency_response":
+                add("scope", "scope.idn", "scope.capture_waveforms")
+                add("source", "source.status", "source.set_frequency")
+                source = self.config.source
+                if self.config.scope.check_errors:
+                    add("scope", "scope.errors")
+                if source is not None and source.check_errors:
+                    add("source", "source.errors")
+                if step.fields.get("screenshot", self.config.output.save_screenshot):
+                    add("scope", "scope.screenshot")
+                ensure_fit_dependencies(step.fields.get("fit"))
             elif step.kind == "source.status":
                 add("source", "source.status")
             elif step.kind == "source.set_freq":
@@ -207,6 +236,9 @@ class RunService:
     def _plan_instruments(self, plan: RunPlan) -> set[str]:
         instruments = {step.kind.split(".", 1)[0] for step in plan.steps if "." in step.kind}
         instruments.discard("sleep")
+        if "sweep" in instruments:
+            instruments.discard("sweep")
+            instruments.update({"source", "scope"})
         if plan.restore.source_state:
             instruments.add("source")
         if plan.safety.require_scope_coupling_not:
@@ -236,10 +268,15 @@ class RunService:
                     source_service_factory=lambda: self._source_service(services=services),
                 )
                 for step in plan.steps:
-                    record = self._run_step(plan, step, services=services)
+                    record = self._run_step(plan, step, run_dir=run_dir, services=services)
                     records.append(record)
                     write_step_record(steps_dir, record)
             except Exception as exc:
+                failure = exc
+                if isinstance(exc, _FrequencyResponseExecutionError):
+                    records.append(exc.record)
+                    write_step_record(steps_dir, exc.record)
+                    failure = exc.cause
                 restore_error = restore_source_state(
                     restore_state,
                     source_service_factory=lambda: self._source_service(services=services),
@@ -250,12 +287,12 @@ class RunService:
                     summary_csv_path=summary_csv_path,
                     status="failed",
                     records=records,
-                    error={"type": type(exc).__name__, "message": str(exc)},
+                    error={"type": type(failure).__name__, "message": str(failure)},
                     restore_state=restore_state,
                     restore_error=restore_error,
                 )
-                if isinstance(exc, WaveBenchError):
-                    raise
+                if isinstance(exc, _FrequencyResponseExecutionError):
+                    raise failure from None
                 raise
 
             restore_error = restore_source_state(
@@ -310,6 +347,7 @@ class RunService:
         plan: RunPlan,
         step: RunStep,
         *,
+        run_dir: Path,
         services: RunInstrumentServices | None = None,
     ) -> RunStepRecord:
         if step.kind == "power.status":
@@ -379,6 +417,12 @@ class RunService:
             artifact = {"autoscale": "completed"}
         elif step.kind == "scope.capture":
             artifact = self._run_scope_capture_step(plan, step, services=services)
+        elif step.kind == "sweep.frequency_response":
+            artifact = self._run_frequency_response_step(
+                step,
+                run_dir=run_dir,
+                services=services,
+            )
         elif step.kind == "dmm.read":
             reading = self._dmm_service(services=services).read(function=step.fields.get("function", "dcv"))
             reading_payload = _status_payload(reading)
@@ -397,6 +441,204 @@ class RunService:
             fields=step.fields,
             artifact=artifact,
         )
+
+    def _run_frequency_response_step(
+        self,
+        step: RunStep,
+        *,
+        run_dir: Path,
+        services: RunInstrumentServices | None = None,
+    ) -> dict[str, Any]:
+        source_channel = step.fields.get("source_channel")
+        source = self._source_service(services=services)
+        csv_path = run_dir / "frequency_response.csv"
+        fit_path = run_dir / "frequency_response_fit.json"
+        points = []
+        reference_channel = step.fields["reference_channel"]
+        response_channel = step.fields["response_channel"]
+        tolerance = step.fields.get(
+            "frequency_tolerance", self.config.waveform.frequency_tolerance_ratio
+        )
+        label = step.fields.get("label", f"frequency_response_{step.index:02d}")
+
+        try:
+            source_status = source.status(channel=source_channel)
+            if str(source_status.output).strip().upper() != "ON":
+                raise ConfigError(
+                    "frequency response requires the source output to be ON; "
+                    "enable it explicitly with a source.output step before the sweep"
+                )
+        except Exception as exc:
+            write_frequency_response_csv(csv_path, points)
+            raise self._frequency_response_execution_error(
+                step,
+                exc,
+                points=points,
+                csv_path=csv_path,
+                fit_path=None,
+                source_channel=source_channel,
+                reference_channel=reference_channel,
+                response_channel=response_channel,
+            ) from exc
+
+        for index, frequency_hz in enumerate(step.fields["frequencies_hz"]):
+            try:
+                source_status = source.set_frequency(channel=source_channel, value_hz=frequency_hz)
+            except Exception as exc:
+                points.append(
+                    failed_frequency_response_point(
+                        index=index,
+                        requested_frequency_hz=frequency_hz,
+                        error=exc,
+                    )
+                )
+                write_frequency_response_csv(csv_path, points)
+                raise self._frequency_response_execution_error(
+                    step,
+                    exc,
+                    points=points,
+                    csv_path=csv_path,
+                    fit_path=None,
+                    source_channel=source_channel,
+                    reference_channel=reference_channel,
+                    response_channel=response_channel,
+                ) from exc
+            if str(source_status.output).strip().upper() != "ON":
+                error = ConfigError(
+                    f"source output is {source_status.output} after setting {frequency_hz:.12g} Hz"
+                )
+                points.append(
+                    failed_frequency_response_point(
+                        index=index,
+                        requested_frequency_hz=frequency_hz,
+                        error=error,
+                    )
+                )
+                write_frequency_response_csv(csv_path, points)
+                raise self._frequency_response_execution_error(
+                    step,
+                    error,
+                    points=points,
+                    csv_path=csv_path,
+                    fit_path=None,
+                    source_channel=source_channel,
+                    reference_channel=reference_channel,
+                    response_channel=response_channel,
+                ) from error
+            if step.fields["settle_s"]:
+                time.sleep(step.fields["settle_s"])
+
+            scope = self._scope_service_for_frequency_response(
+                step,
+                frequency_hz=frequency_hz,
+                services=services,
+            )
+            try:
+                capture = scope.capture_waveforms(
+                    channels=[reference_channel, response_channel],
+                    label=f"{label}_{index:03d}_{frequency_hz:.12g}hz",
+                )
+                points.append(
+                    analyze_frequency_response_point(
+                        index=index,
+                        requested_frequency_hz=frequency_hz,
+                        reference_waveform=capture.waveforms[reference_channel],
+                        response_waveform=capture.waveforms[response_channel],
+                        frequency_tolerance_ratio=tolerance,
+                        capture_package=str(capture.package_dir),
+                        metadata_path=str(capture.metadata_path),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - retain failed points and continue the sweep
+                points.append(
+                    failed_frequency_response_point(
+                        index=index,
+                        requested_frequency_hz=frequency_hz,
+                        error=exc,
+                    )
+                )
+            write_frequency_response_csv(csv_path, points)
+
+        points = unwrap_frequency_response_phase(points)
+        fit_document, fit_values = build_fit_document(points, step.fields.get("fit"))
+        write_frequency_response_csv(csv_path, points, fit_values)
+        written_fit_path = write_fit_document(fit_path, fit_document)
+        return self._frequency_response_artifact(
+            points=points,
+            csv_path=csv_path,
+            fit_path=written_fit_path,
+            source_channel=source_channel,
+            reference_channel=reference_channel,
+            response_channel=response_channel,
+        )
+
+    def _frequency_response_execution_error(
+        self,
+        step: RunStep,
+        cause: Exception,
+        *,
+        points: list[Any],
+        csv_path: Path,
+        fit_path: Path | None,
+        source_channel: int | None,
+        reference_channel: int,
+        response_channel: int,
+    ) -> _FrequencyResponseExecutionError:
+        artifact = self._frequency_response_artifact(
+            points=points,
+            csv_path=csv_path,
+            fit_path=fit_path,
+            source_channel=source_channel,
+            reference_channel=reference_channel,
+            response_channel=response_channel,
+            error=cause,
+        )
+        record = RunStepRecord(
+            index=step.index,
+            kind=step.kind,
+            status="failed",
+            fields=step.fields,
+            artifact=artifact,
+        )
+        return _FrequencyResponseExecutionError(record, cause)
+
+    def _frequency_response_artifact(
+        self,
+        *,
+        points: list[Any],
+        csv_path: Path,
+        fit_path: Path | None,
+        source_channel: int | None,
+        reference_channel: int,
+        response_channel: int,
+        error: Exception | None = None,
+    ) -> dict[str, Any]:
+        failed_points = sum(point.status == "failed" for point in points)
+        warning_points = sum(point.status == "warning" for point in points)
+        captures = [
+            {
+                "index": point.index,
+                "package": point.capture_package,
+                "metadata": point.metadata_path,
+            }
+            for point in points
+            if point.capture_package
+        ]
+        response: dict[str, Any] = {
+            "status": "failed" if error is not None or failed_points else ("warning" if warning_points else "ok"),
+            "csv": str(csv_path),
+            "fit_json": str(fit_path) if fit_path is not None else "",
+            "point_count": len(points),
+            "failed_point_count": failed_points,
+            "warning_point_count": warning_points,
+            "source_channel": source_channel,
+            "reference_channel": reference_channel,
+            "response_channel": response_channel,
+            "captures": captures,
+        }
+        if error is not None:
+            response["error"] = f"{type(error).__name__}: {error}"
+        return {"frequency_response": response}
 
     def _run_scope_capture_step(
         self,
@@ -576,6 +818,34 @@ class RunService:
                 save_npy=step.fields.get("save_npy"),
                 save_screenshot=step.fields.get("screenshot"),
             )
+        if services is not None and services.scope is not None:
+            return ScopeService(
+                config=config,
+                logger=services.scope.logger,
+                session=services.scope.session,
+            )
+        return ScopeService(config=config, logger=CommandLogger())
+
+    def _scope_service_for_frequency_response(
+        self,
+        step: RunStep,
+        *,
+        frequency_hz: float,
+        services: RunInstrumentServices | None = None,
+    ) -> ScopeService:
+        config = self.config.with_waveform_overrides(
+            points=step.fields.get("points"),
+            time_range_s=step.fields["target_cycles"] / frequency_hz,
+            expected_frequency_hz=frequency_hz,
+            frequency_tolerance_ratio=step.fields.get("frequency_tolerance"),
+            target_cycles=step.fields["target_cycles"],
+            window_frequency_hz=frequency_hz,
+        ).with_output_overrides(
+            save_csv=step.fields.get("save_csv"),
+            save_npy=True,
+            save_json=True,
+            save_screenshot=step.fields.get("screenshot"),
+        )
         if services is not None and services.scope is not None:
             return ScopeService(
                 config=config,

@@ -89,6 +89,24 @@ class PackageReaderTests(unittest.TestCase):
             self.assertEqual(len(loaded.steps), 1)
             self.assertEqual(loaded.summary_rows[0]["kind"], "scope.capture")
 
+    def test_load_run_package_reads_frequency_response_and_tolerates_bad_fit_json(self):
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "run.json").write_text(json.dumps({"status": "failed", "steps": []}), encoding="utf-8")
+            (run / "frequency_response.csv").write_text(
+                "index,requested_frequency_hz,gain_linear,status\n0,100,2,ok\n",
+                encoding="utf-8",
+            )
+            (run / "frequency_response_fit.json").write_text("not json", encoding="utf-8")
+
+            loaded = load_run_package(run)
+
+            self.assertEqual(loaded.frequency_response_rows[0]["gain_linear"], "2")
+            self.assertIsNotNone(loaded.frequency_response_csv_path)
+            self.assertIsNotNone(loaded.frequency_response_fit_path)
+            self.assertIsNone(loaded.frequency_response_fit)
+            self.assertIn("not valid JSON", loaded.frequency_response_fit_error or "")
+
 
 if __name__ == "__main__":
     unittest.main()

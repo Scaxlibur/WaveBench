@@ -328,6 +328,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_template.add_argument("--vpp", type=float, default=1.0, help="Template source amplitude in Vpp")
     run_template.add_argument("--source-channel", type=int, default=None, help="Template source channel")
     run_template.add_argument("--scope-channel", type=int, default=None, help="Template scope channel")
+    run_template.add_argument("--reference-channel", type=int, default=None, help="Template frequency-response reference scope channel")
+    run_template.add_argument("--response-channel", type=int, default=None, help="Template frequency-response DUT-output scope channel")
+    run_template.add_argument("--fit", action="store_true", dest="frequency_response_fit", help="Enable all frequency-response fit candidates in the template")
     run_template.add_argument("--power-channel", type=int, default=None, help="Template power channel")
     run_template.add_argument("--voltage", type=float, default=3.3, help="Template power voltage in V")
     run_template.add_argument("--current-limit", type=float, default=0.1, help="Template power current limit in A")
@@ -337,6 +340,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_report = run_sub.add_parser("report", help="Generate an offline HTML report for a run package")
     run_report.add_argument("path", help="Path to data/runs/<run_dir>")
     run_report.add_argument("--output", default=None, help="Output HTML path; defaults to <run_dir>/report.html")
+    run_report.add_argument(
+        "--pdf",
+        action="store_true",
+        help="Also export a portable PDF with visible images embedded / 同时导出嵌入可见图片的便携 PDF 报告",
+    )
+    run_report.add_argument("--pdf-output", default=None, help="Output PDF path; defaults to the HTML path with a .pdf suffix")
     run_report_index = run_sub.add_parser("report-index", help="Generate manifest JSON/CSV for multiple run directories")
     run_report_index.add_argument("paths", nargs="+", help="Paths to data/runs/<run_dir>")
     run_report_index.add_argument("--output", required=True, help="Output directory for manifest.json and manifest.csv")

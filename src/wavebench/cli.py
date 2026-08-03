@@ -11,7 +11,7 @@ from .config import load_config, vertical_scale_from_vpp
 from .data.packages import load_capture_package, load_run_package
 from .discovery import discover_instruments
 from .doctor import doctor_records, has_doctor_errors as has_config_doctor_errors
-from .report.html import write_run_report_html
+from .report.html import write_run_report_html, write_run_report_pdf
 from .report.index import write_report_index
 from .errors import ConfigError, WaveBenchError
 from .cli_parser import build_parser
@@ -385,8 +385,26 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
         if args.domain == "run":
             if args.command == "report":
-                output = write_run_report_html(load_run_package(args.path), output_path=args.output)
+                if args.pdf_output and not args.pdf:
+                    raise ConfigError("run report --pdf-output requires --pdf")
+                package = load_run_package(args.path)
+                output = Path(args.output) if args.output else package.path / "report.html"
+                pdf_output = (
+                    Path(args.pdf_output) if args.pdf_output else output.with_suffix(".pdf")
+                )
+                if args.pdf and output.resolve() == pdf_output.resolve():
+                    raise ConfigError("run report HTML and PDF outputs must use different paths")
+                if args.pdf and output.suffix.lower() == ".pdf":
+                    raise ConfigError("run report --output is an HTML path and must not use a .pdf suffix")
+                if args.pdf and pdf_output.suffix.lower() in {".htm", ".html"}:
+                    raise ConfigError(
+                        "run report --pdf-output is a PDF path and must not use an HTML suffix"
+                    )
+                output = write_run_report_html(package, output_path=output)
                 print(f"report={output}")
+                if args.pdf:
+                    pdf = write_run_report_pdf(package, output_path=pdf_output)
+                    print(f"pdf={pdf}")
                 return 0
             if args.command == "report-index":
                 result = write_report_index(args.paths, args.output)
@@ -424,6 +442,9 @@ def main(argv: list[str] | None = None) -> int:
                     vpp=args.vpp,
                     source_channel=args.source_channel,
                     scope_channel=args.scope_channel,
+                    reference_channel=args.reference_channel,
+                    response_channel=args.response_channel,
+                    frequency_response_fit=args.frequency_response_fit,
                     power_channel=args.power_channel,
                     voltage_v=args.voltage,
                     current_limit_a=args.current_limit,

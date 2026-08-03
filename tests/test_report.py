@@ -1,12 +1,18 @@
+import base64
+import importlib.util
 import json
+import sys
+import types
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 import numpy as np
 
 from wavebench.data.packages import load_run_package
-from wavebench.report.html import render_run_report_html, write_run_report_html
+from wavebench.errors import ConfigError
+from wavebench.report.html import render_run_report_html, write_run_report_html, write_run_report_pdf
 
 
 class RunReportTests(unittest.TestCase):
@@ -762,6 +768,144 @@ class RunReportTests(unittest.TestCase):
 
             self.assertNotIn("<h2>验收摘要 / Acceptance summary</h2>", html)
             self.assertNotIn("<h2>预期 vs 实测 / Expected vs measured</h2>", html)
+
+    def test_run_report_discovers_frequency_response_capture_screenshots_from_csv(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "data" / "runs" / "response"
+            run_dir.mkdir(parents=True)
+            captures = []
+            for index in range(2):
+                capture = root / "data" / "raw" / f"response_{index}"
+                capture.mkdir(parents=True)
+                (capture / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                np.save(capture / "ch1.npy", np.array([[0.0, 0.0], [1e-3, 1.0]]))
+                np.save(capture / "ch2.npy", np.array([[0.0, 0.0], [1e-3, 2.0]]))
+                metadata = capture / "metadata.json"
+                metadata.write_text(
+                    json.dumps(
+                        {
+                            "channels": {"1": {"summary": {}}, "2": {"summary": {}}},
+                            "files": {
+                                "1": {"npy": str(capture / "ch1.npy")},
+                                "2": {"npy": str(capture / "ch2.npy")},
+                                "screenshot": str(capture / "screenshot.png"),
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                captures.append((capture, metadata))
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "steps": [{"index": 0, "kind": "sweep.frequency_response", "status": "ok"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "frequency_response.csv").write_text(
+                "index,requested_frequency_hz,gain_linear,gain_db,phase_unwrapped_deg,status,capture_package,metadata_path\n"
+                f"0,100,2,6.0206,-45,ok,{captures[0][0]},{captures[0][1]}\n"
+                f"1,1000,2,6.0206,-45,ok,{captures[1][0]},{captures[1][1]}\n",
+                encoding="utf-8",
+            )
+
+            output = write_run_report_html(load_run_package(run_dir))
+            html = output.read_text(encoding="utf-8")
+            manifest = json.loads((run_dir / "report-assets" / "manifest.json").read_text(encoding="utf-8"))
+
+            self.assertIn("<h2>频率响应 / Frequency response</h2>", html)
+            self.assertEqual(html.count('<figure class="card screenshot-card">'), 2)
+            self.assertIn("frequency response 0", html)
+            self.assertEqual(len(manifest["capture_packages"]), 2)
+            self.assertEqual(len(manifest["screenshots"]), 2)
+
+    def test_pdf_report_uses_output_directory_as_resource_base(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            html_factory = Mock()
+            renderer = html_factory.return_value
+            module = types.ModuleType("weasyprint")
+            module.HTML = html_factory
+            pdf_path = Path(tmp) / "export" / "report.pdf"
+
+            with patch.dict(sys.modules, {"weasyprint": module}):
+                result = write_run_report_pdf(load_run_package(run_dir), output_path=pdf_path)
+
+            self.assertEqual(result, pdf_path)
+            self.assertEqual(html_factory.call_args.kwargs["base_url"], pdf_path.parent.resolve().as_uri() + "/")
+            renderer.write_pdf.assert_called_once_with(str(pdf_path))
+
+    def test_pdf_report_turns_renderer_failures_into_config_errors(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            html_factory = Mock()
+            html_factory.return_value.write_pdf.side_effect = RuntimeError("renderer unavailable")
+            module = types.ModuleType("weasyprint")
+            module.HTML = html_factory
+
+            with patch.dict(sys.modules, {"weasyprint": module}):
+                with self.assertRaisesRegex(ConfigError, "PDF report export failed"):
+                    write_run_report_pdf(load_run_package(run_dir))
+
+    def test_pdf_report_explains_missing_optional_dependency(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+
+            with patch.dict(sys.modules, {"weasyprint": None}):
+                with self.assertRaisesRegex(ConfigError, "optional PDF dependency"):
+                    write_run_report_pdf(load_run_package(run_dir))
+
+    @unittest.skipUnless(importlib.util.find_spec("weasyprint"), "PDF extra is not installed")
+    def test_pdf_report_smoke_embeds_a_local_screenshot(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "data" / "runs" / "run"
+            capture = root / "data" / "raw" / "capture"
+            run_dir.mkdir(parents=True)
+            capture.mkdir(parents=True)
+            (capture / "screenshot.png").write_bytes(
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
+                    "y4p3VQAAAABJRU5ErkJggg=="
+                )
+            )
+            (capture / "metadata.json").write_text(
+                json.dumps({"files": {"screenshot": str(capture / "screenshot.png")}}),
+                encoding="utf-8",
+            )
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "steps": [
+                            {
+                                "index": 0,
+                                "kind": "scope.capture",
+                                "status": "ok",
+                                "artifact": {
+                                    "package": str(capture),
+                                    "metadata": str(capture / "metadata.json"),
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            pdf = write_run_report_pdf(load_run_package(run_dir))
+
+            self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
+            self.assertGreater(pdf.stat().st_size, 1_000)
 
 
 if __name__ == "__main__":

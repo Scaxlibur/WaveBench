@@ -10,12 +10,34 @@ from typing import Any
 import numpy as np
 
 from wavebench.data.packages import RunPackage
+from wavebench.errors import ConfigError
 
 
 def write_run_report_html(run: RunPackage, output_path: str | Path | None = None) -> Path:
     path = Path(output_path) if output_path is not None else run.path / "report.html"
     path.write_text(render_run_report_html(run, output_dir=path.parent), encoding="utf-8")
     write_run_report_manifest(run, output_dir=path.parent, report_path=path)
+    return path
+
+
+def write_run_report_pdf(run: RunPackage, output_path: str | Path | None = None) -> Path:
+    """Render the report as a portable PDF with its visible images and SVGs embedded."""
+    path = Path(output_path) if output_path is not None else run.path / "report.pdf"
+    try:
+        from weasyprint import HTML
+    except (ImportError, OSError) as exc:
+        raise ConfigError(
+            "PDF report export requires the optional PDF dependency; "
+            "install WaveBench with `.[pdf]` and the platform rendering libraries"
+        ) from exc
+    # A full HTML report may contain hundreds of independent capture artifacts.
+    # Keep the portable PDF focused on its reviewable result: summary, Bode curves,
+    # fit, and point table. The run directory remains the authoritative raw evidence.
+    html = render_run_report_html(run, output_dir=path.parent, compact=True)
+    try:
+        HTML(string=html, base_url=path.parent.resolve().as_uri() + "/").write_pdf(str(path))
+    except Exception as exc:  # noqa: BLE001 - surface renderer failures as a user-facing config error
+        raise ConfigError(f"PDF report export failed: {type(exc).__name__}: {exc}") from exc
     return path
 
 
@@ -131,6 +153,13 @@ class ReportArtifactLink:
 
 
 @dataclass(frozen=True)
+class ReportCaptureReference:
+    step_index: str
+    package: str
+    metadata: str
+
+
+@dataclass(frozen=True)
 class ReportEvidenceSummary:
     source_step_count: int
     scope_capture_count: int
@@ -143,34 +172,45 @@ class ReportEvidenceSummary:
     waveform_preview_count: int
 
 
-def render_run_report_html(run: RunPackage, output_dir: str | Path | None = None) -> str:
+def render_run_report_html(
+    run: RunPackage,
+    output_dir: str | Path | None = None,
+    *,
+    compact: bool = False,
+) -> str:
     experiment = run.run.get("experiment", {}) if isinstance(run.run.get("experiment"), dict) else {}
     restore = run.run.get("restore", {}) if isinstance(run.run.get("restore"), dict) else {}
     error = run.run.get("error", {}) if isinstance(run.run.get("error"), dict) else {}
     report_output_dir = Path(output_dir) if output_dir is not None else run.path
-    screenshots = _collect_screenshots(run, report_output_dir)
-    signals = _collect_signal_summaries(run)
-    expectations = _collect_expectation_rows(run)
-    dmm_readings = _collect_dmm_readings(run)
-    sweep_rows = _collect_sweep_rows(run)
-    waveform_previews = _collect_waveform_previews(run)
+    screenshots = [] if compact else _collect_screenshots(run, report_output_dir)
+    signals = [] if compact else _collect_signal_summaries(run)
+    expectations = [] if compact else _collect_expectation_rows(run)
+    dmm_readings = [] if compact else _collect_dmm_readings(run)
+    sweep_rows = [] if compact else _collect_sweep_rows(run)
+    waveform_previews = [] if compact else _collect_waveform_previews(run)
     evidence = _build_evidence_summary(run, expectations, dmm_readings, screenshots, waveform_previews)
-    artifact_links = _collect_artifact_links(run, report_output_dir, screenshots)
+    artifact_links = [] if compact else _collect_artifact_links(run, report_output_dir, screenshots)
     summary = _build_report_summary(run, screenshots, signals)
     screenshots_by_step = {item.step_index: item for item in screenshots}
-    evidence_timeline_block = _evidence_timeline_block(run, screenshots_by_step)
+    evidence_timeline_block = "" if compact else _evidence_timeline_block(run, screenshots_by_step)
     rows = "\n".join(_step_row(step, screenshots_by_step.get(str(step.get("index", "")))) for step in run.steps)
     if not rows:
         rows = '<tr><td colspan="9">没有记录步骤 / No steps recorded.</td></tr>'
-    screenshots_block = _screenshots_block(screenshots)
-    acceptance_block = _acceptance_block(expectations)
-    expectations_block = _expectations_block(expectations)
-    dmm_block = _dmm_readings_block(dmm_readings)
-    sweep_block = _sweep_summary_block(sweep_rows)
-    artifact_links_block = _artifact_links_block(artifact_links)
-    signals_block = _signals_block(signals)
-    waveform_previews_block = _waveform_previews_block(waveform_previews)
+    screenshots_block = "" if compact else _screenshots_block(screenshots)
+    acceptance_block = "" if compact else _acceptance_block(expectations)
+    expectations_block = "" if compact else _expectations_block(expectations)
+    dmm_block = "" if compact else _dmm_readings_block(dmm_readings)
+    sweep_block = "" if compact else _sweep_summary_block(sweep_rows)
+    frequency_response_block = _frequency_response_block(run, include_table=not compact)
+    artifact_links_block = "" if compact else _artifact_links_block(artifact_links)
+    signals_block = "" if compact else _signals_block(signals)
+    waveform_previews_block = "" if compact else _waveform_previews_block(waveform_previews)
     summary_note = "present" if run.summary_csv_path is not None else "missing"
+    compact_note = (
+        '<p class="muted">PDF 精简为结果摘要、Bode 曲线、拟合与逐点表；完整原始证据保留在 run 目录。</p>'
+        if compact
+        else ""
+    )
     error_block = ""
     if error:
         error_block = f"<h2>运行错误 / Run error</h2><pre>{escape(str(error))}</pre>"
@@ -246,14 +286,30 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
 .dmm-card dl {{ margin: 0; display: grid; gap: 0.25rem; }}
 .dmm-card div {{ display: grid; grid-template-columns: 5.5rem 1fr; gap: 0.5rem; }}
 .dmm-card dt {{ color: var(--muted); }}
-.dmm-card dd {{ margin: 0; font-weight: 650; overflow-wrap: anywhere; }}
-@media print {{ body {{ background: #fff; }} main {{ max-width: none; padding: 0; }} section, article.card, figure.card, .table {{ box-shadow: none; }} }}
+    .dmm-card dd {{ margin: 0; font-weight: 650; overflow-wrap: anywhere; }}
+    .frequency-response-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem; margin: 0.5rem 0 1.25rem; }}
+    .frequency-response-card {{ padding: 0.85rem; }}
+    .frequency-response-card h3 {{ margin: 0 0 0.35rem; font-size: 1rem; }}
+    .frequency-response-card svg {{ display: block; width: 100%; height: auto; margin-top: 0.5rem; border-radius: 8px; }}
+    .fit-formula {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+@page {{ size: A4 landscape; margin: 10mm; }}
+@media print {{
+  body {{ background: #fff; font-size: 9pt; }}
+  main {{ max-width: none; padding: 0; }}
+  section, article.card, figure.card, .table {{ box-shadow: none; }}
+  article.card, figure.card {{ break-inside: avoid; }}
+  .table {{ overflow: visible; }}
+  .compact-table table {{ font-size: 7pt; }}
+  .compact-table th, .compact-table td {{ padding: 0.25rem 0.3rem; }}
+  .frequency-response-grid {{ grid-template-columns: 1fr; }}
+}}
 </style>
 </head>
 <body>
 <main>
 <h1>WaveBench 运行报告 <span class="muted">Run report</span></h1>
-<p class="muted">A static, self-contained hardware validation report.</p>
+<p class="muted">A static offline hardware validation report.</p>
+{compact_note}
 {_summary_block(summary)}
 {_evidence_summary_block(evidence)}
 {evidence_timeline_block}
@@ -275,9 +331,10 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
 </tbody>
 </table>
 </div>
-{dmm_block}
-{sweep_block}
-{acceptance_block}
+    {dmm_block}
+    {sweep_block}
+    {frequency_response_block}
+    {acceptance_block}
 {expectations_block}
 {signals_block}
 {waveform_previews_block}
@@ -332,11 +389,34 @@ def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Pa
                     "generated": "inline-svg",
                 }
             )
+    known_packages = {str(record["package"]) for record in capture_packages}
+    for reference in _capture_references(run):
+        if reference.package in known_packages:
+            continue
+        package_dir = _resolve_artifact_path(run.path, reference.package)
+        capture_packages.append(
+            {
+                "step_index": reference.step_index,
+                "package": reference.package,
+                "path": _relative_url(package_dir, output_dir),
+                "exists": package_dir.exists(),
+            }
+        )
+        if not package_dir.exists():
+            warnings.append(
+                f"step {reference.step_index}: capture package missing: {reference.package}"
+            )
     return {
         "schema": "wavebench.report_manifest.v1",
         "report": _relative_url(report_path, output_dir),
         "run_json": _relative_url(run.run_json_path, output_dir),
         "summary_csv": _relative_url(run.summary_csv_path, output_dir) if run.summary_csv_path is not None else None,
+        "frequency_response_csv": _relative_url(run.frequency_response_csv_path, output_dir)
+        if run.frequency_response_csv_path is not None
+        else None,
+        "frequency_response_fit_json": _relative_url(run.frequency_response_fit_path, output_dir)
+        if run.frequency_response_fit_path is not None
+        else None,
         "capture_packages": capture_packages,
         "screenshots": [
             {
@@ -663,6 +743,268 @@ def _sweep_summary_row(row: ReportSweepRow) -> str:
     )
 
 
+def _frequency_response_block(run: RunPackage, *, include_table: bool = True) -> str:
+    if run.frequency_response_csv_path is None:
+        return ""
+    rows = run.frequency_response_rows
+    gain_blocks = _response_blocks(rows, "gain_db")
+    phase_blocks = _response_blocks(rows, "phase_unwrapped_deg")
+    fit_series = _fit_curve_series(run.frequency_response_fit)
+    gain_svg = _response_svg(
+        gain_blocks,
+        title="幅频 / Magnitude response",
+        y_label="Gain (dB)",
+        series=(),
+    )
+    phase_svg = _response_svg(
+        phase_blocks,
+        title="相频 / Phase response",
+        y_label="Phase (deg, unwrapped)",
+        series=(),
+    )
+    linear_blocks = [[point] for block in _response_blocks(rows, "gain_linear") for point in block]
+    fit_svg = _response_svg(
+        linear_blocks,
+        title="线性增益拟合 / Linear gain fit comparison",
+        y_label="Linear gain (V/V)",
+        series=fit_series,
+        actual_label="Measured",
+    )
+    table_block = ""
+    if include_table:
+        table_rows = "\n".join(_frequency_response_row(row) for row in rows)
+        if not table_rows:
+            table_rows = '<tr><td colspan="10">频响 CSV 没有可读取的记录 / No readable response rows.</td></tr>'
+        table_block = f"""<div class="table compact-table"><table>
+<thead><tr><th>#</th><th>请求频率 / Requested</th><th>输入峰值 / Input peak</th><th>输出峰值 / Output peak</th><th>线性增益</th><th>增益 / Gain</th><th>相位 / Phase</th><th>展开相位 / Unwrapped</th><th>状态 / Status</th><th>警告或错误 / Warning or error</th></tr></thead>
+<tbody>
+{table_rows}
+</tbody>
+</table></div>"""
+    else:
+        table_block = '<p class="muted">逐频点结果请见同目录 <code>frequency_response.csv</code>。</p>'
+    fit_summary = (
+        _fit_summary_block(run.frequency_response_fit, run.frequency_response_fit_error)
+        if include_table
+        else _compact_fit_summary_block(run.frequency_response_fit, run.frequency_response_fit_error)
+    )
+    return f"""<h2>频率响应 / Frequency response</h2>
+<p class="muted">幅频与相频由同一次双通道采集计算。相位为输出相对输入，包含探头、电缆和通道偏斜；未自动校准或 deskew。</p>
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>幅频 / Magnitude</h3>{gain_svg}</article>
+<article class="card frequency-response-card"><h3>相频 / Phase</h3>{phase_svg}</article>
+</section>
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>拟合对比 / Fit comparison</h3>{fit_svg}</article>
+</section>
+{fit_summary}
+{table_block}
+"""
+
+
+def _frequency_response_row(row: dict[str, str]) -> str:
+    status = str(row.get("status", ""))
+    details = " | ".join(
+        value for value in (str(row.get("warnings", "")), str(row.get("error", ""))) if value
+    )
+    return (
+        f'<tr class="{escape(status)}">'
+        f"<td>{escape(str(row.get('index', '')))}</td>"
+        f"<td>{escape(_format_metric(row.get('requested_frequency_hz'), 'Hz'))}</td>"
+        f"<td>{escape(_format_metric(row.get('reference_amplitude_peak_v'), 'V'))}</td>"
+        f"<td>{escape(_format_metric(row.get('response_amplitude_peak_v'), 'V'))}</td>"
+        f"<td>{escape(_format_plain(row.get('gain_linear')))}</td>"
+        f"<td>{escape(_format_metric(row.get('gain_db'), 'dB'))}</td>"
+        f"<td>{escape(_format_metric(row.get('phase_wrapped_deg'), 'deg'))}</td>"
+        f"<td>{escape(_format_metric(row.get('phase_unwrapped_deg'), 'deg'))}</td>"
+        f'<td class="{escape(status)}">{escape(status)}</td>'
+        f"<td>{escape(details)}</td>"
+        "</tr>"
+    )
+
+
+def _fit_summary_block(document: dict[str, Any] | None, error: str | None) -> str:
+    if error:
+        return f'<p class="warning">拟合 JSON 无法读取 / Fit JSON unavailable: {escape(error)}</p>'
+    if not document:
+        return '<p class="muted">未启用拟合 / Fit was not enabled for this run.</p>'
+    methods = document.get("methods", {})
+    if not isinstance(methods, dict) or not methods:
+        return '<p class="muted">没有可用的拟合结果 / No fit results available.</p>'
+    rows = []
+    for name, raw in methods.items():
+        payload = raw if isinstance(raw, dict) else {}
+        metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
+        parameters = payload.get("parameters", {})
+        parameter_text = json.dumps(parameters, ensure_ascii=False) if parameters else ""
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(payload.get('display') or name))}</td>"
+            f"<td class=\"{escape(str(payload.get('status', '')))}\">{escape(str(payload.get('status', '')))}</td>"
+            f"<td><code class=\"fit-formula\">{escape(str(payload.get('formula', payload.get('reason', ''))))}</code></td>"
+            f"<td>{escape(_format_plain(metrics.get('rmse')))}</td>"
+            f"<td>{escape(_format_plain(metrics.get('r_squared')))}</td>"
+            f"<td><code class=\"fit-formula\">{escape(parameter_text)}</code></td>"
+            "</tr>"
+        )
+    return f"""<h3>拟合公式与指标 / Fit formulas and metrics</h3>
+<div class="table compact-table"><table>
+<thead><tr><th>方法 / Method</th><th>状态 / Status</th><th>公式 / Formula</th><th>RMSE</th><th>R²</th><th>参数 / Parameters</th></tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table></div>
+"""
+
+
+def _compact_fit_summary_block(document: dict[str, Any] | None, error: str | None) -> str:
+    """Keep portable PDFs readable when interpolation metadata has hundreds of segments."""
+    if error:
+        return f'<p class="warning">拟合 JSON 无法读取 / Fit JSON unavailable: {escape(error)}</p>'
+    if not document:
+        return '<p class="muted">未启用拟合 / Fit was not enabled for this run.</p>'
+    methods = document.get("methods", {})
+    if not isinstance(methods, dict) or not methods:
+        return '<p class="muted">没有可用的拟合结果 / No fit results available.</p>'
+    rows = []
+    for name, raw in methods.items():
+        payload = raw if isinstance(raw, dict) else {}
+        metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
+        formula = str(payload.get("formula", "")) if name == "polynomial" else "完整公式见拟合 JSON"
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(payload.get('display') or name))}</td>"
+            f"<td class=\"{escape(str(payload.get('status', '')))}\">{escape(str(payload.get('status', '')))}</td>"
+            f"<td>{escape(_format_plain(metrics.get('rmse')))}</td>"
+            f"<td>{escape(_format_plain(metrics.get('r_squared')))}</td>"
+            f"<td><code class=\"fit-formula\">{escape(formula)}</code></td>"
+            "</tr>"
+        )
+    return f"""<h3>线性增益拟合摘要 / Linear-gain fit summary</h3>
+<div class="table compact-table"><table>
+<thead><tr><th>方法 / Method</th><th>状态 / Status</th><th>RMSE</th><th>R²</th><th>公式 / Formula</th></tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table></div>"""
+
+
+def _response_blocks(rows: list[dict[str, str]], key: str) -> list[list[tuple[float, float]]]:
+    blocks: list[list[tuple[float, float]]] = []
+    block: list[tuple[float, float]] = []
+    for row in rows:
+        frequency = _finite_float(row.get("requested_frequency_hz"))
+        value = _finite_float(row.get(key))
+        if row.get("status") == "failed" or frequency is None or frequency <= 0 or value is None:
+            if block:
+                blocks.append(block)
+                block = []
+            continue
+        block.append((frequency, value))
+    if block:
+        blocks.append(block)
+    return blocks
+
+
+def _fit_curve_series(document: dict[str, Any] | None) -> list[tuple[str, str, list[tuple[float, float]]]]:
+    if not document:
+        return []
+    methods = document.get("methods", {})
+    if not isinstance(methods, dict):
+        return []
+    colors = ("#7c3aed", "#dc2626", "#0891b2", "#ea580c")
+    series = []
+    for index, (name, raw) in enumerate(methods.items()):
+        payload = raw if isinstance(raw, dict) else {}
+        curve = payload.get("curve", [])
+        values: list[tuple[float, float]] = []
+        if isinstance(curve, list):
+            for item in curve:
+                if not isinstance(item, dict):
+                    continue
+                frequency = _finite_float(item.get("frequency_hz"))
+                gain = _finite_float(item.get("gain_linear"))
+                if frequency is not None and frequency > 0 and gain is not None:
+                    values.append((frequency, gain))
+        if values:
+            series.append((str(payload.get("display") or name), colors[index % len(colors)], values))
+    return series
+
+
+def _response_svg(
+    blocks: list[list[tuple[float, float]]],
+    *,
+    title: str,
+    y_label: str,
+    series: list[tuple[str, str, list[tuple[float, float]]]],
+    actual_label: str = "Measured",
+) -> str:
+    actual = [point for block in blocks for point in block]
+    all_points = actual + [point for _name, _color, values in series for point in values]
+    if not all_points:
+        return '<p class="warning">没有可绘制的有效频点 / No valid points to plot.</p>'
+    x_values = np.asarray([np.log10(point[0]) for point in all_points], dtype=float)
+    y_values = np.asarray([point[1] for point in all_points], dtype=float)
+    x_min = float(np.min(x_values))
+    x_max = float(np.max(x_values))
+    y_min = float(np.min(y_values))
+    y_max = float(np.max(y_values))
+    if x_min == x_max:
+        x_min -= 0.5
+        x_max += 0.5
+    if y_min == y_max:
+        y_min -= max(abs(y_min) * 0.1, 0.5)
+        y_max += max(abs(y_max) * 0.1, 0.5)
+    else:
+        pad_y = (y_max - y_min) * 0.08
+        y_min -= pad_y
+        y_max += pad_y
+    width, height, pad_left, pad_right, pad_top, pad_bottom = 680, 270, 58, 20, 28, 42
+
+    def position(point: tuple[float, float]) -> tuple[float, float]:
+        x_value = np.log10(point[0])
+        px = pad_left + (x_value - x_min) / (x_max - x_min) * (width - pad_left - pad_right)
+        py = height - pad_bottom - (point[1] - y_min) / (y_max - y_min) * (height - pad_top - pad_bottom)
+        return float(px), float(py)
+
+    polylines = []
+    for block in blocks:
+        if len(block) < 2:
+            continue
+        points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in block))
+        polylines.append(f'<polyline points="{points}" fill="none" stroke="#2563eb" stroke-width="1.8"/>')
+    fit_lines = []
+    legends = []
+    for legend_index, (name, color, values) in enumerate(series):
+        points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in values))
+        fit_lines.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.8"/>')
+        legends.append(
+            f'<text x="{pad_left + legend_index * 150}" y="{height - 8}" font-size="11" fill="{color}">{escape(name)}</text>'
+        )
+    circles = "".join(
+        f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3" fill="#2563eb"/>'
+        for x, y in (position(point) for point in actual)
+    )
+    actual_legend = (
+        f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="#2563eb">{escape(actual_label)}</text>'
+    )
+    return (
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{escape(title, quote=True)}">'
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="#f8fafc"/>'
+        f'<line x1="{pad_left}" y1="{height - pad_bottom}" x2="{width - pad_right}" y2="{height - pad_bottom}" stroke="#9fb3c8"/>'
+        f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{height - pad_bottom}" stroke="#9fb3c8"/>'
+        f'<text x="{pad_left}" y="16" font-size="12" fill="#334e68">{escape(title)}</text>'
+        f'<text x="{pad_left}" y="{height - 26}" font-size="10" fill="#627d98">log10(f / Hz): {x_min:.3g} .. {x_max:.3g}</text>'
+        f'<text x="{pad_left + 4}" y="{pad_top + 14}" font-size="10" fill="#627d98">{escape(y_label)}: {y_min:.4g} .. {y_max:.4g}</text>'
+        f'{"".join(polylines)}{circles}{"".join(fit_lines)}{actual_legend}{"".join(legends)}'
+        '</svg>'
+    )
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
+
+
 def _metric_label(metric: str) -> str:
     labels = {
         "frequency_estimate_hz": "频率 / Frequency",
@@ -910,16 +1252,13 @@ def _build_report_summary(
     experiment = run.run.get("experiment", {}) if isinstance(run.run.get("experiment"), dict) else {}
     restore = run.run.get("restore", {}) if isinstance(run.run.get("restore"), dict) else {}
     failed_steps = 0
-    packages: set[str] = set()
+    packages = {reference.package for reference in _capture_references(run)}
     warning_messages: set[str] = set()
     failed_expect_count = 0
     for step in run.steps:
         if step.get("status") == "failed":
             failed_steps += 1
         artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
-        package = artifact.get("package")
-        if package:
-            packages.add(str(package))
         quality = artifact.get("quality", {}) if isinstance(artifact.get("quality"), dict) else {}
         warnings = quality.get("warnings", [])
         if isinstance(warnings, list):
@@ -958,12 +1297,7 @@ def _build_evidence_summary(
     screenshots: list[ReportScreenshot],
     waveform_previews: list[ReportWaveformPreview],
 ) -> ReportEvidenceSummary:
-    packages = {
-        str(artifact.get("package"))
-        for step in run.steps
-        for artifact in [step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}]
-        if artifact.get("package")
-    }
+    packages = {reference.package for reference in _capture_references(run)}
     return ReportEvidenceSummary(
         source_step_count=sum(1 for step in run.steps if str(step.get("kind", "")).startswith("source.")),
         scope_capture_count=sum(1 for step in run.steps if step.get("kind") == "scope.capture"),
@@ -999,36 +1333,50 @@ def _collect_artifact_links(
                 status=_availability_text(run.summary_csv_path.exists()),
             )
         )
-    screenshots_by_step = {item.step_index: item for item in screenshots}
-    for step in run.steps:
-        artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
-        package_text = artifact.get("package")
-        if not package_text:
-            continue
-        step_index = str(step.get("index", ""))
-        package = str(package_text)
-        package_dir = _resolve_artifact_path(run.path, package)
+    if run.frequency_response_csv_path is not None:
         links.append(
             ReportArtifactLink(
-                step_index=step_index,
+                step_index="-",
+                kind="频率响应 CSV / Frequency response CSV",
+                label="frequency_response.csv",
+                href=_relative_url(run.frequency_response_csv_path, output_dir),
+                status=_availability_text(run.frequency_response_csv_path.exists()),
+            )
+        )
+    if run.frequency_response_fit_path is not None:
+        links.append(
+            ReportArtifactLink(
+                step_index="-",
+                kind="频响拟合 JSON / Frequency response fit JSON",
+                label="frequency_response_fit.json",
+                href=_relative_url(run.frequency_response_fit_path, output_dir),
+                status=_availability_text(run.frequency_response_fit_path.exists()),
+            )
+        )
+    screenshots_by_package = {item.package: item for item in screenshots}
+    for reference in _capture_references(run):
+        package_dir = _resolve_artifact_path(run.path, reference.package)
+        links.append(
+            ReportArtifactLink(
+                step_index=reference.step_index,
                 kind="采集包 / Capture package",
-                label=package,
+                label=reference.package,
                 href=_relative_url(package_dir, output_dir),
                 status=_availability_text(package_dir.exists()),
             )
         )
-        screenshot = screenshots_by_step.get(step_index)
+        screenshot = screenshots_by_package.get(reference.package)
         if screenshot is not None:
             links.append(
                 ReportArtifactLink(
-                    step_index=step_index,
+                    step_index=reference.step_index,
                     kind="截图 / Screenshot",
                     label=Path(screenshot.src).name,
                     href=screenshot.src,
                     status=_availability_text(screenshot.path.exists()),
                 )
             )
-        metadata = _read_capture_metadata(package_dir, artifact.get("metadata"))
+        metadata = _read_capture_metadata(package_dir, reference.metadata)
         for channel, npy_text, _summary in _metadata_waveform_npy_files(metadata):
             if not npy_text:
                 continue
@@ -1038,7 +1386,7 @@ def _collect_artifact_links(
             npy_name = Path(str(npy_text).replace("\\", "/")).name
             links.append(
                 ReportArtifactLink(
-                    step_index=step_index,
+                    step_index=reference.step_index,
                     kind="波形原始数据 / Waveform raw artifact",
                     label=f"ch{channel} {npy_name}",
                     href=_relative_url(npy_path, output_dir),
@@ -1317,13 +1665,9 @@ def _metadata_signal_summaries(metadata: dict[str, Any]) -> list[dict[str, Any]]
 
 def _collect_screenshots(run: RunPackage, output_dir: Path) -> list[ReportScreenshot]:
     screenshots: list[ReportScreenshot] = []
-    for step in run.steps:
-        artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
-        package_text = artifact.get("package")
-        if not package_text:
-            continue
-        package_dir = _resolve_artifact_path(run.path, str(package_text))
-        metadata = _read_capture_metadata(package_dir, artifact.get("metadata"))
+    for reference in _capture_references(run):
+        package_dir = _resolve_artifact_path(run.path, reference.package)
+        metadata = _read_capture_metadata(package_dir, reference.metadata)
         screenshot_text = _metadata_screenshot_path(metadata)
         if not screenshot_text:
             continue
@@ -1334,13 +1678,55 @@ def _collect_screenshots(run: RunPackage, output_dir: Path) -> list[ReportScreen
             continue
         screenshots.append(
             ReportScreenshot(
-                step_index=str(step.get("index", "")),
-                package=str(package_text),
+                step_index=reference.step_index,
+                package=reference.package,
                 path=screenshot_path,
                 src=_relative_url(screenshot_path, output_dir),
             )
         )
     return screenshots
+
+
+def _capture_references(run: RunPackage) -> list[ReportCaptureReference]:
+    references: list[ReportCaptureReference] = []
+    seen: set[str] = set()
+
+    def add(step_index: str, package: Any, metadata: Any) -> None:
+        package_text = str(package or "").strip()
+        if not package_text or package_text in seen:
+            return
+        seen.add(package_text)
+        references.append(
+            ReportCaptureReference(
+                step_index=step_index,
+                package=package_text,
+                metadata=str(metadata or ""),
+            )
+        )
+
+    for step in run.steps:
+        artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
+        add(str(step.get("index", "")), artifact.get("package"), artifact.get("metadata"))
+        response = artifact.get("frequency_response", {})
+        captures = response.get("captures", []) if isinstance(response, dict) else []
+        if isinstance(captures, list):
+            for capture in captures:
+                if isinstance(capture, dict):
+                    point_index = str(capture.get("index", ""))
+                    add(
+                        f"frequency response {point_index}",
+                        capture.get("package"),
+                        capture.get("metadata"),
+                    )
+
+    for row in run.frequency_response_rows:
+        point_index = str(row.get("index", ""))
+        add(
+            f"frequency response {point_index}",
+            row.get("capture_package"),
+            row.get("metadata_path"),
+        )
+    return references
 
 
 def _read_capture_metadata(package_dir: Path, metadata_text: Any) -> dict[str, Any]:

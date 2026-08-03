@@ -1315,6 +1315,114 @@ value_vpp = 5.0
         self.assertEqual(args.path, "data/runs/example")
         self.assertEqual(args.output, "report.html")
 
+    def test_run_report_accepts_pdf_options(self):
+        args = build_parser().parse_args(
+            ["run", "report", "data/runs/example", "--pdf", "--pdf-output", "report.pdf"]
+        )
+
+        self.assertTrue(args.pdf)
+        self.assertEqual(args.pdf_output, "report.pdf")
+
+    def test_run_report_writes_html_and_pdf_to_distinct_paths(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            html_path = Path(tmp) / "report.html"
+            pdf_path = Path(tmp) / "report.pdf"
+            stdout = io.StringIO()
+            with patch("wavebench.cli.write_run_report_html", return_value=html_path) as write_html, patch(
+                "wavebench.cli.write_run_report_pdf", return_value=pdf_path
+            ) as write_pdf, redirect_stdout(stdout):
+                code = main(
+                    [
+                        "run",
+                        "report",
+                        str(run_dir),
+                        "--output",
+                        str(html_path),
+                        "--pdf",
+                        "--pdf-output",
+                        str(pdf_path),
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            write_html.assert_called_once()
+            write_pdf.assert_called_once()
+            self.assertIn(f"report={html_path}", stdout.getvalue())
+            self.assertIn(f"pdf={pdf_path}", stdout.getvalue())
+
+    def test_run_report_rejects_pdf_output_without_pdf_flag_and_path_collisions(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                missing_flag = main(["run", "report", str(run_dir), "--pdf-output", "report.pdf"])
+            self.assertEqual(missing_flag, 2)
+            self.assertIn("requires --pdf", stderr.getvalue())
+
+            stderr = io.StringIO()
+            same_path = Path(tmp) / "report.html"
+            with redirect_stderr(stderr):
+                collision = main(
+                    [
+                        "run",
+                        "report",
+                        str(run_dir),
+                        "--output",
+                        str(same_path),
+                        "--pdf",
+                        "--pdf-output",
+                        str(same_path),
+                    ]
+                )
+            self.assertEqual(collision, 2)
+            self.assertIn("different paths", stderr.getvalue())
+
+    def test_run_report_rejects_misleading_html_and_pdf_suffixes(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            cases = [
+                (
+                    [
+                        "--output",
+                        str(Path(tmp) / "html-named.pdf"),
+                        "--pdf",
+                        "--pdf-output",
+                        str(Path(tmp) / "report.pdf"),
+                    ],
+                    "--output is an HTML path",
+                ),
+                (
+                    [
+                        "--output",
+                        str(Path(tmp) / "report.html"),
+                        "--pdf",
+                        "--pdf-output",
+                        str(Path(tmp) / "pdf-named.html"),
+                    ],
+                    "--pdf-output is a PDF path",
+                ),
+            ]
+
+            for options, message in cases:
+                stderr = io.StringIO()
+                with patch("wavebench.cli.write_run_report_html") as write_html, patch(
+                    "wavebench.cli.write_run_report_pdf"
+                ) as write_pdf, redirect_stderr(stderr):
+                    code = main(["run", "report", str(run_dir), *options])
+
+                self.assertEqual(code, 2)
+                self.assertIn(message, stderr.getvalue())
+                write_html.assert_not_called()
+                write_pdf.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

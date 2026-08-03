@@ -2,7 +2,7 @@
 
 [中文文档](README.md) | English
 
-WaveBench is a lightweight Python measurement bench for explicit, reproducible control of laboratory instruments. It currently covers oscilloscope capture, signal-generator and power-supply control, digital-multimeter reads, multi-instrument run plans, offline reports, and trusted executable instrument plugins.
+WaveBench is a lightweight Python measurement bench for explicit, reproducible control of laboratory instruments. It currently covers oscilloscope capture, signal-generator and power-supply control, digital-multimeter reads, multi-instrument run plans, offline reports, two-channel source/scope frequency-response measurements, and trusted executable instrument plugins.
 
 The WaveBench distribution includes built-in drivers for the RTM2000/RTM2032, DS1104Z/DS1000Z, DG4000/DG4202, DP800, and DM3000/DM3058 families. These five families are the permanent bundled baseline: first use does not require an external plugin, and they are not scheduled for removal from the main package. External packages are optional, independently released upgrades or extensions. A narrowly allowlisted package may take over a canonical ID, while built-in short names remain pinned to the bundled implementation and uninstalling the package restores the bundled canonical implementation where the IDs are shared.
 
@@ -55,6 +55,23 @@ The local marketplace index remains read-only. It does not download or install p
 The Textual interface is an optional extra. In a source checkout, install it with `python -m pip install -e ".[tui]"`, then run `python -m wavebench tui` or `python -m wavebench tui --fake`.
 
 Its supported product scope is intentionally frozen to the power-supply, DMM, and signal-source panels. CLI commands, run plans, and services remain the primary interfaces; the TUI is not a run-plan editor, plugin manager, full oscilloscope viewer, or reporting system.
+
+## Optional frequency-response analysis and PDF reports
+
+`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with linear/dB gain and wrapped/unwrapped output-relative phase. The offline HTML report renders magnitude, phase, fit-comparison SVGs, the point table, and any saved per-point screenshots.
+
+Use the conservative template before editing a plan manually:
+
+```bash
+python -m pip install -e ".[analysis,pdf]"
+python -m wavebench run template source-scope-frequency-response \
+  --frequencies 100,1000,10000 --reference-channel 1 --response-channel 2 \
+  --fit --output plans/frequency_response.toml
+python -m wavebench run check --plan plans/frequency_response.toml
+python -m wavebench run report data/runs/<run-dir> --pdf
+```
+
+`linear_log` and `polynomial` fit linear gain against `log10(frequency_hz / Hz)`; PCHIP additionally needs the `analysis` extra. The PDF is a portable visual report: its visible screenshots, SVG charts, and tables are embedded, while CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.
 
 Executable plugins use canonical IDs and cannot define aliases. Built-in IDs are protected except for narrowly allowlisted optional-override slots that bind one canonical ID to one distribution. The current shared-ID slots cover DG4000, DM3000, DP800, and RTM2000. Their built-in short aliases always select the bundled baseline, and uninstalling the external distribution restores the bundled canonical implementation. DS1000Z uses the separate external canonical ID `rigol.ds1000z`; its built-in `ds1104` and `ds1000z` aliases remain available without the package. DG4000 source plugins may import the stable `DG4000DacBlock` and `DG4000ByteOrder` types from `wavebench.instruments`; waveform loading, normalization, DAC14 encoding, services, and safety policy remain core responsibilities. The source code retains the historical term `migration slot` for this allowlist, but it does not imply deprecating the bundled drivers.
 

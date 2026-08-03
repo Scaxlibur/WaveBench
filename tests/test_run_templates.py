@@ -16,10 +16,25 @@ from wavebench.services.run_templates import (
 def test_list_run_templates_includes_public_names():
     names = [item.name for item in list_run_templates()]
 
-    assert names == ["dmm-acv-source", "power-dmm-dcv", "source-scope-sine", "source-scope-sweep"]
+    assert names == [
+        "dmm-acv-source",
+        "power-dmm-dcv",
+        "source-scope-frequency-response",
+        "source-scope-sine",
+        "source-scope-sweep",
+    ]
 
 
-@pytest.mark.parametrize("name", ["source-scope-sine", "source-scope-sweep", "dmm-acv-source", "power-dmm-dcv"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "source-scope-sine",
+        "source-scope-sweep",
+        "source-scope-frequency-response",
+        "dmm-acv-source",
+        "power-dmm-dcv",
+    ],
+)
 def test_run_templates_render_valid_plans(tmp_path: Path, name: str):
     output = write_run_template(name, tmp_path / f"{name}.toml")
 
@@ -85,6 +100,41 @@ def test_source_scope_sweep_template_expands_frequency_points(tmp_path: Path):
         "sweep_10k",
     ]
     assert text.count("[steps.expect_fft]") == 3
+
+
+def test_frequency_response_template_uses_two_scope_channels_and_compatible_fit_degree(tmp_path: Path):
+    output = write_run_template(
+        "source-scope-frequency-response",
+        tmp_path / "response.toml",
+        options=RunTemplateOptions(
+            frequencies_hz=(100.0, 1000.0, 10000.0),
+            source_channel=2,
+            reference_channel=1,
+            response_channel=3,
+            frequency_response_fit=True,
+        ),
+    )
+
+    plan = load_run_plan(output)
+    response = next(step for step in plan.steps if step.kind == "sweep.frequency_response")
+
+    assert response.fields["source_channel"] == 2
+    assert response.fields["reference_channel"] == 1
+    assert response.fields["response_channel"] == 3
+    assert response.fields["frequencies_hz"] == [100.0, 1000.0, 10000.0]
+    assert response.fields["fit"] == {
+        "methods": ["linear_log", "polynomial", "pchip"],
+        "polynomial_degree": 2,
+    }
+
+
+@pytest.mark.parametrize("frequencies", [(1000.0,), (1000.0, 1000.0), (1000.0, 100.0)])
+def test_frequency_response_template_rejects_non_sweep_frequency_lists(frequencies: tuple[float, ...]):
+    with pytest.raises(ConfigError, match="frequency-response template"):
+        render_run_template(
+            "source-scope-frequency-response",
+            options=RunTemplateOptions(frequencies_hz=frequencies),
+        )
 
 
 def test_parse_frequencies_accepts_comma_separated_values():

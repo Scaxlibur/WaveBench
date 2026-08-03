@@ -19,6 +19,7 @@ EXECUTABLE_STEP_KINDS = {
     "power.output",
     "scope.auto",
     "scope.capture",
+    "sweep.frequency_response",
     "source.status",
     "source.set_freq",
     "source.arb_load",
@@ -73,6 +74,11 @@ def plan_scope_guard_channels(plan: RunPlan, default_channel: int) -> list[int]:
             channel = step.fields.get("channel") or default_channel
             if channel not in channels:
                 channels.append(channel)
+        elif step.kind == "sweep.frequency_response":
+            for field in ("reference_channel", "response_channel"):
+                channel = step.fields[field]
+                if channel not in channels:
+                    channels.append(channel)
     return channels
 
 

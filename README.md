@@ -107,11 +107,11 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 
 - `run check --plan <plan.toml>`：只解析并汇总 plan，不连接仪器
 - `run verify --plan <plan.toml>`：只读查询 plan 涉及仪器的高阻保护状态与 `*IDN?`，用于执行前预检可达性
-- `run template --list` / `run template <name> --output <plan.toml>`：列出或生成保守 run plan 模板；可用 `--frequency`、`--vpp`、`--source-channel` 等少量参数定制；不连接仪器，不覆盖已有文件，除非显式 `--force`
-- `run plan --plan <plan.toml>`：执行显式 source、power、scope、dmm、sleep 步骤；一次 run 内统一打开并复用所需仪器 session，成功或失败后统一关闭，不静默断线重连
-- `run report <run_dir>`：根据 `run.json` / `summary.csv` 生成静态离线 HTML 报告，包含信号分析指标、DMM 读数卡片、实验证据摘要、产物链接、证据时间线和截图
+- `run template --list` / `run template <name> --output <plan.toml>`：列出或生成保守 run plan 模板；可用 `--frequency`、`--frequencies`、`--reference-channel`、`--response-channel`、`--fit` 等少量参数定制；不连接仪器，不覆盖已有文件，除非显式 `--force`
+- `run plan --plan <plan.toml>`：执行显式 source、power、scope、dmm、sleep 和双通道 `sweep.frequency_response` 步骤；一次 run 内统一打开并复用所需仪器 session，成功或失败后统一关闭，不静默断线重连
+- `run report <run_dir>`：根据 `run.json` / `summary.csv` 生成静态离线 HTML 报告；频响 run 额外包含幅频、相频、拟合对比、逐点 CSV 与采集证据链接。加 `--pdf` 可同时导出嵌入截图、SVG 和表格的便携 PDF
 - `capture inspect <capture_dir>`：打印离线采集包摘要
-- 默认示波器高阻保护：`scope.capture` / `scope.fetch` / `sweep discrete` / run-plan `scope.capture` 在采集前查询通道耦合。RTM2032 的 `DCL`/`ACL` 视为高阻，`DC`/`AC` 默认按可能的 50 Ω 拒绝；DS1000Z 输入固定为 1 MΩ，`AC`/`DC`/`GND` 只表示耦合方式，均按该机型语义检查。WaveBench 不会自动修改耦合或输入设置
+- 默认示波器高阻保护：`scope.capture` / `scope.fetch` / `sweep discrete` / run-plan `scope.capture` / `sweep.frequency_response` 在采集前查询通道耦合。频响会同时保护 reference 与 response 两路；RTM2032 的 `DCL`/`ACL` 视为高阻，`DC`/`AC` 默认按可能的 50 Ω 拒绝；DS1000Z 输入固定为 1 MΩ，`AC`/`DC`/`GND` 只表示耦合方式，均按该机型语义检查。WaveBench 不会自动修改耦合或输入设置
 - 可选 `[restore] source_state = true`：在 `finally` 路径快照并恢复 basic 信号源通道状态（输出、函数、频率、Vpp、方波占空比）。该选项不恢复 offset、phase、frequency mode、sweep、负载、极性、噪声、同步、burst、调制、marker、pulse hold 或易失任意波内存；run artifact 以 `source_state_scope = "basic"` 明示范围
 - run 输出位于 `data/runs/<timestamp>_<label>/`，包含 `run.json`、`summary.csv`、步骤记录、质量状态和普通采集包引用
 - `scope.capture` 可启用 `quality_gate = true`；配合 `auto_recover = true` 时，质量告警会触发最多 `[quality].auto_recover_attempts` 次 autoscale + 重采
@@ -206,12 +206,16 @@ python3 -m venv .venv
 cp wavebench.example.toml wavebench.toml
 ```
 
-需要运行测试和代码检查时安装开发依赖；需要终端 TUI 时安装 `tui` extra：
+需要运行测试和代码检查时安装开发依赖；频响 PCHIP 拟合需要 `analysis` extra；离线 PDF 报告需要 `pdf` extra；终端 TUI 需要 `tui` extra：
 
 ```bash
 .venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pip install -e ".[analysis]"
+.venv/bin/python -m pip install -e ".[pdf]"
 .venv/bin/python -m pip install -e ".[tui]"
 ```
+
+`pdf` 使用 WeasyPrint。Linux / WSL 上若导入或渲染失败，请按发行版安装 Cairo、Pango、GDK-PixBuf 及可显示中文的字体；这些是操作系统渲染依赖，不会由 WaveBench 修改或安装。
 
 编辑 `wavebench.toml`，填写实际使用的 VISA/串口 resource，并删除或禁用不属于当前实验台的仪器段。示例配置使用内建短名：
 
@@ -488,6 +492,18 @@ python -m wavebench run check --plan plans/closure_triangle_1k.toml
 python -m wavebench run plan --config wavebench.toml --plan plans/example_scope_expect_quality.toml
 python -m wavebench run report data/runs/<run_dir>
 ```
+
+生成双通道频响模板（CH1 接 DUT 输入，CH2 接 DUT 输出），通过 `run check` / `run verify` 后才允许执行。`--fit` 会生成线性对数插值、多项式和 PCHIP 拟合配置，因此需要先安装 `.[analysis]`：
+
+```powershell
+python -m wavebench run template source-scope-frequency-response --frequencies 100,1000,10000 --reference-channel 1 --response-channel 2 --fit --output plans/frequency_response.toml
+python -m wavebench run check --config wavebench.toml --plan plans/frequency_response.toml
+python -m wavebench run verify --config wavebench.toml --plan plans/frequency_response.toml
+python -m wavebench run plan --config wavebench.toml --plan plans/frequency_response.toml
+python -m wavebench run report data/runs/<run_dir> --pdf
+```
+
+PDF 是“可见报告”的单文件封装：截图、静态 SVG 曲线和表格会嵌入 PDF；`frequency_response.csv`、拟合 JSON、NPY 波形和完整采集包仍保留在 run 目录，适合复算和审计。
 
 DMM ACV smoke 示例：
 

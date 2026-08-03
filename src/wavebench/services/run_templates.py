@@ -22,6 +22,9 @@ class RunTemplateOptions:
     vpp: float = 1.0
     source_channel: int | None = None
     scope_channel: int | None = None
+    reference_channel: int | None = None
+    response_channel: int | None = None
+    frequency_response_fit: bool = False
     power_channel: int | None = None
     voltage_v: float = 3.3
     current_limit_a: float = 0.1
@@ -46,6 +49,8 @@ def render_run_template(name: str, options: RunTemplateOptions | None = None) ->
         return _render_source_scope_sine(opts)
     if name == "source-scope-sweep":
         return _render_source_scope_sweep(opts)
+    if name == "source-scope-frequency-response":
+        return _render_source_scope_frequency_response(opts)
     if name == "dmm-acv-source":
         return _render_dmm_acv_source(opts)
     if name == "power-dmm-dcv":
@@ -76,6 +81,10 @@ RUN_TEMPLATES = {
     "source-scope-sweep": RunTemplate(
         name="source-scope-sweep",
         description="DG4202 source -> RTM2032 scope multi-frequency sine sweep as an expanded run plan",
+    ),
+    "source-scope-frequency-response": RunTemplate(
+        name="source-scope-frequency-response",
+        description="DG4202 source -> two scope channels frequency response with optional gain fitting",
     ),
     "dmm-acv-source": RunTemplate(
         name="dmm-acv-source",
@@ -292,6 +301,83 @@ def _render_source_scope_sweep_point(frequency_hz: float, vpp: float, source_cha
     ).strip()
 
 
+def _render_source_scope_frequency_response(options: RunTemplateOptions) -> str:
+    source_channel = options.source_channel or 1
+    reference_channel = options.reference_channel or 1
+    response_channel = options.response_channel or 2
+    if reference_channel == response_channel:
+        raise ConfigError("--reference-channel and --response-channel must differ")
+    frequencies = options.frequencies_hz or (100.0, 1000.0, 10000.0)
+    if len(frequencies) < 2:
+        raise ConfigError("frequency-response template requires at least two --frequencies values")
+    if any(second <= first for first, second in zip(frequencies, frequencies[1:])):
+        raise ConfigError(
+            "frequency-response template --frequencies values must be strictly increasing and unique"
+        )
+    label = (
+        f"source_scope_frequency_response_{_frequency_label(frequencies[0])}_to_"
+        f"{_frequency_label(frequencies[-1])}"
+    )
+    fit = ""
+    if options.frequency_response_fit:
+        polynomial_degree = min(3, len(frequencies) - 1)
+        fit = """
+
+        [steps.fit]
+        methods = ["linear_log", "polynomial", "pchip"]
+        polynomial_degree = {polynomial_degree}
+        """.format(polynomial_degree=polynomial_degree)
+    frequency_text = ", ".join(_fmt(value) for value in frequencies)
+    return _clean(
+        f"""
+        # WaveBench template: DG4202 CH{source_channel} -> DUT -> scope CH{response_channel}.
+        # Scope CH{reference_channel} measures the DUT input reference. Confirm both probe paths,
+        # high-impedance inputs, vertical scales, and source output before execution.
+
+        [experiment]
+        name = "{label}"
+        label = "{label}"
+
+        [restore]
+        source_state = true
+        source_channel = {source_channel}
+
+        [[steps]]
+        kind = "source.status"
+        channel = {source_channel}
+
+        [[steps]]
+        kind = "source.set_func"
+        channel = {source_channel}
+        function = "sin"
+
+        [[steps]]
+        kind = "source.set_vpp"
+        channel = {source_channel}
+        value_vpp = {_fmt(options.vpp)}
+
+        [[steps]]
+        kind = "source.output"
+        channel = {source_channel}
+        state = "on"
+
+        [[steps]]
+        kind = "sweep.frequency_response"
+        label = "{label}"
+        source_channel = {source_channel}
+        reference_channel = {reference_channel}
+        response_channel = {response_channel}
+        frequencies_hz = [{frequency_text}]
+        target_cycles = 10
+        settle_s = 0.3
+        points = "def"
+        save_csv = false
+        screenshot = false
+        {fit}
+        """
+    )
+
+
 def _render_dmm_acv_source(options: RunTemplateOptions) -> str:
     source_channel = options.source_channel or 2
     label = f"dmm_acv_source_{_frequency_label(options.frequency_hz)}"
@@ -400,6 +486,8 @@ def _validate_options(options: RunTemplateOptions) -> RunTemplateOptions:
     for label, value in (
         ("--source-channel", options.source_channel),
         ("--scope-channel", options.scope_channel),
+        ("--reference-channel", options.reference_channel),
+        ("--response-channel", options.response_channel),
         ("--power-channel", options.power_channel),
     ):
         if value is not None and value <= 0:
