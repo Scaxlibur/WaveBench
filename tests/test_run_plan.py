@@ -391,7 +391,7 @@ frequency_count = 2
         with self.assertRaisesRegex(ConfigError, "either frequencies_hz"):
             load_run_plan(mixed_frequency_forms)
 
-    def test_frequency_response_plan_rejects_bad_frequency_lists_and_multiple_steps(self):
+    def test_frequency_response_plan_rejects_bad_frequency_lists_and_allows_unique_multiple_steps(self):
         duplicate_frequencies = self._write_plan("""
 [[steps]]
 kind = "sweep.frequency_response"
@@ -415,8 +415,46 @@ reference_channel = 3
 response_channel = 4
 frequencies_hz = [100, 1000]
 """)
-        with self.assertRaisesRegex(ConfigError, "at most one"):
-            load_run_plan(multiple_steps)
+        self.assertEqual(len(load_run_plan(multiple_steps).steps), 2)
+
+    def test_frequency_response_plan_rejects_duplicate_response_labels_and_accepts_adaptive_baseline(self):
+        duplicate_labels = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+label = "same"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "same"
+reference_channel = 3
+response_channel = 4
+frequencies_hz = [100, 1000]
+""")
+        with self.assertRaisesRegex(ConfigError, "labels must be unique"):
+            load_run_plan(duplicate_labels)
+
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+
+[steps.baseline]
+run_dir = "baseline-run"
+
+[steps.adaptive]
+enabled = true
+gain_threshold_db = 0.25
+phase_threshold_deg = 5
+max_levels = 2
+max_frequency_points = 20
+"""))
+        self.assertEqual(plan.steps[0].fields["baseline"]["mode"], "complex_transfer")
+        self.assertEqual(plan.steps[0].fields["adaptive"]["max_frequency_points"], 20)
 
     def test_frequency_response_fit_rejects_unknown_method_and_high_degree(self):
         unknown_method = self._write_plan("""

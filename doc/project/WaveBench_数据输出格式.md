@@ -633,22 +633,30 @@ step_index,kind,status,package,metadata,quality_status,quality_warnings,expect_s
 
 ## 双通道频率响应产物
 
-`sweep.frequency_response` 在本次 run 根目录额外写入下列产物，不覆盖普通 `scope.capture` 包：
+单一 `sweep.frequency_response` 保持在本次 run 根目录额外写入下列产物，不覆盖普通 `scope.capture` 包：
 
 ```text
 data/runs/YYYYMMDD_HHMMSS_<label>/
 ├─ frequency_response.csv
 ├─ frequency_response_fit.json   # 仅配置 [steps.fit] 时存在
-├─ frequency_response_calibration.csv  # 仅自动或离线二维校准成功时存在
-└─ frequency_response_calibration.json
+├─ frequency_response_calibration.csv  # 自动或离线二维校准成功时存在
+├─ frequency_response_calibration.json
+├─ frequency_response_calibration_fixed.csv # 默认 Q4.12 定点审计表
+├─ frequency_response_calibration_q.coe
+└─ frequency_response_calibration_q.mem
 ```
+
+同一 run 含多个频响 step 时，根目录新增 `frequency_responses.json`（`schema_version = 1`）。其 `responses[]` 以唯一 `label`、`step_index`、相对 `directory` 和各派生产物引用描述每个响应；每个响应保存在 `frequency_response/<step>_<label>/`。旧 run 没有 manifest 时仍按根目录单响应产物读取。
 
 `frequency_response.csv` 每请求一个频点就原子刷新一次，因此 source 设频失败、scope 采集失败或分析失败时，前序记录和当前失败行仍会保留。稳定基础列为：
 
 ```text
 index,amplitude_index,requested_vpp,requested_frequency_hz,reference_frequency_hz,response_frequency_hz,
 reference_amplitude_peak_v,response_amplitude_peak_v,reference_vpp_v,response_vpp_v,
-gain_linear,gain_db,phase_wrapped_deg,phase_unwrapped_deg,status,warnings,error,
+gain_linear,gain_db,phase_wrapped_deg,phase_unwrapped_deg,
+baseline_gain_db,baseline_phase_unwrapped_deg,gain_linear_corrected,gain_db_corrected,
+phase_wrapped_corrected_deg,phase_unwrapped_corrected_deg,
+adaptive_level,adaptive_parent_start_hz,adaptive_parent_stop_hz,status,warnings,error,
 capture_package,metadata_path
 ```
 
@@ -658,6 +666,10 @@ capture_package,metadata_path
 - `status` 为 `ok`、`warning` 或 `failed`。失败行的数值字段为空，`error` 保存可读错误，不能被误当作零增益或零相位。
 - `capture_package` / `metadata_path` 指向每个成功的同步双通道原始证据。频响采集强制写入两路 NPY 与 metadata，普通可选 CSV 和截图仍遵循该 step 的 `save_csv` / `screenshot` 设置。
 - 开启拟合后，CSV 还会增加 `fit_<method>_gain_linear` 与 `fit_<method>_residual` 列；这些值只对应实际有效频点。
+- 原始 `gain_*` 和 `phase_*` 永远不被软件校正覆盖。直通基线开启时，`baseline_*` 是 `log10(frequency)` 域的插值基线，`*_corrected` 是派生结果；二维校准优先使用校正增益。
+- `adaptive_level = 0` 是初始网格；正数表示加密层级，父区间列记录中点来源。失败点仍保留为失败证据。
+
+`frequency_response_baseline.json` 仅在配置 `[steps.baseline]` 时存在，记录独立基线 response、校正模式、每个 Vpp 的有效域、已用切片和由展开相位拟合的估算延迟。它只证明软件后处理，不改变仪器硬件 deskew。
 
 `frequency_response_fit.json` 是供报告、调试脚本和复算使用的 JSON 文档。它声明 `x_transform = "log10(frequency_hz / Hz)"`、有效范围、被排除的点、拟合公式、参数、误差指标和用于图表的频率/线性增益曲线。它不在定义域外外推：调试脚本应先检查 `valid_domain_hz`。
 
@@ -684,4 +696,12 @@ correction_limited,slope_limited
 - 补偿和斜率限制命中数、完整的 `lut` 行；
 - 每个请求 Vpp 的 `chebyshev` 分段。每段以 `x = log10(frequency_hz / Hz)` 为自变量，`x_start` / `x_stop` 映射到 `t ∈ [-1, 1]`，并按 `G_dB = Σ c_k T_k(t)` 计算。
 
-插值约定是“频率方向平滑样条、相邻请求 Vpp 方向线性插值”；频率或 Vpp 超出 `valid_domain` 时不得外推。输出为 IEEE 浮点 CSV/JSON，不提供 Q 格式、COE 或 MEM 文件。
+插值约定是“频率方向平滑样条、相邻请求 Vpp 方向线性插值”；频率或 Vpp 超出 `valid_domain` 时不得外推。
+
+### 定点部署文件
+
+浮点 LUT 始终是审计事实源；自动或离线校准默认还导出其 `correction_linear` 的部署副本：`frequency_response_calibration_fixed.csv`、Xilinx `frequency_response_calibration_q.coe` 和每行一个固定字宽十六进制字的 `frequency_response_calibration_q.mem`。
+
+- 默认是 16 位有符号二补码 `Q4.12`、半值远离零的最近整数、幅值主序 `linear_index = amplitude_index * frequency_count + frequency_index`、`overflow = error`，绝不静默饱和。
+- fixed CSV 逐地址记录 Vpp/频率索引、原值、量化整数/十六进制、量化值和逐点误差；calibration JSON 的 `fixed_point` 记录格式、配置、编码、地址映射、文件路径和最大绝对量化误差。
+- `[calibration.fixed_point]` 可覆盖 `formats`（`csv` / `coe` / `mem`）、`word_width`、`fractional_bits`、`layout`、`rounding` 与 `overflow`；`saturate` 必须显式选择。

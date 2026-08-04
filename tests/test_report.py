@@ -883,6 +883,43 @@ class RunReportTests(unittest.TestCase):
             self.assertIn("Representative slices", html)
             self.assertIn("frequency_response_calibration.csv", html)
 
+    def test_run_report_renders_each_manifest_frequency_response_with_raw_and_corrected_curves(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            entries = []
+            for index, label in enumerate(("input", "output")):
+                directory = run_dir / "frequency_response" / label
+                directory.mkdir(parents=True)
+                (directory / "frequency_response.csv").write_text(
+                    "index,requested_frequency_hz,gain_db,phase_unwrapped_deg,gain_db_corrected,phase_unwrapped_corrected_deg,status\n"
+                    "0,100,1,-10,0,-5,ok\n1,1000,2,-20,1,-15,ok\n",
+                    encoding="utf-8",
+                )
+                (directory / "frequency_response_baseline.json").write_text(
+                    json.dumps({"mode": "complex_transfer", "baseline_response": "through"}), encoding="utf-8"
+                )
+                entries.append(
+                    {
+                        "step_index": index,
+                        "label": label,
+                        "directory": f"frequency_response/{label}",
+                        "baseline_json": "frequency_response_baseline.json",
+                    }
+                )
+            (run_dir / "frequency_responses.json").write_text(
+                json.dumps({"schema_version": 1, "responses": entries}), encoding="utf-8"
+            )
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn("Frequency response — input", html)
+            self.assertIn("Frequency response — output", html)
+            self.assertIn("Raw magnitude", html)
+            self.assertIn("Corrected magnitude", html)
+            self.assertIn("complex_transfer", html)
+
     def test_pdf_report_uses_output_directory_as_resource_base(self):
         with TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"

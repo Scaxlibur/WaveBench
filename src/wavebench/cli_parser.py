@@ -344,6 +344,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_calibrate.add_argument(
         "--config", required=True, help="Path to TOML containing a [calibration] table"
     )
+    run_calibrate.add_argument(
+        "--response",
+        default=None,
+        help="Frequency-response label for a multi-response run / 多频响 run 的响应标签",
+    )
     run_report = run_sub.add_parser("report", help="Generate an offline HTML report for a run package")
     run_report.add_argument("path", help="Path to data/runs/<run_dir>")
     run_report.add_argument("--output", default=None, help="Output HTML path; defaults to <run_dir>/report.html")

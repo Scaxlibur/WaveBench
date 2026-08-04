@@ -114,7 +114,7 @@ python -m wavebench run verify --config wavebench.toml --plan plans/source_scope
 - source 输出必须已经由前面的显式 `source.output state = "on"` 打开。频响 step 不会偷偷打开输出；若输出关闭或设频写入失败，会立即停止后续频点并走已有 restore 路径。
 - 两路都会经过高阻保护。执行前仍需人工确认探头、线缆、量程和接地；WaveBench 不自动 deskew，也不会把测得相位冒充为已校准 DUT 相位。
 - 每个成功采集强制保存双路 NPY 与 `metadata.json` 作为原始证据，即使全局输出配置关闭了 NPY/JSON。采集或分析失败会写入该频点 CSV 行后继续；信号源状态/写入异常会停止。
-- 一个 plan 最多包含一个该 step，避免固定的频响与校准产物名冲突。
+- 一个 plan 可以包含多个该 step，但每个 `label` 必须唯一；多 response 会写根目录 `frequency_responses.json`，每个响应使用独立子目录，因此不会覆盖产物。
 
 显式频点示例：
 
@@ -215,7 +215,58 @@ python -m wavebench run calibrate data/runs/<run_dir> --config plans/calibration
 | `max_slope_db_per_octave` | `6` | 相邻频率校正的最大斜率，必须大于零。 |
 | `chebyshev_degree` / `chebyshev_segment_count` | `3` / `8` | 为需要公式求值的后端导出的近似参数。 |
 
-该命令只覆盖同 run 目录下的 `frequency_response_calibration.csv/json` 派生产物，绝不改写 `frequency_response.csv` 或原始采集包。
+该命令只覆盖选中 response 目录的 `frequency_response_calibration*` 派生产物，绝不改写 `frequency_response.csv` 或原始采集包。若 manifest 有多个 response，必须显式选择：
+
+```powershell
+python -m wavebench run calibrate data/runs/<run_dir> --config plans/calibration.toml --response dut_path
+```
+
+### 直通基线、软件 deskew 与自适应频率
+
+直通基线必须是**独立 run**：操作者先把 CH1/CH2 手动直通、确认高阻与安全幅度，再按普通 `sweep.frequency_response` 采集。DUT step 只读引用该证据；它不改示波器 deskew 或前面板设置，且 `run check` 会在连接仪器前离线检查基线 response、Vpp 切片和初始频率有效域。
+
+```toml
+[[steps]]
+kind = "sweep.frequency_response"
+label = "dut_path"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10000
+stop_frequency_hz = 500000
+frequency_count = 41
+spacing = "log"
+
+[steps.baseline]
+run_dir = "../runs/through_baseline"
+# response = "through" # 基线 run 有多个 response 时必填
+mode = "complex_transfer" # 默认；或 phase_only / delay_only
+
+[steps.adaptive]
+enabled = true             # 默认关闭，保持旧 plan 行为
+gain_threshold_db = 0.5
+phase_threshold_deg = 10
+max_levels = 2
+max_frequency_points = 1000
+```
+
+默认 `complex_transfer` 同时扣除基线 dB 增益和展开相位；`phase_only` 只校正相位；`delay_only` 从基线相位—频率线性拟合估算延迟后校正相位。原始列永远保留，报告并列原始和校正曲线，二维校准默认用校正增益。
+
+自适应先采集初始网格；任一 Vpp 切片相邻点的增益或展开相位达到阈值时加入中点（log 为几何、linear 为算术），每个新频点都采集**所有** Vpp 切片以保持二维矩形网格。它不能发现端点相同而中间存在未采样窄带异常的特征，初始网格仍须覆盖已知关注区域。
+
+### 定点 LUT / COE / MEM
+
+校准默认同时导出 signed-two's-complement `Q4.12`：审计 CSV、Xilinx `.coe` 与每行一个十六进制字的 `.mem`。默认地址为幅值主序 `amplitude_index * frequency_count + frequency_index`，默认越界报错，不静默截断。
+
+```toml
+[steps.calibration.fixed_point]
+word_width = 16
+fractional_bits = 12
+formats = ["csv", "coe", "mem"]
+layout = "amplitude_major" # 或 frequency_major
+rounding = "nearest"
+overflow = "error"         # 需要硬件饱和时才显式使用 saturate
+```
 
 ### 拟合方法
 
@@ -387,9 +438,12 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 
 | 字段 | 含义 |
 |---|---|
-| `csv` | run 根目录的逐点 `frequency_response.csv`。 |
+| `csv` | 此 response 的逐点 `frequency_response.csv`；多 response 时在独立子目录。 |
 | `fit_json` | 启用拟合时的 `frequency_response_fit.json`；未启用则为空。 |
 | `calibration_csv` / `calibration_json` | 自动二维校准成功时的派生 LUT 路径；未启用或未生成则为空。 |
+| `baseline_json` | 软件基线引用、模式、有效域和估算延迟；未配置则为空。 |
+| `adaptive` | 初始/最终频点数、层数、预算限制和配置；未配置则不存在。 |
+| `fixed_point` | 定点 audit CSV/COE/MEM 路径；校准未生成时为空对象。 |
 | `calibration_error` | 自动校准未生成时的原因；原始频响仍然保留。 |
 | `captures` | 每个已有双通道采集包与 metadata 的引用，供报告和审计使用。 |
 | `failed_point_count` / `warning_point_count` | 频点失败与质量 warning 数量。 |
@@ -428,7 +482,7 @@ HTML 报告当前会汇总：
 - `实验证据摘要 / Run evidence summary`：source 步骤、scope capture、DMM 读数、run.json、summary.csv、截图和波形预览数量。
 - `证据时间线 / Evidence timeline`：按 step 展示 source/scope/DMM/sleep 的证据摘要。
 - `扫频摘要 / Sweep summary`：当 run 里有多点 `scope.capture` 或 sweep label 时显示，列出每个频点的 label、status、quality、expect、FFT、frequency、Vpp、FFT peak、peak amplitude 和 THD。
-- `频率响应 / Frequency response`：当 run 根目录存在 `frequency_response.csv` 时显示幅频、相频、线性增益拟合对比、逐点表格、拟合公式/参数，并发现每点的截图和原始采集包链接；存在校准产物时还会显示目标、留点验证误差、补偿热图与代表性幅值切片。
+- `频率响应 / Frequency response`：按每个 manifest response 显示原始/软件校正幅频和相频、基线与自适应摘要、拟合对比、逐点表格、拟合公式/参数和原始采集包链接；校准产物还会显示目标、留点验证误差、补偿热图、代表性幅值切片和定点摘要。
 - `验收摘要 / Acceptance summary` 与 `预期 vs 实测 / Expected vs measured`：汇总 `[steps.expect]` 和 `[steps.expect_fft]` 的验收结果。
 - `DMM 读数 / DMM readings`、`信号分析 / Signal analysis`、`波形预览 / Waveform previews`、`截图 / Screenshots`。
 

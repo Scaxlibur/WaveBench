@@ -10,6 +10,8 @@ import tomllib
 from wavebench.config import normalize_waveform_points
 from wavebench.errors import ConfigError
 from wavebench.services.frequency_response import FIT_METHODS
+from wavebench.services.frequency_response_adaptive import normalize_frequency_response_adaptive
+from wavebench.services.frequency_response_baseline import normalize_frequency_response_baseline
 from wavebench.services.frequency_response_calibration import normalize_frequency_response_calibration
 
 
@@ -88,6 +90,8 @@ _OPTIONAL_FIELDS = {
         "vpp_step",
         "autoscale_each_amplitude",
         "calibration",
+        "baseline",
+        "adaptive",
     },
     "source.status": {"channel"},
     "source.set_freq": {"channel"},
@@ -445,8 +449,12 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
 
 def _validate_frequency_response_steps(steps: list[RunStep]) -> None:
     response_steps = [step for step in steps if step.kind == "sweep.frequency_response"]
-    if len(response_steps) > 1:
-        raise ConfigError("a run plan may contain at most one sweep.frequency_response step")
+    labels: set[str] = set()
+    for step in response_steps:
+        label = str(step.fields.get("label", f"frequency_response_{step.index:02d}"))
+        if label in labels:
+            raise ConfigError(f"sweep.frequency_response labels must be unique: {label!r}")
+        labels.add(label)
 
 
 def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) -> None:
@@ -526,6 +534,18 @@ def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) ->
         fields["calibration"] = normalize_frequency_response_calibration(
             fields["calibration"], f"{prefix}.calibration"
         ).as_dict()
+    if "baseline" in fields:
+        fields["baseline"] = normalize_frequency_response_baseline(
+            fields["baseline"], f"{prefix}.baseline"
+        ).as_dict()
+    if "adaptive" in fields:
+        fields["adaptive"] = normalize_frequency_response_adaptive(
+            fields["adaptive"], f"{prefix}.adaptive"
+        ).as_dict()
+        if fields["adaptive"]["max_frequency_points"] < len(fields["frequencies_hz"]):
+            raise ConfigError(
+                f"{prefix}.adaptive.max_frequency_points must be at least the initial frequency count"
+            )
 
 
 def _normalize_frequency_response_amplitudes(prefix: str, fields: dict[str, Any]) -> None:

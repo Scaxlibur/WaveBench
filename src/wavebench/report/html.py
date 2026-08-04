@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from wavebench.data.packages import RunPackage
+from wavebench.data.packages import FrequencyResponsePackage, RunPackage
 from wavebench.errors import ConfigError
 
 
@@ -436,6 +436,24 @@ def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Pa
         )
         if run.frequency_response_calibration_path is not None
         else None,
+        "frequency_responses": [
+            {
+                "label": response.label,
+                "directory": _relative_url(response.directory, output_dir),
+                "csv": _relative_url(response.csv_path, output_dir)
+                if response.csv_path is not None
+                else None,
+                "baseline_json": _relative_url(response.baseline_path, output_dir)
+                if response.baseline_path is not None
+                else None,
+                "calibration_json": _relative_url(response.calibration_path, output_dir)
+                if response.calibration_path is not None
+                else None,
+                "status": response.manifest_entry.get("status"),
+                "adaptive": response.manifest_entry.get("adaptive"),
+            }
+            for response in run.frequency_responses
+        ],
         "capture_packages": capture_packages,
         "screenshots": [
             {
@@ -764,25 +782,53 @@ def _sweep_summary_row(row: ReportSweepRow) -> str:
 
 
 def _frequency_response_block(run: RunPackage, *, include_table: bool = True) -> str:
-    if run.frequency_response_csv_path is None:
+    if not run.frequency_responses:
         return ""
-    rows = run.frequency_response_rows
-    gain_blocks = _response_blocks(rows, "gain_db")
-    phase_blocks = _response_blocks(rows, "phase_unwrapped_deg")
-    fit_series = _fit_curve_series(run.frequency_response_fit)
+    multiple = len(run.frequency_responses) > 1
+    return "".join(
+        _frequency_response_section(response, include_table=include_table, multiple=multiple)
+        for response in run.frequency_responses
+    )
+
+
+def _frequency_response_section(
+    response: FrequencyResponsePackage, *, include_table: bool, multiple: bool
+) -> str:
+    rows = response.rows
+    raw_gain_blocks = _response_blocks(rows, "gain_db")
+    raw_phase_blocks = _response_blocks(rows, "phase_unwrapped_deg")
+    corrected_gain_blocks = _response_blocks(rows, "gain_db_corrected")
+    corrected_phase_blocks = _response_blocks(rows, "phase_unwrapped_corrected_deg")
+    fit_series = _fit_curve_series(response.fit)
     gain_svg = _response_svg(
-        gain_blocks,
-        title="幅频 / Magnitude response",
+        raw_gain_blocks,
+        title="原始幅频 / Raw magnitude response",
         y_label="Gain (dB)",
         series=(),
     )
     phase_svg = _response_svg(
-        phase_blocks,
-        title="相频 / Phase response",
+        raw_phase_blocks,
+        title="原始相频 / Raw phase response",
         y_label="Phase (deg, unwrapped)",
         series=(),
     )
-    linear_blocks = [[point] for block in _response_blocks(rows, "gain_linear") for point in block]
+    corrected_gain_svg = _response_svg(
+        corrected_gain_blocks,
+        title="校正幅频 / Corrected magnitude response",
+        y_label="Gain (dB)",
+        series=(),
+    ) if corrected_gain_blocks else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
+    corrected_phase_svg = _response_svg(
+        corrected_phase_blocks,
+        title="校正相频 / Corrected phase response",
+        y_label="Phase (deg, unwrapped)",
+        series=(),
+    ) if corrected_phase_blocks else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
+    linear_blocks = [
+        [point]
+        for block in _response_blocks(rows, "gain_linear_corrected") or _response_blocks(rows, "gain_linear")
+        for point in block
+    ]
     fit_svg = _response_svg(
         linear_blocks,
         title="线性增益拟合 / Linear gain fit comparison",
@@ -802,18 +848,29 @@ def _frequency_response_block(run: RunPackage, *, include_table: bool = True) ->
 </tbody>
 </table></div>"""
     else:
-        table_block = '<p class="muted">逐频点结果请见同目录 <code>frequency_response.csv</code>。</p>'
+        table_block = '<p class="muted">逐频点结果请见本响应目录的 <code>frequency_response.csv</code>。</p>'
     fit_summary = (
-        _fit_summary_block(run.frequency_response_fit, run.frequency_response_fit_error)
+        _fit_summary_block(response.fit, response.fit_error)
         if include_table
-        else _compact_fit_summary_block(run.frequency_response_fit, run.frequency_response_fit_error)
+        else _compact_fit_summary_block(response.fit, response.fit_error)
     )
-    calibration_block = _frequency_response_calibration_block(run)
-    return f"""<h2>频率响应 / Frequency response</h2>
-<p class="muted">幅频与相频由同一次双通道采集计算。相位为输出相对输入，包含探头、电缆和通道偏斜；未自动校准或 deskew。</p>
+    calibration_block = _frequency_response_calibration_block(response)
+    baseline_block = _frequency_response_baseline_block(response)
+    adaptive_block = _frequency_response_adaptive_block(response)
+    title = "频率响应 / Frequency response"
+    if multiple:
+        title += f" — {escape(response.label)}"
+    return f"""<h2>{title}</h2>
+<p class="muted">响应标签 / Response label: <code>{escape(response.label)}</code>。原始幅相保留为证据；软件基线校正不会改写仪器 deskew 或前面板设置。</p>
+{baseline_block}
+{adaptive_block}
 <section class="frequency-response-grid">
-<article class="card frequency-response-card"><h3>幅频 / Magnitude</h3>{gain_svg}</article>
-<article class="card frequency-response-card"><h3>相频 / Phase</h3>{phase_svg}</article>
+<article class="card frequency-response-card"><h3>原始幅频 / Raw magnitude</h3>{gain_svg}</article>
+<article class="card frequency-response-card"><h3>原始相频 / Raw phase</h3>{phase_svg}</article>
+</section>
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>校正幅频 / Corrected magnitude</h3>{corrected_gain_svg}</article>
+<article class="card frequency-response-card"><h3>校正相频 / Corrected phase</h3>{corrected_phase_svg}</article>
 </section>
 <section class="frequency-response-grid">
 <article class="card frequency-response-card"><h3>拟合对比 / Fit comparison</h3>{fit_svg}</article>
@@ -822,6 +879,40 @@ def _frequency_response_block(run: RunPackage, *, include_table: bool = True) ->
 {calibration_block}
 {table_block}
 """
+
+
+def _frequency_response_baseline_block(response: FrequencyResponsePackage) -> str:
+    if response.baseline_error:
+        return f'<p class="warning">基线审计 JSON 无法读取：{escape(response.baseline_error)}</p>'
+    if not response.baseline:
+        return ""
+    mode = response.baseline.get("mode", "")
+    source = response.baseline.get("baseline_response", "")
+    domain = response.baseline.get("valid_domain_hz_by_requested_vpp", {})
+    delay = response.baseline.get("estimated_delay_s_by_requested_vpp", {})
+    return (
+        '<div class="table compact-table"><table><thead><tr><th>软件基线 / Software baseline</th>'
+        '<th>模式 / Mode</th><th>有效域 / Valid domain</th><th>估算延迟 / Estimated delay</th></tr></thead>'
+        f'<tbody><tr><td>{escape(str(source))}</td><td>{escape(str(mode))}</td>'
+        f'<td><code>{escape(json.dumps(domain, ensure_ascii=False))}</code></td>'
+        f'<td><code>{escape(json.dumps(delay, ensure_ascii=False))}</code></td></tr></tbody></table></div>'
+    )
+
+
+def _frequency_response_adaptive_block(response: FrequencyResponsePackage) -> str:
+    adaptive = response.manifest_entry.get("adaptive")
+    if not isinstance(adaptive, dict):
+        return ""
+    return (
+        '<div class="table compact-table"><table><thead><tr><th>自适应加密 / Adaptive refinement</th>'
+        '<th>初始点</th><th>加密层数</th><th>最终点数</th><th>预算限制</th></tr></thead><tbody><tr>'
+        f'<td>{escape(str(adaptive.get("configuration", {})))}</td>'
+        f'<td>{escape(str(adaptive.get("initial_frequency_count", "")))}</td>'
+        f'<td>{escape(str(adaptive.get("refinement_levels_completed", "")))}</td>'
+        f'<td>{escape(str(adaptive.get("final_frequency_count", "")))}</td>'
+        f'<td>{escape(str(adaptive.get("budget_limited", False)))}</td>'
+        '</tr></tbody></table></div>'
+    )
 
 
 def _frequency_response_row(row: dict[str, str]) -> str:
@@ -931,28 +1022,16 @@ def _response_blocks(rows: list[dict[str, str]], key: str) -> list[list[tuple[fl
     return blocks
 
 
-def _frequency_response_calibration_block(run: RunPackage) -> str:
-    if run.frequency_response_calibration_error:
+def _frequency_response_calibration_block(response: FrequencyResponsePackage) -> str:
+    if response.calibration_error:
         return (
             '<h3>二维校准 / 2D calibration</h3>'
             f'<p class="warning">校准 JSON 无法读取 / Calibration unavailable: '
-            f'{escape(run.frequency_response_calibration_error)}</p>'
+            f'{escape(response.calibration_error)}</p>'
         )
-    document = run.frequency_response_calibration
-    rows = run.frequency_response_calibration_rows
+    document = response.calibration
+    rows = response.calibration_rows
     if not document and not rows:
-        errors = [
-            str(response.get("calibration_error"))
-            for step in run.steps
-            if isinstance(step.get("artifact"), dict)
-            for response in [step["artifact"].get("frequency_response", {})]
-            if isinstance(response, dict) and response.get("calibration_error")
-        ]
-        if errors:
-            return (
-                '<h3>二维校准 / 2D calibration</h3><p class="warning">'
-                f'自动校准未生成；原始频响仍已保留：{escape(errors[0])}</p>'
-            )
         return ""
     configuration = document.get("configuration", {}) if isinstance(document, dict) else {}
     validation = document.get("validation", {}) if isinstance(document, dict) else {}
@@ -973,13 +1052,23 @@ def _frequency_response_calibration_block(run: RunPackage) -> str:
         '完整浮点 LUT 与 Chebyshev 系数见 <code>frequency_response_calibration.csv</code> 和 '
         '<code>frequency_response_calibration.json</code>。</p>'
     )
+    fixed_point = document.get("fixed_point") if isinstance(document, dict) else None
+    fixed_note = ""
+    if isinstance(fixed_point, dict):
+        fixed_note = (
+            '<p class="muted">定点部署 / Fixed point: '
+            f'<code>{escape(str(fixed_point.get("q_format", "")))}</code>, '
+            f'{escape(str(fixed_point.get("encoding", "")))}, 最大量化误差 / max error '
+            f'{escape(_format_plain(fixed_point.get("max_abs_quantization_error")))}</p>'
+        )
     return f"""<h3>二维校准 / 2D calibration</h3>
 {summary}
 <section class="frequency-response-grid">
 <article class="card frequency-response-card"><h3>补偿热图 / Correction heatmap</h3>{heatmap}</article>
 <article class="card frequency-response-card"><h3>代表性切片 / Representative slices</h3>{curves}</article>
 </section>
-{note}"""
+{note}
+{fixed_note}"""
 
 
 def _calibration_heatmap_svg(rows: list[dict[str, str]]) -> str:
@@ -1579,6 +1668,34 @@ def _collect_artifact_links(
                 status=_availability_text(run.frequency_response_calibration_path.exists()),
             )
         )
+    for response in run.frequency_responses:
+        prefix = f"[{response.label}] " if len(run.frequency_responses) > 1 else ""
+        if response.baseline_path is not None:
+            links.append(
+                ReportArtifactLink(
+                    step_index=str(response.step_index) if response.step_index is not None else "-",
+                    kind=f"{prefix}软件基线 JSON / Software baseline JSON",
+                    label="frequency_response_baseline.json",
+                    href=_relative_url(response.baseline_path, output_dir),
+                    status=_availability_text(response.baseline_path.exists()),
+                )
+            )
+        fixed_point = response.calibration.get("fixed_point", {}) if response.calibration else {}
+        outputs = fixed_point.get("outputs", {}) if isinstance(fixed_point, dict) else {}
+        if isinstance(outputs, dict):
+            for name, raw_path in outputs.items():
+                if not isinstance(raw_path, str):
+                    continue
+                path = Path(raw_path)
+                links.append(
+                    ReportArtifactLink(
+                        step_index=str(response.step_index) if response.step_index is not None else "-",
+                        kind=f"{prefix}定点 {name.upper()} / Fixed-point {name.upper()}",
+                        label=path.name,
+                        href=_relative_url(path, output_dir),
+                        status=_availability_text(path.exists()),
+                    )
+                )
     screenshots_by_package = {item.package: item for item in screenshots}
     for reference in _capture_references(run):
         package_dir = _resolve_artifact_path(run.path, reference.package)

@@ -124,6 +124,36 @@ class PackageReaderTests(unittest.TestCase):
             self.assertEqual(loaded.frequency_response_calibration_rows[0]["requested_vpp"], "0.1")
             self.assertEqual(loaded.frequency_response_calibration["target_gain_db"], 0)
 
+    def test_load_run_package_reads_multi_response_manifest_and_requires_a_selector(self):
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            for label in ("low", "high"):
+                directory = run / "frequency_response" / label
+                directory.mkdir(parents=True)
+                (directory / "frequency_response.csv").write_text(
+                    "index,requested_frequency_hz,gain_db,status\n0,100,1,ok\n", encoding="utf-8"
+                )
+            (run / "frequency_responses.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "responses": [
+                            {"step_index": 0, "label": "low", "directory": "frequency_response/low"},
+                            {"step_index": 1, "label": "high", "directory": "frequency_response/high"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = load_run_package(run)
+
+            self.assertEqual([item.label for item in loaded.frequency_responses], ["low", "high"])
+            self.assertEqual(loaded.select_frequency_response("high").rows[0]["gain_db"], "1")
+            with self.assertRaisesRegex(ConfigError, "specify --response"):
+                loaded.select_frequency_response()
+
 
 if __name__ == "__main__":
     unittest.main()

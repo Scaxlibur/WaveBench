@@ -97,6 +97,7 @@ from .services.frequency_response_calibration import (
     load_frequency_response_calibration_config,
     write_frequency_response_calibration_csv,
     write_frequency_response_calibration_json,
+    write_fixed_point_calibration,
 )
 from .services.sweep_service import SweepService, parse_frequency_list
 
@@ -392,24 +393,30 @@ def main(argv: list[str] | None = None) -> int:
         if args.domain == "run":
             if args.command == "calibrate":
                 package = load_run_package(args.path)
-                if package.frequency_response_csv_path is None:
+                response = package.select_frequency_response(args.response)
+                if response.csv_path is None:
                     raise ConfigError("run calibrate requires frequency_response.csv in the run directory")
                 calibration = load_frequency_response_calibration_config(args.config)
                 if not calibration.enabled:
                     raise ConfigError("calibration.enabled must be true for run calibrate")
                 document, rows = build_frequency_response_calibration(
-                    package.frequency_response_rows,
+                    response.rows,
                     calibration,
-                    source_csv=package.frequency_response_csv_path,
+                    source_csv=response.csv_path,
                 )
                 csv_path = write_frequency_response_calibration_csv(
-                    package.path / "frequency_response_calibration.csv", rows
+                    response.directory / "frequency_response_calibration.csv", rows
+                )
+                fixed_paths = write_fixed_point_calibration(
+                    response.directory, document, rows, calibration.fixed_point
                 )
                 json_path = write_frequency_response_calibration_json(
-                    package.path / "frequency_response_calibration.json", document
+                    response.directory / "frequency_response_calibration.json", document
                 )
                 print(f"calibration_csv={csv_path}")
                 print(f"calibration_json={json_path}")
+                for name, path in fixed_paths.items():
+                    print(f"calibration_fixed_{name}={path}")
                 return 0
             if args.command == "report":
                 if args.pdf_output and not args.pdf:

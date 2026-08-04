@@ -108,9 +108,9 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - `run check --plan <plan.toml>`：只解析并汇总 plan，不连接仪器
 - `run verify --plan <plan.toml>`：只读查询 plan 涉及仪器的高阻保护状态与 `*IDN?`，用于执行前预检可达性
 - `run template --list` / `run template <name> --output <plan.toml>`：列出或生成保守 run plan 模板；可用 `--frequency`、`--frequencies`、`--reference-channel`、`--response-channel`、`--fit` 等少量参数定制；不连接仪器，不覆盖已有文件，除非显式 `--force`
-- `run plan --plan <plan.toml>`：执行显式 source、power、scope、dmm、sleep 和双通道 `sweep.frequency_response` 步骤；频响可扫描一个或多个请求 Vpp 切片，并可自动导出二维校准 LUT；一次 run 内统一打开并复用所需仪器 session，成功或失败后统一关闭，不静默断线重连
-- `run calibrate <run_dir> --config <calibration.toml>`：完全离线地从既有二维频响 CSV 重建校准 LUT，不连接仪器、不改写原始测量 CSV
-- `run report <run_dir>`：根据 `run.json` / `summary.csv` 生成静态离线 HTML 报告；频响 run 额外包含幅频、相频、拟合对比、逐点 CSV 与采集证据链接；二维校准会增加补偿热图与代表性切片。加 `--pdf` 可同时导出嵌入截图、SVG 和表格的便携 PDF
+- `run plan --plan <plan.toml>`：执行显式 source、power、scope、dmm、sleep 和双通道 `sweep.frequency_response` 步骤；一个 run 可有多个具唯一 label 的频响，每个响应可扫描二维 Vpp × 频率、软件直通基线、可选自适应频率加密，并导出浮点/定点校准 LUT；一次 run 内统一打开并复用所需仪器 session，成功或失败后统一关闭，不静默断线重连
+- `run calibrate <run_dir> --config <calibration.toml> [--response <label>]`：完全离线地从既有二维频响 CSV 重建校准 LUT，不连接仪器、不改写原始测量 CSV；多响应 run 必须指定 `--response`
+- `run report <run_dir>`：根据 `run.json` / `summary.csv` 生成静态离线 HTML 报告；频响 run 额外包含原始/软件校正的幅频与相频、拟合对比、逐点 CSV 与采集证据链接；二维校准会增加补偿热图与代表性切片。加 `--pdf` 可同时导出嵌入截图、SVG 和表格的便携 PDF
 - `capture inspect <capture_dir>`：打印离线采集包摘要
 - 默认示波器高阻保护：`scope.capture` / `scope.fetch` / `sweep discrete` / run-plan `scope.capture` / `sweep.frequency_response` 在采集前查询通道耦合。频响会同时保护 reference 与 response 两路；RTM2032 的 `DCL`/`ACL` 视为高阻，`DC`/`AC` 默认按可能的 50 Ω 拒绝；DS1000Z 输入固定为 1 MΩ，`AC`/`DC`/`GND` 只表示耦合方式，均按该机型语义检查。WaveBench 不会自动修改耦合或输入设置
 - 可选 `[restore] source_state = true`：在 `finally` 路径快照并恢复 basic 信号源通道状态（输出、函数、频率、Vpp、方波占空比）。该选项不恢复 offset、phase、frequency mode、sweep、负载、极性、噪声、同步、burst、调制、marker、pulse hold 或易失任意波内存；run artifact 以 `source_state_scope = "basic"` 明示范围
@@ -550,7 +550,36 @@ chebyshev_degree = 3
 chebyshev_segment_count = 8
 ```
 
-校准输出为 `frequency_response_calibration.csv` 和 `frequency_response_calibration.json`；原始 `frequency_response.csv` 不会被改写。HTML/PDF 会展示校正热图和代表性幅值切片，完整 LUT 与公式保留在 run 目录。PDF 是“可见报告”的单文件封装：截图、静态 SVG 曲线和表格会嵌入 PDF；CSV、JSON、NPY 波形和完整采集包仍保留在 run 目录，适合复算和审计。
+校准输出为 `frequency_response_calibration.csv` 和 `frequency_response_calibration.json`；原始 `frequency_response.csv` 不会被改写。默认还会生成有符号二补码 `Q4.12` 的审计 CSV、Xilinx `.coe` 和逐字 `.mem`（幅值主序：`amplitude_index * frequency_count + frequency_index`）；可在 `[steps.calibration.fixed_point]` 或离线 `[calibration.fixed_point]` 调整字宽、小数位、布局、格式和溢出策略。HTML/PDF 会展示校正热图和代表性幅值切片，完整 LUT 与公式保留在 run 目录。PDF 是“可见报告”的单文件封装：截图、静态 SVG 曲线和表格会嵌入 PDF；CSV、JSON、NPY 波形和完整采集包仍保留在 run 目录，适合复算和审计。
+
+### 直通基线、自适应加密与多响应
+
+直通基线必须是一个先前完成的独立频响 run：操作者先把示波器 CH1/CH2 手动直通接线、确认高阻与安全范围，再按普通双通道频响采集。DUT step 用 `[steps.baseline]` 引用该 run；默认 `complex_transfer` 在 `log10(frequency)` 域插值并同时扣除基线增益和展开相位，另有 `phase_only` 与 `delay_only`。定义域外绝不外推，软件校正不写入示波器 deskew 或前面板设置。
+
+```toml
+[[steps]]
+kind = "sweep.frequency_response"
+label = "dut_path"
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10000
+stop_frequency_hz = 500000
+frequency_count = 41
+spacing = "log"
+
+[steps.baseline]
+run_dir = "../runs/through_baseline"
+mode = "complex_transfer" # complex_transfer / phase_only / delay_only
+
+[steps.adaptive]
+enabled = true
+gain_threshold_db = 0.5
+phase_threshold_deg = 10
+max_levels = 2
+max_frequency_points = 1000
+```
+
+自适应默认关闭以保持旧 plan 行为；开启后先采集初始网格，任一 Vpp 切片相邻点的增益变化达到 0.5 dB 或展开相位变化达到 10° 时，在该区间加入中点（log 为几何中点、linear 为算术中点），并对所有 Vpp 切片采集，保持二维矩形网格。它不能发现“两个端点恰好相同、但中间存在未采样窄带异常”的特征，初始网格仍须覆盖关注频段。多 response 会写入 `frequency_responses.json`；各响应在自己的子目录中保存产物，HTML/PDF 逐段展示。
 
 DMM ACV smoke 示例：
 

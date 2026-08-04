@@ -34,6 +34,15 @@ BASE_CSV_FIELDS = (
     "gain_db",
     "phase_wrapped_deg",
     "phase_unwrapped_deg",
+    "baseline_gain_db",
+    "baseline_phase_unwrapped_deg",
+    "gain_linear_corrected",
+    "gain_db_corrected",
+    "phase_wrapped_corrected_deg",
+    "phase_unwrapped_corrected_deg",
+    "adaptive_level",
+    "adaptive_parent_start_hz",
+    "adaptive_parent_stop_hz",
     "status",
     "warnings",
     "error",
@@ -59,6 +68,15 @@ class FrequencyResponsePoint:
     status: str
     amplitude_index: int = 0
     requested_vpp: float | None = None
+    baseline_gain_db: float | None = None
+    baseline_phase_unwrapped_deg: float | None = None
+    gain_linear_corrected: float | None = None
+    gain_db_corrected: float | None = None
+    phase_wrapped_corrected_deg: float | None = None
+    phase_unwrapped_corrected_deg: float | None = None
+    adaptive_level: int = 0
+    adaptive_parent_start_hz: float | None = None
+    adaptive_parent_stop_hz: float | None = None
     warnings: tuple[str, ...] = ()
     error: str = ""
     capture_package: str = ""
@@ -89,6 +107,15 @@ class FrequencyResponsePoint:
             "gain_db": self.gain_db,
             "phase_wrapped_deg": self.phase_wrapped_deg,
             "phase_unwrapped_deg": self.phase_unwrapped_deg,
+            "baseline_gain_db": self.baseline_gain_db,
+            "baseline_phase_unwrapped_deg": self.baseline_phase_unwrapped_deg,
+            "gain_linear_corrected": self.gain_linear_corrected,
+            "gain_db_corrected": self.gain_db_corrected,
+            "phase_wrapped_corrected_deg": self.phase_wrapped_corrected_deg,
+            "phase_unwrapped_corrected_deg": self.phase_unwrapped_corrected_deg,
+            "adaptive_level": self.adaptive_level,
+            "adaptive_parent_start_hz": self.adaptive_parent_start_hz,
+            "adaptive_parent_stop_hz": self.adaptive_parent_stop_hz,
             "status": self.status,
             "warnings": " | ".join(self.warnings),
             "error": self.error,
@@ -112,6 +139,9 @@ def analyze_frequency_response_point(
     frequency_tolerance_ratio: float,
     capture_package: str,
     metadata_path: str,
+    adaptive_level: int = 0,
+    adaptive_parent_start_hz: float | None = None,
+    adaptive_parent_stop_hz: float | None = None,
 ) -> FrequencyResponsePoint:
     """Compute one transfer-function point from a simultaneous two-channel capture."""
     try:
@@ -152,6 +182,9 @@ def analyze_frequency_response_point(
             status="warning" if warnings else "ok",
             amplitude_index=amplitude_index,
             requested_vpp=requested_vpp,
+            adaptive_level=adaptive_level,
+            adaptive_parent_start_hz=adaptive_parent_start_hz,
+            adaptive_parent_stop_hz=adaptive_parent_stop_hz,
             warnings=tuple(warnings),
             capture_package=capture_package,
             metadata_path=metadata_path,
@@ -173,6 +206,9 @@ def analyze_frequency_response_point(
             status="failed",
             amplitude_index=amplitude_index,
             requested_vpp=requested_vpp,
+            adaptive_level=adaptive_level,
+            adaptive_parent_start_hz=adaptive_parent_start_hz,
+            adaptive_parent_stop_hz=adaptive_parent_stop_hz,
             error=f"{type(exc).__name__}: {exc}",
             capture_package=capture_package,
             metadata_path=metadata_path,
@@ -186,6 +222,9 @@ def failed_frequency_response_point(
     requested_vpp: float | None = None,
     requested_frequency_hz: float,
     error: Exception | str,
+    adaptive_level: int = 0,
+    adaptive_parent_start_hz: float | None = None,
+    adaptive_parent_stop_hz: float | None = None,
 ) -> FrequencyResponsePoint:
     text = str(error)
     if isinstance(error, Exception):
@@ -206,36 +245,59 @@ def failed_frequency_response_point(
         status="failed",
         amplitude_index=amplitude_index,
         requested_vpp=requested_vpp,
+        adaptive_level=adaptive_level,
+        adaptive_parent_start_hz=adaptive_parent_start_hz,
+        adaptive_parent_stop_hz=adaptive_parent_stop_hz,
         error=text,
     )
 
 
 def unwrap_frequency_response_phase(points: list[FrequencyResponsePoint]) -> list[FrequencyResponsePoint]:
-    result: list[FrequencyResponsePoint] = []
-    block: list[FrequencyResponsePoint] = []
+    """Unwrap each amplitude slice in frequency order.
 
-    def flush() -> None:
-        if not block:
-            return
-        unwrapped = np.degrees(np.unwrap(np.radians([point.phase_wrapped_deg for point in block])))
-        result.extend(
-            replace(point, phase_unwrapped_deg=float(value))
-            for point, value in zip(block, unwrapped)
-        )
-        block.clear()
-
-    last_amplitude_index: int | None = None
+    Adaptive points are acquired after their parent grid, so acquisition order is no
+    longer frequency order.  Sorting here prevents those late points from creating
+    fictitious 360-degree jumps while retaining failed evidence rows.
+    """
+    grouped: dict[int, list[FrequencyResponsePoint]] = {}
     for point in points:
-        if last_amplitude_index is not None and point.amplitude_index != last_amplitude_index:
-            flush()
-        last_amplitude_index = point.amplitude_index
-        if point.status == "failed" or point.phase_wrapped_deg is None:
-            flush()
-            result.append(point)
-        else:
-            block.append(point)
-    flush()
+        grouped.setdefault(point.amplitude_index, []).append(point)
+    result: list[FrequencyResponsePoint] = []
+    for amplitude_index in sorted(grouped):
+        block: list[FrequencyResponsePoint] = []
+
+        def flush() -> None:
+            if not block:
+                return
+            unwrapped = np.degrees(np.unwrap(np.radians([point.phase_wrapped_deg for point in block])))
+            result.extend(
+                replace(point, phase_unwrapped_deg=float(value))
+                for point, value in zip(block, unwrapped)
+            )
+            block.clear()
+
+        for point in sorted(grouped[amplitude_index], key=lambda item: item.requested_frequency_hz):
+            if point.status == "failed" or point.phase_wrapped_deg is None:
+                flush()
+                result.append(point)
+            else:
+                block.append(point)
+        flush()
     return result
+
+
+def response_gain_db(point: FrequencyResponsePoint) -> float | None:
+    """Return the corrected gain when available, otherwise the raw measured gain."""
+    return point.gain_db_corrected if point.gain_db_corrected is not None else point.gain_db
+
+
+def response_phase_unwrapped_deg(point: FrequencyResponsePoint) -> float | None:
+    """Return the corrected phase when available, otherwise the raw measured phase."""
+    return (
+        point.phase_unwrapped_corrected_deg
+        if point.phase_unwrapped_corrected_deg is not None
+        else point.phase_unwrapped_deg
+    )
 
 
 def ensure_fit_dependencies(fit: dict[str, Any] | None) -> None:
@@ -294,7 +356,15 @@ def build_fit_document(
         document["valid_domain_hz"] = None
 
     x = np.log10(np.asarray([point.requested_frequency_hz for point in usable], dtype=float))
-    y = np.asarray([point.gain_linear for point in usable], dtype=float)
+    y = np.asarray(
+        [
+            point.gain_linear_corrected
+            if point.gain_linear_corrected is not None
+            else point.gain_linear
+            for point in usable
+        ],
+        dtype=float,
+    )
     for method in methods:
         result, values = _fit_method(
             method=method,

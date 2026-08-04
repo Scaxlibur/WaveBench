@@ -68,6 +68,36 @@ class CliTests(unittest.TestCase):
             self.assertTrue((run_dir / "frequency_response_calibration.json").exists())
             self.assertIn("calibration_csv=", stdout.getvalue())
 
+    def test_run_calibrate_requires_response_selector_for_manifest_with_multiple_responses(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            entries = []
+            for label in ("a", "b"):
+                directory = run_dir / "frequency_response" / label
+                directory.mkdir(parents=True)
+                rows = ["index,requested_frequency_hz,requested_vpp,gain_db,status"]
+                index = 0
+                for amplitude in (0.05, 0.1):
+                    for frequency in (100, 1000, 10000, 100000):
+                        rows.append(f"{index},{frequency},{amplitude},1,ok")
+                        index += 1
+                (directory / "frequency_response.csv").write_text("\n".join(rows), encoding="utf-8")
+                entries.append({"step_index": len(entries), "label": label, "directory": f"frequency_response/{label}"})
+            (run_dir / "frequency_responses.json").write_text(
+                json.dumps({"schema_version": 1, "responses": entries}), encoding="utf-8"
+            )
+            calibration = Path(tmp) / "calibration.toml"
+            calibration.write_text("[calibration]\ntarget_mode = 'unity_gain'\n", encoding="utf-8")
+
+            self.assertEqual(main(["run", "calibrate", str(run_dir), "--config", str(calibration)]), 2)
+            self.assertEqual(
+                main(["run", "calibrate", str(run_dir), "--config", str(calibration), "--response", "b"]),
+                0,
+            )
+            self.assertTrue((run_dir / "frequency_response" / "b" / "frequency_response_calibration.json").exists())
+
     def test_capture_accepts_points_and_output_flags(self):
         args = build_parser().parse_args([
             "scope", "capture", "--points", "def", "--time-range", "0.01", "--window-frequency", "500", "--target-cycles", "10", "--expect-frequency", "500", "--frequency-tolerance", "0.1", "--no-csv", "--label", "x"

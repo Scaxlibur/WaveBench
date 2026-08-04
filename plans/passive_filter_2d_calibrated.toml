@@ -1,0 +1,71 @@
+# 实机 DUT：DG4202 CH1 / RTM CH1 接无源滤波器输入，RTM CH2 接输出。
+# 使用已验证的直通基线，原始列、校正列与定点校准产物会同时保留。
+
+[experiment]
+name = "passive_filter_2d_calibrated"
+label = "passive_filter_2d_calibrated"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 0.05
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "passive_filter"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [10000, 50000, 200000, 500000]
+amplitudes_vpp = [0.05, 0.1]
+autoscale_each_amplitude = true
+target_cycles = 10
+settle_s = 3.0
+points = "def"
+save_csv = false
+screenshot = false
+
+[steps.baseline]
+run_dir = "../data/runs/20260804_221640_through_baseline_2d_stable"
+response = "through"
+mode = "complex_transfer"
+
+[steps.adaptive]
+enabled = true
+gain_threshold_db = 0.5
+phase_threshold_deg = 10
+max_levels = 1
+max_frequency_points = 7
+
+[steps.calibration]
+target_mode = "unity_gain"
+correction_min_db = -12
+correction_max_db = 12
+max_slope_db_per_octave = 6
+
+[steps.calibration.fixed_point]
+word_width = 16
+fractional_bits = 12
+formats = ["csv", "coe", "mem"]
+layout = "amplitude_major"
+rounding = "nearest"
+overflow = "error"

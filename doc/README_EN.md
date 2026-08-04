@@ -58,7 +58,7 @@ Its supported product scope is intentionally frozen to the power-supply, DMM, an
 
 ## Optional frequency-response analysis and PDF reports
 
-`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with linear/dB gain and wrapped/unwrapped output-relative phase. A plan may also specify multiple requested Vpp slices, producing a two-dimensional Vpp × frequency measurement. The offline HTML report renders magnitude, phase, fit-comparison SVGs, the point table, and any saved per-point screenshots.
+`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with raw and, when configured, software-baseline-corrected linear/dB gain and wrapped/unwrapped output-relative phase. A run may contain multiple independently labelled responses and multiple requested Vpp slices, producing a two-dimensional Vpp × frequency measurement. A baseline is an explicitly referenced, separately captured manual CH1/CH2 through connection; it never changes scope deskew or front-panel settings. Optional adaptive refinement inserts linear or logarithmic midpoints where either gain or unwrapped phase changes too quickly, then samples every Vpp slice at the new frequency. The offline HTML/PDF report renders each response's raw/corrected magnitude and phase, fit comparison, audit summary, point table, and any saved per-point screenshots.
 
 Use the conservative template before editing a plan manually:
 
@@ -71,10 +71,10 @@ python -m wavebench run check --plan plans/frequency_response.toml
 python -m wavebench run report data/runs/<run-dir> --pdf
 ```
 
-`linear_log` and `polynomial` fit linear gain against `log10(frequency_hz / Hz)`; PCHIP, dB smoothing splines, and 2D calibration require the `analysis` extra. For multi-Vpp data, `[steps.calibration]` selects a dB target (`passband_median`, `explicit_gain_db`, or `unity_gain`), emits a bounded floating-point LUT in `frequency_response_calibration.csv`, and records validation, limiter flags, and piecewise Chebyshev coefficients in `frequency_response_calibration.json`. Calibration never extrapolates beyond the measured frequency/Vpp domain. The same products can be regenerated without instruments using:
+`linear_log` and `polynomial` fit linear gain against `log10(frequency_hz / Hz)`; PCHIP, dB smoothing splines, and 2D calibration require the `analysis` extra. For multi-Vpp data, `[steps.calibration]` selects a dB target (`passband_median`, `explicit_gain_db`, or `unity_gain`), emits a bounded floating-point LUT in `frequency_response_calibration.csv`, and records validation, limiter flags, and piecewise Chebyshev coefficients in `frequency_response_calibration.json`. By default it additionally emits an auditable signed-two's-complement Q4.12 CSV plus Xilinx COE and MEM files in amplitude-major address order; `[calibration.fixed_point]` can override the width, fractional bits, formats, layout, and overflow policy. Calibration never extrapolates beyond the measured frequency/Vpp domain. The same products can be regenerated without instruments using:
 
 ```bash
-python -m wavebench run calibrate data/runs/<run-dir> --config plans/calibration.toml
+python -m wavebench run calibrate data/runs/<run-dir> --config plans/calibration.toml --response <label>
 ```
 
 The PDF is a portable visual report: its visible screenshots, SVG charts, and tables are embedded, while CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.

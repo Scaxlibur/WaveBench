@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import asdict, dataclass
-from math import isfinite, log2
+from dataclasses import asdict, dataclass, field
+from math import floor, isfinite, log2
 from pathlib import Path
 import tomllib
 from typing import Any, Iterable
@@ -24,6 +24,30 @@ _CSV_FIELDS = (
     "correction_limited",
     "slope_limited",
 )
+FIXED_POINT_FORMATS = ("csv", "coe", "mem")
+FIXED_POINT_LAYOUTS = ("amplitude_major", "frequency_major")
+
+
+@dataclass(frozen=True)
+class FixedPointExportConfig:
+    enabled: bool = True
+    formats: tuple[str, ...] = FIXED_POINT_FORMATS
+    word_width: int = 16
+    fractional_bits: int = 12
+    layout: str = "amplitude_major"
+    rounding: str = "nearest"
+    overflow: str = "error"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "formats": list(self.formats),
+            "word_width": self.word_width,
+            "fractional_bits": self.fractional_bits,
+            "layout": self.layout,
+            "rounding": self.rounding,
+            "overflow": self.overflow,
+        }
 
 
 @dataclass(frozen=True)
@@ -39,9 +63,13 @@ class FrequencyResponseCalibrationConfig:
     max_slope_db_per_octave: float = 6.0
     chebyshev_degree: int = 3
     chebyshev_segment_count: int = 8
+    fixed_point: FixedPointExportConfig | None = field(default_factory=FixedPointExportConfig)
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        result = asdict(self)
+        if self.fixed_point is not None:
+            result["fixed_point"] = self.fixed_point.as_dict()
+        return result
 
 
 def normalize_frequency_response_calibration(
@@ -61,6 +89,7 @@ def normalize_frequency_response_calibration(
         "max_slope_db_per_octave",
         "chebyshev_degree",
         "chebyshev_segment_count",
+        "fixed_point",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
@@ -97,6 +126,11 @@ def normalize_frequency_response_calibration(
     segments = _positive_int(
         raw.get("chebyshev_segment_count", 8), f"{name}.chebyshev_segment_count"
     )
+    fixed_point = (
+        normalize_fixed_point_export(raw["fixed_point"], f"{name}.fixed_point")
+        if "fixed_point" in raw
+        else FixedPointExportConfig()
+    )
     return FrequencyResponseCalibrationConfig(
         enabled=enabled,
         model=model,
@@ -109,6 +143,47 @@ def normalize_frequency_response_calibration(
         max_slope_db_per_octave=slope,
         chebyshev_degree=degree,
         chebyshev_segment_count=segments,
+        fixed_point=fixed_point,
+    )
+
+
+def normalize_fixed_point_export(raw: Any, name: str = "fixed_point") -> FixedPointExportConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{name} must be a TOML table")
+    allowed = {"enabled", "formats", "word_width", "fractional_bits", "layout", "rounding", "overflow"}
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ConfigError(f"{name} has unsupported keys: {', '.join(unknown)}")
+    enabled = _bool(raw.get("enabled", True), f"{name}.enabled")
+    formats_raw = raw.get("formats", list(FIXED_POINT_FORMATS))
+    if not isinstance(formats_raw, (list, tuple)) or not formats_raw:
+        raise ConfigError(f"{name}.formats must be a non-empty array")
+    formats = tuple(_text(value, f"{name}.formats").lower() for value in formats_raw)
+    if any(value not in FIXED_POINT_FORMATS for value in formats) or len(set(formats)) != len(formats):
+        raise ConfigError(f"{name}.formats must use unique values from: {', '.join(FIXED_POINT_FORMATS)}")
+    width = _positive_int(raw.get("word_width", 16), f"{name}.word_width")
+    if width < 2 or width > 32:
+        raise ConfigError(f"{name}.word_width must be from 2 through 32")
+    fractional = _nonnegative_int(raw.get("fractional_bits", 12), f"{name}.fractional_bits")
+    if fractional >= width - 1:
+        raise ConfigError(f"{name}.fractional_bits must leave at least one signed integer bit")
+    layout = _text(raw.get("layout", "amplitude_major"), f"{name}.layout").lower()
+    if layout not in FIXED_POINT_LAYOUTS:
+        raise ConfigError(f"{name}.layout must be one of: {', '.join(FIXED_POINT_LAYOUTS)}")
+    rounding = _text(raw.get("rounding", "nearest"), f"{name}.rounding").lower()
+    if rounding != "nearest":
+        raise ConfigError(f"{name}.rounding must be 'nearest'")
+    overflow = _text(raw.get("overflow", "error"), f"{name}.overflow").lower()
+    if overflow not in {"error", "saturate"}:
+        raise ConfigError(f"{name}.overflow must be 'error' or 'saturate'")
+    return FixedPointExportConfig(
+        enabled=enabled,
+        formats=formats,
+        word_width=width,
+        fractional_bits=fractional,
+        layout=layout,
+        rounding=rounding,
+        overflow=overflow,
     )
 
 
@@ -250,6 +325,70 @@ def write_frequency_response_calibration_json(path: str | Path, document: dict[s
     return output
 
 
+def write_fixed_point_calibration(
+    output_dir: str | Path,
+    document: dict[str, Any],
+    rows: Iterable[dict[str, Any]],
+    config: FixedPointExportConfig | None,
+) -> dict[str, Path]:
+    """Write auditable signed fixed-point correction values and Xilinx memory files."""
+    if config is None or not config.enabled:
+        return {}
+    output = Path(output_dir)
+    ordered = _ordered_lut_rows(rows, layout=config.layout)
+    encoded = [_encode_fixed_point(float(row["correction_linear"]), config) for row in ordered]
+    width_hex = (config.word_width + 3) // 4
+    audit_rows = []
+    for linear_index, (row, encoded_value) in enumerate(zip(ordered, encoded)):
+        quantized, raw = encoded_value
+        audit_rows.append(
+            {
+                "linear_index": linear_index,
+                "amplitude_index": row["amplitude_index"],
+                "frequency_index": row["frequency_index"],
+                "requested_vpp": row["requested_vpp"],
+                "frequency_hz": row["frequency_hz"],
+                "correction_linear": row["correction_linear"],
+                "quantized_integer": quantized,
+                "hex": f"{raw:0{width_hex}X}",
+                "quantized_correction_linear": quantized / (1 << config.fractional_bits),
+                "quantization_error": quantized / (1 << config.fractional_bits) - float(row["correction_linear"]),
+            }
+        )
+    paths: dict[str, Path] = {}
+    if "csv" in config.formats:
+        path = output / "frequency_response_calibration_fixed.csv"
+        _write_csv(path, audit_rows)
+        paths["csv"] = path
+    words = [row["hex"] for row in audit_rows]
+    if "mem" in config.formats:
+        path = output / "frequency_response_calibration_q.mem"
+        _atomic_text(path, "\n".join(words) + "\n")
+        paths["mem"] = path
+    if "coe" in config.formats:
+        path = output / "frequency_response_calibration_q.coe"
+        _atomic_text(
+            path,
+            "memory_initialization_radix=16;\n"
+            "memory_initialization_vector=\n"
+            + ",\n".join(words)
+            + ";\n",
+        )
+        paths["coe"] = path
+    errors = [abs(float(row["quantization_error"])) for row in audit_rows]
+    document["fixed_point"] = {
+        "configuration": config.as_dict(),
+        "q_format": f"Q{config.word_width - config.fractional_bits}.{config.fractional_bits}",
+        "encoding": "signed two's complement",
+        "linear_index": "amplitude_index * frequency_count + frequency_index"
+        if config.layout == "amplitude_major"
+        else "frequency_index * amplitude_count + amplitude_index",
+        "outputs": {key: str(value) for key, value in paths.items()},
+        "max_abs_quantization_error": max(errors, default=0.0),
+    }
+    return paths
+
+
 def _measurement_groups(rows: Iterable[dict[str, Any]]) -> dict[float, list[tuple[float, float]]]:
     groups: dict[float, list[tuple[float, float]]] = {}
     for row in rows:
@@ -257,7 +396,7 @@ def _measurement_groups(rows: Iterable[dict[str, Any]]) -> dict[float, list[tupl
             continue
         frequency = _row_float(row, "requested_frequency_hz")
         amplitude = _row_float(row, "requested_vpp")
-        gain_db = _row_float(row, "gain_db")
+        gain_db = _first_row_float(row, "gain_db_corrected", "gain_db")
         if gain_db is None:
             gain = _row_float(row, "gain_linear")
             gain_db = 20.0 * np.log10(gain) if gain is not None and gain > 0 else None
@@ -430,6 +569,63 @@ def _row_float(row: dict[str, Any], name: str) -> float | None:
     return value if isfinite(value) else None
 
 
+def _first_row_float(row: dict[str, Any], *names: str) -> float | None:
+    for name in names:
+        value = _row_float(row, name)
+        if value is not None:
+            return value
+    return None
+
+
+def _ordered_lut_rows(rows: Iterable[dict[str, Any]], *, layout: str) -> list[dict[str, Any]]:
+    materialized = [dict(row) for row in rows]
+    amplitudes = sorted({float(row["requested_vpp"]) for row in materialized})
+    frequencies = sorted({float(row["frequency_hz"]) for row in materialized})
+    amplitude_index = {value: index for index, value in enumerate(amplitudes)}
+    frequency_index = {value: index for index, value in enumerate(frequencies)}
+    for row in materialized:
+        row["amplitude_index"] = amplitude_index[float(row["requested_vpp"])]
+        row["frequency_index"] = frequency_index[float(row["frequency_hz"])]
+    key = (
+        (lambda row: (row["amplitude_index"], row["frequency_index"]))
+        if layout == "amplitude_major"
+        else (lambda row: (row["frequency_index"], row["amplitude_index"]))
+    )
+    return sorted(materialized, key=key)
+
+
+def _encode_fixed_point(value: float, config: FixedPointExportConfig) -> tuple[int, int]:
+    scale = 1 << config.fractional_bits
+    # "nearest" deliberately means ordinary half-away-from-zero rounding here,
+    # not NumPy's banker's rounding: the emitted files are hardware contracts.
+    scaled = (1 if value >= 0 else -1) * int(floor(abs(value) * scale + 0.5))
+    minimum = -(1 << (config.word_width - 1))
+    maximum = (1 << (config.word_width - 1)) - 1
+    if scaled < minimum or scaled > maximum:
+        if config.overflow == "error":
+            raise ConfigError(
+                f"fixed-point overflow for correction_linear {value:.12g} in "
+                f"Q{config.word_width - config.fractional_bits}.{config.fractional_bits}"
+            )
+        scaled = min(max(scaled, minimum), maximum)
+    return scaled, scaled & ((1 << config.word_width) - 1)
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=list(rows[0]) if rows else ["linear_index"])
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary.replace(path)
+
+
+def _atomic_text(path: Path, text: str) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
 def _bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise ConfigError(f"{name} must be true or false")
@@ -478,4 +674,16 @@ def _positive_int(value: Any, name: str) -> int:
         raise ConfigError(f"{name} must be an integer") from exc
     if result != value or result <= 0:
         raise ConfigError(f"{name} must be a positive integer")
+    return result
+
+
+def _nonnegative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a non-negative integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a non-negative integer") from exc
+    if result != value or result < 0:
+        raise ConfigError(f"{name} must be a non-negative integer")
     return result
