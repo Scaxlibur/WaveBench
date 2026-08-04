@@ -848,6 +848,41 @@ class RunReportTests(unittest.TestCase):
             self.assertEqual(len(manifest["capture_packages"]), 2)
             self.assertEqual(len(manifest["screenshots"]), 2)
 
+    def test_run_report_renders_two_dimensional_calibration_summary_and_charts(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            (run_dir / "frequency_response.csv").write_text(
+                "index,requested_frequency_hz,gain_db,status\n0,100,1,ok\n",
+                encoding="utf-8",
+            )
+            calibration_rows = ["frequency_hz,requested_vpp,fitted_gain_db,correction_db,correction_linear,correction_limited,slope_limited"]
+            for amplitude in (0.05, 0.1):
+                for frequency in (100, 1000, 10000, 100000):
+                    calibration_rows.append(f"{frequency},{amplitude},1,-1,0.891,false,false")
+            (run_dir / "frequency_response_calibration.csv").write_text(
+                "\n".join(calibration_rows), encoding="utf-8"
+            )
+            (run_dir / "frequency_response_calibration.json").write_text(
+                json.dumps(
+                    {
+                        "configuration": {"target_mode": "unity_gain"},
+                        "valid_domain": {"frequency_hz": [100, 100000], "requested_vpp": [0.05, 0.1]},
+                        "target_gain_db": 0,
+                        "validation": {"frequency_holdout_rmse_db": 0.1, "amplitude_holdout_rmse_db": None},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn("二维校准 / 2D calibration", html)
+            self.assertIn("Correction heatmap", html)
+            self.assertIn("Representative slices", html)
+            self.assertIn("frequency_response_calibration.csv", html)
+
     def test_pdf_report_uses_output_directory_as_resource_base(self):
         with TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"

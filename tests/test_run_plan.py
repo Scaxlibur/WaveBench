@@ -330,6 +330,43 @@ polynomial_degree = 2
             {"methods": ["linear_log", "polynomial"], "polynomial_degree": 2},
         )
 
+    def test_frequency_response_plan_generates_vpp_slices_and_calibration(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000, 10000, 100000]
+start_vpp = 0.05
+stop_vpp = 0.15
+vpp_step = 0.05
+
+[steps.calibration]
+target_mode = "explicit_gain_db"
+target_gain_db = -1.0
+"""))
+
+        fields = plan.steps[0].fields
+        self.assertEqual(fields["amplitudes_vpp"], [0.05, 0.1, 0.15])
+        self.assertTrue(fields["autoscale_each_amplitude"])
+        self.assertEqual(fields["calibration"]["target_gain_db"], -1.0)
+
+    def test_frequency_response_plan_rejects_mixed_vpp_forms(self):
+        path = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+amplitudes_vpp = [0.05, 0.1]
+start_vpp = 0.05
+stop_vpp = 0.1
+vpp_step = 0.05
+""")
+        with self.assertRaisesRegex(ConfigError, "either amplitudes_vpp"):
+            load_run_plan(path)
+
     def test_frequency_response_plan_rejects_conflicting_channels_and_frequencies(self):
         same_channel = self._write_plan("""
 [[steps]]

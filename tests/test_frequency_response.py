@@ -232,6 +232,24 @@ class FrequencyResponseTests(unittest.TestCase):
             self.assertEqual(len(pchip_segment["coefficients"]), 4)
             self.assertEqual(pchip_segment["x_start"], 1.0)
 
+    @unittest.skipUnless(HAS_SCIPY, "SciPy analysis dependency is unavailable")
+    def test_db_smoothing_and_chebyshev_fit_export_deployable_metadata(self):
+        points = [
+            _point(index, 10.0 ** (index + 1), 1.0 + 0.2 * index)
+            for index in range(5)
+        ]
+
+        document, values = build_fit_document(
+            points,
+            {"methods": ["smoothing_spline_db", "piecewise_chebyshev_db"]},
+        )
+
+        assert document is not None
+        self.assertEqual(document["methods"]["smoothing_spline_db"]["status"], "ok")
+        self.assertEqual(document["methods"]["piecewise_chebyshev_db"]["status"], "ok")
+        self.assertTrue(document["methods"]["piecewise_chebyshev_db"]["parameters"]["segments"])
+        self.assertIsNotNone(values["smoothing_spline_db"][0][0])
+
     def test_invalid_waveform_time_axis_becomes_an_auditable_failed_point(self):
         frequency_hz = 1_000.0
         reference = _waveform(

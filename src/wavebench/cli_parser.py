@@ -337,6 +337,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_plan = run_sub.add_parser("plan", help="Execute a WaveBench run plan")
     run_plan.add_argument("--plan", required=True, help="Path to a WaveBench run plan TOML file")
     add_runtime_options(run_plan)
+    run_calibrate = run_sub.add_parser(
+        "calibrate", help="Build an offline 2D frequency-response calibration LUT from an existing run"
+    )
+    run_calibrate.add_argument("path", help="Path to data/runs/<run_dir>")
+    run_calibrate.add_argument(
+        "--config", required=True, help="Path to TOML containing a [calibration] table"
+    )
     run_report = run_sub.add_parser("report", help="Generate an offline HTML report for a run package")
     run_report.add_argument("path", help="Path to data/runs/<run_dir>")
     run_report.add_argument("--output", default=None, help="Output HTML path; defaults to <run_dir>/report.html")

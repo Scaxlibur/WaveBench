@@ -638,22 +638,50 @@ step_index,kind,status,package,metadata,quality_status,quality_warnings,expect_s
 ```text
 data/runs/YYYYMMDD_HHMMSS_<label>/
 ├─ frequency_response.csv
-└─ frequency_response_fit.json   # 仅配置 [steps.fit] 时存在
+├─ frequency_response_fit.json   # 仅配置 [steps.fit] 时存在
+├─ frequency_response_calibration.csv  # 仅自动或离线二维校准成功时存在
+└─ frequency_response_calibration.json
 ```
 
 `frequency_response.csv` 每请求一个频点就原子刷新一次，因此 source 设频失败、scope 采集失败或分析失败时，前序记录和当前失败行仍会保留。稳定基础列为：
 
 ```text
-index,requested_frequency_hz,reference_frequency_hz,response_frequency_hz,
+index,amplitude_index,requested_vpp,requested_frequency_hz,reference_frequency_hz,response_frequency_hz,
 reference_amplitude_peak_v,response_amplitude_peak_v,reference_vpp_v,response_vpp_v,
 gain_linear,gain_db,phase_wrapped_deg,phase_unwrapped_deg,status,warnings,error,
 capture_package,metadata_path
 ```
 
 - `gain_linear` 是输出基波峰值 / 输入基波峰值；`gain_db = 20 * log10(gain_linear)`。
+- `amplitude_index` 从零开始标识请求 Vpp 切片；固定幅值的旧 run 也写为 `0`。`requested_vpp` 是信号源设定值；`reference_vpp_v` 是 CH1 实测输入值，只用于审计和诊断，不能替代 LUT 的幅值轴。
 - `phase_wrapped_deg` 在 `[-180, 180)`；`phase_unwrapped_deg` 对连续成功点展开，绝不跨失败点连接。
 - `status` 为 `ok`、`warning` 或 `failed`。失败行的数值字段为空，`error` 保存可读错误，不能被误当作零增益或零相位。
 - `capture_package` / `metadata_path` 指向每个成功的同步双通道原始证据。频响采集强制写入两路 NPY 与 metadata，普通可选 CSV 和截图仍遵循该 step 的 `save_csv` / `screenshot` 设置。
 - 开启拟合后，CSV 还会增加 `fit_<method>_gain_linear` 与 `fit_<method>_residual` 列；这些值只对应实际有效频点。
 
 `frequency_response_fit.json` 是供报告、调试脚本和复算使用的 JSON 文档。它声明 `x_transform = "log10(frequency_hz / Hz)"`、有效范围、被排除的点、拟合公式、参数、误差指标和用于图表的频率/线性增益曲线。它不在定义域外外推：调试脚本应先检查 `valid_domain_hz`。
+
+启用多幅值采集时，传统一维 `[steps.fit]` 文档会选择最低 `requested_vpp` 切片，并通过 `fit_amplitude_vpp` 与 `fit_note` 声明这一点；二维部署/校准必须读取下述校准文件，而不是拼接一维拟合结果。
+
+### 二维校准 LUT
+
+`frequency_response_calibration.csv` 是后端最直接的浮点 LUT 输入；行的稳定列为：
+
+```text
+frequency_hz,requested_vpp,fitted_gain_db,correction_db,correction_linear,
+correction_limited,slope_limited
+```
+
+- 每个 `(requested_vpp, frequency_hz)` 组合一行；频率与幅值节点来自有效测量的共同网格。
+- `fitted_gain_db` 是 dB 域平滑样条预测值，不是原始单点噪声的机械复制。
+- `correction_db = target_gain_db - fitted_gain_db`，`correction_linear = 10^(correction_db / 20)`。
+- `correction_limited` 表示命中 `correction_min_db` / `correction_max_db`；`slope_limited` 表示为满足 `max_slope_db_per_octave` 而受限。后端不应把受限标记忽略后再次放大。
+
+`frequency_response_calibration.json`（`schema_version = 1`）是完整审计和公式载体，包含：
+
+- 源 `frequency_response.csv` 路径、`configuration`、目标模式与最终 `target_gain_db`；
+- 频率/Vpp 有效域、采用的实测网格、样条平滑度候选的留点误差、频率及幅值留点验证 RMSE；
+- 补偿和斜率限制命中数、完整的 `lut` 行；
+- 每个请求 Vpp 的 `chebyshev` 分段。每段以 `x = log10(frequency_hz / Hz)` 为自变量，`x_start` / `x_stop` 映射到 `t ∈ [-1, 1]`，并按 `G_dB = Σ c_k T_k(t)` 计算。
+
+插值约定是“频率方向平滑样条、相邻请求 Vpp 方向线性插值”；频率或 Vpp 超出 `valid_domain` 时不得外推。输出为 IEEE 浮点 CSV/JSON，不提供 Q 格式、COE 或 MEM 文件。

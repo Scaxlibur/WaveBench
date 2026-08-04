@@ -426,6 +426,16 @@ def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Pa
         "frequency_response_fit_json": _relative_url(run.frequency_response_fit_path, output_dir)
         if run.frequency_response_fit_path is not None
         else None,
+        "frequency_response_calibration_csv": _relative_url(
+            run.frequency_response_calibration_csv_path, output_dir
+        )
+        if run.frequency_response_calibration_csv_path is not None
+        else None,
+        "frequency_response_calibration_json": _relative_url(
+            run.frequency_response_calibration_path, output_dir
+        )
+        if run.frequency_response_calibration_path is not None
+        else None,
         "capture_packages": capture_packages,
         "screenshots": [
             {
@@ -786,7 +796,7 @@ def _frequency_response_block(run: RunPackage, *, include_table: bool = True) ->
         if not table_rows:
             table_rows = '<tr><td colspan="10">频响 CSV 没有可读取的记录 / No readable response rows.</td></tr>'
         table_block = f"""<div class="table compact-table"><table>
-<thead><tr><th>#</th><th>请求频率 / Requested</th><th>输入峰值 / Input peak</th><th>输出峰值 / Output peak</th><th>线性增益</th><th>增益 / Gain</th><th>相位 / Phase</th><th>展开相位 / Unwrapped</th><th>状态 / Status</th><th>警告或错误 / Warning or error</th></tr></thead>
+<thead><tr><th>#</th><th>请求幅值 / Requested Vpp</th><th>请求频率 / Requested</th><th>输入峰值 / Input peak</th><th>输出峰值 / Output peak</th><th>线性增益</th><th>增益 / Gain</th><th>相位 / Phase</th><th>展开相位 / Unwrapped</th><th>状态 / Status</th><th>警告或错误 / Warning or error</th></tr></thead>
 <tbody>
 {table_rows}
 </tbody>
@@ -798,6 +808,7 @@ def _frequency_response_block(run: RunPackage, *, include_table: bool = True) ->
         if include_table
         else _compact_fit_summary_block(run.frequency_response_fit, run.frequency_response_fit_error)
     )
+    calibration_block = _frequency_response_calibration_block(run)
     return f"""<h2>频率响应 / Frequency response</h2>
 <p class="muted">幅频与相频由同一次双通道采集计算。相位为输出相对输入，包含探头、电缆和通道偏斜；未自动校准或 deskew。</p>
 <section class="frequency-response-grid">
@@ -808,6 +819,7 @@ def _frequency_response_block(run: RunPackage, *, include_table: bool = True) ->
 <article class="card frequency-response-card"><h3>拟合对比 / Fit comparison</h3>{fit_svg}</article>
 </section>
 {fit_summary}
+{calibration_block}
 {table_block}
 """
 
@@ -820,6 +832,7 @@ def _frequency_response_row(row: dict[str, str]) -> str:
     return (
         f'<tr class="{escape(status)}">'
         f"<td>{escape(str(row.get('index', '')))}</td>"
+        f"<td>{escape(_format_metric(row.get('requested_vpp'), 'Vpp'))}</td>"
         f"<td>{escape(_format_metric(row.get('requested_frequency_hz'), 'Hz'))}</td>"
         f"<td>{escape(_format_metric(row.get('reference_amplitude_peak_v'), 'V'))}</td>"
         f"<td>{escape(_format_metric(row.get('response_amplitude_peak_v'), 'V'))}</td>"
@@ -898,7 +911,13 @@ def _compact_fit_summary_block(document: dict[str, Any] | None, error: str | Non
 def _response_blocks(rows: list[dict[str, str]], key: str) -> list[list[tuple[float, float]]]:
     blocks: list[list[tuple[float, float]]] = []
     block: list[tuple[float, float]] = []
+    amplitude: str | None = None
     for row in rows:
+        current_amplitude = str(row.get("amplitude_index", row.get("requested_vpp", "")))
+        if amplitude is not None and current_amplitude != amplitude and block:
+            blocks.append(block)
+            block = []
+        amplitude = current_amplitude
         frequency = _finite_float(row.get("requested_frequency_hz"))
         value = _finite_float(row.get(key))
         if row.get("status") == "failed" or frequency is None or frequency <= 0 or value is None:
@@ -910,6 +929,159 @@ def _response_blocks(rows: list[dict[str, str]], key: str) -> list[list[tuple[fl
     if block:
         blocks.append(block)
     return blocks
+
+
+def _frequency_response_calibration_block(run: RunPackage) -> str:
+    if run.frequency_response_calibration_error:
+        return (
+            '<h3>二维校准 / 2D calibration</h3>'
+            f'<p class="warning">校准 JSON 无法读取 / Calibration unavailable: '
+            f'{escape(run.frequency_response_calibration_error)}</p>'
+        )
+    document = run.frequency_response_calibration
+    rows = run.frequency_response_calibration_rows
+    if not document and not rows:
+        errors = [
+            str(response.get("calibration_error"))
+            for step in run.steps
+            if isinstance(step.get("artifact"), dict)
+            for response in [step["artifact"].get("frequency_response", {})]
+            if isinstance(response, dict) and response.get("calibration_error")
+        ]
+        if errors:
+            return (
+                '<h3>二维校准 / 2D calibration</h3><p class="warning">'
+                f'自动校准未生成；原始频响仍已保留：{escape(errors[0])}</p>'
+            )
+        return ""
+    configuration = document.get("configuration", {}) if isinstance(document, dict) else {}
+    validation = document.get("validation", {}) if isinstance(document, dict) else {}
+    domain = document.get("valid_domain", {}) if isinstance(document, dict) else {}
+    target = document.get("target_gain_db") if isinstance(document, dict) else None
+    summary = f"""<div class="table compact-table"><table>
+<thead><tr><th>目标 / Target</th><th>有效频段 / Frequency range</th><th>请求幅值 / Requested Vpp</th><th>频率留点 RMSE</th><th>幅值留点 RMSE</th></tr></thead>
+<tbody><tr><td>{escape(_format_metric(target, 'dB'))} ({escape(str(configuration.get('target_mode', '')) )})</td>
+<td>{escape(_format_range(domain.get('frequency_hz'), 'Hz'))}</td>
+<td>{escape(_format_range(domain.get('requested_vpp'), 'Vpp'))}</td>
+<td>{escape(_format_metric(validation.get('frequency_holdout_rmse_db'), 'dB'))}</td>
+<td>{escape(_format_metric(validation.get('amplitude_holdout_rmse_db'), 'dB'))}</td></tr></tbody>
+</table></div>"""
+    heatmap = _calibration_heatmap_svg(rows)
+    curves = _calibration_curve_svg(rows)
+    note = (
+        '<p class="muted">二维 LUT 使用频率 dB 平滑样条与相邻请求 Vpp 线性插值；超出有效域不外推。'
+        '完整浮点 LUT 与 Chebyshev 系数见 <code>frequency_response_calibration.csv</code> 和 '
+        '<code>frequency_response_calibration.json</code>。</p>'
+    )
+    return f"""<h3>二维校准 / 2D calibration</h3>
+{summary}
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>补偿热图 / Correction heatmap</h3>{heatmap}</article>
+<article class="card frequency-response-card"><h3>代表性切片 / Representative slices</h3>{curves}</article>
+</section>
+{note}"""
+
+
+def _calibration_heatmap_svg(rows: list[dict[str, str]]) -> str:
+    points = _calibration_points(rows)
+    if not points:
+        return '<p class="warning">没有可绘制的校准 LUT 点 / No readable calibration points.</p>'
+    amplitudes = sorted({point[0] for point in points})
+    frequencies = sorted({point[1] for point in points})
+    amplitude_indexes = _sample_indexes(len(amplitudes), 16)
+    frequency_indexes = _sample_indexes(len(frequencies), 70)
+    selected_amplitudes = [amplitudes[index] for index in amplitude_indexes]
+    selected_frequencies = [frequencies[index] for index in frequency_indexes]
+    lookup = {(amplitude, frequency): correction for amplitude, frequency, correction in points}
+    values = [lookup[(amplitude, frequency)] for amplitude in selected_amplitudes for frequency in selected_frequencies if (amplitude, frequency) in lookup]
+    if not values:
+        return '<p class="warning">校准 LUT 不是完整矩阵，无法绘制热图。</p>'
+    span = max(max(abs(value) for value in values), 0.1)
+    width, height, left, top, right, bottom = 680, 285, 58, 28, 20, 48
+    plot_width, plot_height = width - left - right, height - top - bottom
+    cell_width = plot_width / len(selected_frequencies)
+    cell_height = plot_height / len(selected_amplitudes)
+    cells = []
+    for row_index, amplitude in enumerate(selected_amplitudes):
+        for column_index, frequency in enumerate(selected_frequencies):
+            correction = lookup.get((amplitude, frequency))
+            if correction is None:
+                color = "#e5e7eb"
+            else:
+                color = _calibration_color(correction, span)
+            cells.append(
+                f'<rect x="{left + column_index * cell_width:.2f}" y="{top + row_index * cell_height:.2f}" '
+                f'width="{cell_width + 0.1:.2f}" height="{cell_height + 0.1:.2f}" fill="{color}"/>'
+            )
+    return (
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Calibration correction heatmap">'
+        f'<rect width="{width}" height="{height}" fill="#f8fafc"/>{"".join(cells)}'
+        f'<rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" fill="none" stroke="#9fb3c8"/>'
+        f'<text x="{left}" y="16" font-size="12" fill="#334e68">Correction (dB), frequency increases left to right</text>'
+        f'<text x="{left}" y="{height - 24}" font-size="10" fill="#627d98">{selected_frequencies[0]:.4g} Hz</text>'
+        f'<text x="{left + plot_width - 80}" y="{height - 24}" font-size="10" fill="#627d98">{selected_frequencies[-1]:.4g} Hz</text>'
+        f'<text x="{left}" y="{height - 8}" font-size="10" fill="#627d98">Vpp: {selected_amplitudes[0]:.4g} .. {selected_amplitudes[-1]:.4g}; color: -{span:.3g} .. +{span:.3g} dB</text>'
+        '</svg>'
+    )
+
+
+def _calibration_curve_svg(rows: list[dict[str, str]]) -> str:
+    points = _calibration_points(rows)
+    grouped: dict[float, list[tuple[float, float]]] = {}
+    for amplitude, frequency, correction in points:
+        grouped.setdefault(amplitude, []).append((frequency, correction))
+    amplitudes = sorted(grouped)
+    if not amplitudes:
+        return '<p class="warning">没有可绘制的校准 LUT 点 / No readable calibration points.</p>'
+    indexes = sorted({0, len(amplitudes) // 2, len(amplitudes) - 1})
+    colors = ("#2563eb", "#7c3aed", "#dc2626")
+    series = [
+        (f"{amplitudes[index]:.6g} Vpp", colors[position], sorted(grouped[amplitudes[index]]))
+        for position, index in enumerate(indexes)
+    ]
+    return _response_svg(
+        [],
+        title="Correction by requested amplitude",
+        y_label="Correction (dB)",
+        series=series,
+        actual_label="",
+    )
+
+
+def _calibration_points(rows: list[dict[str, str]]) -> list[tuple[float, float, float]]:
+    points: list[tuple[float, float, float]] = []
+    for row in rows:
+        amplitude = _finite_float(row.get("requested_vpp"))
+        frequency = _finite_float(row.get("frequency_hz"))
+        correction = _finite_float(row.get("correction_db"))
+        if amplitude is not None and amplitude > 0 and frequency is not None and frequency > 0 and correction is not None:
+            points.append((amplitude, frequency, correction))
+    return points
+
+
+def _sample_indexes(count: int, maximum: int) -> list[int]:
+    if count <= maximum:
+        return list(range(count))
+    return sorted({round(value) for value in np.linspace(0, count - 1, maximum)})
+
+
+def _calibration_color(value: float, span: float) -> str:
+    normalized = min(1.0, abs(value) / span)
+    if value < 0:
+        red = round(232 - 120 * normalized)
+        green = round(241 - 75 * normalized)
+        blue = round(248 - 5 * normalized)
+    else:
+        red = round(255 - 15 * normalized)
+        green = round(247 - 105 * normalized)
+        blue = round(237 - 135 * normalized)
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _format_range(value: Any, unit: str) -> str:
+    if not isinstance(value, list) or len(value) != 2:
+        return ""
+    return f"{_format_metric(value[0], unit)} .. {_format_metric(value[1], unit)}"
 
 
 def _fit_curve_series(document: dict[str, Any] | None) -> list[tuple[str, str, list[tuple[float, float]]]]:
@@ -966,7 +1138,10 @@ def _response_svg(
         y_min -= pad_y
         y_max += pad_y
     width, pad_left, pad_right, pad_top = 680, 58, 20, 28
-    legend_items = [(actual_label, "#2563eb"), *[(name, color) for name, color, _values in series]]
+    legend_items = (
+        ([(actual_label, "#2563eb")] if actual else [])
+        + [(name, color) for name, color, _values in series]
+    )
     legend_columns = 2
     legend_row_height = 15
     legend_rows = max(1, (len(legend_items) + legend_columns - 1) // legend_columns)
@@ -1382,6 +1557,26 @@ def _collect_artifact_links(
                 label="frequency_response_fit.json",
                 href=_relative_url(run.frequency_response_fit_path, output_dir),
                 status=_availability_text(run.frequency_response_fit_path.exists()),
+            )
+        )
+    if run.frequency_response_calibration_csv_path is not None:
+        links.append(
+            ReportArtifactLink(
+                step_index="-",
+                kind="二维校准 CSV / 2D calibration CSV",
+                label="frequency_response_calibration.csv",
+                href=_relative_url(run.frequency_response_calibration_csv_path, output_dir),
+                status=_availability_text(run.frequency_response_calibration_csv_path.exists()),
+            )
+        )
+    if run.frequency_response_calibration_path is not None:
+        links.append(
+            ReportArtifactLink(
+                step_index="-",
+                kind="二维校准 JSON / 2D calibration JSON",
+                label="frequency_response_calibration.json",
+                href=_relative_url(run.frequency_response_calibration_path, output_dir),
+                status=_availability_text(run.frequency_response_calibration_path.exists()),
             )
         )
     screenshots_by_package = {item.package: item for item in screenshots}

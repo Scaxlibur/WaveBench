@@ -10,6 +10,7 @@ import tomllib
 from wavebench.config import normalize_waveform_points
 from wavebench.errors import ConfigError
 from wavebench.services.frequency_response import FIT_METHODS
+from wavebench.services.frequency_response_calibration import normalize_frequency_response_calibration
 
 
 ALLOWED_STEP_KINDS = {
@@ -81,6 +82,12 @@ _OPTIONAL_FIELDS = {
         "save_csv",
         "screenshot",
         "fit",
+        "amplitudes_vpp",
+        "start_vpp",
+        "stop_vpp",
+        "vpp_step",
+        "autoscale_each_amplitude",
+        "calibration",
     },
     "source.status": {"channel"},
     "source.set_freq": {"channel"},
@@ -493,6 +500,8 @@ def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) ->
         raise ConfigError(f"{prefix}.frequencies_hz must be strictly increasing and unique")
     fields["frequencies_hz"] = frequencies
 
+    _normalize_frequency_response_amplitudes(prefix, fields)
+
     fields["target_cycles"] = _positive_float(
         fields.get("target_cycles", 10.0), f"{prefix}.target_cycles"
     )
@@ -513,6 +522,48 @@ def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) ->
             raise ConfigError(f"{prefix}.{name} must be true or false")
     if "fit" in fields:
         fields["fit"] = _parse_frequency_response_fit(fields["fit"], f"{prefix}.fit")
+    if "calibration" in fields:
+        fields["calibration"] = normalize_frequency_response_calibration(
+            fields["calibration"], f"{prefix}.calibration"
+        ).as_dict()
+
+
+def _normalize_frequency_response_amplitudes(prefix: str, fields: dict[str, Any]) -> None:
+    explicit = fields.get("amplitudes_vpp")
+    generated_names = {"start_vpp", "stop_vpp", "vpp_step"}
+    has_generated = any(name in fields for name in generated_names)
+    if explicit is not None and has_generated:
+        raise ConfigError(
+            f"{prefix} must use either amplitudes_vpp or start_vpp, stop_vpp, and vpp_step, not both"
+        )
+    amplitudes: list[float] | None = None
+    if explicit is not None:
+        if not isinstance(explicit, list) or not explicit:
+            raise ConfigError(f"{prefix}.amplitudes_vpp must be a non-empty array")
+        amplitudes = [_positive_float(value, f"{prefix}.amplitudes_vpp") for value in explicit]
+    elif has_generated:
+        required = ("start_vpp", "stop_vpp", "vpp_step")
+        missing = [name for name in required if name not in fields]
+        if missing:
+            raise ConfigError(f"{prefix} requires start_vpp, stop_vpp, and vpp_step together")
+        start = _positive_float(fields["start_vpp"], f"{prefix}.start_vpp")
+        stop = _positive_float(fields["stop_vpp"], f"{prefix}.stop_vpp")
+        step = _positive_float(fields["vpp_step"], f"{prefix}.vpp_step")
+        if stop <= start:
+            raise ConfigError(f"{prefix}.stop_vpp must be greater than start_vpp")
+        count = round((stop - start) / step)
+        if count < 1 or abs(start + count * step - stop) > max(1e-12, step * 1e-9):
+            raise ConfigError(f"{prefix}.vpp_step must divide the requested Vpp range exactly")
+        amplitudes = [round(start + index * step, 15) for index in range(count + 1)]
+    if amplitudes is not None:
+        if any(second <= first for first, second in zip(amplitudes, amplitudes[1:])):
+            raise ConfigError(f"{prefix}.amplitudes_vpp must be strictly increasing and unique")
+        fields["amplitudes_vpp"] = amplitudes
+    if amplitudes is not None or "autoscale_each_amplitude" in fields:
+        autoscale = fields.get("autoscale_each_amplitude", True)
+        if not isinstance(autoscale, bool):
+            raise ConfigError(f"{prefix}.autoscale_each_amplitude must be true or false")
+        fields["autoscale_each_amplitude"] = autoscale
 
 
 def _parse_frequency_response_fit(raw: Any, name: str) -> dict[str, Any]:

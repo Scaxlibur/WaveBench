@@ -324,7 +324,7 @@ def _render_source_scope_frequency_response(options: RunTemplateOptions) -> str:
         fit = """
 
         [steps.fit]
-        methods = ["linear_log", "polynomial", "pchip"]
+        methods = ["linear_log", "polynomial", "pchip", "smoothing_spline_db", "piecewise_chebyshev_db"]
         polynomial_degree = {polynomial_degree}
         """.format(polynomial_degree=polynomial_degree)
     frequency_text = ", ".join(_fmt(value) for value in frequencies)

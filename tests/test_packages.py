@@ -107,6 +107,23 @@ class PackageReaderTests(unittest.TestCase):
             self.assertIsNone(loaded.frequency_response_fit)
             self.assertIn("not valid JSON", loaded.frequency_response_fit_error or "")
 
+    def test_load_run_package_reads_frequency_response_calibration_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            (run / "frequency_response_calibration.csv").write_text(
+                "frequency_hz,requested_vpp,correction_db\n100,0.1,-1\n",
+                encoding="utf-8",
+            )
+            (run / "frequency_response_calibration.json").write_text(
+                json.dumps({"schema_version": 1, "target_gain_db": 0}), encoding="utf-8"
+            )
+
+            loaded = load_run_package(run)
+
+            self.assertEqual(loaded.frequency_response_calibration_rows[0]["requested_vpp"], "0.1")
+            self.assertEqual(loaded.frequency_response_calibration["target_gain_db"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

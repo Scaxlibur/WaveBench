@@ -333,7 +333,7 @@ max_power_current_limit_a = 0.2
 
 这些参数是第一层执行安全上限。全部都是可选项；省略某一项表示这一轴不设软件上限。
 
-- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`run plan` 中 `source.set_vpp` / `source.arb_load` 的 Vpp。
+- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`run plan` 中 `source.set_vpp` / `source.arb_load`，以及 `sweep.frequency_response` 的每个 `amplitudes_vpp` / 生成 Vpp 切片。
 - `max_power_voltage_v`：限制 `power set` 与 `run plan` 中 `power.set` 的设定电压。
 - `max_power_current_limit_a`：限制 `power set` 与 `run plan` 中 `power.set` 的限流值。
 
@@ -434,7 +434,7 @@ max_power_current_limit_a = 0.2
 
 这些参数是第一层执行安全上限。全部都是可选项；省略某一项表示这一轴不设软件上限。
 
-- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`run plan` 中 `source.set_vpp` / `source.arb_load` 的 Vpp。
+- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`run plan` 中 `source.set_vpp` / `source.arb_load`，以及 `sweep.frequency_response` 的每个 `amplitudes_vpp` / 生成 Vpp 切片。
 - `max_power_voltage_v`：限制 `power set` 与 `run plan` 中 `power.set` 的设定电压。
 - `max_power_current_limit_a`：限制 `power set` 与 `run plan` 中 `power.set` 的限流值。
 

@@ -44,6 +44,30 @@ def make_cli_plugin(driver_id="example.scope"):
 
 
 class CliTests(unittest.TestCase):
+    def test_run_calibrate_builds_offline_artifacts_without_loading_instruments(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            response_rows = ["index,requested_frequency_hz,requested_vpp,gain_db,status"]
+            index = 0
+            for amplitude in (0.05, 0.1):
+                for frequency in (100, 1000, 10000, 100000):
+                    response_rows.append(f"{index},{frequency},{amplitude},{6 - index * 0.05},ok")
+                    index += 1
+            (run_dir / "frequency_response.csv").write_text("\n".join(response_rows), encoding="utf-8")
+            calibration = Path(tmp) / "calibration.toml"
+            calibration.write_text("[calibration]\ntarget_mode = 'unity_gain'\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with patch("wavebench.cli._load_run_service") as load_service, redirect_stdout(stdout):
+                code = main(["run", "calibrate", str(run_dir), "--config", str(calibration)])
+
+            self.assertEqual(code, 0)
+            load_service.assert_not_called()
+            self.assertTrue((run_dir / "frequency_response_calibration.csv").exists())
+            self.assertTrue((run_dir / "frequency_response_calibration.json").exists())
+            self.assertIn("calibration_csv=", stdout.getvalue())
+
     def test_capture_accepts_points_and_output_flags(self):
         args = build_parser().parse_args([
             "scope", "capture", "--points", "def", "--time-range", "0.01", "--window-frequency", "500", "--target-cycles", "10", "--expect-frequency", "500", "--frequency-tolerance", "0.1", "--no-csv", "--label", "x"

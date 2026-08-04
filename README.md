@@ -108,8 +108,9 @@ WaveBench 主包长期预装 RTM2000/RTM2032、DS1104Z/DS1000Z、DG4000/DG4202�
 - `run check --plan <plan.toml>`：只解析并汇总 plan，不连接仪器
 - `run verify --plan <plan.toml>`：只读查询 plan 涉及仪器的高阻保护状态与 `*IDN?`，用于执行前预检可达性
 - `run template --list` / `run template <name> --output <plan.toml>`：列出或生成保守 run plan 模板；可用 `--frequency`、`--frequencies`、`--reference-channel`、`--response-channel`、`--fit` 等少量参数定制；不连接仪器，不覆盖已有文件，除非显式 `--force`
-- `run plan --plan <plan.toml>`：执行显式 source、power、scope、dmm、sleep 和双通道 `sweep.frequency_response` 步骤；一次 run 内统一打开并复用所需仪器 session，成功或失败后统一关闭，不静默断线重连
-- `run report <run_dir>`：根据 `run.json` / `summary.csv` 生成静态离线 HTML 报告；频响 run 额外包含幅频、相频、拟合对比、逐点 CSV 与采集证据链接。加 `--pdf` 可同时导出嵌入截图、SVG 和表格的便携 PDF
+- `run plan --plan <plan.toml>`：执行显式 source、power、scope、dmm、sleep 和双通道 `sweep.frequency_response` 步骤；频响可扫描一个或多个请求 Vpp 切片，并可自动导出二维校准 LUT；一次 run 内统一打开并复用所需仪器 session，成功或失败后统一关闭，不静默断线重连
+- `run calibrate <run_dir> --config <calibration.toml>`：完全离线地从既有二维频响 CSV 重建校准 LUT，不连接仪器、不改写原始测量 CSV
+- `run report <run_dir>`：根据 `run.json` / `summary.csv` 生成静态离线 HTML 报告；频响 run 额外包含幅频、相频、拟合对比、逐点 CSV 与采集证据链接；二维校准会增加补偿热图与代表性切片。加 `--pdf` 可同时导出嵌入截图、SVG 和表格的便携 PDF
 - `capture inspect <capture_dir>`：打印离线采集包摘要
 - 默认示波器高阻保护：`scope.capture` / `scope.fetch` / `sweep discrete` / run-plan `scope.capture` / `sweep.frequency_response` 在采集前查询通道耦合。频响会同时保护 reference 与 response 两路；RTM2032 的 `DCL`/`ACL` 视为高阻，`DC`/`AC` 默认按可能的 50 Ω 拒绝；DS1000Z 输入固定为 1 MΩ，`AC`/`DC`/`GND` 只表示耦合方式，均按该机型语义检查。WaveBench 不会自动修改耦合或输入设置
 - 可选 `[restore] source_state = true`：在 `finally` 路径快照并恢复 basic 信号源通道状态（输出、函数、频率、Vpp、方波占空比）。该选项不恢复 offset、phase、frequency mode、sweep、负载、极性、噪声、同步、burst、调制、marker、pulse hold 或易失任意波内存；run artifact 以 `source_state_scope = "basic"` 明示范围
@@ -206,7 +207,7 @@ python3 -m venv .venv
 cp wavebench.example.toml wavebench.toml
 ```
 
-需要运行测试和代码检查时安装开发依赖；频响 PCHIP 拟合需要 `analysis` extra；离线 PDF 报告需要 `pdf` extra；终端 TUI 需要 `tui` extra：
+需要运行测试和代码检查时安装开发依赖；频响 PCHIP、dB 平滑样条、二维校准需要 `analysis` extra；离线 PDF 报告需要 `pdf` extra；终端 TUI 需要 `tui` extra：
 
 ```bash
 .venv/bin/python -m pip install -e ".[dev]"
@@ -493,7 +494,7 @@ python -m wavebench run plan --config wavebench.toml --plan plans/example_scope_
 python -m wavebench run report data/runs/<run_dir>
 ```
 
-生成双通道频响模板（CH1 接 DUT 输入，CH2 接 DUT 输出），通过 `run check` / `run verify` 后才允许执行。`--fit` 会生成线性对数插值、多项式和 PCHIP 拟合配置，因此需要先安装 `.[analysis]`：
+生成双通道频响模板（CH1 接 DUT 输入，CH2 接 DUT 输出），通过 `run check` / `run verify` 后才允许执行。`--fit` 会生成线性对数插值、多项式、PCHIP、dB 平滑样条和分段 Chebyshev 拟合配置，因此需要先安装 `.[analysis]`：
 
 ```powershell
 python -m wavebench run template source-scope-frequency-response --frequencies 100,1000,10000 --reference-channel 1 --response-channel 2 --fit --output plans/frequency_response.toml
@@ -503,7 +504,53 @@ python -m wavebench run plan --config wavebench.toml --plan plans/frequency_resp
 python -m wavebench run report data/runs/<run_dir> --pdf
 ```
 
-PDF 是“可见报告”的单文件封装：截图、静态 SVG 曲线和表格会嵌入 PDF；`frequency_response.csv`、拟合 JSON、NPY 波形和完整采集包仍保留在 run 目录，适合复算和审计。
+二维幅值校准可在同一个频响 step 中给出请求 Vpp 轴。它会对每个幅值切片设定信号源、首个频点 autoscale，并在 run 完成后生成浮点 LUT、补偿系数和分段 Chebyshev 公式：
+
+```toml
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10000
+stop_frequency_hz = 500000
+frequency_count = 246
+spacing = "linear"
+start_vpp = 0.005
+stop_vpp = 0.25
+vpp_step = 0.005
+target_cycles = 10
+settle_s = 1.0
+
+[steps.calibration]
+target_mode = "passband_median" # 或 explicit_gain_db / unity_gain
+# target_gain_db = 0.0          # explicit_gain_db 时必填
+correction_min_db = -12
+correction_max_db = 12
+max_slope_db_per_octave = 6
+```
+
+也可完全离线地对已有二维 run 重调目标和限幅参数。校准 TOML 只需要 `[calibration]` 表，不读取 `wavebench.toml`，也不会连接仪器：
+
+```powershell
+python -m wavebench run calibrate data/runs/<run_dir> --config plans/calibration.toml
+```
+
+`plans/calibration.toml` 的完整最小配置如下。`passband_median` 会在指定通带（未指定则全有效频段）取所有拟合增益的稳健中位数；`explicit_gain_db` 必须提供 `target_gain_db`；`unity_gain` 的目标固定为 0 dB。
+
+```toml
+[calibration]
+target_mode = "passband_median"
+target_frequency_min_hz = 10000
+target_frequency_max_hz = 400000
+correction_min_db = -12
+correction_max_db = 12
+max_slope_db_per_octave = 6
+chebyshev_degree = 3
+chebyshev_segment_count = 8
+```
+
+校准输出为 `frequency_response_calibration.csv` 和 `frequency_response_calibration.json`；原始 `frequency_response.csv` 不会被改写。HTML/PDF 会展示校正热图和代表性幅值切片，完整 LUT 与公式保留在 run 目录。PDF 是“可见报告”的单文件封装：截图、静态 SVG 曲线和表格会嵌入 PDF；CSV、JSON、NPY 波形和完整采集包仍保留在 run 目录，适合复算和审计。
 
 DMM ACV smoke 示例：
 
@@ -574,7 +621,7 @@ frequency_estimate_hz = { min = 950, max = 1050 }
 
 ```powershell
 python -m pip install -e ".[dev]"
-python -m pytest -q
+python scripts/pytest_progress.py -- -q
 ```
 
-GitHub Actions 会在 push 和 pull request 时自动运行 Python 3.11 / 3.12 单元测试。
+`scripts/pytest_progress.py` 不增加依赖，原样转发 pytest 输出，并在每 5 秒打印一行心跳；适合会因长时间无输出而断开的终端。可用 `--heartbeat-s 10` 调整间隔。GitHub Actions 会在 push 和 pull request 时自动运行 Python 3.11 / 3.12 单元测试。

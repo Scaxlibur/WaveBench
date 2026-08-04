@@ -58,7 +58,7 @@ Its supported product scope is intentionally frozen to the power-supply, DMM, an
 
 ## Optional frequency-response analysis and PDF reports
 
-`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with linear/dB gain and wrapped/unwrapped output-relative phase. The offline HTML report renders magnitude, phase, fit-comparison SVGs, the point table, and any saved per-point screenshots.
+`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with linear/dB gain and wrapped/unwrapped output-relative phase. A plan may also specify multiple requested Vpp slices, producing a two-dimensional Vpp × frequency measurement. The offline HTML report renders magnitude, phase, fit-comparison SVGs, the point table, and any saved per-point screenshots.
 
 Use the conservative template before editing a plan manually:
 
@@ -71,7 +71,24 @@ python -m wavebench run check --plan plans/frequency_response.toml
 python -m wavebench run report data/runs/<run-dir> --pdf
 ```
 
-`linear_log` and `polynomial` fit linear gain against `log10(frequency_hz / Hz)`; PCHIP additionally needs the `analysis` extra. The PDF is a portable visual report: its visible screenshots, SVG charts, and tables are embedded, while CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.
+`linear_log` and `polynomial` fit linear gain against `log10(frequency_hz / Hz)`; PCHIP, dB smoothing splines, and 2D calibration require the `analysis` extra. For multi-Vpp data, `[steps.calibration]` selects a dB target (`passband_median`, `explicit_gain_db`, or `unity_gain`), emits a bounded floating-point LUT in `frequency_response_calibration.csv`, and records validation, limiter flags, and piecewise Chebyshev coefficients in `frequency_response_calibration.json`. Calibration never extrapolates beyond the measured frequency/Vpp domain. The same products can be regenerated without instruments using:
+
+```bash
+python -m wavebench run calibrate data/runs/<run-dir> --config plans/calibration.toml
+```
+
+The PDF is a portable visual report: its visible screenshots, SVG charts, and tables are embedded, while CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.
+
+## Running tests in idle-limited terminals
+
+For terminals that disconnect a silent process, use the dependency-free runner below. It forwards pytest output and emits a keepalive line every five seconds; `--heartbeat-s` changes the interval.
+
+```bash
+python scripts/pytest_progress.py -- -q
+python scripts/pytest_progress.py --heartbeat-s 10 -- -q tests/test_run_service.py
+```
+
+This prevents idle-output timeouts; it does not override a terminal or orchestration system's separate total-runtime limit.
 
 Executable plugins use canonical IDs and cannot define aliases. Built-in IDs are protected except for narrowly allowlisted optional-override slots that bind one canonical ID to one distribution. The current shared-ID slots cover DG4000, DM3000, DP800, and RTM2000. Their built-in short aliases always select the bundled baseline, and uninstalling the external distribution restores the bundled canonical implementation. DS1000Z uses the separate external canonical ID `rigol.ds1000z`; its built-in `ds1104` and `ds1000z` aliases remain available without the package. DG4000 source plugins may import the stable `DG4000DacBlock` and `DG4000ByteOrder` types from `wavebench.instruments`; waveform loading, normalization, DAC14 encoding, services, and safety policy remain core responsibilities. The source code retains the historical term `migration slot` for this allowlist, but it does not imply deprecating the bundled drivers.
 

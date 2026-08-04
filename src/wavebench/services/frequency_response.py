@@ -12,9 +12,17 @@ import numpy as np
 from wavebench.errors import ConfigError
 
 
-FIT_METHODS = ("linear_log", "polynomial", "pchip")
+FIT_METHODS = (
+    "linear_log",
+    "polynomial",
+    "pchip",
+    "smoothing_spline_db",
+    "piecewise_chebyshev_db",
+)
 BASE_CSV_FIELDS = (
     "index",
+    "amplitude_index",
+    "requested_vpp",
     "requested_frequency_hz",
     "reference_frequency_hz",
     "response_frequency_hz",
@@ -49,6 +57,8 @@ class FrequencyResponsePoint:
     phase_wrapped_deg: float | None
     phase_unwrapped_deg: float | None
     status: str
+    amplitude_index: int = 0
+    requested_vpp: float | None = None
     warnings: tuple[str, ...] = ()
     error: str = ""
     capture_package: str = ""
@@ -66,6 +76,8 @@ class FrequencyResponsePoint:
     def as_csv_row(self, fit_values: dict[str, tuple[float | None, float | None]] | None = None) -> dict[str, object]:
         row: dict[str, object] = {
             "index": self.index,
+            "amplitude_index": self.amplitude_index,
+            "requested_vpp": self.requested_vpp,
             "requested_frequency_hz": self.requested_frequency_hz,
             "reference_frequency_hz": self.reference_frequency_hz,
             "response_frequency_hz": self.response_frequency_hz,
@@ -92,6 +104,8 @@ class FrequencyResponsePoint:
 def analyze_frequency_response_point(
     *,
     index: int,
+    amplitude_index: int = 0,
+    requested_vpp: float | None = None,
     requested_frequency_hz: float,
     reference_waveform: Any,
     response_waveform: Any,
@@ -136,6 +150,8 @@ def analyze_frequency_response_point(
             phase_wrapped_deg=phase_wrapped_deg,
             phase_unwrapped_deg=None,
             status="warning" if warnings else "ok",
+            amplitude_index=amplitude_index,
+            requested_vpp=requested_vpp,
             warnings=tuple(warnings),
             capture_package=capture_package,
             metadata_path=metadata_path,
@@ -155,6 +171,8 @@ def analyze_frequency_response_point(
             phase_wrapped_deg=None,
             phase_unwrapped_deg=None,
             status="failed",
+            amplitude_index=amplitude_index,
+            requested_vpp=requested_vpp,
             error=f"{type(exc).__name__}: {exc}",
             capture_package=capture_package,
             metadata_path=metadata_path,
@@ -164,6 +182,8 @@ def analyze_frequency_response_point(
 def failed_frequency_response_point(
     *,
     index: int,
+    amplitude_index: int = 0,
+    requested_vpp: float | None = None,
     requested_frequency_hz: float,
     error: Exception | str,
 ) -> FrequencyResponsePoint:
@@ -184,6 +204,8 @@ def failed_frequency_response_point(
         phase_wrapped_deg=None,
         phase_unwrapped_deg=None,
         status="failed",
+        amplitude_index=amplitude_index,
+        requested_vpp=requested_vpp,
         error=text,
     )
 
@@ -202,7 +224,11 @@ def unwrap_frequency_response_phase(points: list[FrequencyResponsePoint]) -> lis
         )
         block.clear()
 
+    last_amplitude_index: int | None = None
     for point in points:
+        if last_amplitude_index is not None and point.amplitude_index != last_amplitude_index:
+            flush()
+        last_amplitude_index = point.amplitude_index
         if point.status == "failed" or point.phase_wrapped_deg is None:
             flush()
             result.append(point)
@@ -214,13 +240,13 @@ def unwrap_frequency_response_phase(points: list[FrequencyResponsePoint]) -> lis
 
 def ensure_fit_dependencies(fit: dict[str, Any] | None) -> None:
     methods = _fit_methods(fit)
-    if "pchip" not in methods:
+    if not {"pchip", "smoothing_spline_db"}.intersection(methods):
         return
     try:
         from scipy.interpolate import PchipInterpolator  # noqa: F401
     except ImportError as exc:
         raise ConfigError(
-            "fit method 'pchip' requires the optional analysis dependency; "
+            "frequency response PCHIP and smoothing-spline fits require the optional analysis dependency; "
             "install WaveBench with `.[analysis]`"
         ) from exc
 
@@ -242,10 +268,22 @@ def build_fit_document(
     document: dict[str, Any] = {
         "schema_version": 1,
         "x_transform": "log10(frequency_hz / Hz)",
-        "valid_points": [point.index for point in usable],
+        "valid_points": [],
         "excluded_points": excluded,
         "methods": {},
     }
+    requested_amplitudes = sorted(
+        {point.requested_vpp for point in usable if point.requested_vpp is not None}
+    )
+    if len(requested_amplitudes) > 1:
+        selected_amplitude = requested_amplitudes[0]
+        usable = [point for point in usable if point.requested_vpp == selected_amplitude]
+        document["fit_amplitude_vpp"] = selected_amplitude
+        document["fit_note"] = (
+            "Multiple requested Vpp slices were captured; conventional one-dimensional fits use "
+            "the lowest requested Vpp slice. Use frequency_response_calibration.json for the 2D model."
+        )
+    document["valid_points"] = [point.index for point in usable]
     fit_values: dict[str, dict[int, tuple[float | None, float | None]]] = {}
     if usable:
         document["valid_domain_hz"] = [
@@ -443,6 +481,26 @@ def _fit_method(
                     "segments": _pchip_segments(interpolator),
                 },
             }
+        elif method == "smoothing_spline_db":
+            predicted_db, curve_db, alpha = _smoothing_spline_db(x, y, curve_x)
+            predicted = np.power(10.0, predicted_db / 20.0)
+            curve_y = np.power(10.0, curve_db / 20.0)
+            result = {
+                "status": "ok",
+                "display": "Smoothing spline in dB over log frequency",
+                "formula": "x = log10(f / Hz); G_dB = S(x); G = 10^(G_dB / 20)",
+                "parameters": {"smoothing_alpha": alpha, "domain": "dB"},
+            }
+        elif method == "piecewise_chebyshev_db":
+            predicted_db, curve_db, segments = _piecewise_chebyshev_db(x, y, curve_x)
+            predicted = np.power(10.0, predicted_db / 20.0)
+            curve_y = np.power(10.0, curve_db / 20.0)
+            result = {
+                "status": "ok",
+                "display": "Piecewise Chebyshev approximation in dB",
+                "formula": "x = log10(f / Hz); G_dB = sum(c_k * T_k(t)) within segment; G = 10^(G_dB / 20)",
+                "parameters": {"domain": "dB", "segments": segments},
+            }
         else:  # pragma: no cover - normalized before dispatch
             return _unavailable_fit(method, "unsupported method")
     except Exception as exc:  # noqa: BLE001 - optional fit must not discard measurements
@@ -463,6 +521,62 @@ def _fit_method(
         for point, value, residual in zip(points, predicted, residuals)
     }
     return result, values
+
+
+def _smoothing_spline_db(
+    x: np.ndarray, y_linear: np.ndarray, curve_x: np.ndarray, *, alpha: float = 0.1
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Fit a conservative spline in dB, scaling the penalty to the observed variance."""
+    try:
+        from scipy.interpolate import UnivariateSpline
+    except ImportError as exc:  # pragma: no cover - guarded in run check
+        raise ConfigError("smoothing_spline_db requires WaveBench with `.[analysis]`") from exc
+    y_db = 20.0 * np.log10(y_linear)
+    if x.size < 4:
+        raise ValueError("smoothing spline requires at least four valid points")
+    variance = float(np.var(y_db))
+    smoothing = max(0.0, alpha * x.size * variance)
+    spline = UnivariateSpline(x, y_db, k=min(3, x.size - 1), s=smoothing)
+    return (
+        np.asarray(spline(x), dtype=float),
+        np.asarray(spline(curve_x), dtype=float),
+        alpha,
+    )
+
+
+def _piecewise_chebyshev_db(
+    x: np.ndarray, y_linear: np.ndarray, curve_x: np.ndarray, *, segment_count: int = 8,
+    degree: int = 3,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    """Approximate dB gain by deployable low-order Chebyshev pieces in log-frequency."""
+    if x.size < 2:
+        raise ValueError("Chebyshev approximation requires at least two valid points")
+    y_db = 20.0 * np.log10(y_linear)
+    count = min(segment_count, x.size - 1)
+    edges = np.linspace(float(x[0]), float(x[-1]), count + 1)
+    predictions = np.empty_like(x)
+    curve_predictions = np.empty_like(curve_x)
+    segments: list[dict[str, Any]] = []
+    for index, (start, stop) in enumerate(zip(edges[:-1], edges[1:])):
+        in_measurement = (x >= start) & ((x < stop) if index < count - 1 else (x <= stop))
+        sample_x = x[in_measurement]
+        sample_count = max(degree + 1, sample_x.size)
+        fit_x = np.linspace(start, stop, sample_count)
+        fit_y = np.interp(fit_x, x, y_db)
+        polynomial = np.polynomial.Chebyshev.fit(
+            fit_x, fit_y, deg=min(degree, sample_count - 1), domain=[start, stop]
+        )
+        predictions[in_measurement] = polynomial(sample_x)
+        in_curve = (curve_x >= start) & ((curve_x < stop) if index < count - 1 else (curve_x <= stop))
+        curve_predictions[in_curve] = polynomial(curve_x[in_curve])
+        segments.append(
+            {
+                "x_start": float(start),
+                "x_stop": float(stop),
+                "coefficients": [float(value) for value in polynomial.coef],
+            }
+        )
+    return predictions, curve_predictions, segments
 
 
 def _unavailable_fit(method: str, reason: str) -> tuple[dict[str, Any], dict[int, tuple[float | None, float | None]]]:

@@ -47,6 +47,11 @@ class RunPackage:
     frequency_response_fit_path: Path | None = None
     frequency_response_fit: dict[str, Any] | None = None
     frequency_response_fit_error: str | None = None
+    frequency_response_calibration_csv_path: Path | None = None
+    frequency_response_calibration_rows: list[dict[str, str]] = field(default_factory=list)
+    frequency_response_calibration_path: Path | None = None
+    frequency_response_calibration: dict[str, Any] | None = None
+    frequency_response_calibration_error: str | None = None
 
     @property
     def status(self) -> str:
@@ -158,6 +163,24 @@ def load_run_package(path: str | Path) -> RunPackage:
             fit = _read_json_object(present_fit_path, label="frequency response fit JSON")
         except ConfigError as exc:
             fit_error = str(exc)
+    calibration_csv_path = run_dir / "frequency_response_calibration.csv"
+    calibration_rows: list[dict[str, str]] = []
+    present_calibration_csv_path: Path | None = None
+    if calibration_csv_path.exists():
+        present_calibration_csv_path = calibration_csv_path
+        with calibration_csv_path.open(newline="", encoding="utf-8") as file:
+            calibration_rows = [dict(row) for row in csv.DictReader(file)]
+    calibration_path = run_dir / "frequency_response_calibration.json"
+    present_calibration_path: Path | None = calibration_path if calibration_path.exists() else None
+    calibration: dict[str, Any] | None = None
+    calibration_error: str | None = None
+    if present_calibration_path is not None:
+        try:
+            calibration = _read_json_object(
+                present_calibration_path, label="frequency response calibration JSON"
+            )
+        except ConfigError as exc:
+            calibration_error = str(exc)
     return RunPackage(
         path=run_dir,
         run_json_path=run_json_path,
@@ -169,6 +192,11 @@ def load_run_package(path: str | Path) -> RunPackage:
         frequency_response_fit_path=present_fit_path,
         frequency_response_fit=fit,
         frequency_response_fit_error=fit_error,
+        frequency_response_calibration_csv_path=present_calibration_csv_path,
+        frequency_response_calibration_rows=calibration_rows,
+        frequency_response_calibration_path=present_calibration_path,
+        frequency_response_calibration=calibration,
+        frequency_response_calibration_error=calibration_error,
     )
 
 

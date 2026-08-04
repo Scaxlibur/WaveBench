@@ -123,7 +123,13 @@ def test_frequency_response_template_uses_two_scope_channels_and_compatible_fit_
     assert response.fields["response_channel"] == 3
     assert response.fields["frequencies_hz"] == [100.0, 1000.0, 10000.0]
     assert response.fields["fit"] == {
-        "methods": ["linear_log", "polynomial", "pchip"],
+        "methods": [
+            "linear_log",
+            "polynomial",
+            "pchip",
+            "smoothing_spline_db",
+            "piecewise_chebyshev_db",
+        ],
         "polynomial_degree": 2,
     }
 

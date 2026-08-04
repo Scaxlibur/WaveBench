@@ -1231,6 +1231,68 @@ settle_s = 0
                 )
             )
 
+    def test_frequency_response_multiple_vpp_slices_autoscale_and_write_calibration(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000, 5000, 10000]
+amplitudes_vpp = [0.05, 0.1]
+settle_s = 0
+
+[steps.calibration]
+target_mode = "unity_gain"
+max_slope_db_per_octave = 20
+"""))
+            config = make_config(tmp)
+            status = SimpleNamespace(output="ON")
+            captures = [
+                fake_frequency_response_capture(tmp, f"response_{index}", frequency_hz=frequency)
+                for index, frequency in enumerate([100, 1000, 5000, 10000] * 2)
+            ]
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_amplitude_vpp.return_value = status
+                source.set_frequency.return_value = status
+                scope = scope_cls.return_value
+                scope.capture_waveforms.side_effect = captures
+
+                result = RunService(config=config, logger=CommandLogger()).run(plan)
+
+            self.assertEqual(
+                source.set_amplitude_vpp.call_args_list,
+                [call(channel=1, value_vpp=0.05), call(channel=1, value_vpp=0.1)],
+            )
+            self.assertEqual(scope.autoscale.call_count, 2)
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual(len(rows), 8)
+            self.assertEqual([row["requested_vpp"] for row in rows[:4]], ["0.05"] * 4)
+            self.assertEqual([row["amplitude_index"] for row in rows[4:]], ["1"] * 4)
+            self.assertTrue((result.run_dir / "frequency_response_calibration.csv").exists())
+            self.assertTrue((result.run_dir / "frequency_response_calibration.json").exists())
+            response = result.steps[0].artifact["frequency_response"]
+            self.assertTrue(response["calibration_csv"])
+
+    def test_frequency_response_vpp_slices_respect_source_safety_limit(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+amplitudes_vpp = [0.05, 0.1]
+"""))
+            limits = SafetyLimitsConfig(max_source_vpp=0.075)
+            with self.assertRaisesRegex(ConfigError, "max_source_vpp"):
+                RunService(config=make_config(tmp, safety_limits=limits), logger=CommandLogger()).check(plan)
+
     def test_frequency_response_refuses_to_set_frequency_when_source_is_off(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(write_plan(tmp, """

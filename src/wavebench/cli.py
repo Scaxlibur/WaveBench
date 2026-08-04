@@ -92,6 +92,12 @@ from .services.run_templates import (
     write_run_template,
 )
 from .services.run_service import RunService
+from .services.frequency_response_calibration import (
+    build_frequency_response_calibration,
+    load_frequency_response_calibration_config,
+    write_frequency_response_calibration_csv,
+    write_frequency_response_calibration_json,
+)
 from .services.sweep_service import SweepService, parse_frequency_list
 
 
@@ -384,6 +390,27 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
         if args.domain == "run":
+            if args.command == "calibrate":
+                package = load_run_package(args.path)
+                if package.frequency_response_csv_path is None:
+                    raise ConfigError("run calibrate requires frequency_response.csv in the run directory")
+                calibration = load_frequency_response_calibration_config(args.config)
+                if not calibration.enabled:
+                    raise ConfigError("calibration.enabled must be true for run calibrate")
+                document, rows = build_frequency_response_calibration(
+                    package.frequency_response_rows,
+                    calibration,
+                    source_csv=package.frequency_response_csv_path,
+                )
+                csv_path = write_frequency_response_calibration_csv(
+                    package.path / "frequency_response_calibration.csv", rows
+                )
+                json_path = write_frequency_response_calibration_json(
+                    package.path / "frequency_response_calibration.json", document
+                )
+                print(f"calibration_csv={csv_path}")
+                print(f"calibration_json={json_path}")
+                return 0
             if args.command == "report":
                 if args.pdf_output and not args.pdf:
                     raise ConfigError("run report --pdf-output requires --pdf")

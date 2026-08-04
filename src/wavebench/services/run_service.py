@@ -24,6 +24,12 @@ from wavebench.services.frequency_response import (
     write_fit_document,
     write_frequency_response_csv,
 )
+from wavebench.services.frequency_response_calibration import (
+    build_frequency_response_calibration,
+    ensure_calibration_dependencies,
+    write_frequency_response_calibration_csv,
+    write_frequency_response_calibration_json,
+)
 from wavebench.services.run_artifacts import RunStepRecord, write_run_files, write_step_record
 from wavebench.services.run_analysis import (
     capture_consistency,
@@ -160,6 +166,10 @@ class RunService:
             elif step.kind == "sweep.frequency_response":
                 add("scope", "scope.idn", "scope.capture_waveforms")
                 add("source", "source.status", "source.set_frequency")
+                if step.fields.get("amplitudes_vpp"):
+                    add("source", "source.set_amplitude_vpp")
+                if step.fields.get("autoscale_each_amplitude"):
+                    add("scope", "scope.autoscale")
                 source = self.config.source
                 if self.config.scope.check_errors:
                     add("scope", "scope.errors")
@@ -168,6 +178,9 @@ class RunService:
                 if step.fields.get("screenshot", self.config.output.save_screenshot):
                     add("scope", "scope.screenshot")
                 ensure_fit_dependencies(step.fields.get("fit"))
+                calibration = step.fields.get("calibration")
+                if calibration and calibration.get("enabled", True):
+                    ensure_calibration_dependencies()
             elif step.kind == "source.status":
                 add("source", "source.status")
             elif step.kind == "source.set_freq":
@@ -453,6 +466,8 @@ class RunService:
         source = self._source_service(services=services)
         csv_path = run_dir / "frequency_response.csv"
         fit_path = run_dir / "frequency_response_fit.json"
+        calibration_csv_path = run_dir / "frequency_response_calibration.csv"
+        calibration_json_path = run_dir / "frequency_response_calibration.json"
         points = []
         reference_channel = step.fields["reference_channel"]
         response_channel = step.fields["response_channel"]
@@ -481,88 +496,157 @@ class RunService:
                 response_channel=response_channel,
             ) from exc
 
-        for index, frequency_hz in enumerate(step.fields["frequencies_hz"]):
-            try:
-                source_status = source.set_frequency(channel=source_channel, value_hz=frequency_hz)
-            except Exception as exc:
-                points.append(
-                    failed_frequency_response_point(
-                        index=index,
-                        requested_frequency_hz=frequency_hz,
-                        error=exc,
+        requested_amplitudes = step.fields.get("amplitudes_vpp") or [None]
+        point_index = 0
+        for amplitude_index, requested_vpp in enumerate(requested_amplitudes):
+            if requested_vpp is not None:
+                try:
+                    source_status = source.set_amplitude_vpp(
+                        channel=source_channel, value_vpp=requested_vpp
                     )
-                )
-                write_frequency_response_csv(csv_path, points)
-                raise self._frequency_response_execution_error(
-                    step,
-                    exc,
-                    points=points,
-                    csv_path=csv_path,
-                    fit_path=None,
-                    source_channel=source_channel,
-                    reference_channel=reference_channel,
-                    response_channel=response_channel,
-                ) from exc
-            if str(source_status.output).strip().upper() != "ON":
-                error = ConfigError(
-                    f"source output is {source_status.output} after setting {frequency_hz:.12g} Hz"
-                )
-                points.append(
-                    failed_frequency_response_point(
-                        index=index,
-                        requested_frequency_hz=frequency_hz,
-                        error=error,
+                except Exception as exc:
+                    write_frequency_response_csv(csv_path, points)
+                    raise self._frequency_response_execution_error(
+                        step,
+                        exc,
+                        points=points,
+                        csv_path=csv_path,
+                        fit_path=None,
+                        source_channel=source_channel,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                    ) from exc
+                if str(source_status.output).strip().upper() != "ON":
+                    error = ConfigError(
+                        f"source output is {source_status.output} after setting {requested_vpp:.12g} Vpp"
                     )
-                )
-                write_frequency_response_csv(csv_path, points)
-                raise self._frequency_response_execution_error(
-                    step,
-                    error,
-                    points=points,
-                    csv_path=csv_path,
-                    fit_path=None,
-                    source_channel=source_channel,
-                    reference_channel=reference_channel,
-                    response_channel=response_channel,
-                ) from error
-            if step.fields["settle_s"]:
-                time.sleep(step.fields["settle_s"])
+                    write_frequency_response_csv(csv_path, points)
+                    raise self._frequency_response_execution_error(
+                        step,
+                        error,
+                        points=points,
+                        csv_path=csv_path,
+                        fit_path=None,
+                        source_channel=source_channel,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                    ) from error
+            for frequency_index, frequency_hz in enumerate(step.fields["frequencies_hz"]):
+                try:
+                    source_status = source.set_frequency(channel=source_channel, value_hz=frequency_hz)
+                except Exception as exc:
+                    points.append(
+                        failed_frequency_response_point(
+                            index=point_index,
+                            amplitude_index=amplitude_index,
+                            requested_vpp=requested_vpp,
+                            requested_frequency_hz=frequency_hz,
+                            error=exc,
+                        )
+                    )
+                    write_frequency_response_csv(csv_path, points)
+                    raise self._frequency_response_execution_error(
+                        step,
+                        exc,
+                        points=points,
+                        csv_path=csv_path,
+                        fit_path=None,
+                        source_channel=source_channel,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                    ) from exc
+                if str(source_status.output).strip().upper() != "ON":
+                    error = ConfigError(
+                        f"source output is {source_status.output} after setting {frequency_hz:.12g} Hz"
+                    )
+                    points.append(
+                        failed_frequency_response_point(
+                            index=point_index,
+                            amplitude_index=amplitude_index,
+                            requested_vpp=requested_vpp,
+                            requested_frequency_hz=frequency_hz,
+                            error=error,
+                        )
+                    )
+                    write_frequency_response_csv(csv_path, points)
+                    raise self._frequency_response_execution_error(
+                        step,
+                        error,
+                        points=points,
+                        csv_path=csv_path,
+                        fit_path=None,
+                        source_channel=source_channel,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                    ) from error
+                if step.fields["settle_s"]:
+                    time.sleep(step.fields["settle_s"])
 
-            scope = self._scope_service_for_frequency_response(
-                step,
-                frequency_hz=frequency_hz,
-                services=services,
-            )
-            try:
-                capture = scope.capture_waveforms(
-                    channels=[reference_channel, response_channel],
-                    label=f"{label}_{index:03d}_{frequency_hz:.12g}hz",
+                scope = self._scope_service_for_frequency_response(
+                    step,
+                    frequency_hz=frequency_hz,
+                    services=services,
                 )
-                points.append(
-                    analyze_frequency_response_point(
-                        index=index,
-                        requested_frequency_hz=frequency_hz,
-                        reference_waveform=capture.waveforms[reference_channel],
-                        response_waveform=capture.waveforms[response_channel],
-                        frequency_tolerance_ratio=tolerance,
-                        capture_package=str(capture.package_dir),
-                        metadata_path=str(capture.metadata_path),
+                if frequency_index == 0 and step.fields.get("autoscale_each_amplitude"):
+                    scope.autoscale()
+                    if step.fields["settle_s"]:
+                        time.sleep(step.fields["settle_s"])
+                try:
+                    amplitude_label = (
+                        f"{label}_{point_index:03d}_{frequency_hz:.12g}hz"
+                        if requested_vpp is None
+                        else f"{label}_a{amplitude_index:02d}_{requested_vpp:.12g}vpp_"
+                        f"{frequency_index:03d}_{frequency_hz:.12g}hz"
                     )
-                )
-            except Exception as exc:  # noqa: BLE001 - retain failed points and continue the sweep
-                points.append(
-                    failed_frequency_response_point(
-                        index=index,
-                        requested_frequency_hz=frequency_hz,
-                        error=exc,
+                    capture = scope.capture_waveforms(
+                        channels=[reference_channel, response_channel],
+                        label=amplitude_label,
                     )
-                )
-            write_frequency_response_csv(csv_path, points)
+                    points.append(
+                        analyze_frequency_response_point(
+                            index=point_index,
+                            amplitude_index=amplitude_index,
+                            requested_vpp=requested_vpp,
+                            requested_frequency_hz=frequency_hz,
+                            reference_waveform=capture.waveforms[reference_channel],
+                            response_waveform=capture.waveforms[response_channel],
+                            frequency_tolerance_ratio=tolerance,
+                            capture_package=str(capture.package_dir),
+                            metadata_path=str(capture.metadata_path),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain failed points and continue the sweep
+                    points.append(
+                        failed_frequency_response_point(
+                            index=point_index,
+                            amplitude_index=amplitude_index,
+                            requested_vpp=requested_vpp,
+                            requested_frequency_hz=frequency_hz,
+                            error=exc,
+                        )
+                    )
+                point_index += 1
+                write_frequency_response_csv(csv_path, points)
 
         points = unwrap_frequency_response_phase(points)
         fit_document, fit_values = build_fit_document(points, step.fields.get("fit"))
         write_frequency_response_csv(csv_path, points, fit_values)
         written_fit_path = write_fit_document(fit_path, fit_document)
+        calibration = step.fields.get("calibration")
+        written_calibration_csv: Path | None = None
+        written_calibration_json: Path | None = None
+        calibration_error: str | None = None
+        if calibration and calibration.get("enabled", True):
+            try:
+                document, rows = build_frequency_response_calibration(
+                    [point.as_csv_row() for point in points], calibration, source_csv=csv_path
+                )
+                written_calibration_csv = write_frequency_response_calibration_csv(calibration_csv_path, rows)
+                written_calibration_json = write_frequency_response_calibration_json(
+                    calibration_json_path, document
+                )
+            except Exception as exc:  # noqa: BLE001 - retain a valid measurement when derived calibration fails
+                calibration_error = f"{type(exc).__name__}: {exc}"
         return self._frequency_response_artifact(
             points=points,
             csv_path=csv_path,
@@ -570,6 +654,9 @@ class RunService:
             source_channel=source_channel,
             reference_channel=reference_channel,
             response_channel=response_channel,
+            calibration_csv_path=written_calibration_csv,
+            calibration_json_path=written_calibration_json,
+            calibration_error=calibration_error,
         )
 
     def _frequency_response_execution_error(
@@ -583,6 +670,8 @@ class RunService:
         source_channel: int | None,
         reference_channel: int,
         response_channel: int,
+        calibration_csv_path: Path | None = None,
+        calibration_json_path: Path | None = None,
     ) -> _FrequencyResponseExecutionError:
         artifact = self._frequency_response_artifact(
             points=points,
@@ -591,6 +680,8 @@ class RunService:
             source_channel=source_channel,
             reference_channel=reference_channel,
             response_channel=response_channel,
+            calibration_csv_path=calibration_csv_path,
+            calibration_json_path=calibration_json_path,
             error=cause,
         )
         record = RunStepRecord(
@@ -611,6 +702,9 @@ class RunService:
         source_channel: int | None,
         reference_channel: int,
         response_channel: int,
+        calibration_csv_path: Path | None = None,
+        calibration_json_path: Path | None = None,
+        calibration_error: str | None = None,
         error: Exception | None = None,
     ) -> dict[str, Any]:
         failed_points = sum(point.status == "failed" for point in points)
@@ -625,9 +719,13 @@ class RunService:
             if point.capture_package
         ]
         response: dict[str, Any] = {
-            "status": "failed" if error is not None or failed_points else ("warning" if warning_points else "ok"),
+            "status": "failed"
+            if error is not None or failed_points
+            else ("warning" if warning_points or calibration_error else "ok"),
             "csv": str(csv_path),
             "fit_json": str(fit_path) if fit_path is not None else "",
+            "calibration_csv": str(calibration_csv_path) if calibration_csv_path is not None else "",
+            "calibration_json": str(calibration_json_path) if calibration_json_path is not None else "",
             "point_count": len(points),
             "failed_point_count": failed_points,
             "warning_point_count": warning_points,
@@ -638,6 +736,8 @@ class RunService:
         }
         if error is not None:
             response["error"] = f"{type(error).__name__}: {error}"
+        if calibration_error is not None:
+            response["calibration_error"] = calibration_error
         return {"frequency_response": response}
 
     def _run_scope_capture_step(
