@@ -89,6 +89,7 @@ _OPTIONAL_FIELDS = {
         "stop_vpp",
         "vpp_step",
         "autoscale_each_amplitude",
+        "retry_warning_with_autoscale",
         "calibration",
         "baseline",
         "adaptive",
@@ -525,6 +526,10 @@ def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) ->
         fields["points"] = normalize_waveform_points(
             _non_empty_str(fields["points"], f"{prefix}.points")
         )
+    retry_warning = fields.get("retry_warning_with_autoscale", True)
+    if not isinstance(retry_warning, bool):
+        raise ConfigError(f"{prefix}.retry_warning_with_autoscale must be true or false")
+    fields["retry_warning_with_autoscale"] = retry_warning
     for name in ("save_csv", "screenshot"):
         if name in fields and not isinstance(fields[name], bool):
             raise ConfigError(f"{prefix}.{name} must be true or false")

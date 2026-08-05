@@ -43,6 +43,10 @@ BASE_CSV_FIELDS = (
     "adaptive_level",
     "adaptive_parent_start_hz",
     "adaptive_parent_stop_hz",
+    "quality_retry_count",
+    "initial_warnings",
+    "initial_capture_package",
+    "initial_metadata_path",
     "status",
     "warnings",
     "error",
@@ -77,6 +81,10 @@ class FrequencyResponsePoint:
     adaptive_level: int = 0
     adaptive_parent_start_hz: float | None = None
     adaptive_parent_stop_hz: float | None = None
+    quality_retry_count: int = 0
+    initial_warnings: tuple[str, ...] = ()
+    initial_capture_package: str = ""
+    initial_metadata_path: str = ""
     warnings: tuple[str, ...] = ()
     error: str = ""
     capture_package: str = ""
@@ -116,6 +124,10 @@ class FrequencyResponsePoint:
             "adaptive_level": self.adaptive_level,
             "adaptive_parent_start_hz": self.adaptive_parent_start_hz,
             "adaptive_parent_stop_hz": self.adaptive_parent_stop_hz,
+            "quality_retry_count": self.quality_retry_count,
+            "initial_warnings": " | ".join(self.initial_warnings),
+            "initial_capture_package": self.initial_capture_package,
+            "initial_metadata_path": self.initial_metadata_path,
             "status": self.status,
             "warnings": " | ".join(self.warnings),
             "error": self.error,

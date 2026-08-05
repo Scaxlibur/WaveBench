@@ -138,6 +138,7 @@ def fake_frequency_response_capture(
     frequency_hz: float,
     gain: float = 2.0,
     phase_deg: float = -45.0,
+    warnings: list[str] | None = None,
 ):
     package = Path(tmp) / name
     package.mkdir()
@@ -148,7 +149,7 @@ def fake_frequency_response_capture(
     def waveform(amplitude: float, phase: float):
         values = amplitude * np.sin(2.0 * np.pi * frequency_hz * times + np.radians(phase))
         summary = {
-            "quality_warnings": [],
+            "quality_warnings": warnings or [],
             "frequency_estimate_hz": frequency_hz,
             "voltage_vpp_v": amplitude * 2.0,
             "frequency_error_ratio": 0.0,
@@ -1230,6 +1231,73 @@ settle_s = 0
                     if call.kwargs["config"].waveform.expected_frequency_hz is not None
                 )
             )
+
+    def test_frequency_response_retries_warning_after_autoscale_and_uses_clean_retry(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [1000, 2000]
+settle_s = 0
+"""))
+            status = SimpleNamespace(output="ON")
+            initial = fake_frequency_response_capture(tmp, "first", frequency_hz=1000, warnings=["frequency_mismatch"])
+            retry = fake_frequency_response_capture(tmp, "retry", frequency_hz=1000)
+            second = fake_frequency_response_capture(tmp, "second", frequency_hz=2000)
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_frequency.return_value = status
+                scope = scope_cls.return_value
+                scope.capture_waveforms.side_effect = [initial, retry, second]
+
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual(scope.autoscale.call_count, 1)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["status"], "ok")
+            self.assertEqual(rows[0]["quality_retry_count"], "1")
+            self.assertEqual(rows[0]["initial_warnings"], "reference: frequency_mismatch | response: frequency_mismatch")
+            self.assertEqual(rows[0]["initial_capture_package"], str(initial.package_dir))
+
+    def test_frequency_response_marks_point_failed_when_warning_retry_is_exhausted(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [1000, 2000]
+settle_s = 0
+"""))
+            status = SimpleNamespace(output="ON")
+            first = fake_frequency_response_capture(tmp, "first", frequency_hz=1000, warnings=["frequency_mismatch"])
+            retry = fake_frequency_response_capture(tmp, "retry", frequency_hz=1000, warnings=["frequency_mismatch"])
+            second = fake_frequency_response_capture(tmp, "second", frequency_hz=2000)
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_frequency.return_value = status
+                scope = scope_cls.return_value
+                scope.capture_waveforms.side_effect = [first, retry, second]
+
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual(scope.autoscale.call_count, 1)
+            self.assertEqual(rows[0]["status"], "failed")
+            self.assertEqual(rows[0]["quality_retry_count"], "1")
+            self.assertIn("quality_retry_exhausted", rows[0]["error"])
+            self.assertEqual(rows[1]["status"], "ok")
 
     def test_frequency_response_multiple_vpp_slices_autoscale_and_write_calibration(self):
         with TemporaryDirectory() as tmp:

@@ -189,9 +189,12 @@ max_slope_db_per_octave = 6
 | `amplitudes_vpp` | 严格递增、正数的显式 Vpp 数组；不能与生成式字段共用。 |
 | `start_vpp` / `stop_vpp` / `vpp_step` | 三者必须同时出现；`stop_vpp > start_vpp`，步进必须整除区间。 |
 | `autoscale_each_amplitude` | 多幅值时默认 `true`；仅在已人工确认量程时才建议设为 `false`。 |
+| `retry_warning_with_autoscale` | 默认 `true`；单点出现质量 warning 时 autoscale、稳定后重测一次。重测仍 warning 则该点标为 failed，并保留两次采集证据。 |
 | `[steps.calibration]` | 仅多幅值数据有实际意义；`enabled = false` 可关闭自动派生。 |
 
 执行顺序固定为“设定 Vpp → 对每个频点设频并等待 `settle_s` → 每个幅值切片的首个频点 autoscale → 再等待 `settle_s` → 同步采集 CH1/CH2”。`autoscale_each_amplitude = false` 可显式关闭该切片首点 autoscale，但仅适用于已由人工确认两路量程足够的情况。每个 Vpp 值都在连接仪器前受 `[safety_limits].max_source_vpp` 检查。
+
+频响点的首次采集若出现质量 warning，默认会执行一次“autoscale → 等待 `settle_s` → 同频同幅值重测”。重测成功时 CSV 的最终值来自第二次采集，并用 `quality_retry_count`、`initial_warnings`、`initial_capture_package` 和 `initial_metadata_path` 保存首次证据；重测仍 warning 时该点标为 `failed`、带 `quality_retry_exhausted` 原因，不参与拟合、软件校正或二维 LUT。可在 step 中设 `retry_warning_with_autoscale = false` 关闭此策略。
 
 完整矩阵的点数为 `幅值数 × 频点数`；每个点至少消耗 `settle_s`，每个幅值切片还会增加一次 autoscale 与稳定等待。先用少量幅值和稀疏频点执行 `run check`、只读 `run verify`、再做实机小矩阵确认量程和耗时，别拿 5 mV 步进和 500 Hz 步进直接开 13 小时以上的盲扫，没必要给仪器和人都上强度。
 

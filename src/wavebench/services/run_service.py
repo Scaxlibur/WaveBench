@@ -5,7 +5,7 @@ import time
 import json
 from math import isfinite
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -673,7 +673,7 @@ class RunService:
                         capture = scope.capture_waveforms(
                             channels=[reference_channel, response_channel], label=amplitude_label
                         )
-                        points.append(analyze_frequency_response_point(
+                        point = analyze_frequency_response_point(
                             index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
                             requested_frequency_hz=frequency_hz,
                             reference_waveform=capture.waveforms[reference_channel],
@@ -681,7 +681,50 @@ class RunService:
                             frequency_tolerance_ratio=tolerance, capture_package=str(capture.package_dir),
                             metadata_path=str(capture.metadata_path), adaptive_level=adaptive_level,
                             adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
-                        ))
+                        )
+                        if point.status == "warning" and step.fields["retry_warning_with_autoscale"]:
+                            initial_point = point
+                            try:
+                                scope.autoscale()
+                                if step.fields["settle_s"]:
+                                    time.sleep(step.fields["settle_s"])
+                                retry_capture = scope.capture_waveforms(
+                                    channels=[reference_channel, response_channel], label=f"{amplitude_label}_retry1"
+                                )
+                                retry_point = analyze_frequency_response_point(
+                                    index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
+                                    requested_frequency_hz=frequency_hz,
+                                    reference_waveform=retry_capture.waveforms[reference_channel],
+                                    response_waveform=retry_capture.waveforms[response_channel],
+                                    frequency_tolerance_ratio=tolerance,
+                                    capture_package=str(retry_capture.package_dir), metadata_path=str(retry_capture.metadata_path),
+                                    adaptive_level=adaptive_level, adaptive_parent_start_hz=parent_start,
+                                    adaptive_parent_stop_hz=parent_stop,
+                                )
+                                point = replace(
+                                    retry_point,
+                                    status="failed" if retry_point.status == "warning" else retry_point.status,
+                                    quality_retry_count=1,
+                                    initial_warnings=initial_point.warnings,
+                                    initial_capture_package=initial_point.capture_package,
+                                    initial_metadata_path=initial_point.metadata_path,
+                                    error=(
+                                        "quality_retry_exhausted: initial warnings="
+                                        + " | ".join(initial_point.warnings)
+                                        + "; retry warnings=" + " | ".join(retry_point.warnings)
+                                    ) if retry_point.status == "warning" else retry_point.error,
+                                )
+                            except Exception as retry_exc:  # noqa: BLE001 - retain the first capture evidence
+                                point = replace(
+                                    initial_point,
+                                    status="failed",
+                                    quality_retry_count=1,
+                                    initial_warnings=initial_point.warnings,
+                                    initial_capture_package=initial_point.capture_package,
+                                    initial_metadata_path=initial_point.metadata_path,
+                                    error=f"quality_retry_failed: {type(retry_exc).__name__}: {retry_exc}",
+                                )
+                        points.append(point)
                     except Exception as exc:  # noqa: BLE001 - retain failed points and continue the sweep
                         points.append(failed_frequency_response_point(
                             index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,

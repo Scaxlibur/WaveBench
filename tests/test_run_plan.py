@@ -325,6 +325,7 @@ polynomial_degree = 2
         self.assertEqual(fields["frequencies_hz"][2], 10000.0)
         self.assertEqual(fields["target_cycles"], 8.0)
         self.assertEqual(fields["settle_s"], 0.0)
+        self.assertTrue(fields["retry_warning_with_autoscale"])
         self.assertEqual(
             fields["fit"],
             {"methods": ["linear_log", "polynomial"], "polynomial_degree": 2},
@@ -351,6 +352,18 @@ target_gain_db = -1.0
         self.assertEqual(fields["amplitudes_vpp"], [0.05, 0.1, 0.15])
         self.assertTrue(fields["autoscale_each_amplitude"])
         self.assertEqual(fields["calibration"]["target_gain_db"], -1.0)
+
+    def test_frequency_response_plan_accepts_warning_retry_configuration(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+retry_warning_with_autoscale = false
+"""))
+
+        self.assertFalse(plan.steps[0].fields["retry_warning_with_autoscale"])
 
     def test_frequency_response_plan_rejects_mixed_vpp_forms(self):
         path = self._write_plan("""
