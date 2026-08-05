@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -795,36 +796,51 @@ def _frequency_response_section(
     response: FrequencyResponsePackage, *, include_table: bool, multiple: bool
 ) -> str:
     rows = response.rows
-    raw_gain_blocks = _response_blocks(rows, "gain_db")
-    raw_phase_blocks = _response_blocks(rows, "phase_unwrapped_deg")
-    corrected_gain_blocks = _response_blocks(rows, "gain_db_corrected")
-    corrected_phase_blocks = _response_blocks(rows, "phase_unwrapped_corrected_deg")
+    raw_gain_measurements = _response_amplitude_series(rows, "gain_db")
+    raw_phase_measurements = _response_amplitude_series(rows, "phase_unwrapped_deg")
+    corrected_gain_measurements = _response_amplitude_series(rows, "gain_db_corrected")
+    corrected_phase_measurements = _response_amplitude_series(rows, "phase_unwrapped_corrected_deg")
+    raw_gain_blocks = [] if raw_gain_measurements else _response_blocks(rows, "gain_db")
+    raw_phase_blocks = [] if raw_phase_measurements else _response_blocks(rows, "phase_unwrapped_deg")
+    corrected_gain_blocks = [] if corrected_gain_measurements else _response_blocks(rows, "gain_db_corrected")
+    corrected_phase_blocks = [] if corrected_phase_measurements else _response_blocks(rows, "phase_unwrapped_corrected_deg")
     fit_series = _fit_curve_series(response.fit)
     gain_svg = _response_svg(
         raw_gain_blocks,
         title="原始幅频 / Raw magnitude response",
         y_label="Gain (dB)",
         series=(),
+        measured_series=raw_gain_measurements,
+        actual_label="",
     )
     phase_svg = _response_svg(
         raw_phase_blocks,
         title="原始相频 / Raw phase response",
         y_label="Phase (deg, unwrapped)",
         series=(),
+        measured_series=raw_phase_measurements,
+        actual_label="",
     )
     corrected_gain_svg = _response_svg(
         corrected_gain_blocks,
         title="校正幅频 / Corrected magnitude response",
         y_label="Gain (dB)",
         series=(),
-    ) if corrected_gain_blocks else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
+        measured_series=corrected_gain_measurements,
+        actual_label="",
+    ) if corrected_gain_blocks or corrected_gain_measurements else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
     corrected_phase_svg = _response_svg(
         corrected_phase_blocks,
         title="校正相频 / Corrected phase response",
         y_label="Phase (deg, unwrapped)",
         series=(),
-    ) if corrected_phase_blocks else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
-    linear_blocks = [
+        measured_series=corrected_phase_measurements,
+        actual_label="",
+    ) if corrected_phase_blocks or corrected_phase_measurements else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
+    linear_measurements = _response_amplitude_series(rows, "gain_linear_corrected") or _response_amplitude_series(
+        rows, "gain_linear"
+    )
+    linear_blocks = [] if linear_measurements else [
         [point]
         for block in _response_blocks(rows, "gain_linear_corrected") or _response_blocks(rows, "gain_linear")
         for point in block
@@ -834,6 +850,7 @@ def _frequency_response_section(
         title="线性增益拟合 / Linear gain fit comparison",
         y_label="Linear gain (V/V)",
         series=fit_series,
+        measured_series=linear_measurements,
         actual_label="Measured",
     )
     table_block = ""
@@ -857,11 +874,13 @@ def _frequency_response_section(
     calibration_block = _frequency_response_calibration_block(response)
     baseline_block = _frequency_response_baseline_block(response)
     adaptive_block = _frequency_response_adaptive_block(response)
+    matrix_summary = _frequency_response_matrix_summary(rows)
     title = "频率响应 / Frequency response"
     if multiple:
         title += f" — {escape(response.label)}"
     return f"""<h2>{title}</h2>
 <p class="muted">响应标签 / Response label: <code>{escape(response.label)}</code>。原始幅相保留为证据；软件基线校正不会改写仪器 deskew 或前面板设置。</p>
+{matrix_summary}
 {baseline_block}
 {adaptive_block}
 <section class="frequency-response-grid">
@@ -1020,6 +1039,72 @@ def _response_blocks(rows: list[dict[str, str]], key: str) -> list[list[tuple[fl
     if block:
         blocks.append(block)
     return blocks
+
+
+def _response_amplitude_series(
+    rows: list[dict[str, str]], key: str
+) -> list[tuple[str, str, list[tuple[float, float]]]]:
+    """Split a 2D sweep into one labeled, colored Bode series per requested Vpp."""
+    groups: dict[str, tuple[float, list[tuple[float, float]]]] = {}
+    for row in rows:
+        requested_vpp = _finite_float(row.get("requested_vpp"))
+        frequency = _finite_float(row.get("requested_frequency_hz"))
+        value = _finite_float(row.get(key))
+        if (
+            requested_vpp is None
+            or requested_vpp <= 0
+            or frequency is None
+            or frequency <= 0
+            or value is None
+            or row.get("status") == "failed"
+        ):
+            continue
+        group_key = str(row.get("amplitude_index", "")) or f"{requested_vpp:.12g}"
+        if group_key not in groups:
+            groups[group_key] = (requested_vpp, [])
+        groups[group_key][1].append((frequency, value))
+    colors = ("#2563eb", "#dc2626", "#0891b2", "#7c3aed", "#ea580c", "#16a34a")
+    return [
+        (f"Measured · {_format_metric(amplitude, 'Vpp')}", colors[index % len(colors)], sorted(values))
+        for index, (_group_key, (amplitude, values)) in enumerate(
+            sorted(groups.items(), key=lambda item: item[1][0])
+        )
+    ]
+
+
+def _frequency_response_matrix_summary(rows: list[dict[str, str]]) -> str:
+    amplitudes = sorted(
+        {
+            value
+            for row in rows
+            if (value := _finite_float(row.get("requested_vpp"))) is not None and value > 0
+        }
+    )
+    frequencies = sorted(
+        {
+            value
+            for row in rows
+            if (value := _finite_float(row.get("requested_frequency_hz"))) is not None and value > 0
+        }
+    )
+    if not amplitudes or not frequencies:
+        return ""
+    combinations = len(amplitudes) * len(frequencies)
+    observed = {
+        (amplitude, frequency)
+        for row in rows
+        if (amplitude := _finite_float(row.get("requested_vpp"))) is not None
+        and amplitude > 0
+        and (frequency := _finite_float(row.get("requested_frequency_hz"))) is not None
+        and frequency > 0
+    }
+    kind = "二维 / 2D" if len(amplitudes) > 1 else "单幅值 / single-amplitude"
+    return (
+        '<p class="muted"><strong>扫频矩阵 / Sweep matrix:</strong> '
+        f'{escape(kind)}，{len(amplitudes)} 个 Vpp 切片 × {len(frequencies)} 个频率节点 '
+        f'= {combinations} 个请求组合；CSV 已记录 {len(observed)}/{combinations} 个组合。'
+        '</p>'
+    )
 
 
 def _frequency_response_calibration_block(response: FrequencyResponsePackage) -> str:
@@ -1204,10 +1289,12 @@ def _response_svg(
     title: str,
     y_label: str,
     series: list[tuple[str, str, list[tuple[float, float]]]],
+    measured_series: list[tuple[str, str, list[tuple[float, float]]]] = (),
     actual_label: str = "Measured",
 ) -> str:
     actual = [point for block in blocks for point in block]
-    all_points = actual + [point for _name, _color, values in series for point in values]
+    measured = [point for _name, _color, values in measured_series for point in values]
+    all_points = actual + measured + [point for _name, _color, values in series for point in values]
     if not all_points:
         return '<p class="warning">没有可绘制的有效频点 / No valid points to plot.</p>'
     x_values = np.asarray([np.log10(point[0]) for point in all_points], dtype=float)
@@ -1226,17 +1313,23 @@ def _response_svg(
         pad_y = (y_max - y_min) * 0.08
         y_min -= pad_y
         y_max += pad_y
-    width, pad_left, pad_right, pad_top = 680, 58, 20, 28
+    y_min, y_max, y_ticks, y_tick_step = _nice_linear_axis_ticks(y_min, y_max)
+    x_ticks = _log_frequency_ticks(x_min, x_max)
+    width, pad_left, pad_right, pad_top = 680, 72, 20, 28
     legend_items = (
-        ([(actual_label, "#2563eb")] if actual else [])
+        ([(actual_label, "#2563eb")] if actual and actual_label else [])
+        + [(name, color) for name, color, _values in measured_series]
         + [(name, color) for name, color, _values in series]
     )
     legend_columns = 2
     legend_row_height = 15
     legend_rows = max(1, (len(legend_items) + legend_columns - 1) // legend_columns)
-    legend_footer = 34
+    # Tick labels and the common x-axis label sit above the legend.  They are
+    # emitted into the SVG itself so the browser and WeasyPrint PDF receive the
+    # exact same, self-contained coordinate system.
+    legend_footer = 52
     pad_bottom = legend_footer + legend_rows * legend_row_height
-    height = 270 + max(0, legend_rows - 2) * legend_row_height
+    height = 288 + max(0, legend_rows - 2) * legend_row_height
     axis_y = height - pad_bottom
 
     def position(point: tuple[float, float]) -> tuple[float, float]:
@@ -1259,8 +1352,51 @@ def _response_svg(
         f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3" fill="#2563eb"/>'
         for x, y in (position(point) for point in actual)
     )
+    measured_lines = []
+    measured_circles = []
+    for _name, color, values in measured_series:
+        points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in values))
+        measured_lines.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.8"/>')
+        measured_circles.extend(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="2.6" fill="{color}"/>'
+            for x, y in (position(point) for point in values)
+        )
+    x_grid = []
+    x_tick_labels = []
+    for frequency_hz in x_ticks:
+        x_value = math.log10(frequency_hz)
+        x = pad_left + (x_value - x_min) / (x_max - x_min) * (width - pad_left - pad_right)
+        x_grid.append(
+            f'<line class="plot-grid x-grid" x1="{x:.2f}" y1="{pad_top}" '
+            f'x2="{x:.2f}" y2="{axis_y}" stroke="#d9e2ec" stroke-width="0.8"/>'
+        )
+        x_grid.append(
+            f'<line class="x-axis-tick" x1="{x:.2f}" y1="{axis_y}" '
+            f'x2="{x:.2f}" y2="{axis_y + 4}" stroke="#627d98" stroke-width="0.9"/>'
+        )
+        x_tick_labels.append(
+            f'<text class="x-axis-label" x="{x:.2f}" y="{axis_y + 16}" '
+            f'text-anchor="middle" font-size="9" fill="#486581">'
+            f'{escape(_format_frequency_axis_tick(frequency_hz))}</text>'
+        )
+    y_grid = []
+    for value in y_ticks:
+        y = axis_y - (value - y_min) / (y_max - y_min) * (axis_y - pad_top)
+        y_grid.append(
+            f'<line class="plot-grid y-grid" x1="{pad_left}" y1="{y:.2f}" '
+            f'x2="{width - pad_right}" y2="{y:.2f}" stroke="#d9e2ec" stroke-width="0.8"/>'
+        )
+        y_grid.append(
+            f'<line class="y-axis-tick" x1="{pad_left - 4}" y1="{y:.2f}" '
+            f'x2="{pad_left}" y2="{y:.2f}" stroke="#627d98" stroke-width="0.9"/>'
+        )
+        y_grid.append(
+            f'<text class="y-axis-label" x="{pad_left - 7}" y="{y + 3.2:.2f}" '
+            f'text-anchor="end" font-size="9" fill="#486581">'
+            f'{escape(_format_linear_axis_tick(value, y_tick_step))}</text>'
+        )
     legend_column_width = (width - pad_left - pad_right) / legend_columns
-    legend_base_y = axis_y + 38
+    legend_base_y = axis_y + 54
     legends = []
     for index, (name, color) in enumerate(legend_items):
         row, column = divmod(index, legend_columns)
@@ -1277,14 +1413,62 @@ def _response_svg(
     return (
         f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{escape(title, quote=True)}">'
         f'<rect x="0" y="0" width="{width}" height="{height}" fill="#f8fafc"/>'
+        f'{"".join(x_grid)}{"".join(y_grid)}{"".join(x_tick_labels)}'
         f'<line x1="{pad_left}" y1="{axis_y}" x2="{width - pad_right}" y2="{axis_y}" stroke="#9fb3c8"/>'
         f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{axis_y}" stroke="#9fb3c8"/>'
         f'<text x="{pad_left}" y="16" font-size="12" fill="#334e68">{escape(title)}</text>'
-        f'<text x="{pad_left}" y="{axis_y + 20}" font-size="10" fill="#627d98">log10(f / Hz): {x_min:.3g} .. {x_max:.3g}</text>'
-        f'<text x="{pad_left + 4}" y="{pad_top + 14}" font-size="10" fill="#627d98">{escape(y_label)}: {y_min:.4g} .. {y_max:.4g}</text>'
-        f'{"".join(polylines)}{circles}{"".join(fit_lines)}{"".join(legends)}'
+        f'<text class="x-axis-title" x="{(pad_left + width - pad_right) / 2:.2f}" y="{axis_y + 34}" '
+        f'text-anchor="middle" font-size="10" fill="#334e68">Frequency / Hz (log)</text>'
+        f'<text class="y-axis-title" x="{pad_left + 4}" y="{pad_top + 14}" font-size="10" fill="#334e68">{escape(y_label)}</text>'
+        f'{"".join(polylines)}{circles}{"".join(measured_lines)}{"".join(measured_circles)}'
+        f'{"".join(fit_lines)}{"".join(legends)}'
         '</svg>'
     )
+
+
+def _log_frequency_ticks(x_min: float, x_max: float) -> list[float]:
+    """Return conventional 1-2-5 log-frequency ticks within the visible domain."""
+    ticks = [
+        factor * 10.0**exponent
+        for exponent in range(math.floor(x_min), math.ceil(x_max) + 1)
+        for factor in (1.0, 2.0, 5.0)
+        if x_min - 1e-12 <= math.log10(factor * 10.0**exponent) <= x_max + 1e-12
+    ]
+    # Very broad plots would otherwise turn into a forest of labels.  Retain
+    # decade ticks first; the common measurement ranges keep all 1-2-5 ticks.
+    if len(ticks) > 10:
+        ticks = [tick for tick in ticks if math.isclose(math.log10(tick) % 1.0, 0.0, abs_tol=1e-10)]
+    return ticks
+
+
+def _nice_linear_axis_ticks(y_min: float, y_max: float) -> tuple[float, float, list[float], float]:
+    """Expand a numeric domain to readable, evenly spaced linear ticks."""
+    span = y_max - y_min
+    raw_step = span / 5.0
+    exponent = 10.0 ** math.floor(math.log10(raw_step))
+    normalized = raw_step / exponent
+    multiplier = next(value for value in (1.0, 2.0, 2.5, 5.0, 10.0) if normalized <= value)
+    step = multiplier * exponent
+    tick_min = math.floor(y_min / step) * step
+    tick_max = math.ceil(y_max / step) * step
+    count = int(round((tick_max - tick_min) / step)) + 1
+    ticks = [tick_min + index * step for index in range(count)]
+    return tick_min, tick_max, ticks, step
+
+
+def _format_frequency_axis_tick(frequency_hz: float) -> str:
+    if frequency_hz >= 1e6:
+        return f"{frequency_hz / 1e6:g} M"
+    if frequency_hz >= 1e3:
+        return f"{frequency_hz / 1e3:g} k"
+    return f"{frequency_hz:g}"
+
+
+def _format_linear_axis_tick(value: float, step: float) -> str:
+    if math.isclose(value, 0.0, abs_tol=abs(step) * 1e-9):
+        value = 0.0
+    precision = max(0, min(6, int(math.ceil(-math.log10(abs(step)))) + 1))
+    return f"{value:.{precision}f}".rstrip("0").rstrip(".")
 
 
 def _short_svg_legend_label(label: str, *, limit: int = 30) -> str:

@@ -36,11 +36,51 @@ class RunReportTests(unittest.TestCase):
         )
         self.assertEqual(len(positions), 4)
         self.assertEqual(len(set(positions)), 4)
-        self.assertEqual({position[0] for position in positions}, {"58.00", "359.00"})
+        self.assertEqual({position[0] for position in positions}, {"72.00", "366.00"})
         self.assertEqual(len({position[1] for position in positions}), 2)
         self.assertIn(">Measured</text>", svg)
         self.assertIn("…</text>", svg)
         self.assertNotIn("Frequency piecewise linear interpolation</text>", svg)
+
+    def test_response_svg_includes_readable_log_frequency_and_linear_value_ticks(self):
+        svg = _response_svg(
+            [[(10_000.0, -0.2), (100_000.0, -1.0), (500_000.0, -3.1)]],
+            title="Magnitude response",
+            y_label="Gain (dB)",
+            series=(),
+        )
+
+        self.assertIn('class="plot-grid x-grid"', svg)
+        self.assertIn('class="plot-grid y-grid"', svg)
+        self.assertIn('class="x-axis-tick"', svg)
+        self.assertIn('class="y-axis-tick"', svg)
+        self.assertIn('class="x-axis-title"', svg)
+        self.assertIn('class="y-axis-title"', svg)
+        self.assertIn(">10 k</text>", svg)
+        self.assertIn(">100 k</text>", svg)
+        self.assertIn(">Gain (dB)</text>", svg)
+
+    def test_run_report_labels_each_amplitude_slice_and_summarizes_a_two_dimensional_sweep(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            rows = [
+                "index,amplitude_index,requested_vpp,requested_frequency_hz,gain_linear,gain_db,phase_unwrapped_deg,status"
+            ]
+            for amplitude_index, amplitude in enumerate((0.05, 0.1)):
+                for frequency in (10_000, 100_000, 500_000):
+                    rows.append(
+                        f"{len(rows) - 1},{amplitude_index},{amplitude},{frequency},0.9,-0.9,-45,ok"
+                    )
+            (run_dir / "frequency_response.csv").write_text("\n".join(rows), encoding="utf-8")
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn("扫频矩阵 / Sweep matrix", html)
+            self.assertIn("二维 / 2D，2 个 Vpp 切片 × 3 个频率节点 = 6 个请求组合", html)
+            self.assertIn('data-label="Measured · 0.05 Vpp"', html)
+            self.assertIn('data-label="Measured · 0.1 Vpp"', html)
 
     def test_run_report_embeds_capture_screenshot_relative_to_report(self):
         with TemporaryDirectory() as tmp:
