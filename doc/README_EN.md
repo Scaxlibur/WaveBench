@@ -56,14 +56,14 @@ The Textual interface is an optional extra. In a source checkout, install it wit
 
 Its supported product scope is intentionally frozen to the power-supply, DMM, and signal-source panels. CLI commands, run plans, and services remain the primary interfaces; the TUI is not a run-plan editor, plugin manager, full oscilloscope viewer, or reporting system.
 
-## Optional frequency-response analysis and PDF reports
+## Optional frequency-response analysis, interactive HTML, and PDF reports
 
-`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with raw and, when configured, software-baseline-corrected linear/dB gain and wrapped/unwrapped output-relative phase. A run may contain multiple independently labelled responses and multiple requested Vpp slices, producing a two-dimensional Vpp × frequency measurement. A baseline is an explicitly referenced, separately captured manual CH1/CH2 through connection; it never changes scope deskew or front-panel settings. Optional adaptive refinement inserts linear or logarithmic midpoints where either gain or unwrapped phase changes too quickly, then samples every Vpp slice at the new frequency. The offline HTML/PDF report renders each response's raw/corrected magnitude and phase, fit comparison, audit summary, point table, and any saved per-point screenshots.
+`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with raw and, when configured, software-baseline-corrected linear/dB gain and wrapped/unwrapped output-relative phase. A run may contain multiple independently labelled responses and multiple requested Vpp slices, producing a two-dimensional Vpp × frequency measurement. A baseline is an explicitly referenced, separately captured manual CH1/CH2 through connection; it never changes scope deskew or front-panel settings. Optional adaptive refinement inserts linear or logarithmic midpoints where either gain or unwrapped phase changes too quickly, then samples every Vpp slice at the new frequency. The offline HTML/PDF report renders each response's raw/corrected magnitude and phase, fit comparison, audit summary, point table, and any saved per-point screenshots. With the `report3d` extra installed, two-dimensional HTML reports also include a rotatable measured-gain surface with Raw/Corrected and dB/V/V selectors, warning/recovery markers, hover evidence, zoom, and camera reset.
 
 Use the conservative template before editing a plan manually:
 
 ```bash
-python -m pip install -e ".[analysis,pdf]"
+python -m pip install -e ".[analysis,pdf,report3d]"
 python -m wavebench run template source-scope-frequency-response \
   --frequencies 100,1000,10000 --reference-channel 1 --response-channel 2 \
   --fit --output plans/frequency_response.toml
@@ -77,7 +77,9 @@ python -m wavebench run report data/runs/<run-dir> --pdf
 python -m wavebench run calibrate data/runs/<run-dir> --config plans/calibration.toml --response <label>
 ```
 
-The PDF is a portable visual report: its visible screenshots, SVG charts, and tables are embedded, while CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.
+The interactive HTML bundles no network resources: Plotly is copied to `report-assets/plotly.min.js` and recorded in the report manifest. Keep that directory beside the HTML when moving the report. Surfaces only connect neighbouring measured grid nodes; failed points remain holes, and no fit or extrapolation is invented. Single-amplitude or smaller-than-2×2 data stays on the static Bode presentation.
+
+The PDF is a portable static visual report: it deliberately does not load Plotly, while its visible screenshots, SVG charts, and tables are embedded. CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.
 
 ## Running tests in idle-limited terminals
 

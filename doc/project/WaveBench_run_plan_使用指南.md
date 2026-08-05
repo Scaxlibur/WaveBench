@@ -485,7 +485,7 @@ HTML 报告当前会汇总：
 - `实验证据摘要 / Run evidence summary`：source 步骤、scope capture、DMM 读数、run.json、summary.csv、截图和波形预览数量。
 - `证据时间线 / Evidence timeline`：按 step 展示 source/scope/DMM/sleep 的证据摘要。
 - `扫频摘要 / Sweep summary`：当 run 里有多点 `scope.capture` 或 sweep label 时显示，列出每个频点的 label、status、quality、expect、FFT、frequency、Vpp、FFT peak、peak amplitude 和 THD。
-- `频率响应 / Frequency response`：按每个 manifest response 显示原始/软件校正幅频和相频、基线与自适应摘要、拟合对比、逐点表格、拟合公式/参数和原始采集包链接；校准产物还会显示目标、留点验证误差、补偿热图、代表性幅值切片和定点摘要。
+- `频率响应 / Frequency response`：按每个 manifest response 显示原始/软件校正幅频和相频、基线与自适应摘要、拟合对比、逐点表格、拟合公式/参数和原始采集包链接；校准产物还会显示目标、留点验证误差、补偿热图、代表性幅值切片和定点摘要。安装 `.[report3d]` 后，至少 2 个 Vpp × 2 个频率节点的 response 会在 Bode 图前增加交互式三维增益曲面，可切换 Raw/Corrected、dB/V/V，并查看 warning、自动恢复次数和采集证据。
 - `验收摘要 / Acceptance summary` 与 `预期 vs 实测 / Expected vs measured`：汇总 `[steps.expect]` 和 `[steps.expect_fft]` 的验收结果。
 - `DMM 读数 / DMM readings`、`信号分析 / Signal analysis`、`波形预览 / Waveform previews`、`截图 / Screenshots`。
 
@@ -497,6 +497,8 @@ python -m wavebench run report data/runs/<run_dir> --output reports/lowpass.html
 ```
 
 PDF 会嵌入 HTML 中可见的截图、静态 SVG 曲线和表格，适合把报告发给他人或归档。CSV、拟合 JSON、NPY 和完整采集包仍是独立证据文件；PDF 中保留它们的链接，但不把大型原始波形伪装成可见图表。WeasyPrint 还需要操作系统提供 Cairo、Pango、GDK-PixBuf 和合适的中文字体。
+
+三维 HTML 使用报告目录内的 `report-assets/plotly.min.js`，不访问 CDN；移动或打包 HTML 时必须同时保留整个 `report-assets/`。failed 点在曲面中保持空洞，不插值补齐；单幅值或不足 2 × 2 的数据自动退回静态 Bode。PDF 的 compact 渲染路径不加载 Plotly，也不预留空白交互区域，因此仍是单文件静态归档。
 
 典型 sweep 流程：
 

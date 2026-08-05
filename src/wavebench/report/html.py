@@ -12,12 +12,30 @@ import numpy as np
 
 from wavebench.data.packages import FrequencyResponsePackage, RunPackage
 from wavebench.errors import ConfigError
+from wavebench.report.plot3d import (
+    build_surface_payload,
+    plotly_head_tag,
+    plotly_initializer,
+    render_surface_card,
+    write_plotly_asset,
+)
 
 
 def write_run_report_html(run: RunPackage, output_path: str | Path | None = None) -> Path:
     path = Path(output_path) if output_path is not None else run.path / "report.html"
-    path.write_text(render_run_report_html(run, output_dir=path.parent), encoding="utf-8")
-    write_run_report_manifest(run, output_dir=path.parent, report_path=path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    has_surface = any(
+        build_surface_payload(response.rows, plot_id="probe", response_label=response.label)
+        for response in run.frequency_responses
+    )
+    plotly_asset = write_plotly_asset(path.parent) if has_surface else None
+    plotly_url = _relative_url(plotly_asset, path.parent) if plotly_asset is not None else None
+    path.write_text(
+        render_run_report_html(run, output_dir=path.parent, plotly_url=plotly_url), encoding="utf-8"
+    )
+    write_run_report_manifest(
+        run, output_dir=path.parent, report_path=path, interactive_asset_path=plotly_asset
+    )
     return path
 
 
@@ -43,7 +61,10 @@ def write_run_report_pdf(run: RunPackage, output_path: str | Path | None = None)
 
 
 def write_run_report_manifest(
-    run: RunPackage, output_dir: str | Path | None = None, report_path: str | Path | None = None
+    run: RunPackage,
+    output_dir: str | Path | None = None,
+    report_path: str | Path | None = None,
+    interactive_asset_path: str | Path | None = None,
 ) -> Path:
     report_output_dir = Path(output_dir) if output_dir is not None else run.path
     manifest_path = report_output_dir / "report-assets" / "manifest.json"
@@ -52,6 +73,7 @@ def write_run_report_manifest(
         run,
         output_dir=report_output_dir,
         report_path=Path(report_path) if report_path is not None else report_output_dir / "report.html",
+        interactive_asset_path=(Path(interactive_asset_path) if interactive_asset_path is not None else None),
     )
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest_path
@@ -178,6 +200,7 @@ def render_run_report_html(
     output_dir: str | Path | None = None,
     *,
     compact: bool = False,
+    plotly_url: str | None = None,
 ) -> str:
     experiment = run.run.get("experiment", {}) if isinstance(run.run.get("experiment"), dict) else {}
     restore = run.run.get("restore", {}) if isinstance(run.run.get("restore"), dict) else {}
@@ -202,7 +225,12 @@ def render_run_report_html(
     expectations_block = "" if compact else _expectations_block(expectations)
     dmm_block = "" if compact else _dmm_readings_block(dmm_readings)
     sweep_block = "" if compact else _sweep_summary_block(sweep_rows)
-    frequency_response_block = _frequency_response_block(run, include_table=not compact)
+    frequency_response_block = _frequency_response_block(
+        run,
+        include_table=not compact,
+        include_interactive_3d=not compact,
+        plotly_url=plotly_url if not compact else None,
+    )
     artifact_links_block = "" if compact else _artifact_links_block(artifact_links)
     signals_block = "" if compact else _signals_block(signals)
     waveform_previews_block = "" if compact else _waveform_previews_block(waveform_previews)
@@ -294,6 +322,13 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
     .frequency-response-card {{ padding: 0.85rem; }}
     .frequency-response-card h3 {{ margin: 0 0 0.35rem; font-size: 1rem; }}
     .frequency-response-card svg {{ display: block; width: 100%; height: auto; margin-top: 0.5rem; border-radius: 8px; }}
+    .response-3d-card {{ margin: 0.5rem 0 1.25rem; }}
+    .response-3d-controls {{ display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.4rem 0; }}
+    .response-3d-controls label {{ color: var(--muted); font-size: 0.9rem; }}
+    .response-3d-controls select {{ margin-left: 0.3rem; padding: 0.25rem 0.4rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }}
+    .response-3d-controls button {{ padding: 0.25rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }}
+    .response-3d-controls button:hover {{ border-color: var(--accent); }}
+    .response-3d-plot {{ width: 100%; height: 34rem; min-height: 28rem; }}
     .fit-formula {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
 @page {{ size: A4 landscape; margin: 10mm; }}
 @media print {{
@@ -314,11 +349,12 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
   body.pdf-compact .summary-card .value.ok, body.pdf-compact .summary-card .value.failed, body.pdf-compact .summary-card .value.warning {{ font-size: 8.5pt; padding: 0.04rem 0.3rem; }}
 }}
 </style>
+{plotly_head_tag(plotly_url if not compact else None)}
 </head>
 <body class="{body_class}">
 <main>
 <h1>WaveBench 运行报告 <span class="muted">Run report</span></h1>
-<p class="muted">A static offline hardware validation report.</p>
+<p class="muted">An offline hardware validation report.</p>
 {compact_note}
 {_summary_block(summary, compact=compact)}
 {evidence_summary_block}
@@ -350,12 +386,19 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
 {waveform_previews_block}
 {screenshots_block}
 </main>
+{plotly_initializer(plotly_url if not compact else None)}
 </body>
 </html>
 """
 
 
-def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Path) -> dict[str, Any]:
+def _build_report_manifest(
+    run: RunPackage,
+    *,
+    output_dir: Path,
+    report_path: Path,
+    interactive_asset_path: Path | None = None,
+) -> dict[str, Any]:
     screenshots = _collect_screenshots(run, output_dir)
     capture_packages: list[dict[str, Any]] = []
     waveform_previews: list[dict[str, Any]] = []
@@ -465,6 +508,17 @@ def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Pa
             for item in screenshots
         ],
         "waveform_previews": waveform_previews,
+        "interactive_assets": (
+            [
+                {
+                    "kind": "plotly.js",
+                    "path": _relative_url(interactive_asset_path, output_dir),
+                    "exists": interactive_asset_path.exists(),
+                }
+            ]
+            if interactive_asset_path is not None
+            else []
+        ),
         "warnings": warnings,
     }
 
@@ -782,18 +836,44 @@ def _sweep_summary_row(row: ReportSweepRow) -> str:
     )
 
 
-def _frequency_response_block(run: RunPackage, *, include_table: bool = True) -> str:
+def _frequency_response_block(
+    run: RunPackage,
+    *,
+    include_table: bool = True,
+    include_interactive_3d: bool = True,
+    plotly_url: str | None = None,
+) -> str:
     if not run.frequency_responses:
         return ""
     multiple = len(run.frequency_responses) > 1
     return "".join(
-        _frequency_response_section(response, include_table=include_table, multiple=multiple)
-        for response in run.frequency_responses
+        _frequency_response_section(
+            response,
+            include_table=include_table,
+            multiple=multiple,
+            interactive_3d=(
+                render_surface_card(
+                    build_surface_payload(
+                        response.rows,
+                        plot_id=f"wavebench-frequency-response-3d-{index}",
+                        response_label=response.label,
+                    ),
+                    plotly_url=plotly_url,
+                )
+                if include_interactive_3d
+                else ""
+            ),
+        )
+        for index, response in enumerate(run.frequency_responses)
     )
 
 
 def _frequency_response_section(
-    response: FrequencyResponsePackage, *, include_table: bool, multiple: bool
+    response: FrequencyResponsePackage,
+    *,
+    include_table: bool,
+    multiple: bool,
+    interactive_3d: str = "",
 ) -> str:
     rows = response.rows
     raw_gain_measurements = _response_amplitude_series(rows, "gain_db")
@@ -883,6 +963,7 @@ def _frequency_response_section(
 {matrix_summary}
 {baseline_block}
 {adaptive_block}
+{interactive_3d}
 <section class="frequency-response-grid">
 <article class="card frequency-response-card"><h3>原始幅频 / Raw magnitude</h3>{gain_svg}</article>
 <article class="card frequency-response-card"><h3>原始相频 / Raw phase</h3>{phase_svg}</article>

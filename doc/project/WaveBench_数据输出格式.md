@@ -705,3 +705,21 @@ correction_limited,slope_limited
 - 默认是 16 位有符号二补码 `Q4.12`、半值远离零的最近整数、幅值主序 `linear_index = amplitude_index * frequency_count + frequency_index`、`overflow = error`，绝不静默饱和。
 - fixed CSV 逐地址记录 Vpp/频率索引、原值、量化整数/十六进制、量化值和逐点误差；calibration JSON 的 `fixed_point` 记录格式、配置、编码、地址映射、文件路径和最大绝对量化误差。
 - `[calibration.fixed_point]` 可覆盖 `formats`（`csv` / `coe` / `mem`）、`word_width`、`fractional_bits`、`layout`、`rounding` 与 `overflow`；`saturate` 必须显式选择。
+
+### 交互式三维 HTML 资源
+
+安装 `WaveBench[report3d]` 后，对至少 2 个请求 Vpp × 2 个频率节点的 response 运行 `run report` 会额外写入：
+
+```text
+<report-output-directory>/
+├─ report.html
+└─ report-assets/
+   ├─ plotly.min.js
+   └─ manifest.json
+```
+
+- 所有 response 共用同一份本地 `plotly.min.js`，HTML 只写相对路径，不访问 CDN。`manifest.json` 的 `interactive_assets[]` 记录 `kind = "plotly.js"`、相对 `path` 和生成时的 `exists` 状态。
+- X 坐标使用 `log10(frequency_hz)` 几何位置，但刻度和 hover 显示实际 Hz；Y 为 `requested_vpp`；Z 优先使用 `gain_db_corrected` / `gain_linear_corrected`，也可切换到原始增益和 dB/V/V。
+- 曲面矩阵只来自 CSV 已有节点。`failed` 点写为缺失值并留洞，绝不补点或域外外推；圆点才表示真实采样。`warning` 点和成功自动恢复点使用独立标记，hover 保留首次 warning、重试次数、首次与最终采集路径。
+- 单幅值或不足 2 × 2 的 response 不生成伪曲面，只保留静态 Bode 图。缺少 `report3d` extra 时报告仍能生成，并显示安装提示。
+- 移动 `report.html` 时必须同时携带同级 `report-assets/`。PDF compact 路径完全不加载 Plotly，继续作为单文件静态视觉归档。
