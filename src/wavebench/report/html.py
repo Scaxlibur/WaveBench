@@ -327,9 +327,22 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
     .response-3d-controls label {{ color: var(--muted); font-size: 0.9rem; }}
     .response-3d-controls select {{ margin-left: 0.3rem; padding: 0.25rem 0.4rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }}
     .response-3d-controls button {{ padding: 0.25rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }}
-    .response-3d-controls button:hover {{ border-color: var(--accent); }}
-    .response-3d-plot {{ width: 100%; height: 34rem; min-height: 28rem; }}
-    .fit-formula {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+.response-3d-controls button:hover {{ border-color: var(--accent); }}
+.response-3d-plot {{ width: 100%; height: 34rem; min-height: 28rem; }}
+.frequency-response-point-log {{ margin: 1rem 0 1.25rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }}
+.frequency-response-point-log > summary {{ cursor: pointer; padding: 0.75rem 0.9rem; color: #102a43; font-weight: 700; }}
+.frequency-response-point-log > summary::marker {{ color: var(--brand); }}
+.frequency-response-point-log[open] > summary {{ border-bottom: 1px solid var(--line); }}
+.frequency-response-point-log-summary {{ margin-left: 0.4rem; color: var(--muted); font-size: 0.9rem; font-weight: 500; }}
+.frequency-response-point-log-note {{ margin: 0.7rem 0.9rem 0; }}
+.frequency-response-point-log .table {{ margin: 0.7rem 0.9rem 0.9rem; }}
+.artifact-links-log {{ margin: 0.5rem 0 1.25rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }}
+.artifact-links-log > summary {{ cursor: pointer; padding: 0.75rem 0.9rem; color: #102a43; font-weight: 700; }}
+.artifact-links-log > summary::marker {{ color: var(--brand); }}
+.artifact-links-log[open] > summary {{ border-bottom: 1px solid var(--line); }}
+.artifact-links-log-summary {{ margin-left: 0.4rem; color: var(--muted); font-size: 0.9rem; font-weight: 500; }}
+.artifact-links-log .table {{ margin: 0.7rem 0.9rem 0.9rem; }}
+.fit-formula {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
 @page {{ size: A4 landscape; margin: 10mm; }}
 @media print {{
   body {{ background: #fff; font-size: 9pt; }}
@@ -715,15 +728,30 @@ def _artifact_links_block(links: list[ReportArtifactLink]) -> str:
     if not links:
         return ""
     rows = "\n".join(_artifact_link_row(link) for link in links)
+    open_attribute = " open" if len(links) <= 100 else ""
     return f"""<h2>产物链接 / Artifact links</h2>
+<details class="artifact-links-log" data-artifact-links-log="true"{open_attribute}>
+<summary>产物链接 / Artifact links<span class="artifact-links-log-summary">{_artifact_links_summary(links)}</span></summary>
 <div class="table compact-table artifact-table"><table>
 <thead><tr><th>步骤 / Step</th><th>类型 / Type</th><th>产物 / Artifact</th><th>链接 / Link</th><th>状态 / Status</th></tr></thead>
 <tbody>
 {rows}
 </tbody>
 </table>
-</div>
+</div></details>
 """
+
+
+def _artifact_links_summary(links: list[ReportArtifactLink]) -> str:
+    kind_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    for link in links:
+        kind_counts[link.kind] = kind_counts.get(link.kind, 0) + 1
+        status = link.status or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+    kinds = ", ".join(f"{kind}: {count:,}" for kind, count in sorted(kind_counts.items()))
+    statuses = ", ".join(f"{status}: {count:,}" for status, count in sorted(status_counts.items()))
+    return escape(f"{len(links):,} 条 / links · 类型 {kinds} · 状态 {statuses}")
 
 
 def _artifact_link_row(link: ReportArtifactLink) -> str:
@@ -938,12 +966,16 @@ def _frequency_response_section(
         table_rows = "\n".join(_frequency_response_row(row) for row in rows)
         if not table_rows:
             table_rows = '<tr><td colspan="10">频响 CSV 没有可读取的记录 / No readable response rows.</td></tr>'
-        table_block = f"""<div class="table compact-table"><table>
+        open_attribute = " open" if len(rows) <= 100 else ""
+        table_block = f"""<details class="frequency-response-point-log" data-frequency-response-point-log="true"{open_attribute}>
+<summary>逐点日志 / Point log<span class="frequency-response-point-log-summary">{_frequency_response_point_log_summary(rows)}</span></summary>
+<p class="muted frequency-response-point-log-note">完整逐点记录默认收起；CSV 仍是可复算的原始事实源。</p>
+<div class="table compact-table"><table>
 <thead><tr><th>#</th><th>请求幅值 / Requested Vpp</th><th>请求频率 / Requested</th><th>输入峰值 / Input peak</th><th>输出峰值 / Output peak</th><th>线性增益</th><th>增益 / Gain</th><th>相位 / Phase</th><th>展开相位 / Unwrapped</th><th>状态 / Status</th><th>警告或错误 / Warning or error</th></tr></thead>
 <tbody>
 {table_rows}
 </tbody>
-</table></div>"""
+</table></div></details>"""
     else:
         table_block = '<p class="muted">逐频点结果请见本响应目录的 <code>frequency_response.csv</code>。</p>'
     fit_summary = (
@@ -979,6 +1011,19 @@ def _frequency_response_section(
 {calibration_block}
 {table_block}
 """
+
+
+def _frequency_response_point_log_summary(rows: list[dict[str, str]]) -> str:
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status", "unknown") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    parts = [f"{len(rows):,} 点 / points"]
+    for status in ("ok", "warning", "failed"):
+        if status in counts:
+            parts.append(f"{status}: {counts.pop(status):,}")
+    parts.extend(f"{status}: {count:,}" for status, count in sorted(counts.items()))
+    return escape(" · ".join(parts))
 
 
 def _frequency_response_baseline_block(response: FrequencyResponsePackage) -> str:

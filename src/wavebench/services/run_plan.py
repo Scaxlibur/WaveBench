@@ -80,6 +80,7 @@ _OPTIONAL_FIELDS = {
         "target_cycles",
         "settle_s",
         "frequency_tolerance",
+        "min_signal_vpp",
         "points",
         "save_csv",
         "screenshot",
@@ -513,6 +514,9 @@ def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) ->
 
     fields["target_cycles"] = _positive_float(
         fields.get("target_cycles", 10.0), f"{prefix}.target_cycles"
+    )
+    fields["min_signal_vpp"] = _positive_float(
+        fields.get("min_signal_vpp", 0.02), f"{prefix}.min_signal_vpp"
     )
     settle_s = _finite_float(fields.get("settle_s", 0.3), f"{prefix}.settle_s")
     if settle_s < 0:

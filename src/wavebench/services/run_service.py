@@ -680,6 +680,7 @@ class RunService:
                             response_waveform=capture.waveforms[response_channel],
                             frequency_tolerance_ratio=tolerance, capture_package=str(capture.package_dir),
                             metadata_path=str(capture.metadata_path), adaptive_level=adaptive_level,
+                            min_signal_vpp=step.fields["min_signal_vpp"],
                             adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
                         )
                         if point.status == "warning" and step.fields["retry_warning_with_autoscale"]:
@@ -697,6 +698,7 @@ class RunService:
                                     reference_waveform=retry_capture.waveforms[reference_channel],
                                     response_waveform=retry_capture.waveforms[response_channel],
                                     frequency_tolerance_ratio=tolerance,
+                                    min_signal_vpp=step.fields["min_signal_vpp"],
                                     capture_package=str(retry_capture.package_dir), metadata_path=str(retry_capture.metadata_path),
                                     adaptive_level=adaptive_level, adaptive_parent_start_hz=parent_start,
                                     adaptive_parent_stop_hz=parent_stop,
@@ -1078,6 +1080,7 @@ class RunService:
         summary = capture.waveform.summary(
             expected_frequency_hz=service.config.waveform.expected_frequency_hz,
             frequency_tolerance_ratio=service.config.waveform.frequency_tolerance_ratio,
+            min_signal_vpp=service.config.waveform.min_signal_vpp,
         )
         return {
             "package": str(capture.package_dir),
@@ -1194,6 +1197,7 @@ class RunService:
             frequency_tolerance_ratio=step.fields.get("frequency_tolerance"),
             target_cycles=step.fields["target_cycles"],
             window_frequency_hz=frequency_hz,
+            min_signal_vpp=step.fields["min_signal_vpp"],
         ).with_output_overrides(
             save_csv=step.fields.get("save_csv"),
             save_npy=True,

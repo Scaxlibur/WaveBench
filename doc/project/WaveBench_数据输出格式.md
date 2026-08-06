@@ -648,7 +648,7 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 
 同一 run 含多个频响 step 时，根目录新增 `frequency_responses.json`（`schema_version = 1`）。其 `responses[]` 以唯一 `label`、`step_index`、相对 `directory` 和各派生产物引用描述每个响应；每个响应保存在 `frequency_response/<step>_<label>/`。旧 run 没有 manifest 时仍按根目录单响应产物读取。
 
-`frequency_response.csv` 每请求一个频点就原子刷新一次，因此 source 设频失败、scope 采集失败或分析失败时，前序记录和当前失败行仍会保留。稳定基础列为：
+`frequency_response.csv` 每请求一个频点就原子刷新一次，因此 source 设频失败、scope 采集失败或分析失败时，前序记录和当前失败行仍会保留。每个原始 `metadata.json.operation.min_signal_vpp` 记录当点采用的低信号门限；普通默认是 20 mVpp，频响 step 可显式降低，但不会抑制频率、削顶或其他质量 warning。稳定基础列为：
 
 ```text
 index,amplitude_index,requested_vpp,requested_frequency_hz,reference_frequency_hz,response_frequency_hz,

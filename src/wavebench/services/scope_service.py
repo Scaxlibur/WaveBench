@@ -405,6 +405,7 @@ class ScopeService:
             "summary": waveform.summary(
                 expected_frequency_hz=self.config.waveform.expected_frequency_hz,
                 frequency_tolerance_ratio=self.config.waveform.frequency_tolerance_ratio,
+                min_signal_vpp=self.config.waveform.min_signal_vpp,
             ),
         }
 
@@ -470,6 +471,7 @@ class ScopeService:
             "frequency_tolerance_ratio": self.config.waveform.frequency_tolerance_ratio,
             "vertical_scale_v_per_div": self.config.waveform.vertical_scale_v_per_div,
             "target_vpp": self.config.waveform.target_vpp,
+            "min_signal_vpp": self.config.waveform.min_signal_vpp,
         }
         screenshot_path: Path | None = None
         screenshot_error: dict[str, str] | None = None
@@ -548,6 +550,7 @@ class ScopeService:
             "frequency_tolerance_ratio": self.config.waveform.frequency_tolerance_ratio,
             "vertical_scale_v_per_div": self.config.waveform.vertical_scale_v_per_div,
             "target_vpp": self.config.waveform.target_vpp,
+            "min_signal_vpp": self.config.waveform.min_signal_vpp,
         }
         waveforms: dict[int, WaveformData] = {}
         files: dict[str, dict[str, str]] = {}

@@ -144,6 +144,25 @@ class FrequencyResponseTests(unittest.TestCase):
         self.assertEqual(point.status, "failed")
         self.assertIn("too small", point.error)
 
+    def test_low_signal_threshold_is_used_for_frequency_response_quality(self):
+        frequency_hz = 1_000.0
+        reference = _waveform(
+            channel=1, start_s=0.0, samples=1000, sample_rate_hz=100_000.0,
+            frequency_hz=frequency_hz, amplitude_peak_v=0.005, phase_deg=0.0, offset_v=0.0,
+        )
+        response = _waveform(
+            channel=2, start_s=0.0, samples=1000, sample_rate_hz=100_000.0,
+            frequency_hz=frequency_hz, amplitude_peak_v=0.02, phase_deg=0.0, offset_v=0.0,
+        )
+
+        point = analyze_frequency_response_point(
+            index=0, requested_frequency_hz=frequency_hz, reference_waveform=reference,
+            response_waveform=response, frequency_tolerance_ratio=0.05, min_signal_vpp=0.005,
+            capture_package="capture", metadata_path="metadata.json",
+        )
+
+        self.assertEqual(point.status, "ok")
+
     def test_phase_unwrap_does_not_bridge_failed_points(self):
         points = [
             _point(0, 10.0, 1.0, 170.0),

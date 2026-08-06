@@ -149,6 +149,7 @@ def analyze_frequency_response_point(
     reference_waveform: Any,
     response_waveform: Any,
     frequency_tolerance_ratio: float,
+    min_signal_vpp: float = 0.02,
     capture_package: str,
     metadata_path: str,
     adaptive_level: int = 0,
@@ -173,8 +174,12 @@ def analyze_frequency_response_point(
             raise ValueError("gain is not finite and positive")
         gain_db = float(20.0 * np.log10(gain_linear))
         phase_wrapped_deg = _wrap_phase_deg(float(np.degrees(np.angle(transfer))))
-        reference_summary = _summary(reference_waveform, requested_frequency_hz, frequency_tolerance_ratio)
-        response_summary = _summary(response_waveform, requested_frequency_hz, frequency_tolerance_ratio)
+        reference_summary = _summary(
+            reference_waveform, requested_frequency_hz, frequency_tolerance_ratio, min_signal_vpp
+        )
+        response_summary = _summary(
+            response_waveform, requested_frequency_hz, frequency_tolerance_ratio, min_signal_vpp
+        )
         warnings = _quality_warnings(reference_summary, "reference") + _quality_warnings(
             response_summary, "response"
         )
@@ -462,10 +467,16 @@ def _amplitude_floor(waveform: Any) -> float:
     return max(1e-12, scale * 1e-12)
 
 
-def _summary(waveform: Any, frequency_hz: float, tolerance_ratio: float) -> dict[str, Any]:
+def _summary(
+    waveform: Any,
+    frequency_hz: float,
+    tolerance_ratio: float,
+    min_signal_vpp: float,
+) -> dict[str, Any]:
     summary = waveform.summary(
         expected_frequency_hz=frequency_hz,
         frequency_tolerance_ratio=tolerance_ratio,
+        min_signal_vpp=min_signal_vpp,
     )
     return summary if isinstance(summary, dict) else {}
 

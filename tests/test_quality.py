@@ -95,6 +95,21 @@ class QualityTests(unittest.TestCase):
         quality = summarize_waveform(times, voltages)
         self.assertTrue(any("low_signal_amplitude" in warning for warning in quality.quality_warnings))
 
+    def test_frequency_response_can_use_a_lower_signal_warning_threshold(self):
+        times = np.linspace(0.0, 0.01, 10000, endpoint=False)
+        voltages = 0.005 * np.sin(2 * np.pi * 1000.0 * times)
+
+        default_quality = summarize_waveform(times, voltages, expected_frequency_hz=1000.0)
+        relaxed_quality = summarize_waveform(
+            times,
+            voltages,
+            expected_frequency_hz=1000.0,
+            min_signal_vpp=0.005,
+        )
+
+        self.assertTrue(any("low_signal_amplitude" in warning for warning in default_quality.quality_warnings))
+        self.assertFalse(any("low_signal_amplitude" in warning for warning in relaxed_quality.quality_warnings))
+
     def test_flat_dc_without_expected_frequency_has_no_frequency_warning(self):
         times = np.linspace(0.0, 0.01, 10000, endpoint=False)
         voltages = np.full_like(times, 5.0)

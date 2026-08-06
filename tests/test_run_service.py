@@ -1190,6 +1190,7 @@ reference_channel = 1
 response_channel = 2
 frequencies_hz = [100, 1000]
 target_cycles = 6
+min_signal_vpp = 0.005
 settle_s = 0
 """))
             config = make_config(tmp)
@@ -1227,6 +1228,13 @@ settle_s = 0
             self.assertTrue(
                 all(
                     call.kwargs["config"].output.save_npy and call.kwargs["config"].output.save_json
+                    for call in scope_cls.call_args_list
+                    if call.kwargs["config"].waveform.expected_frequency_hz is not None
+                )
+            )
+            self.assertTrue(
+                all(
+                    call.kwargs["config"].waveform.min_signal_vpp == 0.005
                     for call in scope_cls.call_args_list
                     if call.kwargs["config"].waveform.expected_frequency_hz is not None
                 )

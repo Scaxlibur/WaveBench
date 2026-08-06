@@ -728,12 +728,14 @@ class WaveformData:
         *,
         expected_frequency_hz: float | None = None,
         frequency_tolerance_ratio: float = 0.05,
+        min_signal_vpp: float = 0.02,
     ) -> dict[str, object]:
         quality = summarize_waveform(
             self.times_s,
             self.voltages_v,
             expected_frequency_hz=expected_frequency_hz,
             frequency_tolerance_ratio=frequency_tolerance_ratio,
+            min_signal_vpp=min_signal_vpp,
         )
         return {
             "channel": self.channel,

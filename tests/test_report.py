@@ -13,7 +13,14 @@ import numpy as np
 
 from wavebench.data.packages import load_run_package
 from wavebench.errors import ConfigError
-from wavebench.report.html import _response_svg, render_run_report_html, write_run_report_html, write_run_report_pdf
+from wavebench.report.html import (
+    ReportArtifactLink,
+    _artifact_links_block,
+    _response_svg,
+    render_run_report_html,
+    write_run_report_html,
+    write_run_report_pdf,
+)
 
 
 class RunReportTests(unittest.TestCase):
@@ -41,6 +48,25 @@ class RunReportTests(unittest.TestCase):
         self.assertIn(">Measured</text>", svg)
         self.assertIn("…</text>", svg)
         self.assertNotIn("Frequency piecewise linear interpolation</text>", svg)
+
+    def test_large_artifact_link_log_is_collapsed_by_default(self):
+        links = [
+            ReportArtifactLink(
+                step_index=str(index),
+                kind="Capture package",
+                label=f"capture-{index}",
+                href=f"capture-{index}",
+                status="ok",
+            )
+            for index in range(101)
+        ]
+
+        html = _artifact_links_block(links)
+
+        self.assertIn('<details class="artifact-links-log" data-artifact-links-log="true">', html)
+        self.assertIn("101 条 / links", html)
+        self.assertIn("类型 Capture package: 101", html)
+        self.assertNotIn('data-artifact-links-log="true" open', html)
 
     def test_response_svg_includes_readable_log_frequency_and_linear_value_ticks(self):
         svg = _response_svg(
@@ -81,6 +107,25 @@ class RunReportTests(unittest.TestCase):
             self.assertIn("二维 / 2D，2 个 Vpp 切片 × 3 个频率节点 = 6 个请求组合", html)
             self.assertIn('data-label="Measured · 0.05 Vpp"', html)
             self.assertIn('data-label="Measured · 0.1 Vpp"', html)
+            self.assertIn('data-frequency-response-point-log="true" open', html)
+            self.assertIn('6 点 / points · ok: 6', html)
+
+    def test_large_frequency_response_point_log_is_collapsed_by_default(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            rows = ["index,requested_frequency_hz,gain_linear,gain_db,phase_unwrapped_deg,status"]
+            for index in range(101):
+                status = "warning" if index == 100 else "ok"
+                rows.append(f"{index},{100 + index},1,0,0,{status}")
+            (run_dir / "frequency_response.csv").write_text("\n".join(rows), encoding="utf-8")
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn('<details class="frequency-response-point-log" data-frequency-response-point-log="true">', html)
+            self.assertIn('101 点 / points · ok: 100 · warning: 1', html)
+            self.assertIn('完整逐点记录默认收起', html)
 
     def test_run_report_embeds_capture_screenshot_relative_to_report(self):
         with TemporaryDirectory() as tmp:

@@ -312,6 +312,7 @@ stop_frequency_hz = 10000
 frequency_count = 3
 spacing = "log"
 target_cycles = 8
+min_signal_vpp = 0.005
 settle_s = 0
 
 [steps.fit]
@@ -324,6 +325,7 @@ polynomial_degree = 2
         self.assertAlmostEqual(fields["frequencies_hz"][1], 1000.0)
         self.assertEqual(fields["frequencies_hz"][2], 10000.0)
         self.assertEqual(fields["target_cycles"], 8.0)
+        self.assertEqual(fields["min_signal_vpp"], 0.005)
         self.assertEqual(fields["settle_s"], 0.0)
         self.assertTrue(fields["retry_warning_with_autoscale"])
         self.assertEqual(
@@ -364,6 +366,18 @@ retry_warning_with_autoscale = false
 """))
 
         self.assertFalse(plan.steps[0].fields["retry_warning_with_autoscale"])
+
+    def test_frequency_response_plan_rejects_non_positive_min_signal_vpp(self):
+        path = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+min_signal_vpp = 0
+""")
+        with self.assertRaisesRegex(ConfigError, "min_signal_vpp must be > 0"):
+            load_run_plan(path)
 
     def test_frequency_response_plan_rejects_mixed_vpp_forms(self):
         path = self._write_plan("""

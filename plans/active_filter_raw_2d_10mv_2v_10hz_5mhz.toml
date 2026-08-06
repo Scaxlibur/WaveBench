@@ -1,0 +1,63 @@
+# 有源滤波器原始二维频响地图。
+# 已人工确认：DUT 独立稳定供电、2 Vpp 输入在线性范围内、CH2 输出不超过 10 Vpp。
+# 不引用旧直通基线，不生成校准 LUT；高频低幅值失败是有效域证据，不做外推。
+
+[experiment]
+name = "active_filter_raw_2d_10mv_2v_10hz_5mhz"
+label = "active_filter_raw_2d_10mv_2v_10hz_5mhz"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 0.010
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "active_filter_raw_2d"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10
+stop_frequency_hz = 5000000
+frequency_count = 144
+spacing = "log"
+amplitudes_vpp = [
+  0.010, 0.015, 0.022, 0.032, 0.047,
+  0.068, 0.100, 0.150, 0.220, 0.320,
+  0.470, 0.680, 1.000, 1.500, 2.000,
+]
+autoscale_each_amplitude = true
+retry_warning_with_autoscale = true
+target_cycles = 10
+# 10/15 mVpp 切片已实测具有稳定的参考/响应波形；仅降低本扫频的低信号告警门限。
+min_signal_vpp = 0.005
+settle_s = 2.0
+points = "def"
+save_csv = false
+screenshot = false
+
+[steps.adaptive]
+enabled = true
+gain_threshold_db = 0.5
+phase_threshold_deg = 10
+max_levels = 1
+max_frequency_points = 200
