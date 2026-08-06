@@ -11,7 +11,7 @@ wavebench run template --list
 wavebench run check --plan plans/example_scope_expect_quality.toml
 ```
 
-`run verify` 会读取配置并查询相关仪器，适合执行前预检。`run plan` 会进行真实实验，执行前请确认接线、scope coupling、输出状态、保护限值和 `[restore]` 范围。`run report` 和 `run calibrate` 读取已有产物，不需要再次连接仪器；校准相关拟合需要安装 `.[analysis]`。
+`run verify` 会读取配置并查询相关仪器，适合执行前预检。`run plan` 会进行真实实验，执行前应确认接线、scope coupling、输出状态、保护限值和 `[restore]` 范围。`run report` 和 `run calibrate` 读取已有产物，不需要再次连接仪器；校准相关拟合需要安装 `.[analysis]`。
 
 ## 计划分类
 
@@ -24,7 +24,7 @@ wavebench run check --plan plans/example_scope_expect_quality.toml
 - `example_dmm_acv_source_smoke.toml`
 - `demo_dg4202_10k_screenshot_report.toml`
 
-### 基础闭环和电源 smoke
+### 基础流程和电源 smoke
 
 - `closure_sine_1k.toml`
 - `closure_sine_1k_fft.toml`
@@ -47,7 +47,7 @@ wavebench run check --plan plans/example_scope_expect_quality.toml
 - `passive_filter_2d_calibrated.toml`
 - `passive_filter_dense_2d_calibrated.toml`
 
-这组计划通常需要特定 DUT、频段、探头接法和一份先前采集的 baseline。两个 `*_calibrated.toml` 文件目前引用本地时间戳目录，不能直接复制到另一台机器；使用前应改成自己的 baseline 路径。
+这组计划通常需要特定 DUT、频段、探头接法和一份先前采集的 baseline。两个 `*_calibrated.toml` 文件目前引用本地时间戳目录，不能直接复制到另一台机器；使用前应替换为当前实验的 baseline 路径。
 
 ## 写入边界
 

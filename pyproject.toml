@@ -26,7 +26,7 @@ wavebench = "wavebench.cli:main"
 packages = ["src/wavebench"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/data", "/doc/instruments"]
+exclude = ["/data", "/docs/instruments"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

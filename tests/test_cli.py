@@ -1060,7 +1060,7 @@ max_source_vpp = 2.0
     def test_plugin_scpi_check_prints_ok(self):
         stdout = io.StringIO()
         with redirect_stdout(stdout):
-            code = main(["plugin", "scpi", "check", "doc/project/scpi-plugin.example.toml"])
+            code = main(["plugin", "scpi", "check", "docs/project/reference/plugins/scpi-plugin.example.toml"])
         self.assertEqual(code, 0)
         self.assertIn("ok\texample.scope\tmetadata valid", stdout.getvalue())
 
@@ -1068,7 +1068,7 @@ max_source_vpp = 2.0
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             code = main([
-                "plugin", "scpi", "doctor", "doc/project/scpi-plugin.example.toml",
+                "plugin", "scpi", "doctor", "docs/project/reference/plugins/scpi-plugin.example.toml",
                 "--resource", "TCPIP::192.0.2.10::INSTR",
             ])
         self.assertEqual(code, 2)
@@ -1086,7 +1086,7 @@ max_source_vpp = 2.0
         ):
             with redirect_stdout(stdout):
                 code = main([
-                    "plugin", "scpi", "doctor", "doc/project/scpi-plugin.example.toml",
+                    "plugin", "scpi", "doctor", "docs/project/reference/plugins/scpi-plugin.example.toml",
                     "--probe", "--resource", "TCPIP::192.0.2.10::INSTR",
                 ])
         self.assertEqual(code, 0)
@@ -1096,7 +1096,7 @@ max_source_vpp = 2.0
     def test_plugin_scpi_info_prints_metadata(self):
         stdout = io.StringIO()
         with redirect_stdout(stdout):
-            code = main(["plugin", "scpi", "info", "doc/project/scpi-plugin.example.toml"])
+            code = main(["plugin", "scpi", "info", "docs/project/reference/plugins/scpi-plugin.example.toml"])
         self.assertEqual(code, 0)
         output = stdout.getvalue()
         self.assertIn("driver_id=example.scope", output)
@@ -1120,7 +1120,7 @@ max_source_vpp = 2.0
         ):
             with redirect_stdout(stdout):
                 code = main([
-                    "plugin", "scpi", "probe", "doc/project/scpi-plugin.example.toml",
+                    "plugin", "scpi", "probe", "docs/project/reference/plugins/scpi-plugin.example.toml",
                     "--resource", "TCPIP::192.0.2.10::INSTR",
                 ])
 
