@@ -1,15 +1,132 @@
+import base64
+import importlib.util
 import json
+import re
+import sys
+import types
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 import numpy as np
 
 from wavebench.data.packages import load_run_package
-from wavebench.report.html import render_run_report_html, write_run_report_html
+from wavebench.errors import ConfigError
+from wavebench.report.html import (
+    ReportArtifactLink,
+    _artifact_links_block,
+    _response_svg,
+    render_run_report_html,
+    write_run_report_html,
+    write_run_report_pdf,
+)
 
 
 class RunReportTests(unittest.TestCase):
+    def test_response_svg_uses_a_separate_two_column_legend_area(self):
+        svg = _response_svg(
+            [[(100.0, 1.0), (1000.0, 2.0)]],
+            title="Fit comparison",
+            y_label="Linear gain",
+            actual_label="Measured",
+            series=[
+                ("Frequency piecewise linear interpolation", "#7c3aed", [(100.0, 1.0), (1000.0, 2.0)]),
+                ("Degree-3 polynomial in log frequency", "#dc2626", [(100.0, 1.2), (1000.0, 1.8)]),
+                ("PCHIP shape-preserving cubic interpolation", "#0891b2", [(100.0, 1.1), (1000.0, 1.9)]),
+            ],
+        )
+
+        positions = re.findall(
+            r'<g class="legend-item" data-label="[^"]+"><line x1="([0-9.]+)" y1="([0-9.]+)"',
+            svg,
+        )
+        self.assertEqual(len(positions), 4)
+        self.assertEqual(len(set(positions)), 4)
+        self.assertEqual({position[0] for position in positions}, {"72.00", "366.00"})
+        self.assertEqual(len({position[1] for position in positions}), 2)
+        self.assertIn(">Measured</text>", svg)
+        self.assertIn("…</text>", svg)
+        self.assertNotIn("Frequency piecewise linear interpolation</text>", svg)
+
+    def test_large_artifact_link_log_is_collapsed_by_default(self):
+        links = [
+            ReportArtifactLink(
+                step_index=str(index),
+                kind="Capture package",
+                label=f"capture-{index}",
+                href=f"capture-{index}",
+                status="ok",
+            )
+            for index in range(101)
+        ]
+
+        html = _artifact_links_block(links)
+
+        self.assertIn('<details class="artifact-links-log" data-artifact-links-log="true">', html)
+        self.assertIn("101 条 / links", html)
+        self.assertIn("类型 Capture package: 101", html)
+        self.assertNotIn('data-artifact-links-log="true" open', html)
+
+    def test_response_svg_includes_readable_log_frequency_and_linear_value_ticks(self):
+        svg = _response_svg(
+            [[(10_000.0, -0.2), (100_000.0, -1.0), (500_000.0, -3.1)]],
+            title="Magnitude response",
+            y_label="Gain (dB)",
+            series=(),
+        )
+
+        self.assertIn('class="plot-grid x-grid"', svg)
+        self.assertIn('class="plot-grid y-grid"', svg)
+        self.assertIn('class="x-axis-tick"', svg)
+        self.assertIn('class="y-axis-tick"', svg)
+        self.assertIn('class="x-axis-title"', svg)
+        self.assertIn('class="y-axis-title"', svg)
+        self.assertIn(">10 k</text>", svg)
+        self.assertIn(">100 k</text>", svg)
+        self.assertIn(">Gain (dB)</text>", svg)
+
+    def test_run_report_labels_each_amplitude_slice_and_summarizes_a_two_dimensional_sweep(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            rows = [
+                "index,amplitude_index,requested_vpp,requested_frequency_hz,gain_linear,gain_db,phase_unwrapped_deg,status"
+            ]
+            for amplitude_index, amplitude in enumerate((0.05, 0.1)):
+                for frequency in (10_000, 100_000, 500_000):
+                    rows.append(
+                        f"{len(rows) - 1},{amplitude_index},{amplitude},{frequency},0.9,-0.9,-45,ok"
+                    )
+            (run_dir / "frequency_response.csv").write_text("\n".join(rows), encoding="utf-8")
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn("扫频矩阵 / Sweep matrix", html)
+            self.assertIn("二维 / 2D，2 个 Vpp 切片 × 3 个频率节点 = 6 个请求组合", html)
+            self.assertIn('data-label="Measured · 0.05 Vpp"', html)
+            self.assertIn('data-label="Measured · 0.1 Vpp"', html)
+            self.assertIn('data-frequency-response-point-log="true" open', html)
+            self.assertIn('6 点 / points · ok: 6', html)
+
+    def test_large_frequency_response_point_log_is_collapsed_by_default(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            rows = ["index,requested_frequency_hz,gain_linear,gain_db,phase_unwrapped_deg,status"]
+            for index in range(101):
+                status = "warning" if index == 100 else "ok"
+                rows.append(f"{index},{100 + index},1,0,0,{status}")
+            (run_dir / "frequency_response.csv").write_text("\n".join(rows), encoding="utf-8")
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn('<details class="frequency-response-point-log" data-frequency-response-point-log="true">', html)
+            self.assertIn('101 点 / points · ok: 100 · warning: 1', html)
+            self.assertIn('完整逐点记录默认收起', html)
+
     def test_run_report_embeds_capture_screenshot_relative_to_report(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -762,6 +879,241 @@ class RunReportTests(unittest.TestCase):
 
             self.assertNotIn("<h2>验收摘要 / Acceptance summary</h2>", html)
             self.assertNotIn("<h2>预期 vs 实测 / Expected vs measured</h2>", html)
+
+    def test_run_report_discovers_frequency_response_capture_screenshots_from_csv(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "data" / "runs" / "response"
+            run_dir.mkdir(parents=True)
+            captures = []
+            for index in range(2):
+                capture = root / "data" / "raw" / f"response_{index}"
+                capture.mkdir(parents=True)
+                (capture / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                np.save(capture / "ch1.npy", np.array([[0.0, 0.0], [1e-3, 1.0]]))
+                np.save(capture / "ch2.npy", np.array([[0.0, 0.0], [1e-3, 2.0]]))
+                metadata = capture / "metadata.json"
+                metadata.write_text(
+                    json.dumps(
+                        {
+                            "channels": {"1": {"summary": {}}, "2": {"summary": {}}},
+                            "files": {
+                                "1": {"npy": str(capture / "ch1.npy")},
+                                "2": {"npy": str(capture / "ch2.npy")},
+                                "screenshot": str(capture / "screenshot.png"),
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                captures.append((capture, metadata))
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "steps": [{"index": 0, "kind": "sweep.frequency_response", "status": "ok"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "frequency_response.csv").write_text(
+                "index,requested_frequency_hz,gain_linear,gain_db,phase_unwrapped_deg,status,capture_package,metadata_path\n"
+                f"0,100,2,6.0206,-45,ok,{captures[0][0]},{captures[0][1]}\n"
+                f"1,1000,2,6.0206,-45,ok,{captures[1][0]},{captures[1][1]}\n",
+                encoding="utf-8",
+            )
+
+            output = write_run_report_html(load_run_package(run_dir))
+            html = output.read_text(encoding="utf-8")
+            manifest = json.loads((run_dir / "report-assets" / "manifest.json").read_text(encoding="utf-8"))
+
+            self.assertIn("<h2>频率响应 / Frequency response</h2>", html)
+            self.assertEqual(html.count('<figure class="card screenshot-card">'), 2)
+            self.assertIn("frequency response 0", html)
+            self.assertEqual(len(manifest["capture_packages"]), 2)
+            self.assertEqual(len(manifest["screenshots"]), 2)
+
+    def test_run_report_renders_two_dimensional_calibration_summary_and_charts(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            (run_dir / "frequency_response.csv").write_text(
+                "index,requested_frequency_hz,gain_db,status\n0,100,1,ok\n",
+                encoding="utf-8",
+            )
+            calibration_rows = ["frequency_hz,requested_vpp,fitted_gain_db,correction_db,correction_linear,correction_limited,slope_limited"]
+            for amplitude in (0.05, 0.1):
+                for frequency in (100, 1000, 10000, 100000):
+                    calibration_rows.append(f"{frequency},{amplitude},1,-1,0.891,false,false")
+            (run_dir / "frequency_response_calibration.csv").write_text(
+                "\n".join(calibration_rows), encoding="utf-8"
+            )
+            (run_dir / "frequency_response_calibration.json").write_text(
+                json.dumps(
+                    {
+                        "configuration": {"target_mode": "unity_gain"},
+                        "valid_domain": {"frequency_hz": [100, 100000], "requested_vpp": [0.05, 0.1]},
+                        "target_gain_db": 0,
+                        "validation": {"frequency_holdout_rmse_db": 0.1, "amplitude_holdout_rmse_db": None},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn("二维校准 / 2D calibration", html)
+            self.assertIn("Correction heatmap", html)
+            self.assertIn("Representative slices", html)
+            self.assertIn("frequency_response_calibration.csv", html)
+
+    def test_run_report_renders_each_manifest_frequency_response_with_raw_and_corrected_curves(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            entries = []
+            for index, label in enumerate(("input", "output")):
+                directory = run_dir / "frequency_response" / label
+                directory.mkdir(parents=True)
+                (directory / "frequency_response.csv").write_text(
+                    "index,requested_frequency_hz,gain_db,phase_unwrapped_deg,gain_db_corrected,phase_unwrapped_corrected_deg,status\n"
+                    "0,100,1,-10,0,-5,ok\n1,1000,2,-20,1,-15,ok\n",
+                    encoding="utf-8",
+                )
+                (directory / "frequency_response_baseline.json").write_text(
+                    json.dumps({"mode": "complex_transfer", "baseline_response": "through"}), encoding="utf-8"
+                )
+                entries.append(
+                    {
+                        "step_index": index,
+                        "label": label,
+                        "directory": f"frequency_response/{label}",
+                        "baseline_json": "frequency_response_baseline.json",
+                    }
+                )
+            (run_dir / "frequency_responses.json").write_text(
+                json.dumps({"schema_version": 1, "responses": entries}), encoding="utf-8"
+            )
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn("Frequency response — input", html)
+            self.assertIn("Frequency response — output", html)
+            self.assertIn("Raw magnitude", html)
+            self.assertIn("Corrected magnitude", html)
+            self.assertIn("complex_transfer", html)
+
+    def test_pdf_report_uses_output_directory_as_resource_base(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            html_factory = Mock()
+            renderer = html_factory.return_value
+            module = types.ModuleType("weasyprint")
+            module.HTML = html_factory
+            pdf_path = Path(tmp) / "export" / "report.pdf"
+
+            with patch.dict(sys.modules, {"weasyprint": module}):
+                result = write_run_report_pdf(load_run_package(run_dir), output_path=pdf_path)
+
+            self.assertEqual(result, pdf_path)
+            self.assertEqual(html_factory.call_args.kwargs["base_url"], pdf_path.parent.resolve().as_uri() + "/")
+            compact_html = html_factory.call_args.kwargs["string"]
+            self.assertIn('<body class="pdf-compact">', compact_html)
+            self.assertIn('<section class="summary-grid pdf-summary-grid">', compact_html)
+            self.assertIn("width: 24%;", compact_html)
+            self.assertIn("page-break-inside: avoid;", compact_html)
+            self.assertNotIn("<h2>实验证据摘要 / Run evidence summary</h2>", compact_html)
+            renderer.write_pdf.assert_called_once_with(str(pdf_path))
+
+    def test_compact_pdf_html_keeps_summary_and_omits_nonessential_evidence(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(
+                json.dumps({"status": "ok", "steps": [{"index": 0, "kind": "sleep", "status": "ok"}]}),
+                encoding="utf-8",
+            )
+
+            html = render_run_report_html(load_run_package(run_dir), compact=True)
+
+            self.assertIn('<body class="pdf-compact">', html)
+            self.assertIn('<section class="summary-grid pdf-summary-grid">', html)
+            self.assertIn("PDF 精简为结果摘要、Bode 曲线与拟合", html)
+            self.assertIn("width: 24%;", html)
+            self.assertIn("page-break-inside: avoid;", html)
+            self.assertNotIn("<h2>实验证据摘要 / Run evidence summary</h2>", html)
+            self.assertNotIn("<h2>证据时间线 / Evidence timeline</h2>", html)
+
+    def test_pdf_report_turns_renderer_failures_into_config_errors(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            html_factory = Mock()
+            html_factory.return_value.write_pdf.side_effect = RuntimeError("renderer unavailable")
+            module = types.ModuleType("weasyprint")
+            module.HTML = html_factory
+
+            with patch.dict(sys.modules, {"weasyprint": module}):
+                with self.assertRaisesRegex(ConfigError, "PDF report export failed"):
+                    write_run_report_pdf(load_run_package(run_dir))
+
+    def test_pdf_report_explains_missing_optional_dependency(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+
+            with patch.dict(sys.modules, {"weasyprint": None}):
+                with self.assertRaisesRegex(ConfigError, "optional PDF dependency"):
+                    write_run_report_pdf(load_run_package(run_dir))
+
+    @unittest.skipUnless(importlib.util.find_spec("weasyprint"), "PDF extra is not installed")
+    def test_pdf_report_smoke_embeds_a_local_screenshot(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "data" / "runs" / "run"
+            capture = root / "data" / "raw" / "capture"
+            run_dir.mkdir(parents=True)
+            capture.mkdir(parents=True)
+            (capture / "screenshot.png").write_bytes(
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
+                    "y4p3VQAAAABJRU5ErkJggg=="
+                )
+            )
+            (capture / "metadata.json").write_text(
+                json.dumps({"files": {"screenshot": str(capture / "screenshot.png")}}),
+                encoding="utf-8",
+            )
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "steps": [
+                            {
+                                "index": 0,
+                                "kind": "scope.capture",
+                                "status": "ok",
+                                "artifact": {
+                                    "package": str(capture),
+                                    "metadata": str(capture / "metadata.json"),
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            pdf = write_run_report_pdf(load_run_package(run_dir))
+
+            self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
+            self.assertGreater(pdf.stat().st_size, 1_000)
 
 
 if __name__ == "__main__":

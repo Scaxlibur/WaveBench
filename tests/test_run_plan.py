@@ -295,9 +295,220 @@ duration_s = 0.5
         text = format_run_plan_schema()
         self.assertIn("power.output", text)
         self.assertIn("source.arb_load", text)
+        self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)
         self.assertIn("frequency_estimate_hz", text)
+
+    def test_frequency_response_plan_normalizes_log_frequency_points_and_fit(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 2
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 100
+stop_frequency_hz = 10000
+frequency_count = 3
+spacing = "log"
+target_cycles = 8
+min_signal_vpp = 0.005
+settle_s = 0
+
+[steps.fit]
+methods = ["linear_log", "polynomial"]
+polynomial_degree = 2
+"""))
+
+        fields = plan.steps[0].fields
+        self.assertEqual(fields["frequencies_hz"][0], 100.0)
+        self.assertAlmostEqual(fields["frequencies_hz"][1], 1000.0)
+        self.assertEqual(fields["frequencies_hz"][2], 10000.0)
+        self.assertEqual(fields["target_cycles"], 8.0)
+        self.assertEqual(fields["min_signal_vpp"], 0.005)
+        self.assertEqual(fields["settle_s"], 0.0)
+        self.assertTrue(fields["retry_warning_with_autoscale"])
+        self.assertEqual(
+            fields["fit"],
+            {"methods": ["linear_log", "polynomial"], "polynomial_degree": 2},
+        )
+
+    def test_frequency_response_plan_generates_vpp_slices_and_calibration(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000, 10000, 100000]
+start_vpp = 0.05
+stop_vpp = 0.15
+vpp_step = 0.05
+
+[steps.calibration]
+target_mode = "explicit_gain_db"
+target_gain_db = -1.0
+"""))
+
+        fields = plan.steps[0].fields
+        self.assertEqual(fields["amplitudes_vpp"], [0.05, 0.1, 0.15])
+        self.assertTrue(fields["autoscale_each_amplitude"])
+        self.assertEqual(fields["calibration"]["target_gain_db"], -1.0)
+
+    def test_frequency_response_plan_accepts_warning_retry_configuration(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+retry_warning_with_autoscale = false
+"""))
+
+        self.assertFalse(plan.steps[0].fields["retry_warning_with_autoscale"])
+
+    def test_frequency_response_plan_rejects_non_positive_min_signal_vpp(self):
+        path = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+min_signal_vpp = 0
+""")
+        with self.assertRaisesRegex(ConfigError, "min_signal_vpp must be > 0"):
+            load_run_plan(path)
+
+    def test_frequency_response_plan_rejects_mixed_vpp_forms(self):
+        path = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+amplitudes_vpp = [0.05, 0.1]
+start_vpp = 0.05
+stop_vpp = 0.1
+vpp_step = 0.05
+""")
+        with self.assertRaisesRegex(ConfigError, "either amplitudes_vpp"):
+            load_run_plan(path)
+
+    def test_frequency_response_plan_rejects_conflicting_channels_and_frequencies(self):
+        same_channel = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 1
+frequencies_hz = [100, 1000]
+""")
+        with self.assertRaisesRegex(ConfigError, "must differ"):
+            load_run_plan(same_channel)
+
+        mixed_frequency_forms = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+start_frequency_hz = 100
+stop_frequency_hz = 1000
+frequency_count = 2
+""")
+        with self.assertRaisesRegex(ConfigError, "either frequencies_hz"):
+            load_run_plan(mixed_frequency_forms)
+
+    def test_frequency_response_plan_rejects_bad_frequency_lists_and_allows_unique_multiple_steps(self):
+        duplicate_frequencies = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 100]
+""")
+        with self.assertRaisesRegex(ConfigError, "strictly increasing"):
+            load_run_plan(duplicate_frequencies)
+
+        multiple_steps = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 3
+response_channel = 4
+frequencies_hz = [100, 1000]
+""")
+        self.assertEqual(len(load_run_plan(multiple_steps).steps), 2)
+
+    def test_frequency_response_plan_rejects_duplicate_response_labels_and_accepts_adaptive_baseline(self):
+        duplicate_labels = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+label = "same"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "same"
+reference_channel = 3
+response_channel = 4
+frequencies_hz = [100, 1000]
+""")
+        with self.assertRaisesRegex(ConfigError, "labels must be unique"):
+            load_run_plan(duplicate_labels)
+
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+
+[steps.baseline]
+run_dir = "baseline-run"
+
+[steps.adaptive]
+enabled = true
+gain_threshold_db = 0.25
+phase_threshold_deg = 5
+max_levels = 2
+max_frequency_points = 20
+"""))
+        self.assertEqual(plan.steps[0].fields["baseline"]["mode"], "complex_transfer")
+        self.assertEqual(plan.steps[0].fields["adaptive"]["max_frequency_points"], 20)
+
+    def test_frequency_response_fit_rejects_unknown_method_and_high_degree(self):
+        unknown_method = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+
+[steps.fit]
+methods = ["spline"]
+""")
+        with self.assertRaisesRegex(ConfigError, "linear_log"):
+            load_run_plan(unknown_method)
+
+        high_degree = self._write_plan("""
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+
+[steps.fit]
+polynomial_degree = 6
+""")
+        with self.assertRaisesRegex(ConfigError, "must be <= 5"):
+            load_run_plan(high_degree)
 
     def test_scope_auto_step_is_explicit_and_has_no_fields(self):
         path = self._write_plan("""

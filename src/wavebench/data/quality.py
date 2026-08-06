@@ -225,6 +225,7 @@ def quality_warnings(
     tolerance_ratio: float,
     sample_count: int,
     voltage_vpp_v: float,
+    min_signal_vpp: float = 0.02,
 ) -> list[str]:
     warnings: list[str] = []
     frequency_required = expected_frequency_hz is not None
@@ -237,8 +238,11 @@ def quality_warnings(
         points_per_cycle = sample_count / estimated_cycles
         if points_per_cycle < 20.0:
             warnings.append("low_points_per_cycle: waveform has fewer than 20 samples per estimated cycle; duty and edge metrics may be unreliable")
-    if dynamic_signal and voltage_vpp_v < 0.02:
-        warnings.append("low_signal_amplitude: waveform Vpp is below 20 mV; check channel scale, probe, or signal connection")
+    if dynamic_signal and voltage_vpp_v < min_signal_vpp:
+        warnings.append(
+            "low_signal_amplitude: waveform Vpp is below "
+            f"{min_signal_vpp * 1e3:g} mV; check channel scale, probe, or signal connection"
+        )
     if frequency_error is not None and frequency_error > tolerance_ratio:
         warnings.append("frequency_mismatch: estimated frequency differs from expected frequency")
     return warnings
@@ -250,6 +254,7 @@ def summarize_waveform(
     *,
     expected_frequency_hz: float | None = None,
     frequency_tolerance_ratio: float = 0.05,
+    min_signal_vpp: float = 0.02,
 ) -> WaveformQuality:
     frequency = estimate_frequency_hysteresis(times_s, voltages_v)
     method = "hysteresis_rising_crossing"
@@ -292,5 +297,6 @@ def summarize_waveform(
             tolerance_ratio=frequency_tolerance_ratio,
             sample_count=int(voltages_v.size),
             voltage_vpp_v=voltage_vpp_v,
+            min_signal_vpp=min_signal_vpp,
         ),
     )

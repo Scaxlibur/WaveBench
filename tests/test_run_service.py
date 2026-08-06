@@ -1,3 +1,5 @@
+import csv
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -127,6 +129,42 @@ def fake_capture(
     np.save(waveform_path, np.column_stack((times, volts)))
     waveform = SimpleNamespace(summary=lambda **kwargs: summary)
     return SimpleNamespace(package_dir=package, metadata_path=metadata, waveform=waveform, npy_path=waveform_path)
+
+
+def fake_frequency_response_capture(
+    tmp: str,
+    name: str,
+    *,
+    frequency_hz: float,
+    gain: float = 2.0,
+    phase_deg: float = -45.0,
+    warnings: list[str] | None = None,
+):
+    package = Path(tmp) / name
+    package.mkdir()
+    metadata = package / "metadata.json"
+    metadata.write_text("{}", encoding="utf-8")
+    times = 0.013 + np.arange(4096, dtype=float) / 100_000.0
+
+    def waveform(amplitude: float, phase: float):
+        values = amplitude * np.sin(2.0 * np.pi * frequency_hz * times + np.radians(phase))
+        summary = {
+            "quality_warnings": warnings or [],
+            "frequency_estimate_hz": frequency_hz,
+            "voltage_vpp_v": amplitude * 2.0,
+            "frequency_error_ratio": 0.0,
+        }
+        return SimpleNamespace(
+            times_s=times,
+            voltages_v=values,
+            summary=lambda **kwargs: summary,
+        )
+
+    return SimpleNamespace(
+        package_dir=package,
+        metadata_path=metadata,
+        waveforms={1: waveform(1.0, 0.0), 2: waveform(gain, phase_deg)},
+    )
 
 def ok_power_status() -> PowerStatus:
     return PowerStatus(
@@ -1141,6 +1179,449 @@ function = "SQU"
                     RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
 
                 self.assertEqual(source.restore_restorable_state.call_args_list, [call(fake_state_1), call(fake_state_2)])
+
+    def test_frequency_response_captures_two_channels_and_persists_evidence(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+target_cycles = 6
+min_signal_vpp = 0.005
+settle_s = 0
+"""))
+            config = make_config(tmp)
+            config = replace(config, output=replace(config.output, save_json=False))
+            first = fake_frequency_response_capture(tmp, "response_100", frequency_hz=100.0)
+            second = fake_frequency_response_capture(tmp, "response_1000", frequency_hz=1000.0)
+            status = SimpleNamespace(output="ON")
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                scope = scope_cls.return_value
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_frequency.return_value = status
+                scope.capture_waveforms.side_effect = [first, second]
+
+                result = RunService(config=config, logger=CommandLogger()).run(plan)
+
+            self.assertEqual(
+                source.set_frequency.call_args_list,
+                [call(channel=1, value_hz=100.0), call(channel=1, value_hz=1000.0)],
+            )
+            self.assertEqual(
+                scope.capture_waveforms.call_args_list,
+                [
+                    call(channels=[1, 2], label="frequency_response_00_000_100hz"),
+                    call(channels=[1, 2], label="frequency_response_00_001_1000hz"),
+                ],
+            )
+            self.assertEqual(scope.require_high_impedance.call_args_list, [call(1, allow_50ohm=False), call(2, allow_50ohm=False)])
+            response = result.steps[0].artifact["frequency_response"]
+            self.assertEqual(response["status"], "ok")
+            self.assertEqual(len(response["captures"]), 2)
+            self.assertTrue((result.run_dir / "frequency_response.csv").exists())
+            self.assertTrue(
+                all(
+                    call.kwargs["config"].output.save_npy and call.kwargs["config"].output.save_json
+                    for call in scope_cls.call_args_list
+                    if call.kwargs["config"].waveform.expected_frequency_hz is not None
+                )
+            )
+            self.assertTrue(
+                all(
+                    call.kwargs["config"].waveform.min_signal_vpp == 0.005
+                    for call in scope_cls.call_args_list
+                    if call.kwargs["config"].waveform.expected_frequency_hz is not None
+                )
+            )
+
+    def test_frequency_response_retries_warning_after_autoscale_and_uses_clean_retry(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [1000, 2000]
+settle_s = 0
+"""))
+            status = SimpleNamespace(output="ON")
+            initial = fake_frequency_response_capture(tmp, "first", frequency_hz=1000, warnings=["frequency_mismatch"])
+            retry = fake_frequency_response_capture(tmp, "retry", frequency_hz=1000)
+            second = fake_frequency_response_capture(tmp, "second", frequency_hz=2000)
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_frequency.return_value = status
+                scope = scope_cls.return_value
+                scope.capture_waveforms.side_effect = [initial, retry, second]
+
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual(scope.autoscale.call_count, 1)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["status"], "ok")
+            self.assertEqual(rows[0]["quality_retry_count"], "1")
+            self.assertEqual(rows[0]["initial_warnings"], "reference: frequency_mismatch | response: frequency_mismatch")
+            self.assertEqual(rows[0]["initial_capture_package"], str(initial.package_dir))
+
+    def test_frequency_response_marks_point_failed_when_warning_retry_is_exhausted(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [1000, 2000]
+settle_s = 0
+"""))
+            status = SimpleNamespace(output="ON")
+            first = fake_frequency_response_capture(tmp, "first", frequency_hz=1000, warnings=["frequency_mismatch"])
+            retry = fake_frequency_response_capture(tmp, "retry", frequency_hz=1000, warnings=["frequency_mismatch"])
+            second = fake_frequency_response_capture(tmp, "second", frequency_hz=2000)
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_frequency.return_value = status
+                scope = scope_cls.return_value
+                scope.capture_waveforms.side_effect = [first, retry, second]
+
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual(scope.autoscale.call_count, 1)
+            self.assertEqual(rows[0]["status"], "failed")
+            self.assertEqual(rows[0]["quality_retry_count"], "1")
+            self.assertIn("quality_retry_exhausted", rows[0]["error"])
+            self.assertEqual(rows[1]["status"], "ok")
+
+    def test_frequency_response_multiple_vpp_slices_autoscale_and_write_calibration(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000, 5000, 10000]
+amplitudes_vpp = [0.05, 0.1]
+settle_s = 0
+
+[steps.calibration]
+target_mode = "unity_gain"
+max_slope_db_per_octave = 20
+"""))
+            config = make_config(tmp)
+            status = SimpleNamespace(output="ON")
+            captures = [
+                fake_frequency_response_capture(tmp, f"response_{index}", frequency_hz=frequency)
+                for index, frequency in enumerate([100, 1000, 5000, 10000] * 2)
+            ]
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_amplitude_vpp.return_value = status
+                source.set_frequency.return_value = status
+                scope = scope_cls.return_value
+                scope.capture_waveforms.side_effect = captures
+
+                result = RunService(config=config, logger=CommandLogger()).run(plan)
+
+            self.assertEqual(
+                source.set_amplitude_vpp.call_args_list,
+                [call(channel=1, value_vpp=0.05), call(channel=1, value_vpp=0.1)],
+            )
+            self.assertEqual(scope.autoscale.call_count, 2)
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual(len(rows), 8)
+            self.assertEqual([row["requested_vpp"] for row in rows[:4]], ["0.05"] * 4)
+            self.assertEqual([row["amplitude_index"] for row in rows[4:]], ["1"] * 4)
+            self.assertTrue((result.run_dir / "frequency_response_calibration.csv").exists())
+            self.assertTrue((result.run_dir / "frequency_response_calibration.json").exists())
+            self.assertTrue((result.run_dir / "frequency_response_calibration_fixed.csv").exists())
+            self.assertTrue((result.run_dir / "frequency_response_calibration_q.coe").exists())
+            self.assertTrue((result.run_dir / "frequency_response_calibration_q.mem").exists())
+            response = result.steps[0].artifact["frequency_response"]
+            self.assertTrue(response["calibration_csv"])
+
+    def test_frequency_response_vpp_slices_respect_source_safety_limit(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+amplitudes_vpp = [0.05, 0.1]
+"""))
+            limits = SafetyLimitsConfig(max_source_vpp=0.075)
+            with self.assertRaisesRegex(ConfigError, "max_source_vpp"):
+                RunService(config=make_config(tmp, safety_limits=limits), logger=CommandLogger()).check(plan)
+
+    def test_frequency_response_refuses_to_set_frequency_when_source_is_off(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+settle_s = 0
+"""))
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = SimpleNamespace(output="OFF")
+
+                with self.assertRaisesRegex(ConfigError, "output to be ON"):
+                    RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            source.set_frequency.assert_not_called()
+            run_dirs = list((Path(tmp) / "data" / "runs").iterdir())
+            run_data = json.loads((run_dirs[0] / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_data["steps"][0]["kind"], "sweep.frequency_response")
+            self.assertEqual(run_data["steps"][0]["status"], "failed")
+            self.assertTrue((run_dirs[0] / "frequency_response.csv").exists())
+            scope_cls.return_value.capture_waveforms.assert_not_called()
+
+    def test_frequency_response_continues_after_an_auditable_capture_failure(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000, 10000]
+settle_s = 0
+"""))
+            status = SimpleNamespace(output="ON")
+            first = fake_frequency_response_capture(tmp, "response_100", frequency_hz=100.0)
+            third = fake_frequency_response_capture(tmp, "response_10000", frequency_hz=10000.0)
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_frequency.return_value = status
+                scope_cls.return_value.capture_waveforms.side_effect = [
+                    first,
+                    ConfigError("scope capture failed"),
+                    third,
+                ]
+
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            self.assertEqual(source.set_frequency.call_count, 3)
+            self.assertEqual(result.steps[0].status, "failed")
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual([row["status"] for row in rows], ["ok", "failed", "ok"])
+            self.assertIn("scope capture failed", rows[1]["error"])
+
+    def test_frequency_response_source_failure_keeps_csv_step_record_and_restore(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000, 10000]
+settle_s = 0
+"""))
+            first = fake_frequency_response_capture(tmp, "response_100", frequency_hz=100.0)
+            status = SimpleNamespace(output="ON")
+            state = SimpleNamespace(channel=1, as_dict=lambda: {"channel": 1, "function": "SIN"})
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                scope = scope_cls.return_value
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_frequency.side_effect = [status, ConfigError("set failed")]
+                source.snapshot_restorable_state.return_value = state
+                scope.capture_waveforms.return_value = first
+
+                with self.assertRaisesRegex(ConfigError, "set failed") as raised:
+                    RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            self.assertIsNone(raised.exception.__cause__)
+            self.assertEqual(source.set_frequency.call_count, 2)
+            source.restore_restorable_state.assert_called_once_with(state)
+            run_dir = next((Path(tmp) / "data" / "runs").iterdir())
+            rows = list(csv.DictReader((run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual([row["status"] for row in rows], ["ok", "failed"])
+            run_data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_data["status"], "failed")
+            self.assertEqual(run_data["steps"][0]["kind"], "sweep.frequency_response")
+            self.assertEqual(run_data["steps"][0]["status"], "failed")
+            self.assertEqual(run_data["error"], {"type": "ConfigError", "message": "set failed"})
+            self.assertEqual(run_data["restore"]["status"], "ok")
+            step_record = json.loads(
+                (run_dir / "steps" / "00_sweep_frequency_response.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(step_record["status"], "failed")
+            self.assertEqual(step_record["artifact"]["frequency_response"]["failed_point_count"], 1)
+            summary_rows = list(csv.DictReader((run_dir / "summary.csv").open(encoding="utf-8")))
+            self.assertEqual(
+                summary_rows,
+                [
+                    {
+                        "index": "0",
+                        "kind": "sweep.frequency_response",
+                        "status": "failed",
+                        "package": "",
+                        "metadata": "",
+                        "quality_status": "",
+                        "quality_warnings": "",
+                        "recovered": "",
+                        "expect_status": "",
+                        "expect_failures": "",
+                        "expect_fft_status": "",
+                        "expect_fft_failures": "",
+                    }
+                ],
+            )
+
+    def test_multiple_frequency_responses_write_independent_directories_and_manifest(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+label = "input_path"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+settle_s = 0
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "output_path"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+settle_s = 0
+"""))
+            captures = [
+                fake_frequency_response_capture(tmp, f"multi_{index}", frequency_hz=frequency)
+                for index, frequency in enumerate([100, 1000, 100, 1000])
+            ]
+            status = SimpleNamespace(output="ON")
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source_cls.return_value.status.return_value = status
+                source_cls.return_value.set_frequency.return_value = status
+                scope_cls.return_value.capture_waveforms.side_effect = captures
+
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            manifest = json.loads((result.run_dir / "frequency_responses.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["label"] for item in manifest["responses"]], ["input_path", "output_path"])
+            self.assertTrue((result.run_dir / "frequency_response" / "00_input_path" / "frequency_response.csv").exists())
+            self.assertTrue((result.run_dir / "frequency_response" / "01_output_path" / "frequency_response.csv").exists())
+
+    def test_adaptive_frequency_response_adds_midpoint_for_all_vpp_slices(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 1000]
+amplitudes_vpp = [0.05, 0.1]
+settle_s = 0
+
+[steps.adaptive]
+gain_threshold_db = 0.5
+phase_threshold_deg = 10
+max_levels = 1
+max_frequency_points = 3
+"""))
+            captures = [
+                fake_frequency_response_capture(tmp, f"adaptive_{index}", frequency_hz=frequency, gain=gain)
+                for index, (frequency, gain) in enumerate(
+                    [(100, 1), (1000, 2), (100, 1), (1000, 2), (10**2.5, 1.5), (10**2.5, 1.5)]
+                )
+            ]
+            status = SimpleNamespace(output="ON")
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_amplitude_vpp.return_value = status
+                source.set_frequency.return_value = status
+                scope_cls.return_value.capture_waveforms.side_effect = captures
+
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertEqual(len(rows), 6)
+            self.assertEqual(sum(row["adaptive_level"] == "1" for row in rows), 2)
+            self.assertEqual({row["requested_vpp"] for row in rows if row["adaptive_level"] == "1"}, {"0.05", "0.1"})
+            response = result.steps[0].artifact["frequency_response"]
+            self.assertEqual(response["adaptive"]["final_frequency_count"], 3)
+
+    def test_frequency_response_applies_referenced_software_baseline_without_rewriting_raw_columns(self):
+        with TemporaryDirectory() as tmp:
+            baseline_dir = Path(tmp) / "baseline"
+            baseline_dir.mkdir()
+            (baseline_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            (baseline_dir / "frequency_response.csv").write_text(
+                "requested_vpp,requested_frequency_hz,gain_db,phase_unwrapped_deg,status\n"
+                "0.1,100,1,10,ok\n0.1,1000,1,10,ok\n",
+                encoding="utf-8",
+            )
+            plan = load_run_plan(write_plan(tmp, """
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+amplitudes_vpp = [0.1]
+frequencies_hz = [100, 1000]
+settle_s = 0
+
+[steps.baseline]
+run_dir = "baseline"
+mode = "complex_transfer"
+"""))
+            status = SimpleNamespace(output="ON")
+            with patch("wavebench.services.run_service.ScopeService") as scope_cls, patch(
+                "wavebench.services.run_service.SourceService"
+            ) as source_cls:
+                source = source_cls.return_value
+                source.status.return_value = status
+                source.set_amplitude_vpp.return_value = status
+                source.set_frequency.return_value = status
+                scope_cls.return_value.capture_waveforms.side_effect = [
+                    fake_frequency_response_capture(tmp, "baseline_dut_100", frequency_hz=100, gain=2, phase_deg=0),
+                    fake_frequency_response_capture(tmp, "baseline_dut_1000", frequency_hz=1000, gain=2, phase_deg=0),
+                ]
+                result = RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            rows = list(csv.DictReader((result.run_dir / "frequency_response.csv").open(encoding="utf-8")))
+            self.assertTrue(all(row["gain_db"] for row in rows))
+            self.assertTrue(all(row["gain_db_corrected"] for row in rows))
+            self.assertTrue((result.run_dir / "frequency_response_baseline.json").exists())
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 [中文文档](README.md) | English
 
-WaveBench is a lightweight Python measurement bench for explicit, reproducible control of laboratory instruments. It currently covers oscilloscope capture, signal-generator and power-supply control, digital-multimeter reads, multi-instrument run plans, offline reports, and trusted executable instrument plugins.
+WaveBench is a lightweight Python measurement bench for explicit, reproducible control of laboratory instruments. It currently covers oscilloscope capture, signal-generator and power-supply control, digital-multimeter reads, multi-instrument run plans, offline reports, two-channel source/scope frequency-response measurements, and trusted executable instrument plugins.
 
 The WaveBench distribution includes built-in drivers for the RTM2000/RTM2032, DS1104Z/DS1000Z, DG4000/DG4202, DP800, and DM3000/DM3058 families. These five families are the permanent bundled baseline: first use does not require an external plugin, and they are not scheduled for removal from the main package. External packages are optional, independently released upgrades or extensions. A narrowly allowlisted package may take over a canonical ID, while built-in short names remain pinned to the bundled implementation and uninstalling the package restores the bundled canonical implementation where the IDs are shared.
 
@@ -55,6 +55,42 @@ The local marketplace index remains read-only. It does not download or install p
 The Textual interface is an optional extra. In a source checkout, install it with `python -m pip install -e ".[tui]"`, then run `python -m wavebench tui` or `python -m wavebench tui --fake`.
 
 Its supported product scope is intentionally frozen to the power-supply, DMM, and signal-source panels. CLI commands, run plans, and services remain the primary interfaces; the TUI is not a run-plan editor, plugin manager, full oscilloscope viewer, or reporting system.
+
+## Optional frequency-response analysis, interactive HTML, and PDF reports
+
+`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with raw and, when configured, software-baseline-corrected linear/dB gain and wrapped/unwrapped output-relative phase. A run may contain multiple independently labelled responses and multiple requested Vpp slices, producing a two-dimensional Vpp × frequency measurement. A baseline is an explicitly referenced, separately captured manual CH1/CH2 through connection; it never changes scope deskew or front-panel settings. Optional adaptive refinement inserts linear or logarithmic midpoints where either gain or unwrapped phase changes too quickly, then samples every Vpp slice at the new frequency. The offline HTML/PDF report renders each response's raw/corrected magnitude and phase, fit comparison, audit summary, point table, and any saved per-point screenshots. With the `report3d` extra installed, two-dimensional HTML reports also include a rotatable measured-gain surface with Raw/Corrected and dB/V/V selectors, warning/recovery markers, hover evidence, zoom, and camera reset.
+
+Use the conservative template before editing a plan manually:
+
+```bash
+python -m pip install -e ".[analysis,pdf,report3d]"
+python -m wavebench run template source-scope-frequency-response \
+  --frequencies 100,1000,10000 --reference-channel 1 --response-channel 2 \
+  --fit --output plans/frequency_response.toml
+python -m wavebench run check --plan plans/frequency_response.toml
+python -m wavebench run report data/runs/<run-dir> --pdf
+```
+
+`linear_log` and `polynomial` fit linear gain against `log10(frequency_hz / Hz)`; PCHIP, dB smoothing splines, and 2D calibration require the `analysis` extra. For multi-Vpp data, `[steps.calibration]` selects a dB target (`passband_median`, `explicit_gain_db`, or `unity_gain`), emits a bounded floating-point LUT in `frequency_response_calibration.csv`, and records validation, limiter flags, and piecewise Chebyshev coefficients in `frequency_response_calibration.json`. By default it additionally emits an auditable signed-two's-complement Q4.12 CSV plus Xilinx COE and MEM files in amplitude-major address order; `[calibration.fixed_point]` can override the width, fractional bits, formats, layout, and overflow policy. Calibration never extrapolates beyond the measured frequency/Vpp domain. The same products can be regenerated without instruments using:
+
+```bash
+python -m wavebench run calibrate data/runs/<run-dir> --config plans/calibration.toml --response <label>
+```
+
+The interactive HTML bundles no network resources: Plotly is copied to `report-assets/plotly.min.js` and recorded in the report manifest. Keep that directory beside the HTML when moving the report. Surfaces only connect neighbouring measured grid nodes; failed points remain holes, and no fit or extrapolation is invented. Single-amplitude or smaller-than-2×2 data stays on the static Bode presentation.
+
+The PDF is a portable static visual report: it deliberately does not load Plotly, while its visible screenshots, SVG charts, and tables are embedded. CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.
+
+## Running tests in idle-limited terminals
+
+For terminals that disconnect a silent process, use the dependency-free runner below. It forwards pytest output and emits a keepalive line every five seconds; `--heartbeat-s` changes the interval.
+
+```bash
+python scripts/pytest_progress.py -- -q
+python scripts/pytest_progress.py --heartbeat-s 10 -- -q tests/test_run_service.py
+```
+
+This prevents idle-output timeouts; it does not override a terminal or orchestration system's separate total-runtime limit.
 
 Executable plugins use canonical IDs and cannot define aliases. Built-in IDs are protected except for narrowly allowlisted optional-override slots that bind one canonical ID to one distribution. The current shared-ID slots cover DG4000, DM3000, DP800, and RTM2000. Their built-in short aliases always select the bundled baseline, and uninstalling the external distribution restores the bundled canonical implementation. DS1000Z uses the separate external canonical ID `rigol.ds1000z`; its built-in `ds1104` and `ds1000z` aliases remain available without the package. DG4000 source plugins may import the stable `DG4000DacBlock` and `DG4000ByteOrder` types from `wavebench.instruments`; waveform loading, normalization, DAC14 encoding, services, and safety policy remain core responsibilities. The source code retains the historical term `migration slot` for this allowlist, but it does not imply deprecating the bundled drivers.
 

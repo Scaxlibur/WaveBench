@@ -19,10 +19,15 @@ def capture_fft_summary(capture: Any) -> dict[str, Any]:
 
 
 def step_status(artifact: dict[str, Any]) -> str:
+    response = artifact.get("frequency_response", {})
+    if isinstance(response, dict) and response.get("status") == "failed":
+        return "failed"
     if artifact.get("expect", {}).get("status") == "failed":
         return "failed"
     if artifact.get("expect_fft", {}).get("status") == "failed":
         return "failed"
+    if isinstance(response, dict) and response.get("status") == "warning":
+        return "warning"
     return "ok"
 
 

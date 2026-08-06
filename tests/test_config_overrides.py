@@ -149,6 +149,19 @@ resource = "TCPIP::192.0.2.40::INSTR"
         self.assertEqual(updated.waveform.window_frequency_hz, 1000.0)
         self.assertEqual(updated.waveform.target_cycles, 10.0)
 
+    def test_waveform_overrides_min_signal_vpp(self):
+        config = WaveBenchConfig(
+            connection=ConnectionConfig("lan", "TCPIP::127.0.0.1::INSTR", 100, 100),
+            scope=ScopeConfig("rtm2032", None, 1, False, True),
+            autoscale=AutoscaleConfig(True, True),
+            waveform=WaveformConfig("real", "lsbf", "dmax"),
+            output=OutputConfig(Path("data/raw"), "timestamp_label", True, True, True, True, False),
+            source_path=Path("test.toml"),
+        )
+        self.assertEqual(config.waveform.min_signal_vpp, 0.02)
+        updated = config.with_waveform_overrides(min_signal_vpp=0.005)
+        self.assertEqual(updated.waveform.min_signal_vpp, 0.005)
+
     def test_waveform_overrides_vertical_scale_and_target_vpp(self):
         config = WaveBenchConfig(
             connection=ConnectionConfig("lan", "TCPIP::127.0.0.1::INSTR", 100, 100),

@@ -44,6 +44,60 @@ def make_cli_plugin(driver_id="example.scope"):
 
 
 class CliTests(unittest.TestCase):
+    def test_run_calibrate_builds_offline_artifacts_without_loading_instruments(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            response_rows = ["index,requested_frequency_hz,requested_vpp,gain_db,status"]
+            index = 0
+            for amplitude in (0.05, 0.1):
+                for frequency in (100, 1000, 10000, 100000):
+                    response_rows.append(f"{index},{frequency},{amplitude},{6 - index * 0.05},ok")
+                    index += 1
+            (run_dir / "frequency_response.csv").write_text("\n".join(response_rows), encoding="utf-8")
+            calibration = Path(tmp) / "calibration.toml"
+            calibration.write_text("[calibration]\ntarget_mode = 'unity_gain'\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with patch("wavebench.cli._load_run_service") as load_service, redirect_stdout(stdout):
+                code = main(["run", "calibrate", str(run_dir), "--config", str(calibration)])
+
+            self.assertEqual(code, 0)
+            load_service.assert_not_called()
+            self.assertTrue((run_dir / "frequency_response_calibration.csv").exists())
+            self.assertTrue((run_dir / "frequency_response_calibration.json").exists())
+            self.assertIn("calibration_csv=", stdout.getvalue())
+
+    def test_run_calibrate_requires_response_selector_for_manifest_with_multiple_responses(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            entries = []
+            for label in ("a", "b"):
+                directory = run_dir / "frequency_response" / label
+                directory.mkdir(parents=True)
+                rows = ["index,requested_frequency_hz,requested_vpp,gain_db,status"]
+                index = 0
+                for amplitude in (0.05, 0.1):
+                    for frequency in (100, 1000, 10000, 100000):
+                        rows.append(f"{index},{frequency},{amplitude},1,ok")
+                        index += 1
+                (directory / "frequency_response.csv").write_text("\n".join(rows), encoding="utf-8")
+                entries.append({"step_index": len(entries), "label": label, "directory": f"frequency_response/{label}"})
+            (run_dir / "frequency_responses.json").write_text(
+                json.dumps({"schema_version": 1, "responses": entries}), encoding="utf-8"
+            )
+            calibration = Path(tmp) / "calibration.toml"
+            calibration.write_text("[calibration]\ntarget_mode = 'unity_gain'\n", encoding="utf-8")
+
+            self.assertEqual(main(["run", "calibrate", str(run_dir), "--config", str(calibration)]), 2)
+            self.assertEqual(
+                main(["run", "calibrate", str(run_dir), "--config", str(calibration), "--response", "b"]),
+                0,
+            )
+            self.assertTrue((run_dir / "frequency_response" / "b" / "frequency_response_calibration.json").exists())
+
     def test_capture_accepts_points_and_output_flags(self):
         args = build_parser().parse_args([
             "scope", "capture", "--points", "def", "--time-range", "0.01", "--window-frequency", "500", "--target-cycles", "10", "--expect-frequency", "500", "--frequency-tolerance", "0.1", "--no-csv", "--label", "x"
@@ -1314,6 +1368,114 @@ value_vpp = 5.0
         self.assertEqual(args.command, "report")
         self.assertEqual(args.path, "data/runs/example")
         self.assertEqual(args.output, "report.html")
+
+    def test_run_report_accepts_pdf_options(self):
+        args = build_parser().parse_args(
+            ["run", "report", "data/runs/example", "--pdf", "--pdf-output", "report.pdf"]
+        )
+
+        self.assertTrue(args.pdf)
+        self.assertEqual(args.pdf_output, "report.pdf")
+
+    def test_run_report_writes_html_and_pdf_to_distinct_paths(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            html_path = Path(tmp) / "report.html"
+            pdf_path = Path(tmp) / "report.pdf"
+            stdout = io.StringIO()
+            with patch("wavebench.cli.write_run_report_html", return_value=html_path) as write_html, patch(
+                "wavebench.cli.write_run_report_pdf", return_value=pdf_path
+            ) as write_pdf, redirect_stdout(stdout):
+                code = main(
+                    [
+                        "run",
+                        "report",
+                        str(run_dir),
+                        "--output",
+                        str(html_path),
+                        "--pdf",
+                        "--pdf-output",
+                        str(pdf_path),
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            write_html.assert_called_once()
+            write_pdf.assert_called_once()
+            self.assertIn(f"report={html_path}", stdout.getvalue())
+            self.assertIn(f"pdf={pdf_path}", stdout.getvalue())
+
+    def test_run_report_rejects_pdf_output_without_pdf_flag_and_path_collisions(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                missing_flag = main(["run", "report", str(run_dir), "--pdf-output", "report.pdf"])
+            self.assertEqual(missing_flag, 2)
+            self.assertIn("requires --pdf", stderr.getvalue())
+
+            stderr = io.StringIO()
+            same_path = Path(tmp) / "report.html"
+            with redirect_stderr(stderr):
+                collision = main(
+                    [
+                        "run",
+                        "report",
+                        str(run_dir),
+                        "--output",
+                        str(same_path),
+                        "--pdf",
+                        "--pdf-output",
+                        str(same_path),
+                    ]
+                )
+            self.assertEqual(collision, 2)
+            self.assertIn("different paths", stderr.getvalue())
+
+    def test_run_report_rejects_misleading_html_and_pdf_suffixes(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(json.dumps({"status": "ok", "steps": []}), encoding="utf-8")
+            cases = [
+                (
+                    [
+                        "--output",
+                        str(Path(tmp) / "html-named.pdf"),
+                        "--pdf",
+                        "--pdf-output",
+                        str(Path(tmp) / "report.pdf"),
+                    ],
+                    "--output is an HTML path",
+                ),
+                (
+                    [
+                        "--output",
+                        str(Path(tmp) / "report.html"),
+                        "--pdf",
+                        "--pdf-output",
+                        str(Path(tmp) / "pdf-named.html"),
+                    ],
+                    "--pdf-output is a PDF path",
+                ),
+            ]
+
+            for options, message in cases:
+                stderr = io.StringIO()
+                with patch("wavebench.cli.write_run_report_html") as write_html, patch(
+                    "wavebench.cli.write_run_report_pdf"
+                ) as write_pdf, redirect_stderr(stderr):
+                    code = main(["run", "report", str(run_dir), *options])
+
+                self.assertEqual(code, 2)
+                self.assertIn(message, stderr.getvalue())
+                write_html.assert_not_called()
+                write_pdf.assert_not_called()
 
 
 if __name__ == "__main__":

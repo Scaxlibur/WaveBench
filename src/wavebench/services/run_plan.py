@@ -3,16 +3,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import difflib
+from math import log10
 from typing import Any
 import tomllib
 
 from wavebench.config import normalize_waveform_points
 from wavebench.errors import ConfigError
+from wavebench.services.frequency_response import FIT_METHODS
+from wavebench.services.frequency_response_adaptive import normalize_frequency_response_adaptive
+from wavebench.services.frequency_response_baseline import normalize_frequency_response_baseline
+from wavebench.services.frequency_response_calibration import normalize_frequency_response_calibration
 
 
 ALLOWED_STEP_KINDS = {
     "scope.auto",
     "scope.capture",
+    "sweep.frequency_response",
     "source.status",
     "source.set_freq",
     "source.arb_load",
@@ -36,6 +42,7 @@ _REQUIRED_FIELDS = {
     "source.set_vpp": ("value_vpp",),
     "source.set_duty": ("duty_percent",),
     "source.output": ("state",),
+    "sweep.frequency_response": ("reference_channel", "response_channel"),
     "sleep": ("duration_s",),
 }
 
@@ -62,6 +69,32 @@ _OPTIONAL_FIELDS = {
         "expect",
         "expect_fft",
     },
+    "sweep.frequency_response": {
+        "label",
+        "source_channel",
+        "frequencies_hz",
+        "start_frequency_hz",
+        "stop_frequency_hz",
+        "frequency_count",
+        "spacing",
+        "target_cycles",
+        "settle_s",
+        "frequency_tolerance",
+        "min_signal_vpp",
+        "points",
+        "save_csv",
+        "screenshot",
+        "fit",
+        "amplitudes_vpp",
+        "start_vpp",
+        "stop_vpp",
+        "vpp_step",
+        "autoscale_each_amplitude",
+        "retry_warning_with_autoscale",
+        "calibration",
+        "baseline",
+        "adaptive",
+    },
     "source.status": {"channel"},
     "source.set_freq": {"channel"},
     "source.arb_load": {"channel", "offset_v", "sample_rate_hz", "max_points", "byte_order", "output_on"},
@@ -80,6 +113,7 @@ _OPTIONAL_FIELDS = {
 _STEP_NOTES = {
     "scope.auto": "Explicit RTM2032 AUToscale. It changes front-panel settings and is never inserted implicitly.",
     "scope.capture": "Trigger one acquisition, write a capture package, and optionally evaluate quality/expect checks. Use target_vpp or vertical_scale_v_per_div to fit the waveform vertically before capture.",
+    "sweep.frequency_response": "Sweep a source through discrete frequencies, capture reference and response channels in one acquisition per point, and write a Bode response CSV.",
     "source.status": "Read signal-generator channel state without changing output.",
     "source.arb_load": "Upload a DG4202 arbitrary waveform from CSV/NPY using DATA:DAC VOLATILE; output remains unchanged unless output_on = true.",
     "source.set_freq": "Set fixed source frequency in Hz; config may force FIX mode first.",
@@ -220,6 +254,7 @@ def load_run_plan(path: str | Path) -> RunPlan:
     if not isinstance(steps_raw, list) or not steps_raw:
         raise ConfigError("run plan requires at least one [[steps]] entry")
     steps = [_parse_step(index, item) for index, item in enumerate(steps_raw)]
+    _validate_frequency_response_steps(steps)
     return RunPlan(path=plan_path, name=name, label=label, safety=safety, restore=restore, steps=steps)
 
 
@@ -369,6 +404,8 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             fields["expect"] = _parse_expect(fields["expect"], f"{prefix}.expect")
         if "expect_fft" in fields:
             fields["expect_fft"] = _parse_expect(fields["expect_fft"], f"{prefix}.expect_fft")
+    elif kind == "sweep.frequency_response":
+        _normalize_frequency_response_fields(prefix, fields)
     elif kind == "power.set":
         fields["voltage_v"] = _positive_float(fields["voltage_v"], f"{prefix}.voltage_v")
         fields["current_limit_a"] = _positive_float(
@@ -410,6 +447,169 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             fields["expect"] = _parse_expect(fields["expect"], f"{prefix}.expect")
     elif kind == "sleep":
         fields["duration_s"] = _positive_float(fields["duration_s"], f"{prefix}.duration_s")
+
+
+def _validate_frequency_response_steps(steps: list[RunStep]) -> None:
+    response_steps = [step for step in steps if step.kind == "sweep.frequency_response"]
+    labels: set[str] = set()
+    for step in response_steps:
+        label = str(step.fields.get("label", f"frequency_response_{step.index:02d}"))
+        if label in labels:
+            raise ConfigError(f"sweep.frequency_response labels must be unique: {label!r}")
+        labels.add(label)
+
+
+def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) -> None:
+    for name in ("source_channel", "reference_channel", "response_channel"):
+        if name in fields:
+            fields[name] = _positive_int(fields[name], f"{prefix}.{name}")
+    if fields["reference_channel"] == fields["response_channel"]:
+        raise ConfigError(f"{prefix}.reference_channel and response_channel must differ")
+    if "label" in fields:
+        fields["label"] = _non_empty_str(fields["label"], f"{prefix}.label")
+
+    explicit = fields.get("frequencies_hz")
+    generated_names = {"start_frequency_hz", "stop_frequency_hz", "frequency_count", "spacing"}
+    has_generated = any(name in fields for name in generated_names)
+    if explicit is not None and has_generated:
+        raise ConfigError(
+            f"{prefix} must use either frequencies_hz or start/stop/frequency_count, not both"
+        )
+    if explicit is not None:
+        if not isinstance(explicit, list) or len(explicit) < 2:
+            raise ConfigError(f"{prefix}.frequencies_hz must be an array with at least two frequencies")
+        frequencies = [_positive_float(value, f"{prefix}.frequencies_hz") for value in explicit]
+    else:
+        required = ("start_frequency_hz", "stop_frequency_hz", "frequency_count")
+        missing = [name for name in required if name not in fields]
+        if missing:
+            raise ConfigError(
+                f"{prefix} requires frequencies_hz or start_frequency_hz, stop_frequency_hz, and frequency_count"
+            )
+        start = _positive_float(fields["start_frequency_hz"], f"{prefix}.start_frequency_hz")
+        stop = _positive_float(fields["stop_frequency_hz"], f"{prefix}.stop_frequency_hz")
+        count = _positive_int(fields["frequency_count"], f"{prefix}.frequency_count")
+        if stop <= start:
+            raise ConfigError(f"{prefix}.stop_frequency_hz must be greater than start_frequency_hz")
+        if count < 2:
+            raise ConfigError(f"{prefix}.frequency_count must be >= 2")
+        spacing = _non_empty_str(fields.get("spacing", "log"), f"{prefix}.spacing").lower()
+        if spacing not in {"log", "linear"}:
+            raise ConfigError(f"{prefix}.spacing must be 'log' or 'linear'")
+        fields["start_frequency_hz"] = start
+        fields["stop_frequency_hz"] = stop
+        fields["frequency_count"] = count
+        fields["spacing"] = spacing
+        if spacing == "log":
+            step = (log10(stop) - log10(start)) / (count - 1)
+            frequencies = [10.0 ** (log10(start) + index * step) for index in range(count)]
+        else:
+            step = (stop - start) / (count - 1)
+            frequencies = [start + index * step for index in range(count)]
+    if any(second <= first for first, second in zip(frequencies, frequencies[1:])):
+        raise ConfigError(f"{prefix}.frequencies_hz must be strictly increasing and unique")
+    fields["frequencies_hz"] = frequencies
+
+    _normalize_frequency_response_amplitudes(prefix, fields)
+
+    fields["target_cycles"] = _positive_float(
+        fields.get("target_cycles", 10.0), f"{prefix}.target_cycles"
+    )
+    fields["min_signal_vpp"] = _positive_float(
+        fields.get("min_signal_vpp", 0.02), f"{prefix}.min_signal_vpp"
+    )
+    settle_s = _finite_float(fields.get("settle_s", 0.3), f"{prefix}.settle_s")
+    if settle_s < 0:
+        raise ConfigError(f"{prefix}.settle_s must be >= 0")
+    fields["settle_s"] = settle_s
+    if "frequency_tolerance" in fields:
+        fields["frequency_tolerance"] = _positive_float(
+            fields["frequency_tolerance"], f"{prefix}.frequency_tolerance"
+        )
+    if "points" in fields:
+        fields["points"] = normalize_waveform_points(
+            _non_empty_str(fields["points"], f"{prefix}.points")
+        )
+    retry_warning = fields.get("retry_warning_with_autoscale", True)
+    if not isinstance(retry_warning, bool):
+        raise ConfigError(f"{prefix}.retry_warning_with_autoscale must be true or false")
+    fields["retry_warning_with_autoscale"] = retry_warning
+    for name in ("save_csv", "screenshot"):
+        if name in fields and not isinstance(fields[name], bool):
+            raise ConfigError(f"{prefix}.{name} must be true or false")
+    if "fit" in fields:
+        fields["fit"] = _parse_frequency_response_fit(fields["fit"], f"{prefix}.fit")
+    if "calibration" in fields:
+        fields["calibration"] = normalize_frequency_response_calibration(
+            fields["calibration"], f"{prefix}.calibration"
+        ).as_dict()
+    if "baseline" in fields:
+        fields["baseline"] = normalize_frequency_response_baseline(
+            fields["baseline"], f"{prefix}.baseline"
+        ).as_dict()
+    if "adaptive" in fields:
+        fields["adaptive"] = normalize_frequency_response_adaptive(
+            fields["adaptive"], f"{prefix}.adaptive"
+        ).as_dict()
+        if fields["adaptive"]["max_frequency_points"] < len(fields["frequencies_hz"]):
+            raise ConfigError(
+                f"{prefix}.adaptive.max_frequency_points must be at least the initial frequency count"
+            )
+
+
+def _normalize_frequency_response_amplitudes(prefix: str, fields: dict[str, Any]) -> None:
+    explicit = fields.get("amplitudes_vpp")
+    generated_names = {"start_vpp", "stop_vpp", "vpp_step"}
+    has_generated = any(name in fields for name in generated_names)
+    if explicit is not None and has_generated:
+        raise ConfigError(
+            f"{prefix} must use either amplitudes_vpp or start_vpp, stop_vpp, and vpp_step, not both"
+        )
+    amplitudes: list[float] | None = None
+    if explicit is not None:
+        if not isinstance(explicit, list) or not explicit:
+            raise ConfigError(f"{prefix}.amplitudes_vpp must be a non-empty array")
+        amplitudes = [_positive_float(value, f"{prefix}.amplitudes_vpp") for value in explicit]
+    elif has_generated:
+        required = ("start_vpp", "stop_vpp", "vpp_step")
+        missing = [name for name in required if name not in fields]
+        if missing:
+            raise ConfigError(f"{prefix} requires start_vpp, stop_vpp, and vpp_step together")
+        start = _positive_float(fields["start_vpp"], f"{prefix}.start_vpp")
+        stop = _positive_float(fields["stop_vpp"], f"{prefix}.stop_vpp")
+        step = _positive_float(fields["vpp_step"], f"{prefix}.vpp_step")
+        if stop <= start:
+            raise ConfigError(f"{prefix}.stop_vpp must be greater than start_vpp")
+        count = round((stop - start) / step)
+        if count < 1 or abs(start + count * step - stop) > max(1e-12, step * 1e-9):
+            raise ConfigError(f"{prefix}.vpp_step must divide the requested Vpp range exactly")
+        amplitudes = [round(start + index * step, 15) for index in range(count + 1)]
+    if amplitudes is not None:
+        if any(second <= first for first, second in zip(amplitudes, amplitudes[1:])):
+            raise ConfigError(f"{prefix}.amplitudes_vpp must be strictly increasing and unique")
+        fields["amplitudes_vpp"] = amplitudes
+    if amplitudes is not None or "autoscale_each_amplitude" in fields:
+        autoscale = fields.get("autoscale_each_amplitude", True)
+        if not isinstance(autoscale, bool):
+            raise ConfigError(f"{prefix}.autoscale_each_amplitude must be true or false")
+        fields["autoscale_each_amplitude"] = autoscale
+
+
+def _parse_frequency_response_fit(raw: Any, name: str) -> dict[str, Any]:
+    table = _table(raw, name)
+    _reject_unknown_keys(table, {"methods", "polynomial_degree"}, name)
+    methods_raw = table.get("methods", list(FIT_METHODS))
+    if not isinstance(methods_raw, list) or not methods_raw:
+        raise ConfigError(f"{name}.methods must be a non-empty array")
+    methods = [_non_empty_str(value, f"{name}.methods").lower() for value in methods_raw]
+    if any(method not in FIT_METHODS for method in methods):
+        raise ConfigError(f"{name}.methods must use: {', '.join(FIT_METHODS)}")
+    if len(set(methods)) != len(methods):
+        raise ConfigError(f"{name}.methods must not contain duplicates")
+    degree = _positive_int(table.get("polynomial_degree", 3), f"{name}.polynomial_degree")
+    if degree > 5:
+        raise ConfigError(f"{name}.polynomial_degree must be <= 5")
+    return {"methods": methods, "polynomial_degree": degree}
 
 
 def _parse_expect(raw: Any, name: str) -> dict[str, dict[str, float]]:

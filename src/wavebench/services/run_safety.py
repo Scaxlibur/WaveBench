@@ -19,6 +19,7 @@ EXECUTABLE_STEP_KINDS = {
     "power.output",
     "scope.auto",
     "scope.capture",
+    "sweep.frequency_response",
     "source.status",
     "source.set_freq",
     "source.arb_load",
@@ -41,6 +42,18 @@ def check_run_plan_safety_limits(plan: RunPlan, limits: SafetyLimitsConfig) -> N
                 config_key="max_source_vpp",
                 unit="Vpp",
             )
+        elif step.kind == "sweep.frequency_response":
+            for amplitude in step.fields.get("amplitudes_vpp", []):
+                _check_limit(
+                    amplitude,
+                    limits.max_source_vpp,
+                    field=(
+                        f"run step {step.index} frequency-response amplitude / "
+                        f"运行步骤 {step.index} 频响信号源幅度"
+                    ),
+                    config_key="max_source_vpp",
+                    unit="Vpp",
+                )
         elif step.kind == "source.arb_load":
             _check_limit(
                 step.fields["amplitude_vpp"],
@@ -73,6 +86,11 @@ def plan_scope_guard_channels(plan: RunPlan, default_channel: int) -> list[int]:
             channel = step.fields.get("channel") or default_channel
             if channel not in channels:
                 channels.append(channel)
+        elif step.kind == "sweep.frequency_response":
+            for field in ("reference_channel", "response_channel"):
+                channel = step.fields[field]
+                if channel not in channels:
+                    channels.append(channel)
     return channels
 
 

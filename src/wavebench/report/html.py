@@ -3,24 +3,68 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from wavebench.data.packages import RunPackage
+from wavebench.data.packages import FrequencyResponsePackage, RunPackage
+from wavebench.errors import ConfigError
+from wavebench.report.plot3d import (
+    build_surface_payload,
+    plotly_head_tag,
+    plotly_initializer,
+    render_surface_card,
+    write_plotly_asset,
+)
 
 
 def write_run_report_html(run: RunPackage, output_path: str | Path | None = None) -> Path:
     path = Path(output_path) if output_path is not None else run.path / "report.html"
-    path.write_text(render_run_report_html(run, output_dir=path.parent), encoding="utf-8")
-    write_run_report_manifest(run, output_dir=path.parent, report_path=path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    has_surface = any(
+        build_surface_payload(response.rows, plot_id="probe", response_label=response.label)
+        for response in run.frequency_responses
+    )
+    plotly_asset = write_plotly_asset(path.parent) if has_surface else None
+    plotly_url = _relative_url(plotly_asset, path.parent) if plotly_asset is not None else None
+    path.write_text(
+        render_run_report_html(run, output_dir=path.parent, plotly_url=plotly_url), encoding="utf-8"
+    )
+    write_run_report_manifest(
+        run, output_dir=path.parent, report_path=path, interactive_asset_path=plotly_asset
+    )
+    return path
+
+
+def write_run_report_pdf(run: RunPackage, output_path: str | Path | None = None) -> Path:
+    """Render the report as a portable PDF with its visible images and SVGs embedded."""
+    path = Path(output_path) if output_path is not None else run.path / "report.pdf"
+    try:
+        from weasyprint import HTML
+    except (ImportError, OSError) as exc:
+        raise ConfigError(
+            "PDF report export requires the optional PDF dependency; "
+            "install WaveBench with `.[pdf]` and the platform rendering libraries"
+        ) from exc
+    # A full HTML report may contain hundreds of independent capture artifacts.
+    # Keep the portable PDF focused on its reviewable result: summary, Bode curves,
+    # fit, and point table. The run directory remains the authoritative raw evidence.
+    html = render_run_report_html(run, output_dir=path.parent, compact=True)
+    try:
+        HTML(string=html, base_url=path.parent.resolve().as_uri() + "/").write_pdf(str(path))
+    except Exception as exc:  # noqa: BLE001 - surface renderer failures as a user-facing config error
+        raise ConfigError(f"PDF report export failed: {type(exc).__name__}: {exc}") from exc
     return path
 
 
 def write_run_report_manifest(
-    run: RunPackage, output_dir: str | Path | None = None, report_path: str | Path | None = None
+    run: RunPackage,
+    output_dir: str | Path | None = None,
+    report_path: str | Path | None = None,
+    interactive_asset_path: str | Path | None = None,
 ) -> Path:
     report_output_dir = Path(output_dir) if output_dir is not None else run.path
     manifest_path = report_output_dir / "report-assets" / "manifest.json"
@@ -29,6 +73,7 @@ def write_run_report_manifest(
         run,
         output_dir=report_output_dir,
         report_path=Path(report_path) if report_path is not None else report_output_dir / "report.html",
+        interactive_asset_path=(Path(interactive_asset_path) if interactive_asset_path is not None else None),
     )
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest_path
@@ -131,6 +176,13 @@ class ReportArtifactLink:
 
 
 @dataclass(frozen=True)
+class ReportCaptureReference:
+    step_index: str
+    package: str
+    metadata: str
+
+
+@dataclass(frozen=True)
 class ReportEvidenceSummary:
     source_step_count: int
     scope_capture_count: int
@@ -143,34 +195,53 @@ class ReportEvidenceSummary:
     waveform_preview_count: int
 
 
-def render_run_report_html(run: RunPackage, output_dir: str | Path | None = None) -> str:
+def render_run_report_html(
+    run: RunPackage,
+    output_dir: str | Path | None = None,
+    *,
+    compact: bool = False,
+    plotly_url: str | None = None,
+) -> str:
     experiment = run.run.get("experiment", {}) if isinstance(run.run.get("experiment"), dict) else {}
     restore = run.run.get("restore", {}) if isinstance(run.run.get("restore"), dict) else {}
     error = run.run.get("error", {}) if isinstance(run.run.get("error"), dict) else {}
     report_output_dir = Path(output_dir) if output_dir is not None else run.path
-    screenshots = _collect_screenshots(run, report_output_dir)
-    signals = _collect_signal_summaries(run)
-    expectations = _collect_expectation_rows(run)
-    dmm_readings = _collect_dmm_readings(run)
-    sweep_rows = _collect_sweep_rows(run)
-    waveform_previews = _collect_waveform_previews(run)
+    screenshots = [] if compact else _collect_screenshots(run, report_output_dir)
+    signals = [] if compact else _collect_signal_summaries(run)
+    expectations = [] if compact else _collect_expectation_rows(run)
+    dmm_readings = [] if compact else _collect_dmm_readings(run)
+    sweep_rows = [] if compact else _collect_sweep_rows(run)
+    waveform_previews = [] if compact else _collect_waveform_previews(run)
     evidence = _build_evidence_summary(run, expectations, dmm_readings, screenshots, waveform_previews)
-    artifact_links = _collect_artifact_links(run, report_output_dir, screenshots)
+    artifact_links = [] if compact else _collect_artifact_links(run, report_output_dir, screenshots)
     summary = _build_report_summary(run, screenshots, signals)
     screenshots_by_step = {item.step_index: item for item in screenshots}
-    evidence_timeline_block = _evidence_timeline_block(run, screenshots_by_step)
+    evidence_timeline_block = "" if compact else _evidence_timeline_block(run, screenshots_by_step)
     rows = "\n".join(_step_row(step, screenshots_by_step.get(str(step.get("index", "")))) for step in run.steps)
     if not rows:
         rows = '<tr><td colspan="9">没有记录步骤 / No steps recorded.</td></tr>'
-    screenshots_block = _screenshots_block(screenshots)
-    acceptance_block = _acceptance_block(expectations)
-    expectations_block = _expectations_block(expectations)
-    dmm_block = _dmm_readings_block(dmm_readings)
-    sweep_block = _sweep_summary_block(sweep_rows)
-    artifact_links_block = _artifact_links_block(artifact_links)
-    signals_block = _signals_block(signals)
-    waveform_previews_block = _waveform_previews_block(waveform_previews)
+    screenshots_block = "" if compact else _screenshots_block(screenshots)
+    acceptance_block = "" if compact else _acceptance_block(expectations)
+    expectations_block = "" if compact else _expectations_block(expectations)
+    dmm_block = "" if compact else _dmm_readings_block(dmm_readings)
+    sweep_block = "" if compact else _sweep_summary_block(sweep_rows)
+    frequency_response_block = _frequency_response_block(
+        run,
+        include_table=not compact,
+        include_interactive_3d=not compact,
+        plotly_url=plotly_url if not compact else None,
+    )
+    artifact_links_block = "" if compact else _artifact_links_block(artifact_links)
+    signals_block = "" if compact else _signals_block(signals)
+    waveform_previews_block = "" if compact else _waveform_previews_block(waveform_previews)
+    evidence_summary_block = "" if compact else _evidence_summary_block(evidence)
     summary_note = "present" if run.summary_csv_path is not None else "missing"
+    compact_note = (
+        '<p class="muted">PDF 精简为结果摘要、Bode 曲线与拟合；逐点 CSV 和完整原始证据保留在 run 目录。</p>'
+        if compact
+        else ""
+    )
+    body_class = "pdf-compact" if compact else ""
     error_block = ""
     if error:
         error_block = f"<h2>运行错误 / Run error</h2><pre>{escape(str(error))}</pre>"
@@ -246,16 +317,60 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
 .dmm-card dl {{ margin: 0; display: grid; gap: 0.25rem; }}
 .dmm-card div {{ display: grid; grid-template-columns: 5.5rem 1fr; gap: 0.5rem; }}
 .dmm-card dt {{ color: var(--muted); }}
-.dmm-card dd {{ margin: 0; font-weight: 650; overflow-wrap: anywhere; }}
-@media print {{ body {{ background: #fff; }} main {{ max-width: none; padding: 0; }} section, article.card, figure.card, .table {{ box-shadow: none; }} }}
+    .dmm-card dd {{ margin: 0; font-weight: 650; overflow-wrap: anywhere; }}
+    .frequency-response-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem; margin: 0.5rem 0 1.25rem; }}
+    .frequency-response-card {{ padding: 0.85rem; }}
+    .frequency-response-card h3 {{ margin: 0 0 0.35rem; font-size: 1rem; }}
+    .frequency-response-card svg {{ display: block; width: 100%; height: auto; margin-top: 0.5rem; border-radius: 8px; }}
+    .response-3d-card {{ margin: 0.5rem 0 1.25rem; }}
+    .response-3d-controls {{ display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.4rem 0; }}
+    .response-3d-controls label {{ color: var(--muted); font-size: 0.9rem; }}
+    .response-3d-controls select {{ margin-left: 0.3rem; padding: 0.25rem 0.4rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }}
+    .response-3d-controls button {{ padding: 0.25rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }}
+.response-3d-controls button:hover {{ border-color: var(--accent); }}
+.response-3d-plot {{ width: 100%; height: 34rem; min-height: 28rem; }}
+.frequency-response-point-log {{ margin: 1rem 0 1.25rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }}
+.frequency-response-point-log > summary {{ cursor: pointer; padding: 0.75rem 0.9rem; color: #102a43; font-weight: 700; }}
+.frequency-response-point-log > summary::marker {{ color: var(--brand); }}
+.frequency-response-point-log[open] > summary {{ border-bottom: 1px solid var(--line); }}
+.frequency-response-point-log-summary {{ margin-left: 0.4rem; color: var(--muted); font-size: 0.9rem; font-weight: 500; }}
+.frequency-response-point-log-note {{ margin: 0.7rem 0.9rem 0; }}
+.frequency-response-point-log .table {{ margin: 0.7rem 0.9rem 0.9rem; }}
+.artifact-links-log {{ margin: 0.5rem 0 1.25rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }}
+.artifact-links-log > summary {{ cursor: pointer; padding: 0.75rem 0.9rem; color: #102a43; font-weight: 700; }}
+.artifact-links-log > summary::marker {{ color: var(--brand); }}
+.artifact-links-log[open] > summary {{ border-bottom: 1px solid var(--line); }}
+.artifact-links-log-summary {{ margin-left: 0.4rem; color: var(--muted); font-size: 0.9rem; font-weight: 500; }}
+.artifact-links-log .table {{ margin: 0.7rem 0.9rem 0.9rem; }}
+.fit-formula {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+@page {{ size: A4 landscape; margin: 10mm; }}
+@media print {{
+  body {{ background: #fff; font-size: 9pt; }}
+  main {{ max-width: none; padding: 0; }}
+  section, article.card, figure.card, .table {{ box-shadow: none; }}
+  article.card, figure.card {{ break-inside: avoid; }}
+  .table {{ overflow: visible; }}
+  .compact-table table {{ font-size: 7pt; }}
+  .compact-table th, .compact-table td {{ padding: 0.25rem 0.3rem; }}
+  .frequency-response-grid {{ grid-template-columns: 1fr; }}
+  body.pdf-compact h1 {{ font-size: 17pt; margin: 0 0 0.15rem; }}
+  body.pdf-compact h2 {{ margin: 0.65rem 0 0.3rem; font-size: 13pt; }}
+  body.pdf-compact .summary-grid {{ display: block; margin: 0.35rem 0 0.55rem; padding: 0; break-inside: avoid; page-break-inside: avoid; }}
+  body.pdf-compact .summary-card {{ box-sizing: border-box; display: inline-block; vertical-align: top; width: 24%; min-height: 0; margin: 0.2% 0.35%; padding: 0.38rem 0.45rem; border-radius: 7px; break-inside: avoid; page-break-inside: avoid; }}
+  body.pdf-compact .summary-card .label {{ font-size: 7.5pt; line-height: 1.25; }}
+  body.pdf-compact .summary-card .value {{ font-size: 10.5pt; line-height: 1.22; margin-top: 0.08rem; }}
+  body.pdf-compact .summary-card .value.ok, body.pdf-compact .summary-card .value.failed, body.pdf-compact .summary-card .value.warning {{ font-size: 8.5pt; padding: 0.04rem 0.3rem; }}
+}}
 </style>
+{plotly_head_tag(plotly_url if not compact else None)}
 </head>
-<body>
+<body class="{body_class}">
 <main>
 <h1>WaveBench 运行报告 <span class="muted">Run report</span></h1>
-<p class="muted">A static, self-contained hardware validation report.</p>
-{_summary_block(summary)}
-{_evidence_summary_block(evidence)}
+<p class="muted">An offline hardware validation report.</p>
+{compact_note}
+{_summary_block(summary, compact=compact)}
+{evidence_summary_block}
 {evidence_timeline_block}
 {artifact_links_block}
 <article class="card meta-card">
@@ -275,20 +390,28 @@ code {{ background: #f0f4f8; padding: 0.1rem 0.3rem; border-radius: 5px; }}
 </tbody>
 </table>
 </div>
-{dmm_block}
-{sweep_block}
-{acceptance_block}
+    {dmm_block}
+    {sweep_block}
+    {frequency_response_block}
+    {acceptance_block}
 {expectations_block}
 {signals_block}
 {waveform_previews_block}
 {screenshots_block}
 </main>
+{plotly_initializer(plotly_url if not compact else None)}
 </body>
 </html>
 """
 
 
-def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Path) -> dict[str, Any]:
+def _build_report_manifest(
+    run: RunPackage,
+    *,
+    output_dir: Path,
+    report_path: Path,
+    interactive_asset_path: Path | None = None,
+) -> dict[str, Any]:
     screenshots = _collect_screenshots(run, output_dir)
     capture_packages: list[dict[str, Any]] = []
     waveform_previews: list[dict[str, Any]] = []
@@ -332,11 +455,62 @@ def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Pa
                     "generated": "inline-svg",
                 }
             )
+    known_packages = {str(record["package"]) for record in capture_packages}
+    for reference in _capture_references(run):
+        if reference.package in known_packages:
+            continue
+        package_dir = _resolve_artifact_path(run.path, reference.package)
+        capture_packages.append(
+            {
+                "step_index": reference.step_index,
+                "package": reference.package,
+                "path": _relative_url(package_dir, output_dir),
+                "exists": package_dir.exists(),
+            }
+        )
+        if not package_dir.exists():
+            warnings.append(
+                f"step {reference.step_index}: capture package missing: {reference.package}"
+            )
     return {
         "schema": "wavebench.report_manifest.v1",
         "report": _relative_url(report_path, output_dir),
         "run_json": _relative_url(run.run_json_path, output_dir),
         "summary_csv": _relative_url(run.summary_csv_path, output_dir) if run.summary_csv_path is not None else None,
+        "frequency_response_csv": _relative_url(run.frequency_response_csv_path, output_dir)
+        if run.frequency_response_csv_path is not None
+        else None,
+        "frequency_response_fit_json": _relative_url(run.frequency_response_fit_path, output_dir)
+        if run.frequency_response_fit_path is not None
+        else None,
+        "frequency_response_calibration_csv": _relative_url(
+            run.frequency_response_calibration_csv_path, output_dir
+        )
+        if run.frequency_response_calibration_csv_path is not None
+        else None,
+        "frequency_response_calibration_json": _relative_url(
+            run.frequency_response_calibration_path, output_dir
+        )
+        if run.frequency_response_calibration_path is not None
+        else None,
+        "frequency_responses": [
+            {
+                "label": response.label,
+                "directory": _relative_url(response.directory, output_dir),
+                "csv": _relative_url(response.csv_path, output_dir)
+                if response.csv_path is not None
+                else None,
+                "baseline_json": _relative_url(response.baseline_path, output_dir)
+                if response.baseline_path is not None
+                else None,
+                "calibration_json": _relative_url(response.calibration_path, output_dir)
+                if response.calibration_path is not None
+                else None,
+                "status": response.manifest_entry.get("status"),
+                "adaptive": response.manifest_entry.get("adaptive"),
+            }
+            for response in run.frequency_responses
+        ],
         "capture_packages": capture_packages,
         "screenshots": [
             {
@@ -347,13 +521,25 @@ def _build_report_manifest(run: RunPackage, *, output_dir: Path, report_path: Pa
             for item in screenshots
         ],
         "waveform_previews": waveform_previews,
+        "interactive_assets": (
+            [
+                {
+                    "kind": "plotly.js",
+                    "path": _relative_url(interactive_asset_path, output_dir),
+                    "exists": interactive_asset_path.exists(),
+                }
+            ]
+            if interactive_asset_path is not None
+            else []
+        ),
         "warnings": warnings,
     }
 
 
-def _summary_block(summary: ReportSummary) -> str:
+def _summary_block(summary: ReportSummary, *, compact: bool = False) -> str:
+    css_class = "summary-grid pdf-summary-grid" if compact else "summary-grid"
     return f"""<h2>摘要 / Summary</h2>
-<section class="summary-grid">
+<section class="{css_class}">
 {_summary_card("状态 / Status", summary.status, css_class=summary.status)}
 {_summary_card("实验 / Experiment", summary.experiment_label)}
 {_summary_card("步骤 / Steps", str(summary.total_steps))}
@@ -542,15 +728,30 @@ def _artifact_links_block(links: list[ReportArtifactLink]) -> str:
     if not links:
         return ""
     rows = "\n".join(_artifact_link_row(link) for link in links)
+    open_attribute = " open" if len(links) <= 100 else ""
     return f"""<h2>产物链接 / Artifact links</h2>
+<details class="artifact-links-log" data-artifact-links-log="true"{open_attribute}>
+<summary>产物链接 / Artifact links<span class="artifact-links-log-summary">{_artifact_links_summary(links)}</span></summary>
 <div class="table compact-table artifact-table"><table>
 <thead><tr><th>步骤 / Step</th><th>类型 / Type</th><th>产物 / Artifact</th><th>链接 / Link</th><th>状态 / Status</th></tr></thead>
 <tbody>
 {rows}
 </tbody>
 </table>
-</div>
+</div></details>
 """
+
+
+def _artifact_links_summary(links: list[ReportArtifactLink]) -> str:
+    kind_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    for link in links:
+        kind_counts[link.kind] = kind_counts.get(link.kind, 0) + 1
+        status = link.status or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+    kinds = ", ".join(f"{kind}: {count:,}" for kind, count in sorted(kind_counts.items()))
+    statuses = ", ".join(f"{status}: {count:,}" for status, count in sorted(status_counts.items()))
+    return escape(f"{len(links):,} 条 / links · 类型 {kinds} · 状态 {statuses}")
 
 
 def _artifact_link_row(link: ReportArtifactLink) -> str:
@@ -661,6 +862,752 @@ def _sweep_summary_row(row: ReportSweepRow) -> str:
         f"<td>{escape(row.thd_ratio)}</td>"
         "</tr>"
     )
+
+
+def _frequency_response_block(
+    run: RunPackage,
+    *,
+    include_table: bool = True,
+    include_interactive_3d: bool = True,
+    plotly_url: str | None = None,
+) -> str:
+    if not run.frequency_responses:
+        return ""
+    multiple = len(run.frequency_responses) > 1
+    return "".join(
+        _frequency_response_section(
+            response,
+            include_table=include_table,
+            multiple=multiple,
+            interactive_3d=(
+                render_surface_card(
+                    build_surface_payload(
+                        response.rows,
+                        plot_id=f"wavebench-frequency-response-3d-{index}",
+                        response_label=response.label,
+                    ),
+                    plotly_url=plotly_url,
+                )
+                if include_interactive_3d
+                else ""
+            ),
+        )
+        for index, response in enumerate(run.frequency_responses)
+    )
+
+
+def _frequency_response_section(
+    response: FrequencyResponsePackage,
+    *,
+    include_table: bool,
+    multiple: bool,
+    interactive_3d: str = "",
+) -> str:
+    rows = response.rows
+    raw_gain_measurements = _response_amplitude_series(rows, "gain_db")
+    raw_phase_measurements = _response_amplitude_series(rows, "phase_unwrapped_deg")
+    corrected_gain_measurements = _response_amplitude_series(rows, "gain_db_corrected")
+    corrected_phase_measurements = _response_amplitude_series(rows, "phase_unwrapped_corrected_deg")
+    raw_gain_blocks = [] if raw_gain_measurements else _response_blocks(rows, "gain_db")
+    raw_phase_blocks = [] if raw_phase_measurements else _response_blocks(rows, "phase_unwrapped_deg")
+    corrected_gain_blocks = [] if corrected_gain_measurements else _response_blocks(rows, "gain_db_corrected")
+    corrected_phase_blocks = [] if corrected_phase_measurements else _response_blocks(rows, "phase_unwrapped_corrected_deg")
+    fit_series = _fit_curve_series(response.fit)
+    gain_svg = _response_svg(
+        raw_gain_blocks,
+        title="原始幅频 / Raw magnitude response",
+        y_label="Gain (dB)",
+        series=(),
+        measured_series=raw_gain_measurements,
+        actual_label="",
+    )
+    phase_svg = _response_svg(
+        raw_phase_blocks,
+        title="原始相频 / Raw phase response",
+        y_label="Phase (deg, unwrapped)",
+        series=(),
+        measured_series=raw_phase_measurements,
+        actual_label="",
+    )
+    corrected_gain_svg = _response_svg(
+        corrected_gain_blocks,
+        title="校正幅频 / Corrected magnitude response",
+        y_label="Gain (dB)",
+        series=(),
+        measured_series=corrected_gain_measurements,
+        actual_label="",
+    ) if corrected_gain_blocks or corrected_gain_measurements else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
+    corrected_phase_svg = _response_svg(
+        corrected_phase_blocks,
+        title="校正相频 / Corrected phase response",
+        y_label="Phase (deg, unwrapped)",
+        series=(),
+        measured_series=corrected_phase_measurements,
+        actual_label="",
+    ) if corrected_phase_blocks or corrected_phase_measurements else '<p class="muted">未配置软件基线校正 / No software baseline correction.</p>'
+    linear_measurements = _response_amplitude_series(rows, "gain_linear_corrected") or _response_amplitude_series(
+        rows, "gain_linear"
+    )
+    linear_blocks = [] if linear_measurements else [
+        [point]
+        for block in _response_blocks(rows, "gain_linear_corrected") or _response_blocks(rows, "gain_linear")
+        for point in block
+    ]
+    fit_svg = _response_svg(
+        linear_blocks,
+        title="线性增益拟合 / Linear gain fit comparison",
+        y_label="Linear gain (V/V)",
+        series=fit_series,
+        measured_series=linear_measurements,
+        actual_label="Measured",
+    )
+    table_block = ""
+    if include_table:
+        table_rows = "\n".join(_frequency_response_row(row) for row in rows)
+        if not table_rows:
+            table_rows = '<tr><td colspan="10">频响 CSV 没有可读取的记录 / No readable response rows.</td></tr>'
+        open_attribute = " open" if len(rows) <= 100 else ""
+        table_block = f"""<details class="frequency-response-point-log" data-frequency-response-point-log="true"{open_attribute}>
+<summary>逐点日志 / Point log<span class="frequency-response-point-log-summary">{_frequency_response_point_log_summary(rows)}</span></summary>
+<p class="muted frequency-response-point-log-note">完整逐点记录默认收起；CSV 仍是可复算的原始事实源。</p>
+<div class="table compact-table"><table>
+<thead><tr><th>#</th><th>请求幅值 / Requested Vpp</th><th>请求频率 / Requested</th><th>输入峰值 / Input peak</th><th>输出峰值 / Output peak</th><th>线性增益</th><th>增益 / Gain</th><th>相位 / Phase</th><th>展开相位 / Unwrapped</th><th>状态 / Status</th><th>警告或错误 / Warning or error</th></tr></thead>
+<tbody>
+{table_rows}
+</tbody>
+</table></div></details>"""
+    else:
+        table_block = '<p class="muted">逐频点结果请见本响应目录的 <code>frequency_response.csv</code>。</p>'
+    fit_summary = (
+        _fit_summary_block(response.fit, response.fit_error)
+        if include_table
+        else _compact_fit_summary_block(response.fit, response.fit_error)
+    )
+    calibration_block = _frequency_response_calibration_block(response)
+    baseline_block = _frequency_response_baseline_block(response)
+    adaptive_block = _frequency_response_adaptive_block(response)
+    matrix_summary = _frequency_response_matrix_summary(rows)
+    title = "频率响应 / Frequency response"
+    if multiple:
+        title += f" — {escape(response.label)}"
+    return f"""<h2>{title}</h2>
+<p class="muted">响应标签 / Response label: <code>{escape(response.label)}</code>。原始幅相保留为证据；软件基线校正不会改写仪器 deskew 或前面板设置。</p>
+{matrix_summary}
+{baseline_block}
+{adaptive_block}
+{interactive_3d}
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>原始幅频 / Raw magnitude</h3>{gain_svg}</article>
+<article class="card frequency-response-card"><h3>原始相频 / Raw phase</h3>{phase_svg}</article>
+</section>
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>校正幅频 / Corrected magnitude</h3>{corrected_gain_svg}</article>
+<article class="card frequency-response-card"><h3>校正相频 / Corrected phase</h3>{corrected_phase_svg}</article>
+</section>
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>拟合对比 / Fit comparison</h3>{fit_svg}</article>
+</section>
+{fit_summary}
+{calibration_block}
+{table_block}
+"""
+
+
+def _frequency_response_point_log_summary(rows: list[dict[str, str]]) -> str:
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status", "unknown") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    parts = [f"{len(rows):,} 点 / points"]
+    for status in ("ok", "warning", "failed"):
+        if status in counts:
+            parts.append(f"{status}: {counts.pop(status):,}")
+    parts.extend(f"{status}: {count:,}" for status, count in sorted(counts.items()))
+    return escape(" · ".join(parts))
+
+
+def _frequency_response_baseline_block(response: FrequencyResponsePackage) -> str:
+    if response.baseline_error:
+        return f'<p class="warning">基线审计 JSON 无法读取：{escape(response.baseline_error)}</p>'
+    if not response.baseline:
+        return ""
+    mode = response.baseline.get("mode", "")
+    source = response.baseline.get("baseline_response", "")
+    domain = response.baseline.get("valid_domain_hz_by_requested_vpp", {})
+    delay = response.baseline.get("estimated_delay_s_by_requested_vpp", {})
+    return (
+        '<div class="table compact-table"><table><thead><tr><th>软件基线 / Software baseline</th>'
+        '<th>模式 / Mode</th><th>有效域 / Valid domain</th><th>估算延迟 / Estimated delay</th></tr></thead>'
+        f'<tbody><tr><td>{escape(str(source))}</td><td>{escape(str(mode))}</td>'
+        f'<td><code>{escape(json.dumps(domain, ensure_ascii=False))}</code></td>'
+        f'<td><code>{escape(json.dumps(delay, ensure_ascii=False))}</code></td></tr></tbody></table></div>'
+    )
+
+
+def _frequency_response_adaptive_block(response: FrequencyResponsePackage) -> str:
+    adaptive = response.manifest_entry.get("adaptive")
+    if not isinstance(adaptive, dict):
+        return ""
+    return (
+        '<div class="table compact-table"><table><thead><tr><th>自适应加密 / Adaptive refinement</th>'
+        '<th>初始点</th><th>加密层数</th><th>最终点数</th><th>预算限制</th></tr></thead><tbody><tr>'
+        f'<td>{escape(str(adaptive.get("configuration", {})))}</td>'
+        f'<td>{escape(str(adaptive.get("initial_frequency_count", "")))}</td>'
+        f'<td>{escape(str(adaptive.get("refinement_levels_completed", "")))}</td>'
+        f'<td>{escape(str(adaptive.get("final_frequency_count", "")))}</td>'
+        f'<td>{escape(str(adaptive.get("budget_limited", False)))}</td>'
+        '</tr></tbody></table></div>'
+    )
+
+
+def _frequency_response_row(row: dict[str, str]) -> str:
+    status = str(row.get("status", ""))
+    details = " | ".join(
+        value for value in (str(row.get("warnings", "")), str(row.get("error", ""))) if value
+    )
+    return (
+        f'<tr class="{escape(status)}">'
+        f"<td>{escape(str(row.get('index', '')))}</td>"
+        f"<td>{escape(_format_metric(row.get('requested_vpp'), 'Vpp'))}</td>"
+        f"<td>{escape(_format_metric(row.get('requested_frequency_hz'), 'Hz'))}</td>"
+        f"<td>{escape(_format_metric(row.get('reference_amplitude_peak_v'), 'V'))}</td>"
+        f"<td>{escape(_format_metric(row.get('response_amplitude_peak_v'), 'V'))}</td>"
+        f"<td>{escape(_format_plain(row.get('gain_linear')))}</td>"
+        f"<td>{escape(_format_metric(row.get('gain_db'), 'dB'))}</td>"
+        f"<td>{escape(_format_metric(row.get('phase_wrapped_deg'), 'deg'))}</td>"
+        f"<td>{escape(_format_metric(row.get('phase_unwrapped_deg'), 'deg'))}</td>"
+        f'<td class="{escape(status)}">{escape(status)}</td>'
+        f"<td>{escape(details)}</td>"
+        "</tr>"
+    )
+
+
+def _fit_summary_block(document: dict[str, Any] | None, error: str | None) -> str:
+    if error:
+        return f'<p class="warning">拟合 JSON 无法读取 / Fit JSON unavailable: {escape(error)}</p>'
+    if not document:
+        return '<p class="muted">未启用拟合 / Fit was not enabled for this run.</p>'
+    methods = document.get("methods", {})
+    if not isinstance(methods, dict) or not methods:
+        return '<p class="muted">没有可用的拟合结果 / No fit results available.</p>'
+    rows = []
+    for name, raw in methods.items():
+        payload = raw if isinstance(raw, dict) else {}
+        metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
+        parameters = payload.get("parameters", {})
+        parameter_text = json.dumps(parameters, ensure_ascii=False) if parameters else ""
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(payload.get('display') or name))}</td>"
+            f"<td class=\"{escape(str(payload.get('status', '')))}\">{escape(str(payload.get('status', '')))}</td>"
+            f"<td><code class=\"fit-formula\">{escape(str(payload.get('formula', payload.get('reason', ''))))}</code></td>"
+            f"<td>{escape(_format_plain(metrics.get('rmse')))}</td>"
+            f"<td>{escape(_format_plain(metrics.get('r_squared')))}</td>"
+            f"<td><code class=\"fit-formula\">{escape(parameter_text)}</code></td>"
+            "</tr>"
+        )
+    return f"""<h3>拟合公式与指标 / Fit formulas and metrics</h3>
+<div class="table compact-table"><table>
+<thead><tr><th>方法 / Method</th><th>状态 / Status</th><th>公式 / Formula</th><th>RMSE</th><th>R²</th><th>参数 / Parameters</th></tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table></div>
+"""
+
+
+def _compact_fit_summary_block(document: dict[str, Any] | None, error: str | None) -> str:
+    """Keep portable PDFs readable when interpolation metadata has hundreds of segments."""
+    if error:
+        return f'<p class="warning">拟合 JSON 无法读取 / Fit JSON unavailable: {escape(error)}</p>'
+    if not document:
+        return '<p class="muted">未启用拟合 / Fit was not enabled for this run.</p>'
+    methods = document.get("methods", {})
+    if not isinstance(methods, dict) or not methods:
+        return '<p class="muted">没有可用的拟合结果 / No fit results available.</p>'
+    rows = []
+    for name, raw in methods.items():
+        payload = raw if isinstance(raw, dict) else {}
+        metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
+        formula = str(payload.get("formula", "")) if name == "polynomial" else "完整公式见拟合 JSON"
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(payload.get('display') or name))}</td>"
+            f"<td class=\"{escape(str(payload.get('status', '')))}\">{escape(str(payload.get('status', '')))}</td>"
+            f"<td>{escape(_format_plain(metrics.get('rmse')))}</td>"
+            f"<td>{escape(_format_plain(metrics.get('r_squared')))}</td>"
+            f"<td><code class=\"fit-formula\">{escape(formula)}</code></td>"
+            "</tr>"
+        )
+    return f"""<h3>线性增益拟合摘要 / Linear-gain fit summary</h3>
+<div class="table compact-table"><table>
+<thead><tr><th>方法 / Method</th><th>状态 / Status</th><th>RMSE</th><th>R²</th><th>公式 / Formula</th></tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table></div>"""
+
+
+def _response_blocks(rows: list[dict[str, str]], key: str) -> list[list[tuple[float, float]]]:
+    blocks: list[list[tuple[float, float]]] = []
+    block: list[tuple[float, float]] = []
+    amplitude: str | None = None
+    for row in rows:
+        current_amplitude = str(row.get("amplitude_index", row.get("requested_vpp", "")))
+        if amplitude is not None and current_amplitude != amplitude and block:
+            blocks.append(block)
+            block = []
+        amplitude = current_amplitude
+        frequency = _finite_float(row.get("requested_frequency_hz"))
+        value = _finite_float(row.get(key))
+        if row.get("status") == "failed" or frequency is None or frequency <= 0 or value is None:
+            if block:
+                blocks.append(block)
+                block = []
+            continue
+        block.append((frequency, value))
+    if block:
+        blocks.append(block)
+    return blocks
+
+
+def _response_amplitude_series(
+    rows: list[dict[str, str]], key: str
+) -> list[tuple[str, str, list[tuple[float, float]]]]:
+    """Split a 2D sweep into one labeled, colored Bode series per requested Vpp."""
+    groups: dict[str, tuple[float, list[tuple[float, float]]]] = {}
+    for row in rows:
+        requested_vpp = _finite_float(row.get("requested_vpp"))
+        frequency = _finite_float(row.get("requested_frequency_hz"))
+        value = _finite_float(row.get(key))
+        if (
+            requested_vpp is None
+            or requested_vpp <= 0
+            or frequency is None
+            or frequency <= 0
+            or value is None
+            or row.get("status") == "failed"
+        ):
+            continue
+        group_key = str(row.get("amplitude_index", "")) or f"{requested_vpp:.12g}"
+        if group_key not in groups:
+            groups[group_key] = (requested_vpp, [])
+        groups[group_key][1].append((frequency, value))
+    colors = ("#2563eb", "#dc2626", "#0891b2", "#7c3aed", "#ea580c", "#16a34a")
+    return [
+        (f"Measured · {_format_metric(amplitude, 'Vpp')}", colors[index % len(colors)], sorted(values))
+        for index, (_group_key, (amplitude, values)) in enumerate(
+            sorted(groups.items(), key=lambda item: item[1][0])
+        )
+    ]
+
+
+def _frequency_response_matrix_summary(rows: list[dict[str, str]]) -> str:
+    amplitudes = sorted(
+        {
+            value
+            for row in rows
+            if (value := _finite_float(row.get("requested_vpp"))) is not None and value > 0
+        }
+    )
+    frequencies = sorted(
+        {
+            value
+            for row in rows
+            if (value := _finite_float(row.get("requested_frequency_hz"))) is not None and value > 0
+        }
+    )
+    if not amplitudes or not frequencies:
+        return ""
+    combinations = len(amplitudes) * len(frequencies)
+    observed = {
+        (amplitude, frequency)
+        for row in rows
+        if (amplitude := _finite_float(row.get("requested_vpp"))) is not None
+        and amplitude > 0
+        and (frequency := _finite_float(row.get("requested_frequency_hz"))) is not None
+        and frequency > 0
+    }
+    kind = "二维 / 2D" if len(amplitudes) > 1 else "单幅值 / single-amplitude"
+    return (
+        '<p class="muted"><strong>扫频矩阵 / Sweep matrix:</strong> '
+        f'{escape(kind)}，{len(amplitudes)} 个 Vpp 切片 × {len(frequencies)} 个频率节点 '
+        f'= {combinations} 个请求组合；CSV 已记录 {len(observed)}/{combinations} 个组合。'
+        '</p>'
+    )
+
+
+def _frequency_response_calibration_block(response: FrequencyResponsePackage) -> str:
+    if response.calibration_error:
+        return (
+            '<h3>二维校准 / 2D calibration</h3>'
+            f'<p class="warning">校准 JSON 无法读取 / Calibration unavailable: '
+            f'{escape(response.calibration_error)}</p>'
+        )
+    document = response.calibration
+    rows = response.calibration_rows
+    if not document and not rows:
+        return ""
+    configuration = document.get("configuration", {}) if isinstance(document, dict) else {}
+    validation = document.get("validation", {}) if isinstance(document, dict) else {}
+    domain = document.get("valid_domain", {}) if isinstance(document, dict) else {}
+    target = document.get("target_gain_db") if isinstance(document, dict) else None
+    summary = f"""<div class="table compact-table"><table>
+<thead><tr><th>目标 / Target</th><th>有效频段 / Frequency range</th><th>请求幅值 / Requested Vpp</th><th>频率留点 RMSE</th><th>幅值留点 RMSE</th></tr></thead>
+<tbody><tr><td>{escape(_format_metric(target, 'dB'))} ({escape(str(configuration.get('target_mode', '')) )})</td>
+<td>{escape(_format_range(domain.get('frequency_hz'), 'Hz'))}</td>
+<td>{escape(_format_range(domain.get('requested_vpp'), 'Vpp'))}</td>
+<td>{escape(_format_metric(validation.get('frequency_holdout_rmse_db'), 'dB'))}</td>
+<td>{escape(_format_metric(validation.get('amplitude_holdout_rmse_db'), 'dB'))}</td></tr></tbody>
+</table></div>"""
+    heatmap = _calibration_heatmap_svg(rows)
+    curves = _calibration_curve_svg(rows)
+    note = (
+        '<p class="muted">二维 LUT 使用频率 dB 平滑样条与相邻请求 Vpp 线性插值；超出有效域不外推。'
+        '完整浮点 LUT 与 Chebyshev 系数见 <code>frequency_response_calibration.csv</code> 和 '
+        '<code>frequency_response_calibration.json</code>。</p>'
+    )
+    fixed_point = document.get("fixed_point") if isinstance(document, dict) else None
+    fixed_note = ""
+    if isinstance(fixed_point, dict):
+        fixed_note = (
+            '<p class="muted">定点部署 / Fixed point: '
+            f'<code>{escape(str(fixed_point.get("q_format", "")))}</code>, '
+            f'{escape(str(fixed_point.get("encoding", "")))}, 最大量化误差 / max error '
+            f'{escape(_format_plain(fixed_point.get("max_abs_quantization_error")))}</p>'
+        )
+    return f"""<h3>二维校准 / 2D calibration</h3>
+{summary}
+<section class="frequency-response-grid">
+<article class="card frequency-response-card"><h3>补偿热图 / Correction heatmap</h3>{heatmap}</article>
+<article class="card frequency-response-card"><h3>代表性切片 / Representative slices</h3>{curves}</article>
+</section>
+{note}
+{fixed_note}"""
+
+
+def _calibration_heatmap_svg(rows: list[dict[str, str]]) -> str:
+    points = _calibration_points(rows)
+    if not points:
+        return '<p class="warning">没有可绘制的校准 LUT 点 / No readable calibration points.</p>'
+    amplitudes = sorted({point[0] for point in points})
+    frequencies = sorted({point[1] for point in points})
+    amplitude_indexes = _sample_indexes(len(amplitudes), 16)
+    frequency_indexes = _sample_indexes(len(frequencies), 70)
+    selected_amplitudes = [amplitudes[index] for index in amplitude_indexes]
+    selected_frequencies = [frequencies[index] for index in frequency_indexes]
+    lookup = {(amplitude, frequency): correction for amplitude, frequency, correction in points}
+    values = [lookup[(amplitude, frequency)] for amplitude in selected_amplitudes for frequency in selected_frequencies if (amplitude, frequency) in lookup]
+    if not values:
+        return '<p class="warning">校准 LUT 不是完整矩阵，无法绘制热图。</p>'
+    span = max(max(abs(value) for value in values), 0.1)
+    width, height, left, top, right, bottom = 680, 285, 58, 28, 20, 48
+    plot_width, plot_height = width - left - right, height - top - bottom
+    cell_width = plot_width / len(selected_frequencies)
+    cell_height = plot_height / len(selected_amplitudes)
+    cells = []
+    for row_index, amplitude in enumerate(selected_amplitudes):
+        for column_index, frequency in enumerate(selected_frequencies):
+            correction = lookup.get((amplitude, frequency))
+            if correction is None:
+                color = "#e5e7eb"
+            else:
+                color = _calibration_color(correction, span)
+            cells.append(
+                f'<rect x="{left + column_index * cell_width:.2f}" y="{top + row_index * cell_height:.2f}" '
+                f'width="{cell_width + 0.1:.2f}" height="{cell_height + 0.1:.2f}" fill="{color}"/>'
+            )
+    return (
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Calibration correction heatmap">'
+        f'<rect width="{width}" height="{height}" fill="#f8fafc"/>{"".join(cells)}'
+        f'<rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" fill="none" stroke="#9fb3c8"/>'
+        f'<text x="{left}" y="16" font-size="12" fill="#334e68">Correction (dB), frequency increases left to right</text>'
+        f'<text x="{left}" y="{height - 24}" font-size="10" fill="#627d98">{selected_frequencies[0]:.4g} Hz</text>'
+        f'<text x="{left + plot_width - 80}" y="{height - 24}" font-size="10" fill="#627d98">{selected_frequencies[-1]:.4g} Hz</text>'
+        f'<text x="{left}" y="{height - 8}" font-size="10" fill="#627d98">Vpp: {selected_amplitudes[0]:.4g} .. {selected_amplitudes[-1]:.4g}; color: -{span:.3g} .. +{span:.3g} dB</text>'
+        '</svg>'
+    )
+
+
+def _calibration_curve_svg(rows: list[dict[str, str]]) -> str:
+    points = _calibration_points(rows)
+    grouped: dict[float, list[tuple[float, float]]] = {}
+    for amplitude, frequency, correction in points:
+        grouped.setdefault(amplitude, []).append((frequency, correction))
+    amplitudes = sorted(grouped)
+    if not amplitudes:
+        return '<p class="warning">没有可绘制的校准 LUT 点 / No readable calibration points.</p>'
+    indexes = sorted({0, len(amplitudes) // 2, len(amplitudes) - 1})
+    colors = ("#2563eb", "#7c3aed", "#dc2626")
+    series = [
+        (f"{amplitudes[index]:.6g} Vpp", colors[position], sorted(grouped[amplitudes[index]]))
+        for position, index in enumerate(indexes)
+    ]
+    return _response_svg(
+        [],
+        title="Correction by requested amplitude",
+        y_label="Correction (dB)",
+        series=series,
+        actual_label="",
+    )
+
+
+def _calibration_points(rows: list[dict[str, str]]) -> list[tuple[float, float, float]]:
+    points: list[tuple[float, float, float]] = []
+    for row in rows:
+        amplitude = _finite_float(row.get("requested_vpp"))
+        frequency = _finite_float(row.get("frequency_hz"))
+        correction = _finite_float(row.get("correction_db"))
+        if amplitude is not None and amplitude > 0 and frequency is not None and frequency > 0 and correction is not None:
+            points.append((amplitude, frequency, correction))
+    return points
+
+
+def _sample_indexes(count: int, maximum: int) -> list[int]:
+    if count <= maximum:
+        return list(range(count))
+    return sorted({round(value) for value in np.linspace(0, count - 1, maximum)})
+
+
+def _calibration_color(value: float, span: float) -> str:
+    normalized = min(1.0, abs(value) / span)
+    if value < 0:
+        red = round(232 - 120 * normalized)
+        green = round(241 - 75 * normalized)
+        blue = round(248 - 5 * normalized)
+    else:
+        red = round(255 - 15 * normalized)
+        green = round(247 - 105 * normalized)
+        blue = round(237 - 135 * normalized)
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _format_range(value: Any, unit: str) -> str:
+    if not isinstance(value, list) or len(value) != 2:
+        return ""
+    return f"{_format_metric(value[0], unit)} .. {_format_metric(value[1], unit)}"
+
+
+def _fit_curve_series(document: dict[str, Any] | None) -> list[tuple[str, str, list[tuple[float, float]]]]:
+    if not document:
+        return []
+    methods = document.get("methods", {})
+    if not isinstance(methods, dict):
+        return []
+    colors = ("#7c3aed", "#dc2626", "#0891b2", "#ea580c")
+    series = []
+    for index, (name, raw) in enumerate(methods.items()):
+        payload = raw if isinstance(raw, dict) else {}
+        curve = payload.get("curve", [])
+        values: list[tuple[float, float]] = []
+        if isinstance(curve, list):
+            for item in curve:
+                if not isinstance(item, dict):
+                    continue
+                frequency = _finite_float(item.get("frequency_hz"))
+                gain = _finite_float(item.get("gain_linear"))
+                if frequency is not None and frequency > 0 and gain is not None:
+                    values.append((frequency, gain))
+        if values:
+            series.append((str(payload.get("display") or name), colors[index % len(colors)], values))
+    return series
+
+
+def _response_svg(
+    blocks: list[list[tuple[float, float]]],
+    *,
+    title: str,
+    y_label: str,
+    series: list[tuple[str, str, list[tuple[float, float]]]],
+    measured_series: list[tuple[str, str, list[tuple[float, float]]]] = (),
+    actual_label: str = "Measured",
+) -> str:
+    actual = [point for block in blocks for point in block]
+    measured = [point for _name, _color, values in measured_series for point in values]
+    all_points = actual + measured + [point for _name, _color, values in series for point in values]
+    if not all_points:
+        return '<p class="warning">没有可绘制的有效频点 / No valid points to plot.</p>'
+    x_values = np.asarray([np.log10(point[0]) for point in all_points], dtype=float)
+    y_values = np.asarray([point[1] for point in all_points], dtype=float)
+    x_min = float(np.min(x_values))
+    x_max = float(np.max(x_values))
+    y_min = float(np.min(y_values))
+    y_max = float(np.max(y_values))
+    if x_min == x_max:
+        x_min -= 0.5
+        x_max += 0.5
+    if y_min == y_max:
+        y_min -= max(abs(y_min) * 0.1, 0.5)
+        y_max += max(abs(y_max) * 0.1, 0.5)
+    else:
+        pad_y = (y_max - y_min) * 0.08
+        y_min -= pad_y
+        y_max += pad_y
+    y_min, y_max, y_ticks, y_tick_step = _nice_linear_axis_ticks(y_min, y_max)
+    x_ticks = _log_frequency_ticks(x_min, x_max)
+    width, pad_left, pad_right, pad_top = 680, 72, 20, 28
+    legend_items = (
+        ([(actual_label, "#2563eb")] if actual and actual_label else [])
+        + [(name, color) for name, color, _values in measured_series]
+        + [(name, color) for name, color, _values in series]
+    )
+    legend_columns = 2
+    legend_row_height = 15
+    legend_rows = max(1, (len(legend_items) + legend_columns - 1) // legend_columns)
+    # Tick labels and the common x-axis label sit above the legend.  They are
+    # emitted into the SVG itself so the browser and WeasyPrint PDF receive the
+    # exact same, self-contained coordinate system.
+    legend_footer = 52
+    pad_bottom = legend_footer + legend_rows * legend_row_height
+    height = 288 + max(0, legend_rows - 2) * legend_row_height
+    axis_y = height - pad_bottom
+
+    def position(point: tuple[float, float]) -> tuple[float, float]:
+        x_value = np.log10(point[0])
+        px = pad_left + (x_value - x_min) / (x_max - x_min) * (width - pad_left - pad_right)
+        py = axis_y - (point[1] - y_min) / (y_max - y_min) * (axis_y - pad_top)
+        return float(px), float(py)
+
+    polylines = []
+    for block in blocks:
+        if len(block) < 2:
+            continue
+        points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in block))
+        polylines.append(f'<polyline points="{points}" fill="none" stroke="#2563eb" stroke-width="1.8"/>')
+    fit_lines = []
+    for name, color, values in series:
+        points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in values))
+        fit_lines.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.8"/>')
+    circles = "".join(
+        f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3" fill="#2563eb"/>'
+        for x, y in (position(point) for point in actual)
+    )
+    measured_lines = []
+    measured_circles = []
+    for _name, color, values in measured_series:
+        points = " ".join(f"{x:.2f},{y:.2f}" for x, y in (position(point) for point in values))
+        measured_lines.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.8"/>')
+        measured_circles.extend(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="2.6" fill="{color}"/>'
+            for x, y in (position(point) for point in values)
+        )
+    x_grid = []
+    x_tick_labels = []
+    for frequency_hz in x_ticks:
+        x_value = math.log10(frequency_hz)
+        x = pad_left + (x_value - x_min) / (x_max - x_min) * (width - pad_left - pad_right)
+        x_grid.append(
+            f'<line class="plot-grid x-grid" x1="{x:.2f}" y1="{pad_top}" '
+            f'x2="{x:.2f}" y2="{axis_y}" stroke="#d9e2ec" stroke-width="0.8"/>'
+        )
+        x_grid.append(
+            f'<line class="x-axis-tick" x1="{x:.2f}" y1="{axis_y}" '
+            f'x2="{x:.2f}" y2="{axis_y + 4}" stroke="#627d98" stroke-width="0.9"/>'
+        )
+        x_tick_labels.append(
+            f'<text class="x-axis-label" x="{x:.2f}" y="{axis_y + 16}" '
+            f'text-anchor="middle" font-size="9" fill="#486581">'
+            f'{escape(_format_frequency_axis_tick(frequency_hz))}</text>'
+        )
+    y_grid = []
+    for value in y_ticks:
+        y = axis_y - (value - y_min) / (y_max - y_min) * (axis_y - pad_top)
+        y_grid.append(
+            f'<line class="plot-grid y-grid" x1="{pad_left}" y1="{y:.2f}" '
+            f'x2="{width - pad_right}" y2="{y:.2f}" stroke="#d9e2ec" stroke-width="0.8"/>'
+        )
+        y_grid.append(
+            f'<line class="y-axis-tick" x1="{pad_left - 4}" y1="{y:.2f}" '
+            f'x2="{pad_left}" y2="{y:.2f}" stroke="#627d98" stroke-width="0.9"/>'
+        )
+        y_grid.append(
+            f'<text class="y-axis-label" x="{pad_left - 7}" y="{y + 3.2:.2f}" '
+            f'text-anchor="end" font-size="9" fill="#486581">'
+            f'{escape(_format_linear_axis_tick(value, y_tick_step))}</text>'
+        )
+    legend_column_width = (width - pad_left - pad_right) / legend_columns
+    legend_base_y = axis_y + 54
+    legends = []
+    for index, (name, color) in enumerate(legend_items):
+        row, column = divmod(index, legend_columns)
+        marker_x = pad_left + column * legend_column_width
+        legend_y = legend_base_y + row * legend_row_height
+        legends.append(
+            f'<g class="legend-item" data-label="{escape(name, quote=True)}">'
+            f'<line x1="{marker_x:.2f}" y1="{legend_y - 3:.2f}" '
+            f'x2="{marker_x + 12:.2f}" y2="{legend_y - 3:.2f}" '
+            f'stroke="{color}" stroke-width="1.8"/>'
+            f'<text x="{marker_x + 17:.2f}" y="{legend_y:.2f}" font-size="10" fill="{color}">'
+            f'{escape(_short_svg_legend_label(name))}</text></g>'
+        )
+    return (
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{escape(title, quote=True)}">'
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="#f8fafc"/>'
+        f'{"".join(x_grid)}{"".join(y_grid)}{"".join(x_tick_labels)}'
+        f'<line x1="{pad_left}" y1="{axis_y}" x2="{width - pad_right}" y2="{axis_y}" stroke="#9fb3c8"/>'
+        f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{axis_y}" stroke="#9fb3c8"/>'
+        f'<text x="{pad_left}" y="16" font-size="12" fill="#334e68">{escape(title)}</text>'
+        f'<text class="x-axis-title" x="{(pad_left + width - pad_right) / 2:.2f}" y="{axis_y + 34}" '
+        f'text-anchor="middle" font-size="10" fill="#334e68">Frequency / Hz (log)</text>'
+        f'<text class="y-axis-title" x="{pad_left + 4}" y="{pad_top + 14}" font-size="10" fill="#334e68">{escape(y_label)}</text>'
+        f'{"".join(polylines)}{circles}{"".join(measured_lines)}{"".join(measured_circles)}'
+        f'{"".join(fit_lines)}{"".join(legends)}'
+        '</svg>'
+    )
+
+
+def _log_frequency_ticks(x_min: float, x_max: float) -> list[float]:
+    """Return conventional 1-2-5 log-frequency ticks within the visible domain."""
+    ticks = [
+        factor * 10.0**exponent
+        for exponent in range(math.floor(x_min), math.ceil(x_max) + 1)
+        for factor in (1.0, 2.0, 5.0)
+        if x_min - 1e-12 <= math.log10(factor * 10.0**exponent) <= x_max + 1e-12
+    ]
+    # Very broad plots would otherwise turn into a forest of labels.  Retain
+    # decade ticks first; the common measurement ranges keep all 1-2-5 ticks.
+    if len(ticks) > 10:
+        ticks = [tick for tick in ticks if math.isclose(math.log10(tick) % 1.0, 0.0, abs_tol=1e-10)]
+    return ticks
+
+
+def _nice_linear_axis_ticks(y_min: float, y_max: float) -> tuple[float, float, list[float], float]:
+    """Expand a numeric domain to readable, evenly spaced linear ticks."""
+    span = y_max - y_min
+    raw_step = span / 5.0
+    exponent = 10.0 ** math.floor(math.log10(raw_step))
+    normalized = raw_step / exponent
+    multiplier = next(value for value in (1.0, 2.0, 2.5, 5.0, 10.0) if normalized <= value)
+    step = multiplier * exponent
+    tick_min = math.floor(y_min / step) * step
+    tick_max = math.ceil(y_max / step) * step
+    count = int(round((tick_max - tick_min) / step)) + 1
+    ticks = [tick_min + index * step for index in range(count)]
+    return tick_min, tick_max, ticks, step
+
+
+def _format_frequency_axis_tick(frequency_hz: float) -> str:
+    if frequency_hz >= 1e6:
+        return f"{frequency_hz / 1e6:g} M"
+    if frequency_hz >= 1e3:
+        return f"{frequency_hz / 1e3:g} k"
+    return f"{frequency_hz:g}"
+
+
+def _format_linear_axis_tick(value: float, step: float) -> str:
+    if math.isclose(value, 0.0, abs_tol=abs(step) * 1e-9):
+        value = 0.0
+    precision = max(0, min(6, int(math.ceil(-math.log10(abs(step)))) + 1))
+    return f"{value:.{precision}f}".rstrip("0").rstrip(".")
+
+
+def _short_svg_legend_label(label: str, *, limit: int = 30) -> str:
+    normalized = " ".join(label.split())
+    return normalized if len(normalized) <= limit else normalized[: limit - 1] + "…"
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
 
 
 def _metric_label(metric: str) -> str:
@@ -910,16 +1857,13 @@ def _build_report_summary(
     experiment = run.run.get("experiment", {}) if isinstance(run.run.get("experiment"), dict) else {}
     restore = run.run.get("restore", {}) if isinstance(run.run.get("restore"), dict) else {}
     failed_steps = 0
-    packages: set[str] = set()
+    packages = {reference.package for reference in _capture_references(run)}
     warning_messages: set[str] = set()
     failed_expect_count = 0
     for step in run.steps:
         if step.get("status") == "failed":
             failed_steps += 1
         artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
-        package = artifact.get("package")
-        if package:
-            packages.add(str(package))
         quality = artifact.get("quality", {}) if isinstance(artifact.get("quality"), dict) else {}
         warnings = quality.get("warnings", [])
         if isinstance(warnings, list):
@@ -958,12 +1902,7 @@ def _build_evidence_summary(
     screenshots: list[ReportScreenshot],
     waveform_previews: list[ReportWaveformPreview],
 ) -> ReportEvidenceSummary:
-    packages = {
-        str(artifact.get("package"))
-        for step in run.steps
-        for artifact in [step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}]
-        if artifact.get("package")
-    }
+    packages = {reference.package for reference in _capture_references(run)}
     return ReportEvidenceSummary(
         source_step_count=sum(1 for step in run.steps if str(step.get("kind", "")).startswith("source.")),
         scope_capture_count=sum(1 for step in run.steps if step.get("kind") == "scope.capture"),
@@ -999,36 +1938,98 @@ def _collect_artifact_links(
                 status=_availability_text(run.summary_csv_path.exists()),
             )
         )
-    screenshots_by_step = {item.step_index: item for item in screenshots}
-    for step in run.steps:
-        artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
-        package_text = artifact.get("package")
-        if not package_text:
-            continue
-        step_index = str(step.get("index", ""))
-        package = str(package_text)
-        package_dir = _resolve_artifact_path(run.path, package)
+    if run.frequency_response_csv_path is not None:
         links.append(
             ReportArtifactLink(
-                step_index=step_index,
+                step_index="-",
+                kind="频率响应 CSV / Frequency response CSV",
+                label="frequency_response.csv",
+                href=_relative_url(run.frequency_response_csv_path, output_dir),
+                status=_availability_text(run.frequency_response_csv_path.exists()),
+            )
+        )
+    if run.frequency_response_fit_path is not None:
+        links.append(
+            ReportArtifactLink(
+                step_index="-",
+                kind="频响拟合 JSON / Frequency response fit JSON",
+                label="frequency_response_fit.json",
+                href=_relative_url(run.frequency_response_fit_path, output_dir),
+                status=_availability_text(run.frequency_response_fit_path.exists()),
+            )
+        )
+    if run.frequency_response_calibration_csv_path is not None:
+        links.append(
+            ReportArtifactLink(
+                step_index="-",
+                kind="二维校准 CSV / 2D calibration CSV",
+                label="frequency_response_calibration.csv",
+                href=_relative_url(run.frequency_response_calibration_csv_path, output_dir),
+                status=_availability_text(run.frequency_response_calibration_csv_path.exists()),
+            )
+        )
+    if run.frequency_response_calibration_path is not None:
+        links.append(
+            ReportArtifactLink(
+                step_index="-",
+                kind="二维校准 JSON / 2D calibration JSON",
+                label="frequency_response_calibration.json",
+                href=_relative_url(run.frequency_response_calibration_path, output_dir),
+                status=_availability_text(run.frequency_response_calibration_path.exists()),
+            )
+        )
+    for response in run.frequency_responses:
+        prefix = f"[{response.label}] " if len(run.frequency_responses) > 1 else ""
+        if response.baseline_path is not None:
+            links.append(
+                ReportArtifactLink(
+                    step_index=str(response.step_index) if response.step_index is not None else "-",
+                    kind=f"{prefix}软件基线 JSON / Software baseline JSON",
+                    label="frequency_response_baseline.json",
+                    href=_relative_url(response.baseline_path, output_dir),
+                    status=_availability_text(response.baseline_path.exists()),
+                )
+            )
+        fixed_point = response.calibration.get("fixed_point", {}) if response.calibration else {}
+        outputs = fixed_point.get("outputs", {}) if isinstance(fixed_point, dict) else {}
+        if isinstance(outputs, dict):
+            for name, raw_path in outputs.items():
+                if not isinstance(raw_path, str):
+                    continue
+                path = Path(raw_path)
+                links.append(
+                    ReportArtifactLink(
+                        step_index=str(response.step_index) if response.step_index is not None else "-",
+                        kind=f"{prefix}定点 {name.upper()} / Fixed-point {name.upper()}",
+                        label=path.name,
+                        href=_relative_url(path, output_dir),
+                        status=_availability_text(path.exists()),
+                    )
+                )
+    screenshots_by_package = {item.package: item for item in screenshots}
+    for reference in _capture_references(run):
+        package_dir = _resolve_artifact_path(run.path, reference.package)
+        links.append(
+            ReportArtifactLink(
+                step_index=reference.step_index,
                 kind="采集包 / Capture package",
-                label=package,
+                label=reference.package,
                 href=_relative_url(package_dir, output_dir),
                 status=_availability_text(package_dir.exists()),
             )
         )
-        screenshot = screenshots_by_step.get(step_index)
+        screenshot = screenshots_by_package.get(reference.package)
         if screenshot is not None:
             links.append(
                 ReportArtifactLink(
-                    step_index=step_index,
+                    step_index=reference.step_index,
                     kind="截图 / Screenshot",
                     label=Path(screenshot.src).name,
                     href=screenshot.src,
                     status=_availability_text(screenshot.path.exists()),
                 )
             )
-        metadata = _read_capture_metadata(package_dir, artifact.get("metadata"))
+        metadata = _read_capture_metadata(package_dir, reference.metadata)
         for channel, npy_text, _summary in _metadata_waveform_npy_files(metadata):
             if not npy_text:
                 continue
@@ -1038,7 +2039,7 @@ def _collect_artifact_links(
             npy_name = Path(str(npy_text).replace("\\", "/")).name
             links.append(
                 ReportArtifactLink(
-                    step_index=step_index,
+                    step_index=reference.step_index,
                     kind="波形原始数据 / Waveform raw artifact",
                     label=f"ch{channel} {npy_name}",
                     href=_relative_url(npy_path, output_dir),
@@ -1317,13 +2318,9 @@ def _metadata_signal_summaries(metadata: dict[str, Any]) -> list[dict[str, Any]]
 
 def _collect_screenshots(run: RunPackage, output_dir: Path) -> list[ReportScreenshot]:
     screenshots: list[ReportScreenshot] = []
-    for step in run.steps:
-        artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
-        package_text = artifact.get("package")
-        if not package_text:
-            continue
-        package_dir = _resolve_artifact_path(run.path, str(package_text))
-        metadata = _read_capture_metadata(package_dir, artifact.get("metadata"))
+    for reference in _capture_references(run):
+        package_dir = _resolve_artifact_path(run.path, reference.package)
+        metadata = _read_capture_metadata(package_dir, reference.metadata)
         screenshot_text = _metadata_screenshot_path(metadata)
         if not screenshot_text:
             continue
@@ -1334,13 +2331,55 @@ def _collect_screenshots(run: RunPackage, output_dir: Path) -> list[ReportScreen
             continue
         screenshots.append(
             ReportScreenshot(
-                step_index=str(step.get("index", "")),
-                package=str(package_text),
+                step_index=reference.step_index,
+                package=reference.package,
                 path=screenshot_path,
                 src=_relative_url(screenshot_path, output_dir),
             )
         )
     return screenshots
+
+
+def _capture_references(run: RunPackage) -> list[ReportCaptureReference]:
+    references: list[ReportCaptureReference] = []
+    seen: set[str] = set()
+
+    def add(step_index: str, package: Any, metadata: Any) -> None:
+        package_text = str(package or "").strip()
+        if not package_text or package_text in seen:
+            return
+        seen.add(package_text)
+        references.append(
+            ReportCaptureReference(
+                step_index=step_index,
+                package=package_text,
+                metadata=str(metadata or ""),
+            )
+        )
+
+    for step in run.steps:
+        artifact = step.get("artifact", {}) if isinstance(step.get("artifact"), dict) else {}
+        add(str(step.get("index", "")), artifact.get("package"), artifact.get("metadata"))
+        response = artifact.get("frequency_response", {})
+        captures = response.get("captures", []) if isinstance(response, dict) else []
+        if isinstance(captures, list):
+            for capture in captures:
+                if isinstance(capture, dict):
+                    point_index = str(capture.get("index", ""))
+                    add(
+                        f"frequency response {point_index}",
+                        capture.get("package"),
+                        capture.get("metadata"),
+                    )
+
+    for row in run.frequency_response_rows:
+        point_index = str(row.get("index", ""))
+        add(
+            f"frequency response {point_index}",
+            row.get("capture_package"),
+            row.get("metadata_path"),
+        )
+    return references
 
 
 def _read_capture_metadata(package_dir: Path, metadata_text: Any) -> dict[str, Any]:

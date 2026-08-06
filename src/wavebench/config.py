@@ -83,6 +83,7 @@ class WaveformConfig:
     window_frequency_hz: float | None = None
     vertical_scale_v_per_div: float | None = None
     target_vpp: float | None = None
+    min_signal_vpp: float = 0.02
 
 @dataclass(frozen=True)
 class SourceConfig:
@@ -233,7 +234,12 @@ class WaveBenchConfig:
         )
 
     def with_output_overrides(
-        self, *, save_csv: bool | None = None, save_npy: bool | None = None, save_screenshot: bool | None = None
+        self,
+        *,
+        save_csv: bool | None = None,
+        save_npy: bool | None = None,
+        save_json: bool | None = None,
+        save_screenshot: bool | None = None,
     ) -> "WaveBenchConfig":
         return WaveBenchConfig(
             connection=self.connection,
@@ -245,7 +251,7 @@ class WaveBenchConfig:
                 package_naming=self.output.package_naming,
                 save_csv=self.output.save_csv if save_csv is None else save_csv,
                 save_npy=self.output.save_npy if save_npy is None else save_npy,
-                save_json=self.output.save_json,
+                save_json=self.output.save_json if save_json is None else save_json,
                 save_commands_log=self.output.save_commands_log,
                 save_screenshot=self.output.save_screenshot if save_screenshot is None else save_screenshot,
             ),
@@ -269,6 +275,7 @@ class WaveBenchConfig:
         window_frequency_hz: float | None = None,
         vertical_scale_v_per_div: float | None = None,
         target_vpp: float | None = None,
+        min_signal_vpp: float | None = None,
     ) -> "WaveBenchConfig":
         return WaveBenchConfig(
             connection=self.connection,
@@ -295,6 +302,7 @@ class WaveBenchConfig:
                     else vertical_scale_v_per_div
                 ),
                 target_vpp=self.waveform.target_vpp if target_vpp is None else target_vpp,
+                min_signal_vpp=self.waveform.min_signal_vpp if min_signal_vpp is None else min_signal_vpp,
             ),
             output=self.output,
             source_path=self.source_path,
@@ -519,6 +527,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                     else None
                 ),
                 target_vpp=float(w["target_vpp"]) if "target_vpp" in w else None,
+                min_signal_vpp=float(w.get("min_signal_vpp", 0.02)),
             ),
             output=OutputConfig(
                 directory=Path(str(o.get("directory", "data/raw"))),
@@ -582,6 +591,8 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
         raise ConfigError("waveform.vertical_scale_v_per_div must be > 0")
     if config.waveform.target_vpp is not None and config.waveform.target_vpp <= 0:
         raise ConfigError("waveform.target_vpp must be > 0")
+    if config.waveform.min_signal_vpp <= 0:
+        raise ConfigError("waveform.min_signal_vpp must be > 0")
     if config.quality.auto_recover_attempts < 0:
         raise ConfigError("quality.auto_recover_attempts must be >= 0")
     if config.quality.consistency_required_captures < 2:

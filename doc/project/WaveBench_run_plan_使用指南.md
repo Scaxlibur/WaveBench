@@ -70,6 +70,14 @@ python -m wavebench run template source-scope-sweep ^
   --scope-channel 1 ^
   --output plans/source_scope_sweep.toml
 
+python -m wavebench run template source-scope-frequency-response ^
+  --frequencies 100,1000,10000 ^
+  --source-channel 1 ^
+  --reference-channel 1 ^
+  --response-channel 2 ^
+  --fit ^
+  --output plans/source_scope_frequency_response.toml
+
 python -m wavebench run template dmm-acv-source ^
   --frequency 1000 ^
   --vpp 1.0 ^
@@ -87,6 +95,7 @@ python -m wavebench run template power-dmm-dcv ^
 
 - `source-scope-sine`：生成单频点 DG4202 -> RTM2032 闭环 plan，带 source restore、scope safety、质量检查、`[steps.expect]` 和 `[steps.expect_fft]`。
 - `source-scope-sweep`：把 `--frequencies` 里的频点展开成多组 `source.set_freq` + `scope.capture`，每个频点都有独立 label、expect 和 FFT expect。它不是新的执行器，只是 run plan 展开器。
+- `source-scope-frequency-response`：生成一次同步双通道采集的频响 plan。reference 通道接 DUT 输入，response 通道接 DUT 输出；`--fit` 额外写入线性增益拟合配置。
 - `dmm-acv-source`：生成 DG4202 -> DMM ACV smoke plan，ACV 期望值按 `Vpp / (2 * sqrt(2))` 自动缩放。
 - `power-dmm-dcv`：生成 DP800 电压设置 + DMM DCV 读回 plan，只设置电压/限流，不自动打开或关闭电源输出。
 
@@ -96,6 +105,188 @@ python -m wavebench run template power-dmm-dcv ^
 python -m wavebench run check  --config wavebench.toml --plan plans/source_scope_sweep.toml
 python -m wavebench run verify --config wavebench.toml --plan plans/source_scope_sweep.toml
 ```
+
+## 双通道频率响应 / Frequency response
+
+`sweep.frequency_response` 让信号源按离散频点设定频率，并让示波器在每个频点只触发一次、同步读取两路波形：
+
+- `reference_channel` 是 DUT 输入参考；`response_channel` 是 DUT 输出，二者必须不同。
+- source 输出必须已经由前面的显式 `source.output state = "on"` 打开。频响 step 不会偷偷打开输出；若输出关闭或设频写入失败，会立即停止后续频点并走已有 restore 路径。
+- 两路都会经过高阻保护。执行前仍需人工确认探头、线缆、量程和接地；WaveBench 不自动 deskew，也不会把测得相位冒充为已校准 DUT 相位。
+- 每个成功采集强制保存双路 NPY 与 `metadata.json` 作为原始证据，即使全局输出配置关闭了 NPY/JSON。采集或分析失败会写入该频点 CSV 行后继续；信号源状态/写入异常会停止。
+- 一个 plan 可以包含多个该 step，但每个 `label` 必须唯一；多 response 会写根目录 `frequency_responses.json`，每个响应使用独立子目录，因此不会覆盖产物。
+
+显式频点示例：
+
+```toml
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "lowpass_bode"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [100, 316.228, 1000, 3162.28, 10000]
+target_cycles = 10
+settle_s = 0.3
+points = "def"
+save_csv = false
+screenshot = true
+
+[steps.fit]
+methods = ["linear_log", "polynomial", "pchip", "smoothing_spline_db", "piecewise_chebyshev_db"]
+polynomial_degree = 2
+```
+
+也可让 parser 生成等比或等差频点：
+
+```toml
+[[steps]]
+kind = "sweep.frequency_response"
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 100
+stop_frequency_hz = 100000
+frequency_count = 31
+spacing = "log" # "log" 或 "linear"
+```
+
+### 二维 Vpp × 频率扫频与自动校准
+
+默认频响 plan 是一个固定源幅值切片。需要观察增益随输入幅值变化、或为数字后端生成二维 LUT 时，在同一个 step 中额外给出请求 Vpp 轴。可以显式列举，或用首末值和步进生成；两种写法不能混用：
+
+```toml
+[[steps]]
+kind = "sweep.frequency_response"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10000
+stop_frequency_hz = 500000
+frequency_count = 246
+spacing = "linear"
+start_vpp = 0.005
+stop_vpp = 0.250
+vpp_step = 0.005
+target_cycles = 10
+settle_s = 1.0
+
+[steps.calibration]
+target_mode = "passband_median"
+correction_min_db = -12
+correction_max_db = 12
+max_slope_db_per_octave = 6
+```
+
+等价的显式幅值写法为 `amplitudes_vpp = [0.005, 0.010, 0.020]`。每个值都是信号源**请求/设定** Vpp；`reference_vpp_v` 始终保留为示波器 CH1 的实测审计量，二者不可互换。
+
+| 字段 | 含义与限制 |
+|---|---|
+| `amplitudes_vpp` | 严格递增、正数的显式 Vpp 数组；不能与生成式字段共用。 |
+| `start_vpp` / `stop_vpp` / `vpp_step` | 三者必须同时出现；`stop_vpp > start_vpp`，步进必须整除区间。 |
+| `autoscale_each_amplitude` | 多幅值时默认 `true`；仅在已人工确认量程时才建议设为 `false`。 |
+| `retry_warning_with_autoscale` | 默认 `true`；单点出现质量 warning 时 autoscale、稳定后重测一次。重测仍 warning 则该点标为 failed，并保留两次采集证据。 |
+| `min_signal_vpp` | 仅本频响 step 的低信号 warning 门限，默认 `0.020` Vpp。若已用实测波形确认低幅值切片仍有足够 SNR，可降低（例如 `0.005`）；它会写入每点原始 metadata 的 operation，不能用来掩盖削顶、频率失配等其他 warning。 |
+| `[steps.calibration]` | 仅多幅值数据有实际意义；`enabled = false` 可关闭自动派生。 |
+
+执行顺序固定为“设定 Vpp → 对每个频点设频并等待 `settle_s` → 每个幅值切片的首个频点 autoscale → 再等待 `settle_s` → 同步采集 CH1/CH2”。`autoscale_each_amplitude = false` 可显式关闭该切片首点 autoscale，但仅适用于已由人工确认两路量程足够的情况。每个 Vpp 值都在连接仪器前受 `[safety_limits].max_source_vpp` 检查。
+
+频响点的首次采集若出现质量 warning，默认会执行一次“autoscale → 等待 `settle_s` → 同频同幅值重测”。重测成功时 CSV 的最终值来自第二次采集，并用 `quality_retry_count`、`initial_warnings`、`initial_capture_package` 和 `initial_metadata_path` 保存首次证据；重测仍 warning 时该点标为 `failed`、带 `quality_retry_exhausted` 原因，不参与拟合、软件校正或二维 LUT。可在 step 中设 `retry_warning_with_autoscale = false` 关闭此策略。
+
+默认 20 mVpp 的门限是保守质量保护，不是仪器限制。对已确认稳定的低幅值扫频，可只在该 `sweep.frequency_response` 中设置 `min_signal_vpp = 0.005`；这会在采集分析阶段生效，因此 `metadata.json`、CSV 状态和报告审计使用同一个判断依据。全局 `[waveform]` 也可设同名默认值，但不建议为了一个低幅值实验而永久降低所有普通采集的门限。
+
+完整矩阵的点数为 `幅值数 × 频点数`；每个点至少消耗 `settle_s`，每个幅值切片还会增加一次 autoscale 与稳定等待。先用少量幅值和稀疏频点执行 `run check`、只读 `run verify`、再做实机小矩阵确认量程和耗时，别拿 5 mV 步进和 500 Hz 步进直接开 13 小时以上的盲扫，没必要给仪器和人都上强度。
+
+`[steps.calibration]` 需要至少两个请求 Vpp 切片且每个切片至少四个共同有效频点。它会在测量结束后使用每切片的 dB 平滑样条、请求 Vpp 方向线性插值生成校准；频率节点沿用实测点，不在频率或 Vpp 定义域外外推。自动校准失败不会删除或重写原始频响 CSV：该 step 变为 `warning`，`artifact.frequency_response.calibration_error` 记录原因，之后可修正配置或数据再离线重算。
+
+离线重算使用只含 `[calibration]` 的独立 TOML，既不读取 `wavebench.toml`，也不连接仪器：
+
+```powershell
+python -m wavebench run calibrate data/runs/<run_dir> --config plans/calibration.toml
+```
+
+`run calibrate` 使用的 `[calibration]` 与 plan 内 `[steps.calibration]` 使用同一 schema。除 `enabled`（仅 plan 使用）外，字段如下：
+
+| 字段 | 默认值 | 说明 |
+|---|---:|---|
+| `model` | `"smoothing_spline_db"` | 当前唯一受支持的二维频率模型。 |
+| `target_mode` | `"passband_median"` | `passband_median`、`explicit_gain_db` 或 `unity_gain`。 |
+| `target_gain_db` | 无 | `explicit_gain_db` 时必填。 |
+| `target_frequency_min_hz` / `target_frequency_max_hz` | 全有效频段 | 仅确定通带中位数目标的频段。 |
+| `correction_min_db` / `correction_max_db` | `-12` / `12` | 导出的补偿 dB 边界。 |
+| `max_slope_db_per_octave` | `6` | 相邻频率校正的最大斜率，必须大于零。 |
+| `chebyshev_degree` / `chebyshev_segment_count` | `3` / `8` | 为需要公式求值的后端导出的近似参数。 |
+
+该命令只覆盖选中 response 目录的 `frequency_response_calibration*` 派生产物，绝不改写 `frequency_response.csv` 或原始采集包。若 manifest 有多个 response，必须显式选择：
+
+```powershell
+python -m wavebench run calibrate data/runs/<run_dir> --config plans/calibration.toml --response dut_path
+```
+
+### 直通基线、软件 deskew 与自适应频率
+
+直通基线必须是**独立 run**：操作者先把 CH1/CH2 手动直通、确认高阻与安全幅度，再按普通 `sweep.frequency_response` 采集。DUT step 只读引用该证据；它不改示波器 deskew 或前面板设置，且 `run check` 会在连接仪器前离线检查基线 response、Vpp 切片和初始频率有效域。
+
+```toml
+[[steps]]
+kind = "sweep.frequency_response"
+label = "dut_path"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10000
+stop_frequency_hz = 500000
+frequency_count = 41
+spacing = "log"
+
+[steps.baseline]
+run_dir = "../runs/through_baseline"
+# response = "through" # 基线 run 有多个 response 时必填
+mode = "complex_transfer" # 默认；或 phase_only / delay_only
+
+[steps.adaptive]
+enabled = true             # 默认关闭，保持旧 plan 行为
+gain_threshold_db = 0.5
+phase_threshold_deg = 10
+max_levels = 2
+max_frequency_points = 1000
+```
+
+默认 `complex_transfer` 同时扣除基线 dB 增益和展开相位；`phase_only` 只校正相位；`delay_only` 从基线相位—频率线性拟合估算延迟后校正相位。原始列永远保留，报告并列原始和校正曲线，二维校准默认用校正增益。
+
+自适应先采集初始网格；任一 Vpp 切片相邻点的增益或展开相位达到阈值时加入中点（log 为几何、linear 为算术），每个新频点都采集**所有** Vpp 切片以保持二维矩形网格。它不能发现端点相同而中间存在未采样窄带异常的特征，初始网格仍须覆盖已知关注区域。
+
+### 定点 LUT / COE / MEM
+
+校准默认同时导出 signed-two's-complement `Q4.12`：审计 CSV、Xilinx `.coe` 与每行一个十六进制字的 `.mem`。默认地址为幅值主序 `amplitude_index * frequency_count + frequency_index`，默认越界报错，不静默截断。
+
+```toml
+[steps.calibration.fixed_point]
+word_width = 16
+fractional_bits = 12
+formats = ["csv", "coe", "mem"]
+layout = "amplitude_major" # 或 frequency_major
+rounding = "nearest"
+overflow = "error"         # 需要硬件饱和时才显式使用 saturate
+```
+
+### 拟合方法
+
+除专供二维校准的模型外，传统线性增益拟合仍使用因变量 `gain_linear` 与 `x = log10(f / Hz)`：
+
+- `linear_log`：分段线性插值，导出每段 `m`、`b`，即 `G = m*x + b`。
+- `polynomial`：1–5 阶多项式，导出降幂系数。阶数必须小于有效频点数。
+- `pchip`：保形三次插值，导出每段 `x_start`、`x_stop` 和 `[c3, c2, c1, c0]`，即 `G = c3*dx^3 + c2*dx^2 + c1*dx + c0`。它需要先安装 `python -m pip install -e ".[analysis]"`。
+- `smoothing_spline_db`：在 dB 增益域对 `log10(f / Hz)` 做平滑样条，输出曲线用于可读性更好的报告和调试；少于四个有效点时标为 unavailable。
+- `piecewise_chebyshev_db`：在 dB 域给出低阶分段 Chebyshev 近似，适合需要直接计算公式的调试后端。
+
+二维校准固定使用 `smoothing_spline_db`；它会用规律留点交叉验证在若干平滑度候选中选择一个全切片共享的惩罚，再导出每幅值的三阶、默认 8 个对数频段的 Chebyshev 系数。校正定义为 `correction_db = target_gain_db - fitted_gain_db`，线性乘数为 `10^(correction_db / 20)`；补偿幅度和相邻频点的 dB/oct 斜率都会被限制并逐点标记。
+
+相位使用输出相对输入的相量差，CSV 同时提供 `phase_wrapped_deg` 和不跨失败点连接的 `phase_unwrapped_deg`。探头、电缆和通道延迟均会包含在相位里；先做直通基线或 deskew，才能把相位解释为 DUT 本体特性。
 
 ## 一个 step 只做一件事
 
@@ -249,6 +440,20 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 | `quality_recovery` | 自动恢复尝试记录；未启用或未触发时可能不存在。 |
 | `expect` | `[steps.expect]` 的检查结果；未配置时可能不存在。 |
 
+`sweep.frequency_response` 的 `artifact.frequency_response` 常见字段：
+
+| 字段 | 含义 |
+|---|---|
+| `csv` | 此 response 的逐点 `frequency_response.csv`；多 response 时在独立子目录。 |
+| `fit_json` | 启用拟合时的 `frequency_response_fit.json`；未启用则为空。 |
+| `calibration_csv` / `calibration_json` | 自动二维校准成功时的派生 LUT 路径；未启用或未生成则为空。 |
+| `baseline_json` | 软件基线引用、模式、有效域和估算延迟；未配置则为空。 |
+| `adaptive` | 初始/最终频点数、层数、预算限制和配置；未配置则不存在。 |
+| `fixed_point` | 定点 audit CSV/COE/MEM 路径；校准未生成时为空对象。 |
+| `calibration_error` | 自动校准未生成时的原因；原始频响仍然保留。 |
+| `captures` | 每个已有双通道采集包与 metadata 的引用，供报告和审计使用。 |
+| `failed_point_count` / `warning_point_count` | 频点失败与质量 warning 数量。 |
+
 ### `summary.csv`
 
 `summary.csv` 面向脚本和表格查看。常见列：
@@ -283,8 +488,20 @@ HTML 报告当前会汇总：
 - `实验证据摘要 / Run evidence summary`：source 步骤、scope capture、DMM 读数、run.json、summary.csv、截图和波形预览数量。
 - `证据时间线 / Evidence timeline`：按 step 展示 source/scope/DMM/sleep 的证据摘要。
 - `扫频摘要 / Sweep summary`：当 run 里有多点 `scope.capture` 或 sweep label 时显示，列出每个频点的 label、status、quality、expect、FFT、frequency、Vpp、FFT peak、peak amplitude 和 THD。
+- `频率响应 / Frequency response`：按每个 manifest response 显示原始/软件校正幅频和相频、基线与自适应摘要、拟合对比、逐点表格、拟合公式/参数和原始采集包链接；校准产物还会显示目标、留点验证误差、补偿热图、代表性幅值切片和定点摘要。安装 `.[report3d]` 后，至少 2 个 Vpp × 2 个频率节点的 response 会在 Bode 图前增加交互式三维增益曲面，可切换 Raw/Corrected、dB/V/V，并查看 warning、自动恢复次数和采集证据。
 - `验收摘要 / Acceptance summary` 与 `预期 vs 实测 / Expected vs measured`：汇总 `[steps.expect]` 和 `[steps.expect_fft]` 的验收结果。
 - `DMM 读数 / DMM readings`、`信号分析 / Signal analysis`、`波形预览 / Waveform previews`、`截图 / Screenshots`。
+
+安装 `.[pdf]` 后可在同一离线命令中导出 PDF：
+
+```powershell
+python -m wavebench run report data/runs/<run_dir> --pdf
+python -m wavebench run report data/runs/<run_dir> --output reports/lowpass.html --pdf --pdf-output reports/lowpass.pdf
+```
+
+PDF 会嵌入 HTML 中可见的截图、静态 SVG 曲线和表格，适合把报告发给他人或归档。CSV、拟合 JSON、NPY 和完整采集包仍是独立证据文件；PDF 中保留它们的链接，但不把大型原始波形伪装成可见图表。WeasyPrint 还需要操作系统提供 Cairo、Pango、GDK-PixBuf 和合适的中文字体。
+
+三维 HTML 使用报告目录内的 `report-assets/plotly.min.js`，不访问 CDN；移动或打包 HTML 时必须同时保留整个 `report-assets/`。failed 点在曲面中保持空洞，不插值补齐；单幅值或不足 2 × 2 的数据自动退回静态 Bode。PDF 的 compact 渲染路径不加载 Plotly，也不预留空白交互区域，因此仍是单文件静态归档。
 
 典型 sweep 流程：
 

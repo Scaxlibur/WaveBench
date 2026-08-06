@@ -1,0 +1,51 @@
+# 实机自适应扫频测试：不引用 500 kHz 截止的基线，也不生成校准 LUT。
+
+[experiment]
+name = "passive_filter_adaptive_5mhz"
+label = "passive_filter_adaptive_5mhz"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 0.1
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "passive_filter_adaptive"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [10000, 100000, 500000, 1000000, 5000000]
+amplitudes_vpp = [0.1]
+autoscale_each_amplitude = true
+target_cycles = 10
+settle_s = 3.0
+points = "def"
+save_csv = false
+screenshot = false
+
+[steps.adaptive]
+enabled = true
+gain_threshold_db = 0.5
+phase_threshold_deg = 10
+max_levels = 2
+max_frequency_points = 10
