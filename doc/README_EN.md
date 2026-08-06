@@ -1,106 +1,63 @@
 # WaveBench Documentation
 
-[中文文档](README.md) | English
+[中文文档](README.md) · English
 
-WaveBench is a lightweight Python measurement bench for explicit, reproducible control of laboratory instruments. It currently covers oscilloscope capture, signal-generator and power-supply control, digital-multimeter reads, multi-instrument run plans, offline reports, two-channel source/scope frequency-response measurements, and trusted executable instrument plugins.
+WaveBench is a Python measurement bench for laboratory debugging. It combines explicit instrument commands, run plans, capture packages, and offline reports. It requires Python 3.11 or newer. The current development line is `0.8.22`; the latest stable tag is `v0.8.0`.
 
-The WaveBench distribution includes built-in drivers for the RTM2000/RTM2032, DS1104Z/DS1000Z, DG4000/DG4202, DP800, and DM3000/DM3058 families. These five families are the permanent bundled baseline: first use does not require an external plugin, and they are not scheduled for removal from the main package. External packages are optional, independently released upgrades or extensions. A narrowly allowlisted package may take over a canonical ID, while built-in short names remain pinned to the bundled implementation and uninstalling the package restores the bundled canonical implementation where the IDs are shared.
+> [!WARNING]
+> Some commands connect to and change real instruments. Check wiring, input impedance, output state, and voltage/current limits before running a hardware action.
 
-The current development version is `v0.8.22`. It adds low-order preset-harmonic profile and
-configuration models, driver protocols, and capability-gated service entry points. Public writes
-are limited to EVEN, ODD, and ALL; the USER bitmap and H2-H16 amplitude/phase values are strictly
-for complete readback and restoration. Only external plugins with per-field readback, complete
-restoration, and ambiguous-write latching may declare these capabilities; the built-in DG4202
-fallback does not. External modulation sources, advanced digital modulation, user-defined
-harmonics, and DAC16 remain outside the public surface.
+## Start without instruments
 
-> [!IMPORTANT]
-> The current formal release is `v0.8.0`. This release introduces Instrument API V2, managed plugin lifecycle operations, canonical override slots, and the SocketIO backend; those capabilities are not part of `v0.7.0`. Users of other releases should follow the documentation stored in the matching tag.
-
-> Warning: WaveBench communicates with real laboratory equipment. Review the active configuration, wiring, voltage/current limits, input impedance, and output state before running any command that can change an instrument.
-
-## Start here
-
-- [Project boundaries](project/WaveBench_项目边界.md)
-- [Configuration format](project/WaveBench_配置文件格式.md)
-- [Run-plan guide](project/WaveBench_run_plan_使用指南.md)
-- [Data and artifact formats](project/WaveBench_数据输出格式.md)
-- [Error handling and command logs](project/WaveBench_错误处理和日志策略.md)
-- [Executable instrument plugin development](project/WaveBench_插件开发指南.md)
-- [Sweep analyzer public contract](project/WaveBench_sweep_analyzer_contract_EN.md)
-- [Installing and managing instrument plugins](project/WaveBench_可安装仪器插件.md)
-
-## Managed local plugins
-
-WaveBench treats executable Python plugins as trusted code, not as sandboxed extensions. The managed lifecycle accepts only an explicitly supplied local source directory or wheel, requires the current interpreter to be a virtual environment, does not download packages, installs with dependencies disabled, and never edits `wavebench.toml`.
+The following commands generate and check a plan locally. They do not connect to instruments or enable an output:
+The example uses Linux/WSL; Windows users should run it in WSL.
 
 ```bash
-python -m wavebench plugin package check <folder-or-wheel>
-python -m wavebench plugin install <folder-or-wheel> --dry-run
-python -m wavebench plugin install <folder-or-wheel>
-python -m wavebench plugin installed
-python -m wavebench plugin info <canonical-driver-id> --installed
-python -m wavebench plugin upgrade <folder-or-wheel> --dry-run
-python -m wavebench plugin downgrade <folder-or-wheel> --dry-run
-python -m wavebench plugin remove <canonical-driver-id> --dry-run
-python -m wavebench plugin recover
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+source .venv/bin/activate
+
+wavebench run template --list
+wavebench run template source-scope-sine --output /tmp/wavebench-demo.toml --force
+wavebench run check --plan /tmp/wavebench-demo.toml
 ```
 
-Source-directory inspection executes the package's declared build backend in a subprocess, including during dry-run. Wheel inspection is static. Installation, replacement, and removal use an environment lock, an atomic ledger, a write-ahead transaction journal, cached wheel hashes, post-install descriptor validation, and best-effort rollback. Automatic recovery is deliberately limited to states that can be proven to match the exact previous or target installation.
+For the terminal UI, install `.[tui]` and run `wavebench tui --fake`. The fake mode uses simulated devices.
 
-The local marketplace index remains read-only. It does not download or install plugins.
+## Built-in support
 
-## Optional TUI
+| Entry point | Built-in families | Scope |
+| --- | --- | --- |
+| Oscilloscope | R&S RTM2000/RTM2032, RIGOL DS1104Z/DS1000Z | Waveform reads, captures, multiple channels, screenshots |
+| Signal generator | RIGOL DG4000/DG4202 | Basic waveforms, frequency control, sweeps, arbitrary-wave uploads |
+| Power supply | RIGOL DP800 | Status, protection, setpoints, and explicit output control |
+| DMM | RIGOL DM3000/DM3058 | Common readings and selected function/range/trigger state |
+| Run plans | source, power, scope, dmm, sleep, frequency-response steps | Multi-instrument execution and offline checks |
+| TUI | Power, DMM, and source panels | Experimental manual control |
+| Plugins | `wavebench.instruments` drivers | Optional, explicitly selected extensions |
 
-The Textual interface is an optional extra. In a source checkout, install it with `python -m pip install -e ".[tui]"`, then run `python -m wavebench tui` or `python -m wavebench tui --fake`.
+## Find a guide
 
-Its supported product scope is intentionally frozen to the power-supply, DMM, and signal-source panels. CLI commands, run plans, and services remain the primary interfaces; the TUI is not a run-plan editor, plugin manager, full oscilloscope viewer, or reporting system.
+- Setup and configuration: [configuration format](project/WaveBench_配置文件格式.md)
+- Run plans and reports: [run plan guide](project/WaveBench_run_plan_使用指南.md)
+- Capture and run artifacts: [data output format](project/WaveBench_数据输出格式.md)
+- Install or develop plugins: [plugin user guide](project/WaveBench_可安装仪器插件.md) and [plugin development guide](project/WaveBench_插件开发指南.md)
+- TUI and read-only HTTP MCP: [TUI](project/WaveBench_TUI终端控制面板.md) and [HTTP MCP](project/WaveBench_HTTP_MCP_只读接口.md)
+- Public sweep contract: [English contract](project/WaveBench_sweep_analyzer_contract_EN.md)
+- Example plans and their hardware boundaries: [plans README](../plans/README.md)
 
-## Optional frequency-response analysis, interactive HTML, and PDF reports
+Most detailed pages are currently maintained in Chinese. Commands, identifiers, and schemas should match across languages.
 
-`sweep.frequency_response` sets the source through explicit frequency points and captures a reference (DUT input) and response (DUT output) scope channel in one acquisition per point. It writes a point-by-point `frequency_response.csv` with raw and, when configured, software-baseline-corrected linear/dB gain and wrapped/unwrapped output-relative phase. A run may contain multiple independently labelled responses and multiple requested Vpp slices, producing a two-dimensional Vpp × frequency measurement. A baseline is an explicitly referenced, separately captured manual CH1/CH2 through connection; it never changes scope deskew or front-panel settings. Optional adaptive refinement inserts linear or logarithmic midpoints where either gain or unwrapped phase changes too quickly, then samples every Vpp slice at the new frequency. The offline HTML/PDF report renders each response's raw/corrected magnitude and phase, fit comparison, audit summary, point table, and any saved per-point screenshots. With the `report3d` extra installed, two-dimensional HTML reports also include a rotatable measured-gain surface with Raw/Corrected and dB/V/V selectors, warning/recovery markers, hover evidence, zoom, and camera reset.
+## Check before running hardware
 
-Use the conservative template before editing a plan manually:
+| Class | Examples | Instrument I/O |
+| --- | --- | --- |
+| Offline | `run schema`, `run template`, `run check`, `run report`, `capture inspect`, `tui --fake` | No instrument I/O; TUI may write a local log |
+| Connected read/preflight | `doctor`, `idn`, `status`, `run verify` | Yes, for queries and checks |
+| State-changing | `scope fetch/capture/autoscale`, source/power setters, output commands, `run plan` | Yes; may change setup, trigger acquisition, or switch output |
 
-```bash
-python -m pip install -e ".[analysis,pdf,report3d]"
-python -m wavebench run template source-scope-frequency-response \
-  --frequencies 100,1000,10000 --reference-channel 1 --response-channel 2 \
-  --fit --output plans/frequency_response.toml
-python -m wavebench run check --plan plans/frequency_response.toml
-python -m wavebench run report data/runs/<run-dir> --pdf
-```
+WaveBench does not implicitly reset instruments, enable outputs, or change oscilloscope input impedance. `power set` and `power output` are separate operations. When enabled, source restoration covers only the documented basic fields; it is not a full channel snapshot.
 
-`linear_log` and `polynomial` fit linear gain against `log10(frequency_hz / Hz)`; PCHIP, dB smoothing splines, and 2D calibration require the `analysis` extra. For multi-Vpp data, `[steps.calibration]` selects a dB target (`passband_median`, `explicit_gain_db`, or `unity_gain`), emits a bounded floating-point LUT in `frequency_response_calibration.csv`, and records validation, limiter flags, and piecewise Chebyshev coefficients in `frequency_response_calibration.json`. By default it additionally emits an auditable signed-two's-complement Q4.12 CSV plus Xilinx COE and MEM files in amplitude-major address order; `[calibration.fixed_point]` can override the width, fractional bits, formats, layout, and overflow policy. Calibration never extrapolates beyond the measured frequency/Vpp domain. The same products can be regenerated without instruments using:
+Executable Python plugins run with the current user's permissions. Install only a trusted local source directory or wheel, and keep real resources, serial numbers, credentials, and generated artifacts out of public documentation.
 
-```bash
-python -m wavebench run calibrate data/runs/<run-dir> --config plans/calibration.toml --response <label>
-```
-
-The interactive HTML bundles no network resources: Plotly is copied to `report-assets/plotly.min.js` and recorded in the report manifest. Keep that directory beside the HTML when moving the report. Surfaces only connect neighbouring measured grid nodes; failed points remain holes, and no fit or extrapolation is invented. Single-amplitude or smaller-than-2×2 data stays on the static Bode presentation.
-
-The PDF is a portable static visual report: it deliberately does not load Plotly, while its visible screenshots, SVG charts, and tables are embedded. CSV/JSON/NPY evidence stays as separate artifacts for reproducible analysis. WeasyPrint also relies on platform rendering libraries (Cairo, Pango, GDK-PixBuf) and suitable CJK fonts where needed.
-
-## Running tests in idle-limited terminals
-
-For terminals that disconnect a silent process, use the dependency-free runner below. It forwards pytest output and emits a keepalive line every five seconds; `--heartbeat-s` changes the interval.
-
-```bash
-python scripts/pytest_progress.py -- -q
-python scripts/pytest_progress.py --heartbeat-s 10 -- -q tests/test_run_service.py
-```
-
-This prevents idle-output timeouts; it does not override a terminal or orchestration system's separate total-runtime limit.
-
-Executable plugins use canonical IDs and cannot define aliases. Built-in IDs are protected except for narrowly allowlisted optional-override slots that bind one canonical ID to one distribution. The current shared-ID slots cover DG4000, DM3000, DP800, and RTM2000. Their built-in short aliases always select the bundled baseline, and uninstalling the external distribution restores the bundled canonical implementation. DS1000Z uses the separate external canonical ID `rigol.ds1000z`; its built-in `ds1104` and `ds1000z` aliases remain available without the package. DG4000 source plugins may import the stable `DG4000DacBlock` and `DG4000ByteOrder` types from `wavebench.instruments`; waveform loading, normalization, DAC14 encoding, services, and safety policy remain core responsibilities. The source code retains the historical term `migration slot` for this allowlist, but it does not imply deprecating the bundled drivers.
-
-## Safety defaults
-
-- No implicit instrument reset.
-- No hidden output enable/disable.
-- No automatic change to oscilloscope input impedance.
-- No raw SCPI surface in the HTTP MCP service.
-- No third-party plugin import during ordinary metadata listing.
-- No system-Python plugin installation, network dependency resolution, or unmanaged-distribution takeover.
-
-Most detailed design documents are currently maintained in Chinese. Commands, identifiers, schemas, and examples are kept stable across languages.
+The root [README](../README.md) is the short project entry point. The [Chinese documentation index](README.md) groups the longer pages by task. Older roadmaps and vendor manuals are reference material, not current feature promises.
