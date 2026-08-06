@@ -5,7 +5,9 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from wavebench import __version__
 from wavebench.cli import build_parser
@@ -162,10 +164,24 @@ value_vpp = 1.0
 
             self.assertEqual(status, 200)
             names = {tool["name"] for tool in payload["tools"]}
-            self.assertEqual(names, {"run.schema", "run.check", "capture.inspect"})
+            self.assertEqual(
+                names,
+                {
+                    "run.schema",
+                    "run.check",
+                    "capture.inspect",
+                    "scope.observe",
+                    "doctor.config",
+                    "scope.advise",
+                },
+            )
             self.assertFalse(any("raw" in name.lower() for name in names))
             self.assertFalse(any("output" in name.lower() for name in names))
             self.assertFalse(any(name.lower().endswith((".on", ".off")) for name in names))
+            by_name = {tool["name"]: tool for tool in payload["tools"]}
+            self.assertFalse(by_name["scope.observe"]["read_only"])
+            self.assertTrue(by_name["scope.observe"]["mutates_instrument"])
+            self.assertTrue(by_name["scope.observe"]["instrument_state_effects"])
 
     def test_call_run_schema_succeeds(self):
         with TemporaryDirectory() as tmp:
@@ -335,7 +351,17 @@ value_vpp = 1.0
             )
             self.assertEqual(status, 200)
             names = {tool["name"] for tool in listed["result"]["tools"]}
-            self.assertEqual(names, {"run.schema", "run.check", "capture.inspect"})
+            self.assertEqual(
+                names,
+                {
+                    "run.schema",
+                    "run.check",
+                    "capture.inspect",
+                    "scope.observe",
+                    "doctor.config",
+                    "scope.advise",
+                },
+            )
 
             status, called = self._request(
                 server,
@@ -352,6 +378,134 @@ value_vpp = 1.0
             self.assertEqual(status, 200)
             self.assertEqual(called["result"]["structuredContent"]["status"], "ok")
             self.assertEqual(called["result"]["content"][0]["type"], "text")
+
+    def test_call_scope_observe_succeeds_with_structured_read_only_payload(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            server = self._start_server(config)
+
+            with patch(
+                "wavebench.mcp_http.scope_observe_payload",
+                return_value={
+                    "status": "ok",
+                    "read_only": False,
+                    "mutates_instrument": True,
+                    "raw_scpi": False,
+                    "observation": {"channel": 2, "channels": [2, 3]},
+                },
+            ) as observe:
+                status, payload = self._request(
+                    server,
+                    "POST",
+                    "/call",
+                    token="test-token",
+                    body={
+                        "tool": "scope.observe",
+                        "arguments": {
+                            "channels": [2, 3],
+                            "fetch_waveform": True,
+                            "expectations": {"2": {"frequency_hz": 1000}},
+                        },
+                    },
+                )
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["result"]["status"], "ok")
+            self.assertFalse(payload["result"]["read_only"])
+            self.assertTrue(payload["result"]["mutates_instrument"])
+            observe.assert_called_once()
+            self.assertIsNone(observe.call_args.kwargs["channel"])
+            self.assertEqual(observe.call_args.kwargs["channels"], (2, 3))
+            self.assertTrue(observe.call_args.kwargs["fetch_waveform"])
+            self.assertEqual(observe.call_args.kwargs["expectations"], {2: {"frequency_hz": 1000}})
+
+    def test_call_scope_observe_rejects_non_integer_channel(self):
+        with TemporaryDirectory() as tmp:
+            server = self._start_server(self._write_config(Path(tmp)))
+
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self._request(
+                    server,
+                    "POST",
+                    "/call",
+                    token="test-token",
+                    body={
+                        "tool": "scope.observe",
+                        "arguments": {"channel": "1"},
+                    },
+                )
+
+            self.assertEqual(caught.exception.code, 400)
+
+    def test_call_scope_advise_succeeds_without_applying_recommendations(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            server = self._start_server(config)
+
+            with patch(
+                "wavebench.mcp_http.scope_advise_payload",
+                return_value={
+                    "status": "ok",
+                    "read_only": True,
+                    "mutates_instrument": False,
+                    "raw_scpi": False,
+                    "applies_recommendations": False,
+                    "recommendations": [{"id": "focus_channel"}],
+                },
+            ) as advise:
+                status, payload = self._request(
+                    server,
+                    "POST",
+                    "/call",
+                    token="test-token",
+                    body={
+                        "tool": "scope.advise",
+                        "arguments": {
+                            "channels": [1, 2],
+                            "fetch_waveform": False,
+                            "target_cycles": 8,
+                            "expectations": {"1": {"frequency_hz": 1000}},
+                        },
+                    },
+                )
+
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["result"]["applies_recommendations"])
+        advise.assert_called_once()
+        self.assertEqual(advise.call_args.kwargs["channels"], (1, 2))
+        self.assertEqual(advise.call_args.kwargs["target_cycles"], 8.0)
+        self.assertEqual(advise.call_args.kwargs["expectations"], {1: {"frequency_hz": 1000}})
+
+    def test_call_doctor_config_returns_structured_records(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_config(root)
+            server = self._start_server(config)
+            record = SimpleNamespace(
+                severity="ok",
+                target="scope",
+                driver="ds1104",
+                resource="TCPIP::scope::INSTR",
+                idn="RIGOL,DS1104Z,123,1.0",
+                message="reachable",
+                suggestion="",
+            )
+
+            with patch("wavebench.mcp_http.doctor_records", return_value=[record]):
+                status, payload = self._request(
+                    server,
+                    "POST",
+                    "/call",
+                    token="test-token",
+                    body={"tool": "doctor.config", "arguments": {"timeout_ms": 1000}},
+                )
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["result"]["status"], "ok")
+            self.assertEqual(payload["result"]["records"][0]["target"], "scope")
+            self.assertFalse(payload["result"]["mutates_instrument"])
 
     def test_mcp_jsonrpc_requires_token(self):
         with TemporaryDirectory() as tmp:
