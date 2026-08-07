@@ -1143,8 +1143,20 @@ def main(argv: list[str] | None = None) -> int:
     forwarded = [item for item in raw_argv if item != "--json"]
     stdout = io.StringIO()
     stderr = io.StringIO()
-    with redirect_stdout(stdout), redirect_stderr(stderr):
-        code = _main(["--json", *forwarded])
+    try:
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = _main(["--json", *forwarded])
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 2
+        diagnostics = stderr.getvalue()
+        if diagnostics:
+            sys.stderr.write(diagnostics)
+        if code == 0:
+            _emit_json_result(stdout.getvalue().strip() or None, exit_code=0)
+            return 0
+        message = diagnostics.strip().splitlines()[-1] if diagnostics.strip() else "invalid command line arguments"
+        print(json.dumps(error_envelope(ConfigError(message)), indent=2, ensure_ascii=False))
+        return code
     diagnostics = stderr.getvalue()
     if diagnostics:
         sys.stderr.write(diagnostics)

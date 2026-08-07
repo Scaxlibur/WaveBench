@@ -147,3 +147,17 @@ def test_run_intent_cli_emits_offline_json_without_opening_instruments() -> None
         assert payload["schema"] == "wavebench.cli.result.v1"
         assert payload["result"]["schema"] == INTENT_SCHEMA
         assert payload["result"]["intent_digest"]
+
+
+def test_json_wrapper_turns_argparse_errors_into_one_error_envelope() -> None:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("sys.stderr", stderr), redirect_stdout(stdout):
+        code = main(["--json", "capability", "explain"])
+
+    assert code == 2
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema"] == "wavebench.error.v1"
+    assert payload["code"] == "config_error"
+    assert payload["exit_code"] == 2
+    assert "usage:" in stderr.getvalue()
