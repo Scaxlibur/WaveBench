@@ -394,6 +394,36 @@ class RunService:
                     records.append(record)
                     write_step_record(steps_dir, record)
                     self._update_frequency_responses_manifest(run_dir, record)
+            except KeyboardInterrupt as exc:
+                restore_error = restore_source_state(
+                    restore_state,
+                    source_service_factory=lambda: self._source_service(services=services),
+                )
+                interruption_error: dict[str, Any] = {
+                    "type": "KeyboardInterrupt",
+                    "message": str(exc) or "run interrupted by user",
+                }
+                if restore_error is not None:
+                    interruption_error["cause"] = dict(interruption_error)
+                    interruption_error["type"] = "RestoreError"
+                    interruption_error["message"] = _restore_error_message(restore_error)
+                write_run_files(
+                    plan=plan,
+                    run_json_path=run_json_path,
+                    summary_csv_path=summary_csv_path,
+                    status="failed",
+                    records=records,
+                    error=interruption_error,
+                    restore_state=restore_state,
+                    restore_error=restore_error,
+                    provenance=provenance,
+                )
+                if restore_error is not None:
+                    raise ConfigError(
+                        "run plan source state restore failed: "
+                        + _restore_error_message(restore_error)
+                    ) from exc
+                raise
             except Exception as exc:
                 failure = exc
                 if isinstance(exc, _FrequencyResponseExecutionError):
@@ -1720,3 +1750,18 @@ def _first_finite_row_value(row: dict[str, Any], *names: str) -> float | None:
         if isfinite(value):
             return value
     return None
+
+
+def _restore_error_message(error: dict[str, Any]) -> str:
+    """Expose the first concrete channel error while retaining the full payload."""
+
+    errors = error.get("errors")
+    if isinstance(errors, list):
+        details = [
+            str(item.get("message"))
+            for item in errors
+            if isinstance(item, dict) and item.get("message")
+        ]
+        if details:
+            return "; ".join(details)
+    return str(error.get("message", "source state restore failed"))

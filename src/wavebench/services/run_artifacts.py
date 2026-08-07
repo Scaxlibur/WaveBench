@@ -44,7 +44,7 @@ def write_run_files(
     summary_csv_path: Path,
     status: str,
     records: list[RunStepRecord],
-    error: dict[str, str] | None,
+    error: dict[str, Any] | None,
     restore_state: list[RestorableSourceState] | None = None,
     restore_error: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
