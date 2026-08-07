@@ -85,6 +85,11 @@ class DataError(WaveBenchError):
     code = "data_error"
 
 
+class ResourceBusyError(WaveBenchError):
+    exit_code = 7
+    code = "resource_busy"
+
+
 def error_envelope(
     exc: BaseException,
     *,
