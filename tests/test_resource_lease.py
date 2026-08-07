@@ -32,9 +32,10 @@ def test_lease_busy_error_and_private_metadata(tmp_path: Path) -> None:
         assert raised.value.code == "resource_busy"
         assert raised.value.exit_code == 7
         assert first.lock_path.stat().st_mode & 0o777 == 0o600
-        payload = json.loads(first.lock_path.read_text(encoding="utf-8"))
-        assert payload["status"] == "held"
-        assert "192.0.2.10" not in first.lock_path.read_text(encoding="utf-8")
+        payload = json.loads(first.metadata_path.read_text(encoding="utf-8"))
+        assert payload["schema"] == "wavebench.resource_lease.v1"
+        assert payload["lease_id"]
+        assert "192.0.2.10" not in first.metadata_path.read_text(encoding="utf-8")
         assert first.status()["held"] is True
     finally:
         first.release()
@@ -49,9 +50,14 @@ def test_release_and_stale_cleanup_keep_lock_file(tmp_path: Path) -> None:
 
     assert path.exists()
     assert lease.status()["held"] is False
+    lease.metadata_path.write_text(
+        json.dumps({"schema": "wavebench.resource_lease.v1", "lease_id": "stale"}),
+        encoding="utf-8",
+    )
+    assert lease.status()["stale_metadata"] is True
     assert lease.clear_stale_metadata() is True
     assert path.exists()
-    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "stale_metadata_cleared"
+    assert not lease.metadata_path.exists()
 
 
 def test_acquire_many_releases_partial_batch_on_busy_resource(tmp_path: Path) -> None:
