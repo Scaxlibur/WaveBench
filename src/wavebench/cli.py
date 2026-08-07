@@ -1154,7 +1154,11 @@ def main(argv: list[str] | None = None) -> int:
         if code == 0:
             _emit_json_result(stdout.getvalue().strip() or None, exit_code=0)
             return 0
-        message = diagnostics.strip().splitlines()[-1] if diagnostics.strip() else "invalid command line arguments"
+        message = (
+            diagnostics.strip().splitlines()[-1]
+            if diagnostics.strip()
+            else "invalid command line arguments"
+        )
         print(json.dumps(error_envelope(ConfigError(message)), indent=2, ensure_ascii=False))
         return code
     diagnostics = stderr.getvalue()
