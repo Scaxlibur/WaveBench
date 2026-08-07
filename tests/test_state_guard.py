@@ -204,3 +204,29 @@ def test_service_state_guard_baseline_uses_write_readback() -> None:
     )
     service.set_amplitude_vpp(channel=1, value_vpp=2.0)
     assert session.set_amplitude_vpp.call_count == 1
+
+
+def test_source_arbitrary_upload_does_not_bypass_drift_when_output_stays_off(tmp_path) -> None:
+    waveform = tmp_path / "waveform.csv"
+    waveform.write_text("0\n1\n", encoding="utf-8")
+    session = Mock()
+    session.get_status.return_value = _source_status()
+    session.upload_dg4000_dac14_block.return_value = _source_status()
+    service = SourceService(
+        config=_config(),
+        logger=CommandLogger(),
+        session=session,
+        state_guard=SourceStateGuard(),
+    )
+
+    service.status(channel=1)
+    session.get_status.return_value = _source_status(amplitude=2.0)
+    with pytest.raises(StateDriftError):
+        service.upload_arbitrary_waveform(
+            channel=1,
+            file_path=str(waveform),
+            playback_frequency_hz=1000.0,
+            amplitude_vpp=1.0,
+            output_on=False,
+        )
+    session.upload_dg4000_dac14_block.assert_not_called()

@@ -652,7 +652,7 @@ class SourceService:
             required.append("source.status")
         self._require("source.arbitrary_upload", *required)
         with self._source_session() as source:
-            self._state_guard_before_write(source, channel, force_off=not output_on)
+            self._state_guard_before_write(source, channel)
             result = source.upload_dg4000_dac14_block(
                 channel=channel,
                 block=block,
