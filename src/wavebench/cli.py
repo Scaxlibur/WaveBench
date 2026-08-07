@@ -561,7 +561,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"run_json={result.run_json_path}")
                 print(f"summary={result.summary_csv_path}")
                 print(f"steps={len(result.steps)}")
-                return 0
+                return 2 if any(step.status == "failed" for step in result.steps) else 0
         if args.domain == "dmm":
             service = _load_dmm_service(args)
             if args.command == "idn":
