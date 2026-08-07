@@ -17,7 +17,7 @@ from wavebench.instruments.models import (
     ScopeTimebaseSnapshot,
     ScopeWaveformMetadataSnapshot,
 )
-from wavebench.services.scope_service import ScopeService
+from wavebench.services.scope_service import ScopeService, ScopeStatusSummary
 
 
 def _snapshot(channel: int = 2) -> ScopeSnapshot:
@@ -63,6 +63,49 @@ def test_scope_service_status_rejects_missing_capability_before_opening():
             service.status(channel=1)
 
     open_scope.assert_not_called()
+
+
+def test_scope_status_summary_returns_partial_without_snapshot_capability():
+    driver = SimpleNamespace(
+        idn=lambda: "Rohde&Schwarz,RTM2032,SN,FW",
+        channel_coupling=lambda channel: "ACL",
+    )
+    descriptor = SimpleNamespace(
+        driver_id="rohde-schwarz.rtm2032",
+        kind="scope",
+        capabilities=("scope.idn", "scope.channel_coupling"),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="rohde-schwarz.rtm2032")),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=descriptor,
+    )
+
+    result = service.status_summary(channel=2)
+
+    assert isinstance(result, ScopeStatusSummary)
+    assert result.status == "partial"
+    assert result.idn == "Rohde&Schwarz,RTM2032,SN,FW"
+    assert result.coupling == "ACL"
+    assert result.missing_capabilities == ("scope.snapshot",)
+
+
+def test_scope_status_summary_strict_requires_complete_snapshot():
+    descriptor = SimpleNamespace(
+        driver_id="rohde-schwarz.rtm2032",
+        kind="scope",
+        capabilities=("scope.idn",),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="rohde-schwarz.rtm2032")),
+        logger=SimpleNamespace(),
+        session=SimpleNamespace(),
+        descriptor=descriptor,
+    )
+
+    with pytest.raises(ConfigError, match="scope.snapshot"):
+        service.status_summary(channel=2, strict=True)
 
 
 def test_scope_status_cli_uses_default_channel_and_prints_stable_fields():

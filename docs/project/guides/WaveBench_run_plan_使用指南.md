@@ -37,6 +37,23 @@ python -m wavebench run plan   --config wavebench.toml --plan plans/example_scop
 
 `run check` 只解析 plan 并打印摘要，不连接仪器；`run verify` 执行只读资源和安全预检；`run plan` 才会真实执行。
 
+## 执行意图与摘要核验
+
+需要把计划交给另一个进程或在执行前固定输入时，可以先生成执行意图：
+
+```powershell
+python -m wavebench run intent --config wavebench.toml --plan plans/example_scope_expect_quality.toml ^
+  --output data/intents/example.json
+
+python -m wavebench run plan --config wavebench.toml --plan plans/example_scope_expect_quality.toml ^
+  --intent data/intents/example.json
+```
+
+执行意图使用 `wavebench.execution_intent.v1`，包含 plan/config 摘要、任意波形 payload 摘要和每个
+step 的 `OperationSpec`。`run plan --intent` 会在取得资源租约、打开仪器 session 前重新计算摘要；
+计划、配置或 payload 发生变化时返回 `execution_intent_mismatch`。未提供外部意图文件时，run 仍会
+把生成的意图写入 `run.json.provenance.execution_intent`。
+
 ## run plan 的 session 生命周期
 
 `run plan` 会在一次 run 开始时为 plan 需要的仪器统一打开 session，并在 safety guard、snapshot/restore 和所有 step 之间复用这些 session。run 成功、step 失败、safety guard 失败或 restore 失败时，都会统一关闭已经打开的 session。

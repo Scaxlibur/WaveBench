@@ -6,7 +6,7 @@ import os
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -54,6 +54,32 @@ from wavebench.transport.base import InstrumentTransport
 
 HIGH_IMPEDANCE_COUPLINGS = {"DCL", "DCLIMIT", "ACL", "ACLIMIT"}
 LOW_IMPEDANCE_COUPLINGS = {"DC", "AC"}
+
+
+@dataclass(frozen=True)
+class ScopeStatusSummary:
+    """Stable scope status result that can represent a partial capability set."""
+
+    status: str
+    channel: int
+    snapshot: ScopeSnapshot | None = None
+    idn: str | None = None
+    coupling: str | None = None
+    missing_capabilities: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "status": self.status,
+            "channel": self.channel,
+            "idn": self.idn,
+            "coupling": self.coupling,
+            "missing_capabilities": list(self.missing_capabilities),
+        }
+        if self.snapshot is not None:
+            payload["snapshot"] = asdict(self.snapshot)
+        return payload
+
+
 def normalize_coupling(value: str) -> str:
     return value.strip().upper()
 
@@ -141,6 +167,11 @@ class ScopeService:
         require_capabilities(descriptor, capabilities, operation=operation)
 
     def _open_scope(self) -> ScopeDriver:
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=self.config.connection.resource,
+                operation="scope.session",
+            )
         opened = open_instrument_driver(
             driver_reference=self.config.scope.driver,
             expected_kind="scope",
@@ -192,6 +223,41 @@ class ScopeService:
         self._require("scope.status", "scope.snapshot")
         with self._scope_session() as scope:
             return cast(ScopeSnapshotDriver, scope).get_snapshot(channel)
+
+    def status_summary(self, channel: int, *, strict: bool = False) -> ScopeStatusSummary:
+        """Return a complete snapshot when available, otherwise a read-only partial summary."""
+
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        if "scope.snapshot" in descriptor.capabilities:
+            snapshot = self.status(channel)
+            return ScopeStatusSummary(
+                status="ok",
+                channel=channel,
+                snapshot=snapshot,
+                coupling=snapshot.channel.coupling,
+            )
+        if strict:
+            self._require("scope.status", "scope.snapshot")
+        self._require("scope.status", "scope.idn")
+        missing = ["scope.snapshot"]
+        identity: str | None = None
+        coupling: str | None = None
+        with self._scope_session() as scope:
+            identity = scope.idn()
+            if "scope.channel_coupling" in descriptor.capabilities:
+                coupling = scope.channel_coupling(channel)
+            else:
+                missing.append("scope.channel_coupling")
+        return ScopeStatusSummary(
+            status="partial",
+            channel=channel,
+            idn=identity,
+            coupling=coupling,
+            missing_capabilities=tuple(missing),
+        )
 
     def acquisition_status(self) -> ScopeAcquisitionStatus:
         self._require("scope.acquisition_status", "scope.acquisition_status")

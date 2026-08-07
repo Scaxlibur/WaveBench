@@ -64,6 +64,45 @@ class ConfigError(WaveBenchError):
     code = "config_error"
 
 
+class ExecutionIntentError(ConfigError):
+    code = "execution_intent_mismatch"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected_digest: str | None = None,
+        actual_digest: str | None = None,
+        expected_plan_digest: str | None = None,
+        actual_plan_digest: str | None = None,
+        expected_config_digest: str | None = None,
+        actual_config_digest: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.expected_digest = expected_digest
+        self.actual_digest = actual_digest
+        self.expected_plan_digest = expected_plan_digest
+        self.actual_plan_digest = actual_plan_digest
+        self.expected_config_digest = expected_config_digest
+        self.actual_config_digest = actual_config_digest
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        merged = dict(details or {})
+        merged.setdefault("expected_digest", self.expected_digest)
+        merged.setdefault("actual_digest", self.actual_digest)
+        merged.setdefault("expected_plan_digest", self.expected_plan_digest)
+        merged.setdefault("actual_plan_digest", self.actual_plan_digest)
+        merged.setdefault("expected_config_digest", self.expected_config_digest)
+        merged.setdefault("actual_config_digest", self.actual_config_digest)
+        return super().to_envelope(operation=operation, details=merged, cause=cause)
+
+
 class AccessDeniedError(ConfigError):
     exit_code = 2
     code = "access_denied"

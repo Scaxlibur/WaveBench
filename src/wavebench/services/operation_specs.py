@@ -150,12 +150,21 @@ def _spec(
 _BUILTIN_SPECS = (
     _spec("run.schema", None, effect="offline", lease_mode="none"),
     _spec("run.check", None, effect="offline", lease_mode="none"),
+    _spec("run.intent", None, effect="offline", lease_mode="none"),
+    _spec("run.sleep", None, effect="offline", lease_mode="none"),
     _spec("run.report", None, effect="offline", lease_mode="none"),
     _spec("run.compare", None, effect="offline", lease_mode="none"),
     _spec("run.resume", None, effect="offline", lease_mode="none"),
     _spec("scope.idn", "scope", required_capabilities=("scope.idn",), effect="observe"),
     _spec("scope.errors", "scope", required_capabilities=("scope.errors",), effect="stateful_read"),
-    _spec("scope.status", "scope", required_capabilities=("scope.snapshot",), effect="stateful_read"),
+    _spec(
+        "scope.status",
+        "scope",
+        required_capabilities=("scope.idn",),
+        optional_capabilities=("scope.snapshot", "scope.channel_coupling"),
+        effect="stateful_read",
+        safe_alternatives=("scope.idn", "scope.channel_coupling"),
+    ),
     _spec("scope.acquisition_status", "scope", required_capabilities=("scope.acquisition_status",), effect="stateful_read"),
     _spec("scope.channel_coupling", "scope", required_capabilities=("scope.channel_coupling",), effect="stateful_read"),
     _spec(

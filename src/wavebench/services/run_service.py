@@ -7,7 +7,7 @@ from math import isfinite
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from wavebench.config import WaveBenchConfig
 from wavebench.data.package import new_package_dir, safe_label
@@ -48,6 +48,10 @@ from wavebench.services.frequency_response_evidence import (
     case_id,
     plan_digest,
     signal_level_evidence,
+)
+from wavebench.services.execution_intent import (
+    build_execution_intent,
+    verify_execution_intent,
 )
 from wavebench.services.run_artifacts import RunStepRecord, write_run_files, write_step_record
 from wavebench.services.run_analysis import (
@@ -452,9 +456,17 @@ class RunService:
                 instruments.add("power")
         return instruments
 
-    def run(self, plan: RunPlan) -> RunResult:
+    def run(
+        self,
+        plan: RunPlan,
+        *,
+        execution_intent: Mapping[str, Any] | None = None,
+    ) -> RunResult:
         self.check(plan)
-        plan_hash = plan_digest(plan)
+        intent = build_execution_intent(plan, self.config)
+        if execution_intent is not None:
+            intent = verify_execution_intent(execution_intent, plan, self.config)
+        plan_hash = intent.plan_digest
         with self._run_instrument_services(plan) as services:
             self._run_safety_guards(plan, services=services)
             run_dir = new_package_dir(run_output_base(self.config), plan.label)
@@ -474,6 +486,7 @@ class RunService:
             provenance = {
                 "schema": "wavebench.run_provenance.v1",
                 "plan_hash": plan_hash,
+                "execution_intent": intent.as_dict(),
                 "frequency_response": {
                     "schema": "wavebench.frequency_response_evidence.v1",
                     "capture_sync_grade": CAPTURE_SYNC_GRADE,
@@ -870,9 +883,12 @@ class RunService:
             )
             artifact = {"source_status": _status_payload(status)}
         elif step.kind == "source.arb_load":
+            waveform_path = Path(step.fields["file"])
+            if not waveform_path.is_absolute():
+                waveform_path = plan.path.parent / waveform_path
             status = self._source_service(services=services).upload_arbitrary_waveform(
                 channel=step.fields.get("channel"),
-                file_path=step.fields["file"],
+                file_path=str(waveform_path),
                 playback_frequency_hz=step.fields["frequency_hz"],
                 amplitude_vpp=step.fields["amplitude_vpp"],
                 offset_v=step.fields.get("offset_v", 0.0),

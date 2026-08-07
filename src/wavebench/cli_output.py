@@ -50,6 +50,8 @@ from .plugins.lifecycle import InstalledPlugin, LifecycleResult
 from .plugins.package_inspect import PluginPackage
 from .plugins.scpi import DeclarativeScpiPlugin, ScpiProbeResult
 from .services.run_plan import RunPlan, RunStep
+from .services.scope_service import ScopeStatusSummary
+from .services.capability_explain import CapabilityExplanation
 
 
 
@@ -64,6 +66,36 @@ def _print_plugin_list(plugins: list[InstrumentPlugin]) -> None:
             f"{plugin.driver_id}	{plugin.kind}	{plugin.origin}	"
             f"{plugin.model_text}	{plugin.capability_text}"
         )
+
+
+def _print_capability_explanation(result: CapabilityExplanation) -> None:
+    payload = result.as_dict()
+    print(f"operation={payload['operation']}")
+    print(f"status={payload['status']}")
+    print(f"reason={payload['reason']}")
+    print(f"driver_id={payload.get('driver_id') or 'n/a'}")
+    print(f"instrument_kind={payload.get('instrument_kind') or 'n/a'}")
+    print(f"access={payload['access']}")
+    print(
+        "available_capabilities="
+        + (",".join(payload["available_capabilities"]) or "none")
+    )
+    print(
+        "missing_capabilities="
+        + (",".join(payload["missing_capabilities"]) or "none")
+    )
+    print(
+        "missing_optional_capabilities="
+        + (",".join(payload["missing_optional_capabilities"]) or "none")
+    )
+    spec = payload.get("spec")
+    if isinstance(spec, dict):
+        print(f"effect={spec['effect']}")
+        print(f"lease_mode={spec['lease_mode']}")
+        print("changed_fields=" + (",".join(spec["changed_fields"]) or "none"))
+        print("restore_coverage=" + str(spec["restore_coverage"]))
+        print("risk_flags=" + (",".join(spec["risk_flags"]) or "none"))
+        print("safe_alternatives=" + (",".join(spec["safe_alternatives"]) or "none"))
 
 
 def _print_plugin_info(plugin: InstrumentPlugin) -> None:
@@ -306,7 +338,20 @@ def _print_dmm_dcv_impedance_configuration(
     print(f"changed={'true' if result.changed else 'false'}")
 
 
-def _print_scope_snapshot(snapshot: ScopeSnapshot) -> None:
+def _print_scope_snapshot(snapshot: ScopeSnapshot | ScopeStatusSummary) -> None:
+    if isinstance(snapshot, ScopeStatusSummary):
+        print(f"status={snapshot.status}")
+        print(f"channel={snapshot.channel}")
+        print(f"idn={snapshot.idn or 'n/a'}")
+        print(f"coupling={snapshot.coupling or 'n/a'}")
+        print(
+            "missing_capabilities="
+            + (",".join(snapshot.missing_capabilities) or "none")
+        )
+        if snapshot.snapshot is None:
+            return
+        snapshot = snapshot.snapshot
+
     def scalar(value: object) -> str:
         if value is None:
             return "n/a"

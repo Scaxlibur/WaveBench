@@ -13,6 +13,11 @@ def add_runtime_options(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wavebench")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one versioned machine-readable result / 输出一个版本化机器可读结果",
+    )
     subparsers = parser.add_subparsers(dest="domain", required=True)
 
     scope_parser = subparsers.add_parser("scope", help="Oscilloscope commands")
@@ -58,6 +63,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-visa",
         action="store_true",
         help="Skip PyVISA resource-manager discovery / 跳过 PyVISA 资源枚举",
+    )
+    capability_parser = subparsers.add_parser(
+        "capability",
+        help="Explain offline operation capability decisions / 离线解释操作能力",
+    )
+    capability_sub = capability_parser.add_subparsers(dest="command", required=True)
+    capability_explain = capability_sub.add_parser(
+        "explain",
+        help="Explain one operation against a driver or config / 解释一个操作对驱动或配置的要求",
+    )
+    capability_explain.add_argument("operation", help="Registered operation name, e.g. source.output")
+    capability_explain.add_argument(
+        "--driver",
+        default=None,
+        help="Instrument driver reference, e.g. dg4202 / 仪器驱动引用",
+    )
+    capability_explain.add_argument(
+        "--kind",
+        choices=("scope", "source", "power", "dmm"),
+        default=None,
+        help="Instrument kind when selecting a configured driver / 仪器类型",
+    )
+    capability_explain.add_argument(
+        "--config",
+        default=None,
+        help="Use driver and access settings from a WaveBench TOML config / 从配置读取驱动和访问策略",
+    )
+    capability_explain.add_argument(
+        "--access",
+        choices=("read_only", "read_write", "disabled"),
+        default=None,
+        help="Access policy override / 访问策略覆盖值",
     )
     tui_parser.add_argument("--config", default="wavebench.toml", help="Path to wavebench TOML config")
     tui_parser.add_argument("--resource", help="Override power VISA resource / 覆盖电源 VISA 资源")
@@ -307,6 +344,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_check.add_argument("--plan", required=True, help="Path to a WaveBench run plan TOML file")
     add_runtime_options(run_check)
+    run_intent = run_sub.add_parser(
+        "intent",
+        help="Build an offline execution intent for a run plan / 为运行计划生成离线执行意图",
+    )
+    run_intent.add_argument("--plan", required=True, help="Path to a WaveBench run plan TOML file")
+    run_intent.add_argument("--output", default=None, help="Write the execution intent JSON to this path")
+    add_runtime_options(run_intent)
     run_verify = run_sub.add_parser(
         "verify",
         help="Verify / 预检 instruments referenced by a run plan with read-only *IDN? queries",
@@ -336,6 +380,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_template.add_argument("--current-limit", type=float, default=0.1, help="Template power current limit in A")
     run_plan = run_sub.add_parser("plan", help="Execute a WaveBench run plan")
     run_plan.add_argument("--plan", required=True, help="Path to a WaveBench run plan TOML file")
+    run_plan.add_argument(
+        "--intent",
+        default=None,
+        help="Verify this execution intent before opening instrument sessions / 打开仪器会话前核验执行意图",
+    )
     add_runtime_options(run_plan)
     run_calibrate = run_sub.add_parser(
         "calibrate", help="Build an offline 2D frequency-response calibration LUT from an existing run"
@@ -373,11 +422,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("text", "json"),
         default="text",
         help="Output format; JSON is suitable for automation",
-    )
-    run_compare.add_argument(
-        "--json",
-        action="store_true",
-        help="Alias for --format json",
     )
     run_compare.add_argument(
         "--gain-tolerance-db",
@@ -691,6 +735,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read a typed, non-mutating oscilloscope state snapshot",
     )
     status.add_argument("--channel", type=int, default=None)
+    status.add_argument(
+        "--strict",
+        action="store_true",
+        help="Require the complete scope.snapshot capability / 要求完整 scope.snapshot 能力",
+    )
     add_runtime_options(status)
 
     acquisition_status = scope_sub.add_parser(

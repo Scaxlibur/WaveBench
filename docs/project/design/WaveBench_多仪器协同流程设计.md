@@ -74,9 +74,10 @@ wavebench run verify --config wavebench.toml --plan plans/dp800_scope_probe_volt
 正常释放只删除当前 lease 的 sidecar，不删除 `.lock` 文件。进程崩溃后，内核负责释放锁；
 残留 sidecar 只能在再次取得非阻塞锁后清理，不能根据 PID 删除活动锁。
 
-`run check`、离线报告和比较命令不会取得资源租约。当前租约覆盖 run 使用 factory 打开的
-transport；`doctor`、网络 discovery 和独立 SCPI probe 的绕行路径仍需单独接入，不能共享这一
-覆盖声明。
+`run check`、离线报告和比较命令不会取得资源租约。run 使用 factory 打开的 transport、独立
+Service 的一次性 session、`doctor`、网络 discovery 和声明式 SCPI probe 均在实际 I/O 前取得同一
+类本地独占租约；离线命令仍不接触仪器。租约只覆盖当前进程持有的本地 Linux / WSL 文件锁，不能
+替代外部程序或真实设备内部的互斥机制。
 
 ## run 内状态守卫
 
@@ -103,6 +104,43 @@ transport；`doctor`、网络 discovery 和独立 SCPI probe 的绕行路径仍�
 compare-and-swap；前面板或其他进程仍可能在查询与写入之间改变状态，因此文档和报告不能将其
 描述为原子事务。当前实现只覆盖上述 Source/Power 基础控制，不代表调制、扫描、保护参数、触发
 等全部 Service 写操作都已纳入状态守卫。
+
+## scope status 与能力解释
+
+`scope status` 默认优先返回完整 `scope.snapshot`。当驱动没有该能力时，命令仍可使用基础只读
+能力返回 `status=partial`，并列出缺少的 capability；当前内建 RTM2032 路径至少提供 `*IDN?` 和
+通道耦合信息。需要完整字段时使用 `scope status --strict`，缺少 `scope.snapshot` 会以非零状态
+失败，不使用伪造的默认值。
+
+`capability explain <operation>` 只读取本地 registry、驱动 descriptor 和配置，不打开 transport。
+结果会说明操作的 effect、租约模式、风险字段、缺少的 capability、访问策略是否拒绝，以及可用的
+安全替代操作。例如：
+
+```text
+wavebench capability explain source.output --driver dg4202
+wavebench --json capability explain source.output --config wavebench.toml
+```
+
+本地候选只用于解释和过滤，不会触发插件安装、网络下载或仪器连接。
+
+## execution intent
+
+可在打开仪器前生成规范化执行意图：
+
+```text
+wavebench run intent --config wavebench.toml --plan plans/example.toml \
+  --output data/intents/example.json
+wavebench run plan --config wavebench.toml --plan plans/example.toml \
+  --intent data/intents/example.json
+```
+
+意图文件使用 `wavebench.execution_intent.v1`，保存 plan digest、脱敏后的 config digest、任意波形
+payload 的 SHA-256 和每个 step 对应的 `OperationSpec`。`run plan --intent` 会在取得资源租约前重新
+计算摘要；计划、配置或 payload 改变时返回 `execution_intent_mismatch`，不会打开仪器 session。没有
+外部意图文件时，run 仍会生成同一意图并写入 `run.json.provenance.execution_intent`。
+
+非交互命令可在命令行任意位置使用 `--json`，输出一个 `wavebench.cli.result.v1` 结果；错误使用
+`wavebench.error.v1`，诊断文本写入 stderr。TUI 和 HTTP MCP 服务不套用这一 one-shot JSON 包装。
 
 ## 计划文件格式
 
@@ -399,6 +437,9 @@ output  : data/runs/YYYYMMDD_HHMMSS_<label>/run.json + summary.csv + step record
 restore : `[restore] source_state = true` 时 snapshot source 状态，并在成功/失败路径恢复
 state guard : run 内 Source/Power 基础控制写入执行 compare-before-write；漂移时零 setter 调用，
 并将 `state_drift` 与状态差异写入工件
+scope status : 缺少 `scope.snapshot` 时返回 `status=partial`；`--strict` 路径保持完整快照门槛
+capability : `capability explain` 离线解释 OperationSpec、descriptor、access 和安全替代
+intent : `run intent` / `run plan --intent` 校验 plan、config 和 payload digest
 ```
 
 DP800 电压阶跃实机 smoke：
