@@ -49,6 +49,7 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.resource_lease import ResourceLease
 from wavebench.transport.base import InstrumentTransport
 
 HIGH_IMPEDANCE_COUPLINGS = {"DCL", "DCLIMIT", "ACL", "ACLIMIT"}
@@ -126,6 +127,7 @@ class ScopeService:
     session: ScopeDriver | None = None
     descriptor: InstrumentDescriptor | None = None
     transport: InstrumentTransport | None = None
+    lease: ResourceLease | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         access_policy(getattr(self.config.scope, "access", "read_write"), "scope.access").require(
@@ -152,6 +154,7 @@ class ScopeService:
             settings={"check_errors": self.config.scope.check_errors},
             options=getattr(self.config.scope, "options", {}),
             access=getattr(self.config.scope, "access", "read_write"),
+            lease=self.lease,
         )
         self.descriptor = opened.descriptor
         self.transport = opened.transport

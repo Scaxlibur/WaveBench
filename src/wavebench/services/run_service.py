@@ -64,6 +64,11 @@ from wavebench.services.run_safety import (
     reject_unsupported_steps,
     run_scope_safety_guards,
 )
+from wavebench.services.resource_lease import (
+    ResourceLease,
+    ResourceLeaseManager,
+    resource_fingerprint,
+)
 from wavebench.services.scope_service import ScopeService
 from wavebench.services.source_service import SourceService
 from wavebench.services.source_state import RestorableSourceState
@@ -151,6 +156,7 @@ def run_output_base(config: WaveBenchConfig) -> Path:
 class RunService:
     config: WaveBenchConfig
     logger: CommandLogger
+    lease_manager: ResourceLeaseManager | None = None
 
     def verify(self, plan: RunPlan) -> list[RunPreflightRecord]:
         self.check(plan)
@@ -1913,6 +1919,23 @@ class RunService:
     def _run_instrument_services(self, plan: RunPlan) -> Iterator[RunInstrumentServices]:
         instruments = self._plan_instruments(plan)
         with ExitStack() as stack:
+            resources = self._plan_resource_values(instruments)
+            lease_manager = self.lease_manager or ResourceLeaseManager()
+            leases = lease_manager.acquire_many(
+                resources,
+                operation=f"run plan {plan.label}",
+            )
+            for lease in leases:
+                # Borrowed leases are released after all driver sessions close.
+                stack.callback(lease.release)
+            leases_by_fingerprint = {lease.fingerprint: lease for lease in leases}
+
+            def lease_for(resource: str) -> ResourceLease:
+                try:
+                    return leases_by_fingerprint[resource_fingerprint(resource)]
+                except KeyError as exc:
+                    raise ConfigError("run resource lease mapping is incomplete") from exc
+
             scope: ScopeService | None = None
             source: SourceService | None = None
             power: PowerService | None = None
@@ -1920,7 +1943,12 @@ class RunService:
 
             if "scope" in instruments:
                 logger = CommandLogger()
-                bootstrap = ScopeService(config=self.config, logger=logger)
+                scope_lease = lease_for(self.config.connection.resource)
+                bootstrap = ScopeService(
+                    config=self.config,
+                    logger=logger,
+                    lease=scope_lease,
+                )
                 session = bootstrap.open_session()
                 stack.callback(session.close)
                 scope = ScopeService(
@@ -1929,10 +1957,19 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    lease=scope_lease,
                 )
             if "source" in instruments:
                 logger = CommandLogger()
-                bootstrap = SourceService(config=self.config, logger=logger)
+                source_config = self.config.source
+                if source_config is None or not source_config.resource:
+                    raise ConfigError("source resource is required by this run plan")
+                source_lease = lease_for(source_config.resource)
+                bootstrap = SourceService(
+                    config=self.config,
+                    logger=logger,
+                    lease=source_lease,
+                )
                 session = bootstrap.open_session()
                 stack.callback(session.close)
                 source = SourceService(
@@ -1941,10 +1978,19 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    lease=source_lease,
                 )
             if "power" in instruments:
                 logger = CommandLogger()
-                bootstrap = PowerService(config=self.config, logger=logger)
+                power_config = self.config.power
+                if power_config is None or not power_config.resource:
+                    raise ConfigError("power resource is required by this run plan")
+                power_lease = lease_for(power_config.resource)
+                bootstrap = PowerService(
+                    config=self.config,
+                    logger=logger,
+                    lease=power_lease,
+                )
                 session = bootstrap.open_session()
                 stack.callback(session.close)
                 power = PowerService(
@@ -1953,10 +1999,19 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    lease=power_lease,
                 )
             if "dmm" in instruments:
                 logger = CommandLogger()
-                bootstrap = DmmService(config=self.config, logger=logger)
+                dmm_config = self.config.dmm
+                if dmm_config is None or not dmm_config.resource:
+                    raise ConfigError("dmm resource is required by this run plan")
+                dmm_lease = lease_for(dmm_config.resource)
+                bootstrap = DmmService(
+                    config=self.config,
+                    logger=logger,
+                    lease=dmm_lease,
+                )
                 session = bootstrap.open_session()
                 stack.callback(session.close)
                 dmm = DmmService(
@@ -1965,9 +2020,23 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    lease=dmm_lease,
                 )
 
             yield RunInstrumentServices(scope=scope, source=source, power=power, dmm=dmm)
+
+    def _plan_resource_values(self, instruments: set[str]) -> list[str]:
+        resources: list[str] = []
+        if "scope" in instruments:
+            resources.append(self.config.connection.resource)
+        for kind in ("source", "power", "dmm"):
+            if kind not in instruments:
+                continue
+            section = getattr(self.config, kind)
+            if section is None or not section.resource:
+                raise ConfigError(f"{kind} resource is required by this run plan")
+            resources.append(section.resource)
+        return resources
 
     def _power_service(self, *, services: RunInstrumentServices | None = None) -> PowerService:
         if services is not None and services.power is not None:
@@ -2021,6 +2090,7 @@ class RunService:
                 session=services.scope.session,
                 descriptor=services.scope.descriptor,
                 transport=services.scope.transport,
+                lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())
 
@@ -2052,6 +2122,7 @@ class RunService:
                 session=services.scope.session,
                 descriptor=services.scope.descriptor,
                 transport=services.scope.transport,
+                lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())
 

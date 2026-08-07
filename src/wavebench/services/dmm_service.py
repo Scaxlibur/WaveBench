@@ -34,6 +34,7 @@ from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.resource_lease import ResourceLease
 from wavebench.transport.base import InstrumentTransport
 
 
@@ -44,6 +45,7 @@ class DmmService:
     session: DmmDriver | None = None
     descriptor: InstrumentDescriptor | None = None
     transport: InstrumentTransport | None = None
+    lease: ResourceLease | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         dmm = self._dmm_config()
@@ -77,6 +79,7 @@ class DmmService:
             options=getattr(dmm, "options", {}),
             serial_config=dmm,
             access=getattr(dmm, "access", "read_write"),
+            lease=self.lease,
         )
         self.descriptor = opened.descriptor
         self.transport = opened.transport

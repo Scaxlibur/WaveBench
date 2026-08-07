@@ -14,6 +14,7 @@ from typing import Any
 
 from wavebench.errors import AccessDeniedError
 from wavebench.services.access_policy import AccessMode, normalize_access_mode
+from wavebench.services.resource_lease import ResourceLease
 
 from .base import InstrumentTransport
 
@@ -62,6 +63,8 @@ class GuardedAuditedTransport:
     inner: InstrumentTransport
     access: AccessMode = "read_write"
     counters: AuditCounters = field(default_factory=AuditCounters)
+    lease: ResourceLease | None = None
+    release_lease_on_close: bool = True
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
 
@@ -131,9 +134,13 @@ class GuardedAuditedTransport:
             if self._closed:
                 return
             self._closed = True
-        close = getattr(self.inner, "close", None)
-        if callable(close):
-            close()
+        try:
+            close = getattr(self.inner, "close", None)
+            if callable(close):
+                close()
+        finally:
+            if self.lease is not None and self.release_lease_on_close:
+                self.lease.release()
 
     def audit_snapshot(self) -> dict[str, Any]:
         with self._lock:

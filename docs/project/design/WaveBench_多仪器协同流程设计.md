@@ -61,6 +61,23 @@ wavebench run verify --config wavebench.toml --plan plans/dp800_scope_probe_volt
 
 `run` 是独立 domain，不塞进 `scope` / `source` / `power`。
 
+## 资源租约
+
+`run plan` 在打开任何仪器 session 前，会为计划涉及的 `scope`、`source`、`power` 和
+`dmm` 资源按规范化资源键排序，并一次性取得本地 Linux / WSL 独占租约。任一资源已被
+其他进程占用时，后续 transport 不会打开，已取得的前置租约会全部释放，并返回稳定错误码
+`resource_busy`。
+
+租约使用 POSIX `flock`。锁目录优先读取环境变量 `WAVEBENCH_LEASE_DIR`，其次使用
+`XDG_RUNTIME_DIR` 下的 WaveBench 目录，最后回退到用户缓存目录。锁文件名只包含资源身份的
+哈希，不写入 IP 或串口路径；holder 信息保存在权限为 `0600` 的同名 JSON sidecar 中。
+正常释放只删除当前 lease 的 sidecar，不删除 `.lock` 文件。进程崩溃后，内核负责释放锁；
+残留 sidecar 只能在再次取得非阻塞锁后清理，不能根据 PID 删除活动锁。
+
+`run check`、离线报告和比较命令不会取得资源租约。当前租约覆盖 run 使用 factory 打开的
+transport；`doctor`、网络 discovery 和独立 SCPI probe 的绕行路径仍需单独接入，不能共享这一
+覆盖声明。
+
 ## 计划文件格式
 
 第一版建议用 TOML，原因是项目已经使用 TOML，用户不用再学一种新格式。

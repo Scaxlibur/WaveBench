@@ -9,6 +9,7 @@ from wavebench.errors import ConfigError
 from wavebench.logging import CommandLogger
 from wavebench.plugins.api import PluginKind
 from wavebench.services.access_policy import AccessMode, normalize_access_mode
+from wavebench.services.resource_lease import ResourceLease, resource_fingerprint
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.pyvisa_transport import PyVisaTransport
@@ -52,8 +53,11 @@ def open_instrument_driver(
     options: Mapping[str, object] | None = None,
     serial_config: DmmConfig | None = None,
     access: AccessMode = "read_write",
+    lease: ResourceLease | None = None,
 ) -> OpenedInstrument:
     normalized_access = normalize_access_mode(access, "access")
+    if lease is not None and lease.fingerprint != resource_fingerprint(resource, lease.lock_id):
+        raise ConfigError("resource lease does not match configured instrument resource")
     descriptor = resolve_instrument_descriptor(
         driver_reference,
         expected_kind=expected_kind,
@@ -73,17 +77,31 @@ def open_instrument_driver(
                 f"instrument driver {descriptor.driver_id!r} requested more than one transport; "
                 "instrument API v2 factories may open exactly one configured transport"
             )
-        concrete_transport = _open_transport(
-            backend=backend,
-            resource=resource,
-            timeout_ms=timeout_ms,
-            opc_timeout_ms=opc_timeout_ms,
-            read_retry_attempts=read_retry_attempts,
-            read_retry_delay_ms=read_retry_delay_ms,
-            logger=logger,
-            serial_config=serial_config,
-        )
-        transport = GuardedAuditedTransport(concrete_transport, access=normalized_access)
+        lease_acquired_here = False
+        if lease is not None and not lease.acquired:
+            lease.acquire()
+            lease_acquired_here = True
+        try:
+            concrete_transport = _open_transport(
+                backend=backend,
+                resource=resource,
+                timeout_ms=timeout_ms,
+                opc_timeout_ms=opc_timeout_ms,
+                read_retry_attempts=read_retry_attempts,
+                read_retry_delay_ms=read_retry_delay_ms,
+                logger=logger,
+                serial_config=serial_config,
+            )
+            transport = GuardedAuditedTransport(
+                concrete_transport,
+                access=normalized_access,
+                lease=lease,
+                release_lease_on_close=lease_acquired_here,
+            )
+        except Exception:
+            if lease_acquired_here:
+                lease.release()
+            raise
         opened_transports.append(transport)
         return transport
 

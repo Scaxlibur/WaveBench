@@ -64,6 +64,7 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.source_state import RestorableSourceState
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.resource_lease import ResourceLease
 from wavebench.transport.base import InstrumentTransport
 
 
@@ -74,6 +75,7 @@ class SourceService:
     session: SourceDriver | None = None
     descriptor: InstrumentDescriptor | None = None
     transport: InstrumentTransport | None = None
+    lease: ResourceLease | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         source = self._source_config()
@@ -107,6 +109,7 @@ class SourceService:
             settings={"check_errors": source.check_errors},
             options=getattr(source, "options", {}),
             access=getattr(source, "access", "read_write"),
+            lease=self.lease,
         )
         self.descriptor = opened.descriptor
         self.transport = opened.transport
