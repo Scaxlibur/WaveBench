@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from wavebench.errors import ConfigError
+from wavebench.errors import ConfigError, StateDriftError
 from wavebench.logging import CommandLogger
 from wavebench.services.run_analysis import step_status
 from wavebench.services.run_artifacts import RunStepRecord
@@ -150,6 +150,70 @@ duration_s = 0.01
         assert instrument_io["schema"] == "wavebench.run_instrument_io.v1"
         assert instrument_io["instrument_mutation_writes"] == 0
         assert instrument_io["instruments"]["source"]["access"] == "read_only"
+
+
+def test_state_drift_error_keeps_structured_details_in_run_artifact() -> None:
+    with TemporaryDirectory() as tmp:
+        plan = load_run_plan(
+            _write_plan(
+                tmp,
+                """
+[[steps]]
+kind = "sleep"
+duration_s = 0.01
+""",
+            )
+        )
+        service = _service(tmp)
+        failure = StateDriftError(
+            "source channel 1 changed outside the current run; refusing write",
+            expected={"channel": 1, "frequency_hz": 1000.0},
+            actual={"channel": 1, "frequency_hz": 2000.0},
+            diff={
+                "frequency_hz": {
+                    "expected": 1000.0,
+                    "actual": 2000.0,
+                }
+            },
+        )
+        with patch.object(service, "_run_step", side_effect=failure):
+            with pytest.raises(StateDriftError):
+                service.run(plan)
+
+        run_dir = next((Path(tmp) / "data" / "runs").iterdir())
+        run_data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        assert run_data["error"]["schema"] == "wavebench.error.v1"
+        assert run_data["error"]["code"] == "state_drift"
+        assert run_data["error"]["details"]["diff"]["frequency_hz"]["actual"] == 2000.0
+
+
+def test_run_artifact_records_state_guard_provenance() -> None:
+    with TemporaryDirectory() as tmp:
+        plan = load_run_plan(
+            _write_plan(
+                tmp,
+                """
+[[steps]]
+kind = "sleep"
+duration_s = 0.01
+""",
+            )
+        )
+        service = _service(tmp)
+        guarded = SimpleNamespace(
+            state_guard_snapshot=lambda: {"1": {"channel": 1, "output": "OFF"}}
+        )
+        services = RunInstrumentServices(source=guarded)  # type: ignore[arg-type]
+
+        with patch.object(
+            service, "_run_instrument_services", return_value=nullcontext(services)
+        ):
+            result = service.run(plan)
+
+        run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+        state_guard = run_data["provenance"]["state_guard"]
+        assert state_guard["schema"] == "wavebench.state_guard.v1"
+        assert state_guard["expected"]["source"]["1"]["output"] == "OFF"
 
 
 def test_on_failure_rejects_unknown_policy() -> None:

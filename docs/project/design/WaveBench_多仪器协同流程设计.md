@@ -78,6 +78,32 @@ wavebench run verify --config wavebench.toml --plan plans/dp800_scope_probe_volt
 transport；`doctor`、网络 discovery 和独立 SCPI probe 的绕行路径仍需单独接入，不能共享这一
 覆盖声明。
 
+## run 内状态守卫
+
+`run plan` 对 SourceService 和 PowerService 的基础控制写入启用 compare-before-write。每个受保护
+通道先读取一次结构化状态，与当前 run 保存的 expected state 按字段比较；发现外部或仪器自身的
+状态变化时，写入操作立即失败，底层 setter 不会被调用。
+
+当前保护范围包括：
+
+- source：`source.set_freq`、`source.set_func`、`source.set_vpp`、`source.set_duty`、`source.output`
+  以及 Service 层的任意波形上传；
+- power：`power.set`、`power.output`。
+
+比较字段只包含控制状态，例如输出状态、函数、频率、幅度、偏置、相位、模式和设定值。实时
+测量值不参与比较。写入成功后，expected state 使用写后回读的结构化状态更新；首次观察某个通道
+时只建立基线，不凭空判定漂移。数值字段使用固定容差，避免仪器分辨率造成误报。
+
+状态不一致会使用稳定错误码 `state_drift`，并在 run 工件的 `error.details` 中保存
+`expected`、`actual` 和 `diff`。`run.json.provenance.state_guard` 同时保存最终 expected state，
+便于复核执行过程中记录的控制状态。
+
+授权的 OFF 操作可以从漂移状态收敛，用于安全门和恢复路径；该操作仍受 `access` 策略、能力检查
+和资源租约约束，并记录实际回读结果。状态守卫是查询后写入的保护，不是硬件原子
+compare-and-swap；前面板或其他进程仍可能在查询与写入之间改变状态，因此文档和报告不能将其
+描述为原子事务。当前实现只覆盖上述 Source/Power 基础控制，不代表调制、扫描、保护参数、触发
+等全部 Service 写操作都已纳入状态守卫。
+
 ## 计划文件格式
 
 第一版建议用 TOML，原因是项目已经使用 TOML，用户不用再学一种新格式。
@@ -371,6 +397,8 @@ quality : `scope.capture` 可记录质量状态；`auto_recover = true` 时按�
 expect : `scope.capture` 可设置指标 min/max 断言，失败时 run 状态为 failed
 output  : data/runs/YYYYMMDD_HHMMSS_<label>/run.json + summary.csv + step records
 restore : `[restore] source_state = true` 时 snapshot source 状态，并在成功/失败路径恢复
+state guard : run 内 Source/Power 基础控制写入执行 compare-before-write；漂移时零 setter 调用，
+并将 `state_drift` 与状态差异写入工件
 ```
 
 DP800 电压阶跃实机 smoke：

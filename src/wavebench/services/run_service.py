@@ -12,7 +12,7 @@ from typing import Any, Iterator
 from wavebench.config import WaveBenchConfig
 from wavebench.data.package import new_package_dir, safe_label
 from wavebench.data.packages import load_run_package
-from wavebench.errors import ConfigError
+from wavebench.errors import ConfigError, StateDriftError, error_envelope
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
@@ -72,6 +72,7 @@ from wavebench.services.resource_lease import (
 from wavebench.services.scope_service import ScopeService
 from wavebench.services.source_service import SourceService
 from wavebench.services.source_state import RestorableSourceState
+from wavebench.services.state_guard import PowerStateGuard, SourceStateGuard
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,17 @@ class RunInstrumentServices:
             "instrument_mutation_writes": mutation_writes,
             "instrument_mutation_writes_completed": mutation_writes_completed,
         }
+
+    def state_snapshot(self) -> dict[str, dict[str, dict[str, object]]]:
+        snapshots: dict[str, dict[str, dict[str, object]]] = {}
+        for name, service in (("source", self.source), ("power", self.power)):
+            if service is None:
+                continue
+            getter = getattr(service, "state_guard_snapshot", None)
+            snapshot = getter() if callable(getter) else None
+            if isinstance(snapshot, dict) and snapshot:
+                snapshots[name] = snapshot
+        return snapshots
 
 
 class _FrequencyResponseExecutionError(Exception):
@@ -472,6 +484,12 @@ class RunService:
                 instrument_io = services.audit_snapshot()
                 if instrument_io is not None:
                     provenance["instrument_io"] = instrument_io
+                state_snapshot = services.state_snapshot()
+                if state_snapshot:
+                    provenance["state_guard"] = {
+                        "schema": "wavebench.state_guard.v1",
+                        "expected": state_snapshot,
+                    }
 
             try:
                 restore_state = snapshot_source_state(
@@ -574,13 +592,18 @@ class RunService:
                     source_service_factory=lambda: self._source_service(services=services),
                 )
                 refresh_provenance()
+                failure_error: dict[str, Any]
+                if isinstance(failure, StateDriftError):
+                    failure_error = error_envelope(failure)
+                else:
+                    failure_error = {"type": type(failure).__name__, "message": str(failure)}
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
                     summary_csv_path=summary_csv_path,
                     status="failed",
                     records=records,
-                    error={"type": type(failure).__name__, "message": str(failure)},
+                    error=failure_error,
                     restore_state=restore_state,
                     restore_error=restore_error,
                     provenance=provenance,
@@ -1940,6 +1963,8 @@ class RunService:
             source: SourceService | None = None
             power: PowerService | None = None
             dmm: DmmService | None = None
+            source_guard = SourceStateGuard()
+            power_guard = PowerStateGuard()
 
             if "scope" in instruments:
                 logger = CommandLogger()
@@ -1969,6 +1994,7 @@ class RunService:
                     config=self.config,
                     logger=logger,
                     lease=source_lease,
+                    state_guard=source_guard,
                 )
                 session = bootstrap.open_session()
                 stack.callback(session.close)
@@ -1979,6 +2005,7 @@ class RunService:
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
                     lease=source_lease,
+                    state_guard=source_guard,
                 )
             if "power" in instruments:
                 logger = CommandLogger()
@@ -1990,6 +2017,7 @@ class RunService:
                     config=self.config,
                     logger=logger,
                     lease=power_lease,
+                    state_guard=power_guard,
                 )
                 session = bootstrap.open_session()
                 stack.callback(session.close)
@@ -2000,6 +2028,7 @@ class RunService:
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
                     lease=power_lease,
+                    state_guard=power_guard,
                 )
             if "dmm" in instruments:
                 logger = CommandLogger()

@@ -76,6 +76,37 @@ class InstrumentError(WaveBenchError):
     exit_code = 4
     code = "instrument_error"
 
+
+class StateDriftError(InstrumentError):
+    code = "state_drift"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected: Mapping[str, Any] | None = None,
+        actual: Mapping[str, Any] | None = None,
+        diff: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.expected = dict(expected or {})
+        self.actual = dict(actual or {})
+        self.diff = dict(diff or {})
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        merged = dict(details or {})
+        merged.setdefault("expected", self.expected)
+        merged.setdefault("actual", self.actual)
+        merged.setdefault("diff", self.diff)
+        return super().to_envelope(operation=operation, details=merged, cause=cause)
+
+
 class OperationTimeout(WaveBenchError):
     exit_code = 5
     code = "operation_timeout"
