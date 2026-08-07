@@ -22,6 +22,9 @@ def step_status(artifact: dict[str, Any]) -> str:
     response = artifact.get("frequency_response", {})
     if isinstance(response, dict) and response.get("status") == "failed":
         return "failed"
+    quality_gate = artifact.get("quality_gate")
+    if isinstance(quality_gate, dict) and quality_gate.get("status") in {"failed", "warning"}:
+        return "failed"
     if artifact.get("expect", {}).get("status") == "failed":
         return "failed"
     if artifact.get("expect_fft", {}).get("status") == "failed":

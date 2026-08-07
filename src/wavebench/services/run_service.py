@@ -373,7 +373,8 @@ class RunService:
             run_json_path = run_dir / "run.json"
             summary_csv_path = run_dir / "summary.csv"
             restore_state: list[RestorableSourceState] | None = None
-            restore_error: dict[str, str] | None = None
+            restore_error: dict[str, Any] | None = None
+            run_failure: dict[str, Any] | None = None
             provenance = {
                 "schema": "wavebench.run_provenance.v1",
                 "plan_hash": plan_hash,
@@ -394,6 +395,16 @@ class RunService:
                     records.append(record)
                     write_step_record(steps_dir, record)
                     self._update_frequency_responses_manifest(run_dir, record)
+                    if record.status == "failed" and step.fields.get("on_failure", "stop") == "stop":
+                        run_failure = {
+                            "type": "StepFailure",
+                            "code": "step_failed",
+                            "message": f"run step {step.index} ({step.kind}) failed",
+                            "step_index": step.index,
+                            "step_kind": step.kind,
+                            "policy": "stop",
+                        }
+                        break
             except KeyboardInterrupt as exc:
                 restore_error = restore_source_state(
                     restore_state,
@@ -475,7 +486,7 @@ class RunService:
                 summary_csv_path=summary_csv_path,
                 status=run_status,
                 records=records,
-                error=None,
+                error=run_failure,
                 restore_state=restore_state,
                 restore_error=None,
                 provenance=provenance,

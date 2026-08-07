@@ -47,7 +47,7 @@ _REQUIRED_FIELDS = {
 }
 
 _OPTIONAL_FIELDS = {
-    "scope.auto": set(),
+    "scope.auto": {"on_failure"},
     "scope.capture": {
         "channel",
         "label",
@@ -68,6 +68,7 @@ _OPTIONAL_FIELDS = {
         "autoscale_settle_s",
         "expect",
         "expect_fft",
+        "on_failure",
     },
     "sweep.frequency_response": {
         "label",
@@ -96,19 +97,20 @@ _OPTIONAL_FIELDS = {
         "adaptive",
         "stop_conditions",
         "resume_from",
+        "on_failure",
     },
-    "source.status": {"channel"},
-    "source.set_freq": {"channel"},
-    "source.arb_load": {"channel", "offset_v", "sample_rate_hz", "max_points", "byte_order", "output_on"},
-    "source.set_func": {"channel"},
-    "source.set_vpp": {"channel"},
-    "source.set_duty": {"channel"},
-    "source.output": {"channel"},
-    "power.status": {"channel"},
-    "power.set": {"channel"},
-    "power.output": {"channel"},
-    "dmm.read": {"function", "expect"},
-    "sleep": set(),
+    "source.status": {"channel", "on_failure"},
+    "source.set_freq": {"channel", "on_failure"},
+    "source.arb_load": {"channel", "offset_v", "sample_rate_hz", "max_points", "byte_order", "output_on", "on_failure"},
+    "source.set_func": {"channel", "on_failure"},
+    "source.set_vpp": {"channel", "on_failure"},
+    "source.set_duty": {"channel", "on_failure"},
+    "source.output": {"channel", "on_failure"},
+    "power.status": {"channel", "on_failure"},
+    "power.set": {"channel", "on_failure"},
+    "power.output": {"channel", "on_failure"},
+    "dmm.read": {"function", "expect", "on_failure"},
+    "sleep": {"on_failure"},
 }
 
 
@@ -354,6 +356,11 @@ def _parse_step(index: int, raw: Any) -> RunStep:
 
 def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> None:
     prefix = f"steps[{index}]"
+    if "on_failure" in fields:
+        on_failure = _non_empty_str(fields["on_failure"], f"{prefix}.on_failure").lower()
+        if on_failure not in {"stop", "continue"}:
+            raise ConfigError(f"{prefix}.on_failure must be 'stop' or 'continue'")
+        fields["on_failure"] = on_failure
     if "channel" in fields:
         fields["channel"] = _positive_int(fields["channel"], f"{prefix}.channel")
     if kind == "scope.capture":
