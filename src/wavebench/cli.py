@@ -435,6 +435,55 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
         if args.domain == "capability":
             if args.command == "explain":
+                if args.candidates:
+                    spec = get_operation_spec(args.operation)
+                    if spec is None:
+                        result = explain_operation(args.operation)
+                        candidates_payload = {
+                            "operation": args.operation,
+                            "candidates": [],
+                            "explanation": result.as_dict(),
+                        }
+                        if args.json:
+                            _emit_json_result(candidates_payload, status=result.status, exit_code=2)
+                        else:
+                            _print_capability_explanation(result)
+                        return 2
+                    if spec.instrument_kind is None:
+                        raise ConfigError("--candidates requires an instrument operation")
+                    registry = build_instrument_registry()
+                    loaded = registry.load_all()
+                    candidates = [
+                        explain_operation(
+                            args.operation,
+                            descriptor=descriptor,
+                            access=args.access or "read_write",
+                        ).as_dict()
+                        for descriptor in loaded.descriptors
+                        if descriptor.kind == spec.instrument_kind
+                    ]
+                    supported = [item for item in candidates if item["status"] == "supported"]
+                    candidates_payload = {
+                        "operation": args.operation,
+                        "candidates": candidates,
+                        "supported_count": len(supported),
+                    }
+                    if args.json:
+                        _emit_json_result(
+                            candidates_payload,
+                            status="ok" if supported else "failed",
+                            exit_code=0 if supported else 2,
+                        )
+                    else:
+                        print(f"operation={args.operation}")
+                        print(f"supported_count={len(supported)}")
+                        for item in candidates:
+                            print(
+                                f"candidate={item.get('driver_id') or 'n/a'}"
+                                f"\tstatus={item['status']}"
+                                f"\tmissing={','.join(item['missing_capabilities']) or 'none'}"
+                            )
+                    return 0 if supported else 2
                 descriptor, access = _capability_target(args)
                 result = explain_operation(
                     args.operation,

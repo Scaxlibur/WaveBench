@@ -96,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Access policy override / 访问策略覆盖值",
     )
+    capability_explain.add_argument(
+        "--candidates",
+        action="store_true",
+        help="List local drivers that can perform the operation / 列出本地可执行该操作的驱动",
+    )
     lock_parser = subparsers.add_parser(
         "lock",
         help="Inspect local resource leases / 查询本地资源租约",

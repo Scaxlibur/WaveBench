@@ -63,7 +63,10 @@ wavebench run report data/runs/<run-dir>
 ```bash
 wavebench capability explain scope.status --driver rtm2032
 wavebench capability explain source.output --config wavebench.toml --json
+wavebench capability explain source.output --candidates --json
 ```
+
+`--candidates` 只筛选当前本地 registry 中的驱动，不安装、不下载插件。
 
 `--json` 可以放在命令行任意位置。非交互命令输出 `wavebench.cli.result.v1`；错误输出
 `wavebench.error.v1`，诊断信息写入 stderr。TUI 和 HTTP MCP 不使用 one-shot JSON 包装。

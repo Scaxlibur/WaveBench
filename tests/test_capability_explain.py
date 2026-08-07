@@ -91,3 +91,25 @@ def test_capability_cli_can_explain_partial_scope_status_offline() -> None:
     assert code == 0
     assert "status=supported\n" in stdout.getvalue()
     assert "missing_optional_capabilities=scope.snapshot\n" in stdout.getvalue()
+
+
+def test_capability_cli_lists_local_candidates_without_installing() -> None:
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        code = main(
+            [
+                "capability",
+                "explain",
+                "source.output",
+                "--candidates",
+                "--json",
+            ]
+        )
+
+    assert code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["supported_count"] >= 1
+    assert any(
+        item["driver_id"] == "rigol.dg4202"
+        for item in payload["result"]["candidates"]
+    )
