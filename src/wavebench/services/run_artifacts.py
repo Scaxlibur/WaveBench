@@ -47,6 +47,7 @@ def write_run_files(
     error: dict[str, str] | None,
     restore_state: list[RestorableSourceState] | None = None,
     restore_error: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> None:
     run_data: dict[str, Any] = {
         "status": status,
@@ -80,6 +81,8 @@ def write_run_files(
             run_data["restore"]["source_channel"] = plan.restore.source_channels[0]
     if error is not None:
         run_data["error"] = error
+    if provenance is not None:
+        run_data["provenance"] = provenance
     run_json_path.write_text(
         json.dumps(run_data, indent=2, ensure_ascii=False),
         encoding="utf-8",

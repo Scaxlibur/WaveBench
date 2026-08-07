@@ -219,8 +219,8 @@ def build_frequency_response_calibration(
     """Build a deployable two-dimensional gain-correction LUT from an audited CSV."""
     if isinstance(config, dict):
         config = normalize_frequency_response_calibration(config)
-    ensure_calibration_dependencies()
-    groups = _measurement_groups(rows)
+    rows_list = [dict(row) for row in rows]
+    groups = _measurement_groups(rows_list)
     if len(groups) < 2:
         raise ConfigError("two-dimensional calibration requires at least two valid requested_vpp slices")
     for amplitude, samples in groups.items():
@@ -230,6 +230,9 @@ def build_frequency_response_calibration(
     common_frequencies = _common_frequency_grid(groups)
     if common_frequencies.size < 4:
         raise ConfigError("two-dimensional calibration requires at least four common valid frequency points")
+    # Validate the data shape first so a missing optional package does not hide a
+    # user configuration or evidence error.
+    ensure_calibration_dependencies()
 
     alpha, frequency_cv = _select_smoothing_alpha(groups)
     models = {
@@ -300,8 +303,47 @@ def build_frequency_response_calibration(
         "limit_counts": limit_counts,
         "chebyshev": chebyshev,
         "lut": calibration_rows,
+        "evidence": _calibration_evidence(rows_list),
     }
     return document, calibration_rows
+
+
+def _calibration_evidence(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize the measured rows used and excluded by the LUT builder."""
+
+    excluded: list[dict[str, Any]] = []
+    case_ids: list[str] = []
+    plan_hashes: set[str] = set()
+    for index, row in enumerate(rows):
+        case = str(row.get("case_id", "") or "")
+        if case:
+            case_ids.append(case)
+        plan_hash = str(row.get("plan_hash", "") or "")
+        if plan_hash:
+            plan_hashes.add(plan_hash)
+        status = str(row.get("status", "") or "").lower()
+        gain = _first_row_float(row, "gain_db_corrected", "gain_db")
+        frequency = _row_float(row, "requested_frequency_hz")
+        amplitude = _first_row_float(row, "requested_source_vpp", "requested_vpp")
+        if status == "failed" or frequency is None or amplitude is None or gain is None:
+            excluded.append(
+                {
+                    "index": row.get("index", index),
+                    "case_id": case,
+                    "reason": row.get("exclusion_reason")
+                    or row.get("failure_reason")
+                    or row.get("error")
+                    or "invalid_calibration_input",
+                }
+            )
+    return {
+        "schema": "wavebench.frequency_response_evidence.v1",
+        "case_ids": sorted(set(case_ids)),
+        "plan_hashes": sorted(plan_hashes),
+        "input_point_count": len(rows),
+        "excluded_point_count": len(excluded),
+        "excluded_points": excluded,
+    }
 
 
 def write_frequency_response_calibration_csv(
@@ -395,7 +437,7 @@ def _measurement_groups(rows: Iterable[dict[str, Any]]) -> dict[float, list[tupl
         if str(row.get("status", "")).strip().lower() == "failed":
             continue
         frequency = _row_float(row, "requested_frequency_hz")
-        amplitude = _row_float(row, "requested_vpp")
+        amplitude = _first_row_float(row, "requested_source_vpp", "requested_vpp")
         gain_db = _first_row_float(row, "gain_db_corrected", "gain_db")
         if gain_db is None:
             gain = _row_float(row, "gain_linear")

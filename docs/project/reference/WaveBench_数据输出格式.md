@@ -617,6 +617,7 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 - `run.json.status`：整个流程状态，常见值是 `ok` / `failed`。
 - `run.json.steps[]`：逐 step 记录，包含 `index`、`kind`、`status`、`artifact`，失败时包含 `error`。
 - `run.json.restore`：如果启用 `[restore] source_state = true`，这里记录 snapshot 与 restore 结果。
+- `run.json.provenance`：记录运行 provenance schema、规范化 plan 哈希和频响采集同步等级。
 - `scope.capture` step 的 `artifact.package` 指向普通采集包目录。
 - `scope.capture` step 的 `artifact.quality` 保存质量摘要。
 - `scope.capture` step 的 `artifact.expect` 保存 `[steps.expect]` 检查结果。
@@ -651,19 +652,22 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 `frequency_response.csv` 每请求一个频点就原子刷新一次，因此 source 设频失败、scope 采集失败或分析失败时，前序记录和当前失败行仍会保留。每个原始 `metadata.json.operation.min_signal_vpp` 记录当点采用的低信号门限；普通默认是 20 mVpp，频响 step 可显式降低，但不会抑制频率、削顶或其他质量 warning。稳定基础列为：
 
 ```text
-index,amplitude_index,requested_vpp,requested_frequency_hz,reference_frequency_hz,response_frequency_hz,
+index,case_id,acquisition_id,capture_sync_grade,requested_source_vpp,requested_vpp,reference_plane,signal_level_evidence,quality_metrics,plan_hash,amplitude_index,requested_frequency_hz,reference_frequency_hz,response_frequency_hz,
 reference_amplitude_peak_v,response_amplitude_peak_v,reference_vpp_v,response_vpp_v,
 gain_linear,gain_db,phase_wrapped_deg,phase_unwrapped_deg,
 baseline_gain_db,baseline_phase_unwrapped_deg,gain_linear_corrected,gain_db_corrected,
 phase_wrapped_corrected_deg,phase_unwrapped_corrected_deg,
-adaptive_level,adaptive_parent_start_hz,adaptive_parent_stop_hz,status,warnings,error,
-capture_package,metadata_path
+adaptive_level,adaptive_parent_start_hz,adaptive_parent_stop_hz,quality_retry_count,
+initial_capture_package,initial_metadata_path,retry_capture_package,retry_metadata_path,
+status,failure_reason,exclusion_reason,warnings,error,capture_package,metadata_path
 ```
 
 - `gain_linear` 是输出基波峰值 / 输入基波峰值；`gain_db = 20 * log10(gain_linear)`。
-- `amplitude_index` 从零开始标识请求 Vpp 切片；固定幅值的旧 run 也写为 `0`。`requested_vpp` 是信号源设定值；`reference_vpp_v` 是 CH1 实测输入值，只用于审计和诊断，不能替代 LUT 的幅值轴。
+- `case_id` 标识计划中的请求网格点；`acquisition_id` 标识一次物理双通道采集，autoscale 重测会产生新的 ID。`capture_sync_grade` 当前为 `waveforms_atomic_aux_best_effort`，表示两路波形来自同一次 acquisition，但截图等辅助证据不宣称同帧。
+- `amplitude_index` 从零开始标识请求 Vpp 切片；固定幅值的旧 run 也写为 `0`。`requested_source_vpp` 和兼容保留的 `requested_vpp` 是信号源请求值；`reference_vpp_v` 是 CH1 实测输入值，只用于审计和诊断，不能替代 LUT 的幅值轴。`reference_plane` 和 `signal_level_evidence` 记录测量平面及换算假设，默认不做换算。
 - `phase_wrapped_deg` 在 `[-180, 180)`；`phase_unwrapped_deg` 对连续成功点展开，绝不跨失败点连接。
 - `status` 为 `ok`、`warning` 或 `failed`。失败行的数值字段为空，`error` 保存可读错误，不能被误当作零增益或零相位。
+- `failure_reason` 和 `exclusion_reason` 说明失败点为何不进入拟合或校准；`quality_metrics` 保存 RMS、峰值、峰值因子和有限样本比例等非破坏性质量指标。
 - `capture_package` / `metadata_path` 指向每个成功的同步双通道原始证据。频响采集强制写入两路 NPY 与 metadata，普通可选 CSV 和截图仍遵循该 step 的 `save_csv` / `screenshot` 设置。
 - 开启拟合后，CSV 还会增加 `fit_<method>_gain_linear` 与 `fit_<method>_residual` 列；这些值只对应实际有效频点。
 - 原始 `gain_*` 和 `phase_*` 永远不被软件校正覆盖。直通基线开启时，`baseline_*` 是 `log10(frequency)` 域的插值基线，`*_corrected` 是派生结果；二维校准优先使用校正增益。

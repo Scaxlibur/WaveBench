@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryFile
@@ -92,6 +93,8 @@ from .services.run_templates import (
     write_run_template,
 )
 from .services.run_service import RunService
+from .services.run_compare import RunCompareError, compare_run_packages_result
+from .services.frequency_response_resume import build_frequency_response_resume
 from .services.frequency_response_calibration import (
     build_frequency_response_calibration,
     load_frequency_response_calibration_config,
@@ -417,6 +420,67 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"calibration_json={json_path}")
                 for name, path in fixed_paths.items():
                     print(f"calibration_fixed_{name}={path}")
+                return 0
+            if args.command == "compare":
+                if len(args.paths) < 2:
+                    raise ConfigError("run compare requires at least two run directories")
+                try:
+                    comparison = compare_run_packages_result(
+                        args.paths,
+                        response_labels=args.response,
+                        output_path=args.output,
+                        gain_tolerance_db=args.gain_tolerance_db,
+                        phase_tolerance_deg=args.phase_tolerance_deg,
+                    )
+                except RunCompareError as exc:
+                    raise ConfigError(str(exc)) from exc
+                payload = comparison.as_dict()
+                if args.json or args.format == "json":
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                else:
+                    print(f"compare_schema={payload['schema_version']}")
+                    print(f"reference={payload['reference'].get('path', '')}")
+                    for item in payload["comparisons"]:
+                        summary = item.get("summary", {})
+                        print(
+                            "candidate="
+                            f"{item.get('candidate', {}).get('path', '')}"
+                            f"\tstatus={item.get('status', '')}"
+                            f"\tmatched={summary.get('matched', 0)}"
+                            f"\tmissing_reference={summary.get('missing_reference', 0)}"
+                            f"\tmissing_candidate={summary.get('missing_candidate', 0)}"
+                        )
+                    if payload.get("errors"):
+                        print(f"errors={len(payload['errors'])}")
+                if args.output and not (args.json or args.format == "json"):
+                    print(f"compare_json={args.output}")
+                statuses = [item.get("status") for item in payload.get("comparisons", [])]
+                if payload.get("errors") or any(
+                    status in {"incompatible", "unavailable", "duplicate", "out_of_tolerance"}
+                    for status in statuses
+                ):
+                    return 2
+                return 0
+            if args.command == "resume":
+                manifest = build_frequency_response_resume(
+                    args.path,
+                    args.plan,
+                    response_label=args.response,
+                )
+                source_path = Path(args.path)
+                output = (
+                    Path(args.output)
+                    if args.output
+                    else (source_path / "frequency_response_resume.json" if source_path.is_dir() else source_path.parent / "frequency_response_resume.json")
+                )
+                if output.suffix.lower() != ".json":
+                    output = output / "frequency_response_resume.json"
+                manifest.write(output)
+                print(f"resume_json={output}")
+                print(f"source_csv={manifest.source_csv}")
+                print(f"reusable={len(manifest.reusable_cases)}")
+                print(f"pending={len(manifest.pending_cases)}")
+                print(f"rejected={len(manifest.rejected_points)}")
                 return 0
             if args.command == "report":
                 if args.pdf_output and not args.pdf:

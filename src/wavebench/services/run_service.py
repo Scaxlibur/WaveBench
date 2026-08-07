@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from wavebench.config import WaveBenchConfig
-from wavebench.data.package import new_package_dir
+from wavebench.data.package import new_package_dir, safe_label
 from wavebench.data.packages import load_run_package
 from wavebench.errors import ConfigError
 from wavebench.instruments.capabilities import require_capabilities
@@ -23,6 +23,7 @@ from wavebench.services.frequency_response import (
     build_fit_document,
     ensure_fit_dependencies,
     failed_frequency_response_point,
+    load_frequency_response_points,
     unwrap_frequency_response_phase,
     write_fit_document,
     write_frequency_response_csv,
@@ -39,6 +40,14 @@ from wavebench.services.frequency_response_calibration import (
     write_fixed_point_calibration,
     write_frequency_response_calibration_csv,
     write_frequency_response_calibration_json,
+)
+from wavebench.services.frequency_response_evidence import (
+    CAPTURE_SYNC_GRADE,
+    acquisition_id,
+    annotate_capture_metadata,
+    case_id,
+    plan_digest,
+    signal_level_evidence,
 )
 from wavebench.services.run_artifacts import RunStepRecord, write_run_files, write_step_record
 from wavebench.services.run_analysis import (
@@ -153,7 +162,24 @@ class RunService:
         check_run_plan_safety_limits(plan, self.config.safety_limits)
         reject_unsupported_steps(plan)
         self._check_frequency_response_baselines(plan)
+        self._check_frequency_response_resumes(plan)
         self._check_plan_capabilities(plan)
+
+    def _check_frequency_response_resumes(self, plan: RunPlan) -> None:
+        """Validate resume CSVs before any instrument session is opened."""
+
+        plan_hash = plan_digest(plan)
+        for step in plan.steps:
+            if step.kind != "sweep.frequency_response" or not step.fields.get("resume_from"):
+                continue
+            requested_amplitudes = step.fields.get("amplitudes_vpp") or [None]
+            self._load_frequency_response_resume(
+                plan,
+                step,
+                label=step.fields.get("label", f"frequency_response_{step.index:02d}"),
+                requested_amplitudes=requested_amplitudes,
+                plan_hash=plan_hash,
+            )
 
     def _check_frequency_response_baselines(self, plan: RunPlan) -> None:
         """Validate referenced baseline evidence offline, before an instrument is opened."""
@@ -334,6 +360,7 @@ class RunService:
 
     def run(self, plan: RunPlan) -> RunResult:
         self.check(plan)
+        plan_hash = plan_digest(plan)
         with self._run_instrument_services(plan) as services:
             self._run_safety_guards(plan, services=services)
             run_dir = new_package_dir(run_output_base(self.config), plan.label)
@@ -347,13 +374,23 @@ class RunService:
             summary_csv_path = run_dir / "summary.csv"
             restore_state: list[RestorableSourceState] | None = None
             restore_error: dict[str, str] | None = None
+            provenance = {
+                "schema": "wavebench.run_provenance.v1",
+                "plan_hash": plan_hash,
+                "frequency_response": {
+                    "schema": "wavebench.frequency_response_evidence.v1",
+                    "capture_sync_grade": CAPTURE_SYNC_GRADE,
+                },
+            }
             try:
                 restore_state = snapshot_source_state(
                     plan,
                     source_service_factory=lambda: self._source_service(services=services),
                 )
                 for step in plan.steps:
-                    record = self._run_step(plan, step, run_dir=run_dir, services=services)
+                    record = self._run_step(
+                        plan, step, run_dir=run_dir, services=services, plan_hash=plan_hash
+                    )
                     records.append(record)
                     write_step_record(steps_dir, record)
                     self._update_frequency_responses_manifest(run_dir, record)
@@ -377,6 +414,7 @@ class RunService:
                     error={"type": type(failure).__name__, "message": str(failure)},
                     restore_state=restore_state,
                     restore_error=restore_error,
+                    provenance=provenance,
                 )
                 if isinstance(exc, _FrequencyResponseExecutionError):
                     raise failure from None
@@ -396,6 +434,7 @@ class RunService:
                     error={"type": "ConfigError", "message": "source state restore failed"},
                     restore_state=restore_state,
                     restore_error=restore_error,
+                    provenance=provenance,
                 )
                 raise ConfigError("run plan source state restore failed: " + restore_error["message"])
 
@@ -409,6 +448,7 @@ class RunService:
                 error=None,
                 restore_state=restore_state,
                 restore_error=None,
+                provenance=provenance,
             )
             return RunResult(
                 run_dir=run_dir,
@@ -436,6 +476,7 @@ class RunService:
         *,
         run_dir: Path,
         services: RunInstrumentServices | None = None,
+        plan_hash: str = "",
     ) -> RunStepRecord:
         if step.kind == "power.status":
             status = self._power_service(services=services).status(channel=step.fields.get("channel"))
@@ -513,6 +554,7 @@ class RunService:
                     item.kind == "sweep.frequency_response" for item in plan.steps
                 ) > 1,
                 services=services,
+                plan_hash=plan_hash,
             )
         elif step.kind == "dmm.read":
             reading = self._dmm_service(services=services).read(function=step.fields.get("function", "dcv"))
@@ -541,6 +583,7 @@ class RunService:
         run_dir: Path,
         multiple_responses: bool,
         services: RunInstrumentServices | None = None,
+        plan_hash: str = "",
     ) -> dict[str, Any]:
         source_channel = step.fields.get("source_channel")
         source = self._source_service(services=services)
@@ -592,7 +635,14 @@ class RunService:
             ) from exc
 
         requested_amplitudes = step.fields.get("amplitudes_vpp") or [None]
-        point_index = 0
+        points, resumed_keys, resume_summary = self._load_frequency_response_resume(
+            plan,
+            step,
+            label=label,
+            requested_amplitudes=requested_amplitudes,
+            plan_hash=plan_hash,
+        )
+        point_index = max((point.index for point in points), default=-1) + 1
         pending = [
             (frequency_hz, 0, None, None)
             for frequency_hz in step.fields["frequencies_hz"]
@@ -625,14 +675,43 @@ class RunService:
                             reference_channel=reference_channel, response_channel=response_channel,
                         ) from error
                 for frequency_index, (frequency_hz, adaptive_level, parent_start, parent_stop) in enumerate(pending):
+                    point_key = self._frequency_response_point_key(
+                        amplitude_index, requested_vpp, frequency_hz
+                    )
+                    if point_key in resumed_keys:
+                        continue
+                    point_case_id = case_id(
+                        plan_name=plan.name,
+                        step_index=step.index,
+                        label=label,
+                        frequency_hz=frequency_hz,
+                        requested_vpp=requested_vpp,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                    )
                     try:
                         source_status = source.set_frequency(channel=source_channel, value_hz=frequency_hz)
                     except Exception as exc:
-                        points.append(failed_frequency_response_point(
-                            index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
-                            requested_frequency_hz=frequency_hz, error=exc, adaptive_level=adaptive_level,
-                            adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
-                        ))
+                        points.append(
+                            self._annotate_frequency_point(
+                                failed_frequency_response_point(
+                                    index=point_index,
+                                    amplitude_index=amplitude_index,
+                                    requested_vpp=requested_vpp,
+                                    requested_frequency_hz=frequency_hz,
+                                    error=exc,
+                                    adaptive_level=adaptive_level,
+                                    adaptive_parent_start_hz=parent_start,
+                                    adaptive_parent_stop_hz=parent_stop,
+                                ),
+                                case_id_value=point_case_id,
+                                plan_hash=plan_hash,
+                                reference_channel=reference_channel,
+                                response_channel=response_channel,
+                                requested_frequency_hz=frequency_hz,
+                                requested_vpp=requested_vpp,
+                            )
+                        )
                         write_frequency_response_csv(csv_path, points)
                         raise self._frequency_response_execution_error(
                             step, exc, points=points, csv_path=csv_path, fit_path=None,
@@ -643,11 +722,26 @@ class RunService:
                         error = ConfigError(
                             f"source output is {source_status.output} after setting {frequency_hz:.12g} Hz"
                         )
-                        points.append(failed_frequency_response_point(
-                            index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
-                            requested_frequency_hz=frequency_hz, error=error, adaptive_level=adaptive_level,
-                            adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
-                        ))
+                        points.append(
+                            self._annotate_frequency_point(
+                                failed_frequency_response_point(
+                                    index=point_index,
+                                    amplitude_index=amplitude_index,
+                                    requested_vpp=requested_vpp,
+                                    requested_frequency_hz=frequency_hz,
+                                    error=error,
+                                    adaptive_level=adaptive_level,
+                                    adaptive_parent_start_hz=parent_start,
+                                    adaptive_parent_stop_hz=parent_stop,
+                                ),
+                                case_id_value=point_case_id,
+                                plan_hash=plan_hash,
+                                reference_channel=reference_channel,
+                                response_channel=response_channel,
+                                requested_frequency_hz=frequency_hz,
+                                requested_vpp=requested_vpp,
+                            )
+                        )
                         write_frequency_response_csv(csv_path, points)
                         raise self._frequency_response_execution_error(
                             step, error, points=points, csv_path=csv_path, fit_path=None,
@@ -663,13 +757,13 @@ class RunService:
                         scope.autoscale()
                         if step.fields["settle_s"]:
                             time.sleep(step.fields["settle_s"])
+                    amplitude_label = (
+                        f"{label}_{point_index:03d}_{frequency_hz:.12g}hz"
+                        if requested_vpp is None
+                        else f"{label}_a{amplitude_index:02d}_{requested_vpp:.12g}vpp_"
+                        f"l{adaptive_level}_{frequency_index:03d}_{frequency_hz:.12g}hz"
+                    )
                     try:
-                        amplitude_label = (
-                            f"{label}_{point_index:03d}_{frequency_hz:.12g}hz"
-                            if requested_vpp is None
-                            else f"{label}_a{amplitude_index:02d}_{requested_vpp:.12g}vpp_"
-                            f"l{adaptive_level}_{frequency_index:03d}_{frequency_hz:.12g}hz"
-                        )
                         capture = scope.capture_waveforms(
                             channels=[reference_channel, response_channel], label=amplitude_label
                         )
@@ -682,6 +776,15 @@ class RunService:
                             metadata_path=str(capture.metadata_path), adaptive_level=adaptive_level,
                             min_signal_vpp=step.fields["min_signal_vpp"],
                             adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
+                        )
+                        point = self._annotate_frequency_point(
+                            point,
+                            case_id_value=point_case_id,
+                            plan_hash=plan_hash,
+                            reference_channel=reference_channel,
+                            response_channel=response_channel,
+                            requested_frequency_hz=frequency_hz,
+                            requested_vpp=requested_vpp,
                         )
                         if point.status == "warning" and step.fields["retry_warning_with_autoscale"]:
                             initial_point = point
@@ -703,6 +806,16 @@ class RunService:
                                     adaptive_level=adaptive_level, adaptive_parent_start_hz=parent_start,
                                     adaptive_parent_stop_hz=parent_stop,
                                 )
+                                retry_point = self._annotate_frequency_point(
+                                    retry_point,
+                                    case_id_value=point_case_id,
+                                    plan_hash=plan_hash,
+                                    reference_channel=reference_channel,
+                                    response_channel=response_channel,
+                                    requested_frequency_hz=frequency_hz,
+                                    requested_vpp=requested_vpp,
+                                    retry_of=getattr(initial_point, "acquisition_id", None),
+                                )
                                 point = replace(
                                     retry_point,
                                     status="failed" if retry_point.status == "warning" else retry_point.status,
@@ -710,6 +823,8 @@ class RunService:
                                     initial_warnings=initial_point.warnings,
                                     initial_capture_package=initial_point.capture_package,
                                     initial_metadata_path=initial_point.metadata_path,
+                                    retry_capture_package=retry_point.capture_package,
+                                    retry_metadata_path=retry_point.metadata_path,
                                     error=(
                                         "quality_retry_exhausted: initial warnings="
                                         + " | ".join(initial_point.warnings)
@@ -717,6 +832,9 @@ class RunService:
                                     ) if retry_point.status == "warning" else retry_point.error,
                                 )
                             except Exception as retry_exc:  # noqa: BLE001 - retain the first capture evidence
+                                failed_retry_capture = self._find_failed_frequency_capture(
+                                    f"{amplitude_label}_retry1"
+                                )
                                 point = replace(
                                     initial_point,
                                     status="failed",
@@ -724,17 +842,69 @@ class RunService:
                                     initial_warnings=initial_point.warnings,
                                     initial_capture_package=initial_point.capture_package,
                                     initial_metadata_path=initial_point.metadata_path,
+                                    retry_capture_package=(
+                                        str(failed_retry_capture) if failed_retry_capture is not None else ""
+                                    ),
+                                    retry_metadata_path=(
+                                        str(failed_retry_capture / "metadata.partial.json")
+                                        if failed_retry_capture is not None
+                                        else ""
+                                    ),
                                     error=f"quality_retry_failed: {type(retry_exc).__name__}: {retry_exc}",
                                 )
                         points.append(point)
                     except Exception as exc:  # noqa: BLE001 - retain failed points and continue the sweep
-                        points.append(failed_frequency_response_point(
+                        failed_capture = self._find_failed_frequency_capture(amplitude_label)
+                        failed_point = failed_frequency_response_point(
                             index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
                             requested_frequency_hz=frequency_hz, error=exc, adaptive_level=adaptive_level,
                             adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
-                        ))
+                        )
+                        if failed_capture is not None:
+                            failed_point = replace(
+                                failed_point,
+                                capture_package=str(failed_capture),
+                                metadata_path=str(failed_capture / "metadata.partial.json"),
+                            )
+                        points.append(
+                            self._annotate_frequency_point(
+                                failed_point,
+                                case_id_value=point_case_id,
+                                plan_hash=plan_hash,
+                                reference_channel=reference_channel,
+                                response_channel=response_channel,
+                                requested_frequency_hz=frequency_hz,
+                                requested_vpp=requested_vpp,
+                            )
+                        )
+                    stop_reason = self._frequency_response_stop_reason(
+                        points, step.fields.get("stop_conditions")
+                    )
                     point_index += 1
                     write_frequency_response_csv(csv_path, points)
+                    if stop_reason is not None:
+                        error = ConfigError(
+                            f"frequency response stop condition triggered: {stop_reason}"
+                        )
+                        raise self._frequency_response_execution_error(
+                            step,
+                            error,
+                            points=points,
+                            csv_path=csv_path,
+                            fit_path=None,
+                            label=label,
+                            response_dir=response_dir,
+                            source_channel=source_channel,
+                            reference_channel=reference_channel,
+                            response_channel=response_channel,
+                            stop_conditions=step.fields.get("stop_conditions"),
+                            stop_reason=stop_reason,
+                            adaptive=adaptive_summary,
+                            # The summary is initialized before the first point;
+                            # preserve it if an explicit group stop aborts the step.
+                            # (The helper accepts None for non-resume runs.)
+                            resume=resume_summary,
+                        ) from error
 
             points = unwrap_frequency_response_phase(points)
             if baseline_response is not None:
@@ -829,7 +999,250 @@ class RunService:
             calibration_json_path=written_calibration_json,
             fixed_point_paths=fixed_point_paths,
             calibration_error=calibration_error,
+            resume=resume_summary,
+            stop_conditions=step.fields.get("stop_conditions"),
         )
+
+    def _annotate_frequency_point(
+        self,
+        point: Any,
+        *,
+        case_id_value: str,
+        plan_hash: str,
+        reference_channel: int,
+        response_channel: int,
+        requested_frequency_hz: float,
+        requested_vpp: float | None,
+        retry_of: str | None = None,
+    ) -> Any:
+        """Attach stable point/capture evidence without making capture fragile.
+
+        Capture metadata is an audit artifact.  If an older or synthetic capture has
+        no writable metadata path, the measured point is retained and the annotation
+        failure becomes a warning on that point instead of discarding the measurement.
+        """
+
+        capture_path = getattr(point, "capture_package", "")
+        metadata_path = getattr(point, "metadata_path", "")
+        acquisition = ""
+        annotation_error = ""
+        if capture_path:
+            acquisition = acquisition_id(capture_path, label=case_id_value)
+            if metadata_path:
+                try:
+                    annotate_capture_metadata(
+                        metadata_path,
+                        case=case_id_value,
+                        acquisition=acquisition,
+                        requested_frequency_hz=requested_frequency_hz,
+                        requested_source_vpp=requested_vpp,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                        reference_vpp_v=getattr(point, "reference_vpp_v", None),
+                        response_vpp_v=getattr(point, "response_vpp_v", None),
+                        plan_hash=plan_hash,
+                        retry_of=retry_of,
+                    )
+                except Exception as exc:  # noqa: BLE001 - preserve the measurement evidence
+                    annotation_error = f"evidence_annotation_failed: {type(exc).__name__}: {exc}"
+
+        updates: dict[str, Any] = {}
+        available = getattr(point, "__dataclass_fields__", {})
+        if "case_id" in available:
+            updates["case_id"] = case_id_value
+        if "acquisition_id" in available:
+            updates["acquisition_id"] = acquisition
+        if "capture_sync_grade" in available:
+            updates["capture_sync_grade"] = CAPTURE_SYNC_GRADE if capture_path else "unknown"
+        if "plan_hash" in available:
+            updates["plan_hash"] = plan_hash
+        if "requested_source_vpp" in available:
+            updates["requested_source_vpp"] = requested_vpp
+        if "reference_plane" in available:
+            updates["reference_plane"] = "scope_input"
+        if "signal_level_evidence" in available:
+            updates["signal_level_evidence"] = signal_level_evidence(
+                requested_source_vpp=requested_vpp,
+                reference_vpp_v=getattr(point, "reference_vpp_v", None),
+                response_vpp_v=getattr(point, "response_vpp_v", None),
+                reference_channel=reference_channel,
+                response_channel=response_channel,
+            )
+        if annotation_error:
+            existing_warnings = tuple(getattr(point, "warnings", ()) or ())
+            updates["warnings"] = existing_warnings + (annotation_error,)
+            if getattr(point, "status", "ok") == "ok":
+                updates["status"] = "warning"
+        return replace(point, **updates) if updates else point
+
+    def _find_failed_frequency_capture(self, label: str) -> Path | None:
+        """Find the most recent partial package left by a failed capture."""
+
+        try:
+            candidates = sorted(
+                (
+                    path
+                    for path in self.config.output.directory.glob(f"*_{safe_label(label)}_failed")
+                    if path.is_dir()
+                ),
+                key=lambda path: path.stat().st_mtime_ns,
+                reverse=True,
+            )
+        except OSError:
+            return None
+        return candidates[0] if candidates else None
+
+    @staticmethod
+    def _resume_csv_from_manifest(run_dir: Path, label: str) -> Path:
+        manifest_path = run_dir / "frequency_responses.json"
+        try:
+            document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConfigError(f"frequency responses manifest is unreadable: {manifest_path}") from exc
+        entries = document.get("responses") if isinstance(document, dict) else None
+        if not isinstance(entries, list):
+            raise ConfigError(f"frequency responses manifest has no responses array: {manifest_path}")
+        selected = next(
+            (entry for entry in entries if isinstance(entry, dict) and entry.get("label") == label),
+            None,
+        )
+        if not isinstance(selected, dict):
+            raise ConfigError(f"frequency response {label!r} was not found in {manifest_path}")
+        directory = Path(str(selected.get("directory", ".")))
+        if not directory.is_absolute():
+            directory = run_dir / directory
+        return directory / str(selected.get("csv", "frequency_response.csv"))
+
+    def _load_frequency_response_resume(
+        self,
+        plan: RunPlan,
+        step: RunStep,
+        *,
+        label: str,
+        requested_amplitudes: list[float | None],
+        plan_hash: str,
+    ) -> tuple[list[Any], set[tuple[int, float | None, str]], dict[str, Any] | None]:
+        raw_path = step.fields.get("resume_from")
+        if not raw_path:
+            return [], set(), None
+        source = Path(str(raw_path))
+        if not source.is_absolute():
+            source = plan.path.parent / source
+        if source.is_dir() and (source / "frequency_responses.json").exists():
+            source = self._resume_csv_from_manifest(source, label)
+        loaded = load_frequency_response_points(source)
+        usable: list[Any] = []
+        resumed_keys: set[tuple[int, float | None, str]] = set()
+        rejected: list[dict[str, Any]] = []
+        expected_amplitudes = {
+            None if value is None else float(value) for value in requested_amplitudes
+        }
+        for point in loaded:
+            if point.plan_hash and point.plan_hash != plan_hash:
+                raise ConfigError(
+                    "resume response plan hash does not match the current plan: "
+                    f"{point.plan_hash} != {plan_hash}"
+                )
+            requested_vpp = point.requested_source_vpp
+            if requested_vpp not in expected_amplitudes:
+                rejected.append({"index": point.index, "reason": "amplitude_not_in_current_plan"})
+                continue
+            expected_case = case_id(
+                plan_name=plan.name,
+                step_index=step.index,
+                label=label,
+                frequency_hz=point.requested_frequency_hz,
+                requested_vpp=requested_vpp,
+                reference_channel=step.fields["reference_channel"],
+                response_channel=step.fields["response_channel"],
+            )
+            if point.case_id and point.case_id != expected_case:
+                raise ConfigError(
+                    "resume response case identity does not match the current plan: "
+                    f"{point.case_id} != {expected_case}"
+                )
+            if point.status == "ok" and point.usable_for_fit:
+                usable.append(replace(point, case_id=expected_case, plan_hash=plan_hash))
+                resolved_amplitude_index = (
+                    requested_amplitudes.index(requested_vpp)
+                    if requested_vpp in requested_amplitudes
+                    else point.amplitude_index
+                )
+                resumed_keys.add(
+                    self._frequency_response_point_key(
+                        resolved_amplitude_index, requested_vpp, point.requested_frequency_hz
+                    )
+                )
+            else:
+                rejected.append(
+                    {
+                        "index": point.index,
+                        "case_id": point.case_id or expected_case,
+                        "status": point.status,
+                        "reason": point.failure_reason or point.error or "not_reusable",
+                    }
+                )
+        return usable, resumed_keys, {
+            "source": str(source),
+            "reused_point_count": len(usable),
+            "rejected_point_count": len(rejected),
+            "rejected_points": rejected,
+        }
+
+    @staticmethod
+    def _frequency_response_point_key(
+        amplitude_index: int, requested_vpp: float | None, frequency_hz: float
+    ) -> tuple[int, float | None, str]:
+        return (
+            int(amplitude_index),
+            None if requested_vpp is None else float(requested_vpp),
+            format(float(frequency_hz), ".12g"),
+        )
+
+    @staticmethod
+    def _frequency_response_stop_reason(
+        points: list[Any], conditions: dict[str, Any] | None
+    ) -> str | None:
+        if not conditions:
+            return None
+        failed_count = sum(getattr(point, "status", "") == "failed" for point in points)
+        warning_count = sum(getattr(point, "status", "") == "warning" for point in points)
+        if "max_failed_points" in conditions and failed_count >= conditions["max_failed_points"]:
+            return f"max_failed_points={conditions['max_failed_points']} (actual {failed_count})"
+        if "max_warning_points" in conditions and warning_count >= conditions["max_warning_points"]:
+            return f"max_warning_points={conditions['max_warning_points']} (actual {warning_count})"
+        if "max_consecutive_failed_points" in conditions:
+            consecutive = 0
+            for point in reversed(points):
+                if getattr(point, "status", "") != "failed":
+                    break
+                consecutive += 1
+            if consecutive >= conditions["max_consecutive_failed_points"]:
+                return (
+                    "max_consecutive_failed_points="
+                    f"{conditions['max_consecutive_failed_points']} (actual {consecutive})"
+                )
+        limit = conditions.get("max_gain_jump_db")
+        if limit is not None and len(points) >= 2:
+            current = points[-1]
+            current_gain = getattr(current, "gain_db", None)
+            if current_gain is not None and getattr(current, "status", "") != "failed":
+                previous = next(
+                    (
+                        point
+                        for point in reversed(points[:-1])
+                        if getattr(point, "amplitude_index", None)
+                        == getattr(current, "amplitude_index", None)
+                        and getattr(point, "gain_db", None) is not None
+                        and getattr(point, "status", "") != "failed"
+                    ),
+                    None,
+                )
+                if previous is not None:
+                    jump = abs(float(current_gain) - float(previous.gain_db))
+                    if jump > float(limit):
+                        return f"max_gain_jump_db={limit:g} (actual {jump:g})"
+        return None
 
     def _frequency_response_execution_error(
         self,
@@ -849,6 +1262,8 @@ class RunService:
         calibration_csv_path: Path | None = None,
         calibration_json_path: Path | None = None,
         fixed_point_paths: dict[str, Path] | None = None,
+        stop_conditions: dict[str, Any] | None = None,
+        stop_reason: str | None = None,
     ) -> _FrequencyResponseExecutionError:
         artifact = self._frequency_response_artifact(
             points=points,
@@ -864,6 +1279,8 @@ class RunService:
             calibration_csv_path=calibration_csv_path,
             calibration_json_path=calibration_json_path,
             fixed_point_paths=fixed_point_paths,
+            stop_conditions=stop_conditions,
+            stop_reason=stop_reason,
             error=cause,
         )
         record = RunStepRecord(
@@ -892,6 +1309,9 @@ class RunService:
         calibration_json_path: Path | None = None,
         fixed_point_paths: dict[str, Path] | None = None,
         calibration_error: str | None = None,
+        resume: dict[str, Any] | None = None,
+        stop_conditions: dict[str, Any] | None = None,
+        stop_reason: str | None = None,
         error: Exception | None = None,
     ) -> dict[str, Any]:
         failed_points = sum(point.status == "failed" for point in points)
@@ -899,6 +1319,14 @@ class RunService:
         captures = [
             {
                 "index": point.index,
+                "case_id": getattr(point, "case_id", ""),
+                "acquisition_id": getattr(point, "acquisition_id", ""),
+                "capture_sync_grade": getattr(
+                    point, "capture_sync_grade", CAPTURE_SYNC_GRADE
+                ),
+                "quality_metrics": getattr(point, "quality_metrics", {}),
+                "retry_package": getattr(point, "retry_capture_package", ""),
+                "retry_metadata": getattr(point, "retry_metadata_path", ""),
                 "package": point.capture_package,
                 "metadata": point.metadata_path,
             }
@@ -926,6 +1354,43 @@ class RunService:
             "reference_channel": reference_channel,
             "response_channel": response_channel,
             "captures": captures,
+            "evidence": {
+                "schema": "wavebench.frequency_response_evidence.v1",
+                "plan_hash": next(
+                    (
+                        getattr(point, "plan_hash", "")
+                        for point in points
+                        if getattr(point, "plan_hash", "")
+                    ),
+                    "",
+                ),
+                "reference_plane": "scope_input",
+                "capture_sync_grade": next(
+                    (
+                        getattr(point, "capture_sync_grade", "")
+                        for point in points
+                        if getattr(point, "capture_sync_grade", "")
+                    ),
+                    CAPTURE_SYNC_GRADE,
+                ),
+                "case_ids": [
+                    getattr(point, "case_id", "") for point in points if getattr(point, "case_id", "")
+                ],
+                "acquisition_ids": [
+                    getattr(point, "acquisition_id", "")
+                    for point in points
+                    if getattr(point, "acquisition_id", "")
+                ],
+                "excluded_points": [
+                    {
+                        "case_id": getattr(point, "case_id", ""),
+                        "index": point.index,
+                        "reason": point.error or point.status,
+                    }
+                    for point in points
+                    if not point.usable_for_fit
+                ],
+            },
         }
         if error is not None:
             response["error"] = f"{type(error).__name__}: {error}"
@@ -933,6 +1398,12 @@ class RunService:
             response["calibration_error"] = calibration_error
         if adaptive is not None:
             response["adaptive"] = adaptive
+        if resume is not None:
+            response["resume"] = resume
+        if stop_conditions is not None:
+            response["stop_conditions"] = stop_conditions
+        if stop_reason is not None:
+            response["stop_reason"] = stop_reason
         return {"frequency_response": response}
 
     @staticmethod
@@ -984,6 +1455,9 @@ class RunService:
             "status": response.get("status", record.status),
             "adaptive": response.get("adaptive"),
             "fixed_point": response.get("fixed_point", {}),
+            "evidence": response.get("evidence", {}),
+            "resume": response.get("resume"),
+            "stop_reason": response.get("stop_reason", ""),
         }
         entries = [item for item in existing["responses"] if not (
             isinstance(item, dict) and item.get("label") == entry["label"]

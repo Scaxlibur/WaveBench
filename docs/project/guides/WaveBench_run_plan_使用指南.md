@@ -197,6 +197,19 @@ max_slope_db_per_octave = 6
 
 频响点的首次采集若出现质量 warning，默认会执行一次「autoscale → 等待 `settle_s` → 同频同幅值重测」。重测成功时，CSV 的最终值来自第二次采集；首次证据保存在 `quality_retry_count`、`initial_warnings`、`initial_capture_package` 和 `initial_metadata_path` 中。重测仍出现 warning 时，该点标为 `failed`，原因设为 `quality_retry_exhausted`，不参与拟合、软件校正或二维 LUT。可在 step 中设置 `retry_warning_with_autoscale = false` 关闭此策略。
 
+每个频响点还会写入稳定的 `case_id`、本次物理采集的 `acquisition_id`、`plan_hash` 和 `capture_sync_grade`。`case_id` 由计划语义、频率、请求 Vpp、通道角色生成，适合跨 run 比较；重测会保留不同的 `acquisition_id`。`reference_vpp_v` 是参考示波器通道的实测值，`requested_source_vpp` 是信号源请求值；系统不会根据输入阻抗自动换算电压。`signal_level_evidence` 会记录参考平面和未执行换算的说明。
+
+频响点级采集或分析失败仍会保留行并继续扫描，这是为了保留完整网格证据。需要在异常累计时停止整组扫描时，可显式设置 `stop_conditions`：
+
+```toml
+[steps.stop_conditions]
+max_failed_points = 2
+max_consecutive_failed_points = 1
+max_gain_jump_db = 6
+```
+
+达到任一条件后，当前 response 步骤停止，并在 `artifact.frequency_response.stop_conditions` 中保存触发条件；信号源设频、输出状态或通信失败仍会立即停止该步骤。
+
 默认 20 mVpp 的门限是保守质量保护，不是仪器限制。对已确认稳定的低幅值扫频，可只在该 `sweep.frequency_response` 中设置 `min_signal_vpp = 0.005`；这会在采集分析阶段生效，因此 `metadata.json`、CSV 状态和报告审计使用同一个判断依据。全局 `[waveform]` 也可设同名默认值，但不建议为了一个低幅值实验而永久降低所有普通采集的门限。
 
 完整矩阵的点数为 `幅值数 × 频点数`；每个点至少消耗 `settle_s`，每个幅值切片还会增加一次 autoscale 与稳定等待。先用少量幅值和稀疏频点执行 `run check`、只读 `run verify`、再做实机小矩阵确认量程和耗时，别拿 5 mV 步进和 500 Hz 步进直接开 13 小时以上的盲扫，没必要给仪器和人都上强度。
@@ -226,6 +239,26 @@ python -m wavebench run calibrate data/runs/<run_dir> --config plans/calibration
 ```powershell
 python -m wavebench run calibrate data/runs/<run_dir> --config plans/calibration.toml --response dut_path
 ```
+
+### 跨 run 比较与缺失点补测
+
+`run compare` 是离线命令，按 `case_id` 优先、按频率和请求 Vpp 回退，对比增益、相位、参考 Vpp、状态和缺失点。不同通道角色、参考平面或计划哈希会被标记为不兼容，不会静默合并：
+
+```powershell
+python -m wavebench run compare data/runs/baseline data/runs/current --gain-tolerance-db 0.5 --phase-tolerance-deg 5 --output reports/frequency_compare.json
+```
+
+使用 `--format json` 可将结果直接写到标准输出。比较命令只读取已有 run artifact，不打开仪器。
+
+需要补测缺失点时，先生成离线清单：
+
+```powershell
+python -m wavebench run resume data/runs/current --plan plans/lowpass_frequency_response.toml --response dut_path --output reports/frequency_resume.json
+```
+
+清单会列出可复用、待补测和被拒绝的点。新 plan 可在对应 response step 中设置 `resume_from = "../data/runs/current/frequency_response.csv"`；WaveBench 只复用计划哈希和案例标识均匹配且状态为 `ok` 的点，原 run 目录不会被改写。
+
+补测清单先覆盖计划声明的初始频率网格；启用自适应加点时，新的中点仍按当前 plan 的自适应规则重新判断。
 
 ### 直通基线、软件 deskew 与自适应频率
 
@@ -452,6 +485,9 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 | `fixed_point` | 定点 audit CSV/COE/MEM 路径；校准未生成时为空对象。 |
 | `calibration_error` | 自动校准未生成时的原因；原始频响仍然保留。 |
 | `captures` | 每个已有双通道采集包与 metadata 的引用，供报告和审计使用。 |
+| `evidence` | 证据 schema、计划哈希、参考平面、同步等级、`case_id` 和 `acquisition_id` 列表。 |
+| `resume` | 使用 `resume_from` 时的来源 CSV、复用点数、待补测点数和拒绝原因。 |
+| `stop_conditions` / `stop_reason` | 显式组停止条件和触发原因；未配置时不存在。 |
 | `failed_point_count` / `warning_point_count` | 频点失败与质量 warning 数量。 |
 
 ### `summary.csv`

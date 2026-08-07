@@ -349,6 +349,59 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Frequency-response label for a multi-response run / 多频响 run 的响应标签",
     )
+    run_compare = run_sub.add_parser(
+        "compare",
+        help="Compare frequency-response results from existing runs offline",
+    )
+    run_compare.add_argument(
+        "paths",
+        nargs="+",
+        help="Two or more data/runs/<run_dir> paths to compare / 要比较的 run 目录",
+    )
+    run_compare.add_argument(
+        "--response",
+        default=None,
+        help="Frequency-response label to select in each run / 每个 run 中选择的频响标签",
+    )
+    run_compare.add_argument(
+        "--output",
+        default=None,
+        help="Write the machine-readable comparison JSON to this path",
+    )
+    run_compare.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format; JSON is suitable for automation",
+    )
+    run_compare.add_argument(
+        "--json",
+        action="store_true",
+        help="Alias for --format json",
+    )
+    run_compare.add_argument(
+        "--gain-tolerance-db",
+        type=float,
+        default=None,
+        help="Optional absolute gain-difference limit in dB",
+    )
+    run_compare.add_argument(
+        "--phase-tolerance-deg",
+        type=float,
+        default=None,
+        help="Optional absolute phase-difference limit in degrees",
+    )
+    run_resume = run_sub.add_parser(
+        "resume",
+        help="Prepare an offline frequency-response remeasurement manifest",
+    )
+    run_resume.add_argument(
+        "path",
+        help="Existing run directory or frequency_response.csv path",
+    )
+    run_resume.add_argument("--plan", required=True, help="Current run plan TOML file")
+    run_resume.add_argument("--response", default=None, help="Frequency-response label for a multi-response run")
+    run_resume.add_argument("--output", default=None, help="Write the resume manifest JSON to this path")
     run_report = run_sub.add_parser("report", help="Generate an offline HTML report for a run package")
     run_report.add_argument("path", help="Path to data/runs/<run_dir>")
     run_report.add_argument("--output", default=None, help="Output HTML path; defaults to <run_dir>/report.html")

@@ -94,6 +94,8 @@ _OPTIONAL_FIELDS = {
         "calibration",
         "baseline",
         "adaptive",
+        "stop_conditions",
+        "resume_from",
     },
     "source.status": {"channel"},
     "source.set_freq": {"channel"},
@@ -555,6 +557,39 @@ def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) ->
             raise ConfigError(
                 f"{prefix}.adaptive.max_frequency_points must be at least the initial frequency count"
             )
+    if "stop_conditions" in fields:
+        fields["stop_conditions"] = _normalize_frequency_response_stop_conditions(
+            fields["stop_conditions"], f"{prefix}.stop_conditions"
+        )
+    if "resume_from" in fields:
+        fields["resume_from"] = _non_empty_str(fields["resume_from"], f"{prefix}.resume_from")
+
+
+def _normalize_frequency_response_stop_conditions(raw: Any, name: str) -> dict[str, Any]:
+    """Normalize explicit group-stop limits while retaining point-level tolerance."""
+
+    table = _table(raw, name)
+    _reject_unknown_keys(
+        table,
+        {
+            "max_failed_points",
+            "max_warning_points",
+            "max_consecutive_failed_points",
+            "max_gain_jump_db",
+        },
+        name,
+    )
+    result: dict[str, Any] = {}
+    for key in ("max_failed_points", "max_warning_points", "max_consecutive_failed_points"):
+        if key in table:
+            value = _positive_int(table[key], f"{name}.{key}")
+            result[key] = value
+    if "max_gain_jump_db" in table:
+        value = _positive_float(table["max_gain_jump_db"], f"{name}.max_gain_jump_db")
+        result["max_gain_jump_db"] = value
+    if not result:
+        raise ConfigError(f"{name} must define at least one stop condition")
+    return result
 
 
 def _normalize_frequency_response_amplitudes(prefix: str, fields: dict[str, Any]) -> None:

@@ -132,11 +132,13 @@ DP800 的设定值、保护和输出是三类独立操作。示例计划见 [pla
 
 使用 `source-scope-frequency-response` 模板可以生成 reference / response 双通道扫频 plan。基础频响采集不要求额外依赖；PCHIP、平滑样条和二维校准需要 `analysis`，PDF 报告需要 `pdf`，交互式三维 HTML 需要 `report3d`。详细说明见 [run plan 使用指南](docs/project/guides/WaveBench_run_plan_使用指南.md)；执行前仍需确认真实接线。
 
+频响结果可用 `run compare` 离线比较多个 run，并用 `run resume` 生成缺失点补测清单；两条命令都不会连接仪器。每个已生成采集包的频响点会保存 `case_id`、`acquisition_id`、请求 Vpp 与参考通道实测 Vpp，便于复查测量来源。
+
 ## 命令的安全边界
 
 | 类别 | 例子 | 说明 |
 | --- | --- | --- |
-| 离线 | `run schema`、`run template`、`run check`、`run report`、`capture inspect`、`tui --fake` | 不连接仪器；TUI 可能写本地日志 |
+| 离线 | `run schema`、`run template`、`run check`、`run report`、`run compare`、`run resume`、`capture inspect`、`tui --fake` | 不连接仪器；TUI 可能写本地日志 |
 | 连接读取 | `doctor`、`idn`、`status`、`run verify` | 会查询设备；仍应把它当作有状态的 I/O |
 | 修改设备 | `scope fetch/capture/autoscale`、source/power setter、output、`run plan`、非 fake TUI | 可能改变设置、触发采集或切换输出 |
 

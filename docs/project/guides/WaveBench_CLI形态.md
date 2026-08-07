@@ -29,7 +29,7 @@ wavebench run --help
 
 | 类别 | 示例 | 行为 |
 |---|---|---|
-| 离线 | `run schema`、`run template`、`run check`、`run report`、`capture inspect`、`tui --fake` | 不连接仪器；报告和检查只读取本地产物 |
+| 离线 | `run schema`、`run template`、`run check`、`run report`、`run compare`、`run resume`、`capture inspect`、`tui --fake` | 不连接仪器；报告、比较和检查只读取本地产物 |
 | 连接读取 | `doctor`、`net`、`scope idn`、`scope status`、`run verify` | 查询资源、身份或状态，不应修改实验设置 |
 | 显式写入或触发 | `scope auto`、`scope fetch/capture`、source / power setter、`run plan` | 可能改变设置、触发采集或切换输出 |
 
@@ -55,6 +55,15 @@ wavebench run report data/runs/<run-dir>
 ```
 
 `run check` 只解析 TOML 和字段，不连接仪器；`run verify` 做执行前的只读预检；`run plan` 才会执行真实实验。
+
+频响结果的离线处理使用以下命令：
+
+```bash
+wavebench run compare data/runs/<reference-run> data/runs/<candidate-run> --format json
+wavebench run resume data/runs/<candidate-run> --plan plans/<plan>.toml
+```
+
+`run compare` 按 `case_id` 比较增益、相位和测量状态；`run resume` 生成可复用点与待补测点清单。两条命令都不会打开仪器 session。
 
 ## 示波器命令
 
