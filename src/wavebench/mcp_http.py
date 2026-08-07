@@ -174,6 +174,9 @@ def _run_check_tool(arguments: dict[str, Any], config_path: Path) -> dict[str, A
                 "scope_guard_channel": plan.safety.scope_guard_channel,
                 "require_scope_coupling_not": list(plan.safety.require_scope_coupling_not),
                 "allow_50ohm": plan.safety.allow_50ohm,
+                "safety_gate": plan.safety.safety_gate,
+                "off_source_channels": list(plan.safety.off_source_channels),
+                "off_power_channels": list(plan.safety.off_power_channels),
             },
             "restore": {
                 "source_state": plan.restore.source_state,

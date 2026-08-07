@@ -213,6 +213,10 @@ def _print_run_plan_summary(plan: RunPlan) -> None:
         print(f"safety: scope CH{plan.safety.scope_guard_channel} coupling not in [{blocked}]")
     else:
         print("safety: none")
+    if plan.safety.safety_gate:
+        source_channels = ",".join(str(channel) for channel in plan.safety.off_source_channels) or "inferred"
+        power_channels = ",".join(str(channel) for channel in plan.safety.off_power_channels) or "inferred"
+        print(f"safety_gate: stop; source OFF=[{source_channels}] power OFF=[{power_channels}]")
     if plan.restore.source_state:
         if plan.restore.source_channels:
             channels = ",".join(str(channel) for channel in plan.restore.source_channels)

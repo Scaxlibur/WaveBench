@@ -425,7 +425,30 @@ voltage_vpp_v = { min = 2.8, max = 3.8 }
 - `screenshot = true`：本次采集额外保存 `screenshot.png`，并在 `metadata.json.files.screenshot` 记录路径；截图失败不会吞掉波形包。
 - `quality_gate = true`：把采集质量状态写入 `run.json` / `summary.csv`。
 - `auto_recover = true`：如果质量有 warning，显式执行 `scope.auto` 并重采，最多次数由 `[quality].auto_recover_attempts` 控制。
-- `[steps.expect]`：对采集摘要指标做 min/max 断言。断言失败时 run 标记为 `failed`，但采集包仍保留。
+- `[steps.expect]`：对采集摘要指标做 min/max 断言。断言失败时当前 step 标记为 `failed`，默认停止后续步骤，但采集包仍保留。
+
+### 失败策略和安全门
+
+所有 step 都支持 `on_failure`，默认值是 `"stop"`。需要在失败后继续执行后续步骤时，必须显式写出：
+
+```toml
+[[steps]]
+kind = "scope.capture"
+on_failure = "continue"
+```
+
+`quality_gate = true` 且采集仍有 warning 时，step 会标记为 `failed`；`quality_gate` 未启用时，普通质量 warning 不会单独停止 run。频响 step 的点级采集失败仍会保留 CSV 行，并按 `stop_conditions` 决定是否结束当前频响 step。
+
+安全门独立于 `on_failure`。计划级安全门需要明确授权 OFF 通道：
+
+```toml
+[safety]
+safety_gate = true
+off_source_channels = [1]
+off_power_channels = [1]
+```
+
+安全门遇到失败或 gate warning 时，先对授权通道执行 OFF，再停止 run；`on_failure = "continue"` 不会覆盖这个停止动作。若启用 source restore，恢复配置后会再次确认授权通道为 OFF。关断结果会写入失败 step 的 `artifact.safety_gate` 和顶层 `run.json.error`。未列出任何 OFF 目标时，执行器会把安全门视为配置失败，不会猜测其他通道。
 
 ## run 输出字段契约
 
@@ -452,6 +475,7 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 | `safety` | safety guard 的检查结果；未启用时为空或简短状态。 |
 | `restore` | source restore 的 snapshot / restore 状态；未启用时为空或简短状态。 |
 | `steps` | 每个 step 的执行记录。 |
+| `error` | run 级失败信息；例如 `code = "step_failed"` 或 `code = "safety_gate_failed"`。 |
 
 `steps[]` 常见字段：
 
@@ -472,6 +496,7 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 | `quality` | 质量摘要，含 `status`、warnings 和关键测量指标。 |
 | `quality_recovery` | 自动恢复尝试记录；未启用或未触发时可能不存在。 |
 | `expect` | `[steps.expect]` 的检查结果；未配置时可能不存在。 |
+| `safety_gate` | 安全门的授权 OFF 通道、执行动作和失败原因；仅在安全门触发时存在。 |
 
 `sweep.frequency_response` 的 `artifact.frequency_response` 常见字段：
 

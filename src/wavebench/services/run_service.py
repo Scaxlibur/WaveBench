@@ -311,6 +311,18 @@ class RunService:
             elif step.kind == "dmm.read":
                 add("dmm", "dmm.read")
 
+            gate = step.fields.get("safety_gate")
+            if isinstance(gate, dict) and gate.get("enabled"):
+                if (
+                    gate.get("source_channels")
+                    or step.kind.startswith("source.")
+                    or step.kind == "sweep.frequency_response"
+                    or plan.restore.source_state
+                ):
+                    add("source", "source.output")
+                if gate.get("power_channels") or step.kind.startswith("power."):
+                    add("power", "power.output")
+
         if plan.restore.source_state:
             add(
                 "source",
@@ -321,6 +333,16 @@ class RunService:
                 "source.set_square_duty_cycle",
                 "source.output",
             )
+        if plan.safety.safety_gate:
+            if plan.safety.off_source_channels or any(
+                item.kind.startswith("source.") or item.kind == "sweep.frequency_response"
+                for item in plan.steps
+            ):
+                add("source", "source.output")
+            if plan.safety.off_power_channels or any(
+                item.kind.startswith("power.") for item in plan.steps
+            ):
+                add("power", "power.output")
         if plan_scope_guard_channels(plan, self.config.scope.default_channel):
             add("scope", "scope.channel_coupling")
 
@@ -356,6 +378,18 @@ class RunService:
             instruments.add("scope")
         if plan_scope_guard_channels(plan, self.config.scope.default_channel):
             instruments.add("scope")
+        if plan.safety.off_source_channels:
+            instruments.add("source")
+        if plan.safety.off_power_channels:
+            instruments.add("power")
+        for step in plan.steps:
+            gate = step.fields.get("safety_gate")
+            if not isinstance(gate, dict) or not gate.get("enabled"):
+                continue
+            if gate.get("source_channels"):
+                instruments.add("source")
+            if gate.get("power_channels"):
+                instruments.add("power")
         return instruments
 
     def run(self, plan: RunPlan) -> RunResult:
@@ -375,6 +409,8 @@ class RunService:
             restore_state: list[RestorableSourceState] | None = None
             restore_error: dict[str, Any] | None = None
             run_failure: dict[str, Any] | None = None
+            safety_gate_step: RunStep | None = None
+            safety_gate_config: dict[str, Any] | None = None
             provenance = {
                 "schema": "wavebench.run_provenance.v1",
                 "plan_hash": plan_hash,
@@ -392,9 +428,45 @@ class RunService:
                     record = self._run_step(
                         plan, step, run_dir=run_dir, services=services, plan_hash=plan_hash
                     )
+                    safety_gate = self._safety_gate_for_step(plan, step)
+                    gate_triggered = safety_gate["enabled"] and record.status in {
+                        "failed",
+                        "warning",
+                    }
+                    trigger_status = record.status
+                    if gate_triggered:
+                        try:
+                            gate_result = self._apply_safety_gate(step, safety_gate, services=services)
+                        except Exception as exc:  # noqa: BLE001 - retain gate failure in run artifact
+                            gate_result = {
+                                "status": "failed",
+                                "error": {
+                                    "type": type(exc).__name__,
+                                    "message": str(exc),
+                                },
+                            }
+                        record = replace(
+                            record,
+                            status="failed",
+                            artifact={**record.artifact, "safety_gate": gate_result},
+                        )
                     records.append(record)
                     write_step_record(steps_dir, record)
                     self._update_frequency_responses_manifest(run_dir, record)
+                    if gate_triggered:
+                        safety_gate_step = step
+                        safety_gate_config = safety_gate
+                        run_failure = {
+                            "type": "SafetyGateFailure",
+                            "code": "safety_gate_failed",
+                            "message": f"safety gate stopped run step {step.index} ({step.kind})",
+                            "step_index": step.index,
+                            "step_kind": step.kind,
+                            "policy": "stop",
+                            "trigger_status": trigger_status,
+                            "safety_gate": gate_result,
+                        }
+                        break
                     if record.status == "failed" and step.fields.get("on_failure", "stop") == "stop":
                         run_failure = {
                             "type": "StepFailure",
@@ -465,14 +537,44 @@ class RunService:
                 restore_state,
                 source_service_factory=lambda: self._source_service(services=services),
             )
+            if (
+                safety_gate_step is not None
+                and safety_gate_config is not None
+                and restore_state is not None
+            ):
+                try:
+                    post_restore_gate = self._apply_safety_gate(
+                        safety_gate_step,
+                        safety_gate_config,
+                        services=services,
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain final OFF evidence
+                    post_restore_gate = {
+                        "status": "failed",
+                        "error": {
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    }
+                if run_failure is not None:
+                    gate_error = run_failure.get("safety_gate")
+                    if isinstance(gate_error, dict):
+                        gate_error["post_restore"] = post_restore_gate
             if restore_error is not None:
+                restore_failure: dict[str, Any] = {
+                    "type": "ConfigError",
+                    "code": "restore_failed",
+                    "message": "source state restore failed",
+                }
+                if run_failure is not None:
+                    restore_failure["cause"] = run_failure
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
                     summary_csv_path=summary_csv_path,
                     status="failed",
                     records=records,
-                    error={"type": "ConfigError", "message": "source state restore failed"},
+                    error=restore_failure,
                     restore_state=restore_state,
                     restore_error=restore_error,
                     provenance=provenance,
@@ -497,6 +599,148 @@ class RunService:
                 summary_csv_path=summary_csv_path,
                 steps=records,
             )
+
+    def _safety_gate_for_step(self, plan: RunPlan, step: RunStep) -> dict[str, Any]:
+        local = step.fields.get("safety_gate")
+        local_gate = local if isinstance(local, dict) else {"enabled": False}
+        enabled = bool(plan.safety.safety_gate or local_gate.get("enabled", False))
+        source_channels = tuple(
+            int(channel)
+            for channel in (
+                local_gate.get("source_channels") or plan.safety.off_source_channels
+            )
+        )
+        power_channels = tuple(
+            int(channel)
+            for channel in (
+                local_gate.get("power_channels") or plan.safety.off_power_channels
+            )
+        )
+        if (
+            enabled
+            and not source_channels
+            and not power_channels
+            and local_gate.get("enabled", False)
+            and not plan.safety.safety_gate
+        ):
+            source_channels = tuple(self._inferred_source_gate_channels(plan, step))
+            power_channels = tuple(self._inferred_power_gate_channels(plan, step))
+        return {
+            "enabled": enabled,
+            "source_channels": list(source_channels),
+            "power_channels": list(power_channels),
+        }
+
+    def _inferred_source_gate_channels(self, plan: RunPlan, step: RunStep) -> list[int]:
+        channels: list[int] = []
+
+        def add(value: Any) -> None:
+            if value is None:
+                return
+            channel = int(value)
+            if channel not in channels:
+                channels.append(channel)
+
+        if step.kind.startswith("source.") or step.kind == "sweep.frequency_response":
+            add(step.fields.get("source_channel") or step.fields.get("channel"))
+        for item in plan.steps:
+            if item.kind.startswith("source.") or item.kind == "sweep.frequency_response":
+                add(item.fields.get("source_channel") or item.fields.get("channel"))
+        for channel in plan.restore.source_channels:
+            add(channel)
+        if not channels and "source" in self._plan_instruments(plan) and self.config.source is not None:
+            add(self.config.source.default_channel)
+        return channels
+
+    def _inferred_power_gate_channels(self, plan: RunPlan, step: RunStep) -> list[int]:
+        channels: list[int] = []
+
+        def add(value: Any) -> None:
+            if value is None:
+                return
+            channel = int(value)
+            if channel not in channels:
+                channels.append(channel)
+
+        if step.kind.startswith("power."):
+            add(step.fields.get("channel"))
+        for item in plan.steps:
+            if item.kind.startswith("power."):
+                add(item.fields.get("channel"))
+        if not channels and "power" in self._plan_instruments(plan) and self.config.power is not None:
+            add(self.config.power.default_channel)
+        return channels
+
+    def _apply_safety_gate(
+        self,
+        step: RunStep,
+        gate: dict[str, Any],
+        *,
+        services: RunInstrumentServices | None = None,
+    ) -> dict[str, Any]:
+        source_channels = [int(channel) for channel in gate.get("source_channels", [])]
+        power_channels = [int(channel) for channel in gate.get("power_channels", [])]
+        if not source_channels and not power_channels:
+            raise ConfigError(
+                f"step {step.index} safety gate has no authorized OFF targets"
+            )
+        result: dict[str, Any] = {
+            "status": "ok",
+            "source_channels": source_channels,
+            "power_channels": power_channels,
+            "actions": [],
+        }
+        errors: list[dict[str, Any]] = []
+        for channel in source_channels:
+            try:
+                status = self._source_service(services=services).set_output(
+                    channel=channel,
+                    enabled=False,
+                )
+                result["actions"].append(
+                    {
+                        "instrument": "source",
+                        "channel": channel,
+                        "state": "off",
+                        "status": _status_payload(status),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - attempt every authorized OFF target
+                errors.append(
+                    {
+                        "instrument": "source",
+                        "channel": channel,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+        for channel in power_channels:
+            try:
+                status = self._power_service(services=services).set_output(
+                    channel=channel,
+                    enabled=False,
+                )
+                result["actions"].append(
+                    {
+                        "instrument": "power",
+                        "channel": channel,
+                        "state": "off",
+                        "status": _status_payload(status),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - attempt every authorized OFF target
+                errors.append(
+                    {
+                        "instrument": "power",
+                        "channel": channel,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+        if errors:
+            result["status"] = "failed"
+            result["errors"] = errors
+        return result
 
     def _run_safety_guards(
         self,

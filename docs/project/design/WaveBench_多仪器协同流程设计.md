@@ -205,7 +205,7 @@ Top-level tables:
 | Table | Fields | Notes |
 |---|---|---|
 | `[experiment]` | `name`, `label` | Optional metadata; defaults to the plan filename. |
-| `[safety]` | `scope_guard_channel`, `require_scope_coupling_not` | Optional read-only guard. It may refuse execution but must not auto-correct hardware settings. |
+| `[safety]` | `scope_guard_channel`, `require_scope_coupling_not`, `safety_gate`, `off_source_channels`, `off_power_channels` | Optional read-only guard and explicit failure OFF policy. The OFF policy is inactive unless `safety_gate = true`. |
 | `[restore]` | `source_state`, `source_channel` | Optional source snapshot/restore. Restore is attempted on success and failure. |
 | `[[steps]]` | `kind` plus kind-specific fields | Steps execute in order. |
 
@@ -222,9 +222,9 @@ Supported `[[steps]]` kinds:
 | `source.set_freq` | `frequency_hz` | `channel` |
 | `source.set_duty` | `duty_percent` | `channel` |
 | `source.output` | `state` | `channel` |
-| `scope.auto` | - | - |
-| `scope.capture` | - | `channel`, `label`, `points`, `time_range_s`, `window_frequency_hz`, `target_cycles`, `expect_frequency_hz`, `frequency_tolerance`, `save_csv`, `save_npy`, `quality_gate`, `auto_recover`, `[steps.expect]` |
-| `sleep` | `duration_s` | - |
+| `scope.auto` | - | `on_failure`, `safety_gate` |
+| `scope.capture` | - | `channel`, `label`, `points`, `time_range_s`, `window_frequency_hz`, `target_cycles`, `expect_frequency_hz`, `frequency_tolerance`, `save_csv`, `save_npy`, `quality_gate`, `auto_recover`, `on_failure`, `safety_gate`, `[steps.expect]` |
+| `sleep` | `duration_s` | `on_failure`, `safety_gate` |
 
 `[steps.expect]` belongs under a `scope.capture` step. Each metric accepts `{ min = ..., max = ... }`. Common metrics are `frequency_estimate_hz`, `frequency_error_ratio`, `voltage_vpp_v`, `voltage_mean_v`, and `duty_cycle`.
 
@@ -288,6 +288,17 @@ scope_guard_channel = 2
 
 注意：guard 只能查询，不能自动修改示波器输入阻抗。
 
+计划还可以声明失败时的安全门：
+
+```toml
+[safety]
+safety_gate = true
+off_source_channels = [1]
+off_power_channels = [1]
+```
+
+安全门与 `on_failure` 分开判断。失败或质量 gate warning 触发后，执行器先对授权通道执行 OFF，再停止 run；若启用 source restore，恢复配置后会再次确认授权通道为 OFF。OFF 结果写入 step artifact 和 `run.json.error`。`on_failure = "continue"` 只适用于未触发安全门的普通失败；未配置 OFF 目标的安全门会以配置失败结束，不会自动选择通道。
+
 ## 输出目录
 
 流程级输出建议：
@@ -317,13 +328,15 @@ data/runs/YYYYMMDD_HHMMSS_<experiment_label>/
 
 ## 错误处理
 
-如果某一步失败：
+如果某一步失败，默认行为是：
 
 - 立即停止；
 - 写 `run.json`，标记 `status = "failed"`；
 - 记录失败 step、错误类型、错误消息；
 - 已经生成的 capture package 保留；
 - 不执行后续步骤。
+
+需要继续采点时，step 必须显式声明 `on_failure = "continue"`。安全门触发时始终停止，并先执行已授权的 OFF 策略。
 
 第一版不做自动 rollback。
 

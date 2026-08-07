@@ -113,6 +113,12 @@ _OPTIONAL_FIELDS = {
     "sleep": {"on_failure"},
 }
 
+# Failure handling is a common contract for every executable step.  Keeping the
+# fields in the schema table makes ``run schema`` and unknown-key diagnostics stay
+# in sync as new step kinds are added.
+for _step_fields in _OPTIONAL_FIELDS.values():
+    _step_fields.update({"on_failure", "safety_gate"})
+
 
 _STEP_NOTES = {
     "scope.auto": "Explicit RTM2032 AUToscale. It changes front-panel settings and is never inserted implicitly.",
@@ -172,7 +178,7 @@ def format_run_plan_schema() -> str:
         "",
         "Top-level tables:",
         "  [experiment] optional: name, label",
-        "  [safety] optional: scope_guard_channel, require_scope_coupling_not, allow_50ohm",
+        "  [safety] optional: scope_guard_channel, require_scope_coupling_not, allow_50ohm, safety_gate, off_source_channels, off_power_channels",
         "  [restore] optional: source_state, source_channel, source_channels",
         "  [[steps]] required: kind",
         "",
@@ -203,6 +209,9 @@ class SafetyGuard:
     scope_guard_channel: int | None
     require_scope_coupling_not: tuple[str, ...]
     allow_50ohm: bool = False
+    safety_gate: bool = False
+    off_source_channels: tuple[int, ...] = ()
+    off_power_channels: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -293,7 +302,14 @@ def _parse_restore(raw: Any) -> SourceRestorePolicy:
 
 def _parse_safety(raw: Any) -> SafetyGuard:
     table = _table(raw, "safety")
-    allowed = {"scope_guard_channel", "require_scope_coupling_not", "allow_50ohm"}
+    allowed = {
+        "scope_guard_channel",
+        "require_scope_coupling_not",
+        "allow_50ohm",
+        "safety_gate",
+        "off_source_channels",
+        "off_power_channels",
+    }
     _reject_unknown_keys(table, allowed, "safety")
 
     channel = table.get("scope_guard_channel")
@@ -316,7 +332,58 @@ def _parse_safety(raw: Any) -> SafetyGuard:
     allow_50ohm = table.get("allow_50ohm", False)
     if not isinstance(allow_50ohm, bool):
         raise ConfigError("safety.allow_50ohm must be true or false")
-    return SafetyGuard(scope_guard_channel=channel, require_scope_coupling_not=blocked, allow_50ohm=allow_50ohm)
+    safety_gate_raw = table.get("safety_gate", False)
+    nested_source_channels: tuple[int, ...] = ()
+    nested_power_channels: tuple[int, ...] = ()
+    if isinstance(safety_gate_raw, dict):
+        _reject_unknown_keys(
+            safety_gate_raw,
+            {"enabled", "source_channels", "power_channels"},
+            "safety.safety_gate",
+        )
+        safety_gate = safety_gate_raw.get("enabled", True)
+        if not isinstance(safety_gate, bool):
+            raise ConfigError("safety.safety_gate.enabled must be true or false")
+        nested_source_channels = _parse_channel_list(
+            safety_gate_raw.get("source_channels"),
+            "safety.safety_gate.source_channels",
+        )
+        nested_power_channels = _parse_channel_list(
+            safety_gate_raw.get("power_channels"),
+            "safety.safety_gate.power_channels",
+        )
+    else:
+        safety_gate = safety_gate_raw
+        if not isinstance(safety_gate, bool):
+            raise ConfigError("safety.safety_gate must be true or false or a TOML table")
+    off_source_channels = _parse_channel_list(
+        table.get("off_source_channels"), "safety.off_source_channels"
+    )
+    off_power_channels = _parse_channel_list(
+        table.get("off_power_channels"), "safety.off_power_channels"
+    )
+    if nested_source_channels and off_source_channels:
+        raise ConfigError(
+            "safety.safety_gate.source_channels and safety.off_source_channels are mutually exclusive"
+        )
+    if nested_power_channels and off_power_channels:
+        raise ConfigError(
+            "safety.safety_gate.power_channels and safety.off_power_channels are mutually exclusive"
+        )
+    off_source_channels = off_source_channels or nested_source_channels
+    off_power_channels = off_power_channels or nested_power_channels
+    if (off_source_channels or off_power_channels) and not safety_gate:
+        raise ConfigError(
+            "safety.off_source_channels/off_power_channels require safety.safety_gate = true"
+        )
+    return SafetyGuard(
+        scope_guard_channel=channel,
+        require_scope_coupling_not=blocked,
+        allow_50ohm=allow_50ohm,
+        safety_gate=safety_gate,
+        off_source_channels=off_source_channels,
+        off_power_channels=off_power_channels,
+    )
 
 
 def _parse_step(index: int, raw: Any) -> RunStep:
@@ -361,6 +428,10 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         if on_failure not in {"stop", "continue"}:
             raise ConfigError(f"{prefix}.on_failure must be 'stop' or 'continue'")
         fields["on_failure"] = on_failure
+    if "safety_gate" in fields:
+        fields["safety_gate"] = _normalize_step_safety_gate(
+            fields["safety_gate"], f"{prefix}.safety_gate"
+        )
     if "channel" in fields:
         fields["channel"] = _positive_int(fields["channel"], f"{prefix}.channel")
     if kind == "scope.capture":
@@ -693,6 +764,47 @@ def _table(raw: Any, name: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError(f"{name} must be a TOML table")
     return raw
+
+
+def _parse_channel_list(raw: Any, name: str) -> tuple[int, ...]:
+    """Parse a channel list used by an explicit safety OFF policy."""
+
+    if raw is None:
+        return ()
+    values = [raw] if isinstance(raw, int) and not isinstance(raw, bool) else raw
+    if not isinstance(values, list) or not values:
+        raise ConfigError(f"{name} must be a non-empty array of positive integers")
+    parsed = tuple(_positive_int(value, name) for value in values)
+    if len(set(parsed)) != len(parsed):
+        raise ConfigError(f"{name} must not contain duplicate channels")
+    return parsed
+
+
+def _normalize_step_safety_gate(raw: Any, name: str) -> dict[str, Any]:
+    """Normalize a step-local safety gate without opening an implicit device."""
+
+    if isinstance(raw, bool):
+        return {"enabled": raw, "source_channels": [], "power_channels": []}
+    table = _table(raw, name)
+    _reject_unknown_keys(
+        table,
+        {"enabled", "source_channels", "power_channels", "off_source_channels", "off_power_channels"},
+        name,
+    )
+    enabled = table.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"{name}.enabled must be true or false")
+    source_raw = table.get("source_channels", table.get("off_source_channels", []))
+    power_raw = table.get("power_channels", table.get("off_power_channels", []))
+    source_channels = _parse_channel_list(source_raw, f"{name}.source_channels") if source_raw else ()
+    power_channels = _parse_channel_list(power_raw, f"{name}.power_channels") if power_raw else ()
+    if (source_channels or power_channels) and not enabled:
+        raise ConfigError(f"{name} channel targets require enabled = true")
+    return {
+        "enabled": enabled,
+        "source_channels": list(source_channels),
+        "power_channels": list(power_channels),
+    }
 
 
 def _reject_unknown_keys(table: dict[str, Any], allowed: set[str], name: str) -> None:
