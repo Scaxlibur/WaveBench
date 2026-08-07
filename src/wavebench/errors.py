@@ -118,6 +118,23 @@ def error_envelope(
     return envelope.as_dict()
 
 
+def ensure_error_envelope(
+    payload: Mapping[str, Any],
+    *,
+    default_code: str = "run_failed",
+    default_exit_code: int = 1,
+) -> dict[str, Any]:
+    """Add the envelope fields to a legacy error mapping without dropping data."""
+
+    normalized = dict(payload)
+    normalized.setdefault("schema", ERROR_SCHEMA)
+    normalized.setdefault("code", default_code)
+    normalized.setdefault("type", "WaveBenchError")
+    normalized.setdefault("message", "WaveBench operation failed")
+    normalized.setdefault("exit_code", default_exit_code)
+    return normalized
+
+
 def _cause_payload(cause: Mapping[str, Any] | BaseException | None) -> dict[str, Any] | None:
     if cause is None:
         return None

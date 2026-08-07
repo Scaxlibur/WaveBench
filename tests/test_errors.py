@@ -6,6 +6,7 @@ from wavebench.errors import (
     ErrorEnvelope,
     InstrumentError,
     error_envelope,
+    ensure_error_envelope,
 )
 
 
@@ -53,3 +54,16 @@ def test_error_envelope_is_json_compatible() -> None:
         error_type="CustomError",
     ).as_dict()
     assert payload["schema"] == ERROR_SCHEMA
+
+
+def test_legacy_error_mapping_is_augmented_without_dropping_custom_fields() -> None:
+    payload = ensure_error_envelope(
+        {"type": "StepFailure", "message": "failed", "step_index": 3},
+        default_code="step_failed",
+        default_exit_code=2,
+    )
+
+    assert payload["schema"] == ERROR_SCHEMA
+    assert payload["code"] == "step_failed"
+    assert payload["exit_code"] == 2
+    assert payload["step_index"] == 3

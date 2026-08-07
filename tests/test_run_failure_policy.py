@@ -70,14 +70,14 @@ duration_s = 0.01
         assert [record.status for record in result.steps] == ["failed"]
         run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
         assert run_data["status"] == "failed"
-        assert run_data["error"] == {
-            "type": "StepFailure",
-            "code": "step_failed",
-            "message": "run step 0 (sleep) failed",
-            "step_index": 0,
-            "step_kind": "sleep",
-            "policy": "stop",
-        }
+        assert run_data["error"]["schema"] == "wavebench.error.v1"
+        assert run_data["error"]["exit_code"] == 2
+        assert run_data["error"]["code"] == "step_failed"
+        assert run_data["error"]["type"] == "StepFailure"
+        assert run_data["error"]["message"] == "run step 0 (sleep) failed"
+        assert run_data["error"]["step_index"] == 0
+        assert run_data["error"]["step_kind"] == "sleep"
+        assert run_data["error"]["policy"] == "stop"
 
 
 def test_failed_step_can_explicitly_continue() -> None:

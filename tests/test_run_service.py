@@ -1473,7 +1473,11 @@ settle_s = 0
             self.assertEqual(run_data["status"], "failed")
             self.assertEqual(run_data["steps"][0]["kind"], "sweep.frequency_response")
             self.assertEqual(run_data["steps"][0]["status"], "failed")
-            self.assertEqual(run_data["error"], {"type": "ConfigError", "message": "set failed"})
+            self.assertEqual(run_data["error"]["schema"], "wavebench.error.v1")
+            self.assertEqual(run_data["error"]["code"], "run_failed")
+            self.assertEqual(run_data["error"]["exit_code"], 2)
+            self.assertEqual(run_data["error"]["type"], "ConfigError")
+            self.assertEqual(run_data["error"]["message"], "set failed")
             self.assertEqual(run_data["restore"]["status"], "ok")
             step_record = json.loads(
                 (run_dir / "steps" / "00_sweep_frequency_response.json").read_text(encoding="utf-8")

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from wavebench.errors import ensure_error_envelope
 from wavebench.services.run_plan import RunPlan
 from wavebench.services.source_state import RestorableSourceState
 
@@ -69,7 +70,11 @@ def write_run_files(
             run_data["restore"]["source_channel"] = restore_state[0].channel
             run_data["restore"]["snapshot"] = restore_state[0].as_dict()
         if restore_error is not None:
-            run_data["restore"]["error"] = restore_error
+            run_data["restore"]["error"] = ensure_error_envelope(
+                restore_error,
+                default_code="restore_failed",
+                default_exit_code=2,
+            )
     elif plan.restore.source_state:
         run_data["restore"] = {
             "source_state": True,
@@ -80,7 +85,7 @@ def write_run_files(
         if len(plan.restore.source_channels) == 1:
             run_data["restore"]["source_channel"] = plan.restore.source_channels[0]
     if error is not None:
-        run_data["error"] = error
+        run_data["error"] = ensure_error_envelope(error, default_exit_code=2)
     if provenance is not None:
         run_data["provenance"] = provenance
     run_json_path.write_text(
