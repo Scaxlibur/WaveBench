@@ -618,6 +618,7 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 - `run.json.steps[]`：逐 step 记录，包含 `index`、`kind`、`status`、`artifact`，失败时包含 `error`。
 - `run.json.restore`：如果启用 `[restore] source_state = true`，这里记录 snapshot 与 restore 结果。
 - `run.json.provenance`：记录运行 provenance schema、规范化 plan 哈希和频响采集同步等级。
+- `run.json.provenance.instrument_io`：记录 run 使用的受保护 transport 原生 I/O 计数；不会从 `commands.log` 反推。
 - `scope.capture` step 的 `artifact.package` 指向普通采集包目录。
 - `scope.capture` step 的 `artifact.quality` 保存质量摘要。
 - `scope.capture` step 的 `artifact.expect` 保存 `[steps.expect]` 检查结果。
@@ -631,6 +632,44 @@ step_index,kind,status,package,metadata,quality_status,quality_warnings,expect_s
 ```
 
 断言失败时，run 会标记为 `failed`，但采集包仍会保留。这样失败结果也能被复盘，而不是只得到一条错误消息。
+
+### `provenance.instrument_io`
+
+当 run 通过 WaveBench factory 打开仪器 transport 时，`run.json` 会写入版本化的 I/O 证据：
+
+```json
+{
+  "schema": "wavebench.run_instrument_io.v1",
+  "coverage": "run_factory_transports",
+  "instrument_mutation_writes": 0,
+  "instrument_mutation_writes_completed": 0,
+  "instruments": {
+    "source": {
+      "schema": "wavebench.instrument_io.v1",
+      "access": "read_only",
+      "counters": {
+        "query_calls": 2,
+        "binary_query_calls": 0,
+        "write_requests": 0,
+        "write_transmitted": 0,
+        "write_completed": 0,
+        "blocked_write_requests": 0,
+        "instrument_mutation_writes": 0
+      }
+    }
+  }
+}
+```
+
+计数含义：
+
+- `*_requests`：调用方请求执行的次数；
+- `*_transmitted`：已委托给具体 transport 的次数；底层抛出异常时仍按可能已发送计数；
+- `*_completed`：具体 transport 调用未抛出异常的次数；不表示仪器已经完成内部处理；
+- `blocked_*`：在访问策略边界被拒绝、未调用具体 transport 的次数；
+- `instrument_mutation_writes`：文本和二进制写入的 `transmitted` 总数。
+
+`SerialTransport.query()` 内部为完成查询而发送的串口字节只计入 `query_calls`，不会误报为 mutation write。该证据覆盖 run 使用 factory 打开的 transport；直接绕过 factory 的 discovery、doctor 或独立插件探测路径不应据此宣称已审计。
 
 ## 双通道频率响应产物
 

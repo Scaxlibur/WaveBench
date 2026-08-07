@@ -49,6 +49,7 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.transport.base import InstrumentTransport
 
 HIGH_IMPEDANCE_COUPLINGS = {"DCL", "DCLIMIT", "ACL", "ACLIMIT"}
 LOW_IMPEDANCE_COUPLINGS = {"DC", "AC"}
@@ -124,6 +125,7 @@ class ScopeService:
     logger: CommandLogger
     session: ScopeDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         access_policy(getattr(self.config.scope, "access", "read_write"), "scope.access").require(
@@ -152,7 +154,12 @@ class ScopeService:
             access=getattr(self.config.scope, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def open_session(self) -> ScopeDriver:
         return self._open_scope()

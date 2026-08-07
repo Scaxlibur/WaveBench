@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import math
+from typing import Any
 
 from wavebench.config import PowerConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
@@ -16,6 +17,7 @@ from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.transport.base import InstrumentTransport
 
 
 @dataclass
@@ -24,6 +26,7 @@ class PowerService:
     logger: CommandLogger
     session: PowerDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         power = self._power_config()
@@ -59,7 +62,12 @@ class PowerService:
             access=getattr(power, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def open_session(self) -> PowerDriver:
         return self._open_power()

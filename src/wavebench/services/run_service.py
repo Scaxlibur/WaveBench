@@ -91,6 +91,48 @@ class RunInstrumentServices:
     power: PowerService | None = None
     dmm: DmmService | None = None
 
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        """Return transport-native counters without deriving them from logs."""
+
+        instruments: dict[str, dict[str, Any]] = {}
+        for name, service in (
+            ("scope", self.scope),
+            ("source", self.source),
+            ("power", self.power),
+            ("dmm", self.dmm),
+        ):
+            if service is None:
+                continue
+            getter = getattr(service, "audit_snapshot", None)
+            if not callable(getter):
+                continue
+            try:
+                snapshot = getter()
+            except Exception:  # noqa: BLE001 - audit must not mask run failures
+                continue
+            if isinstance(snapshot, dict):
+                instruments[name] = snapshot
+        if not instruments:
+            return None
+
+        mutation_writes = 0
+        mutation_writes_completed = 0
+        for snapshot in instruments.values():
+            counters = snapshot.get("counters")
+            if not isinstance(counters, dict):
+                continue
+            mutation_writes += int(counters.get("instrument_mutation_writes", 0))
+            mutation_writes_completed += int(
+                counters.get("instrument_mutation_writes_completed", 0)
+            )
+        return {
+            "schema": "wavebench.run_instrument_io.v1",
+            "coverage": "run_factory_transports",
+            "instruments": instruments,
+            "instrument_mutation_writes": mutation_writes,
+            "instrument_mutation_writes_completed": mutation_writes_completed,
+        }
+
 
 class _FrequencyResponseExecutionError(Exception):
     """Carry the partial sweep artifact so a fatal source failure remains auditable."""
@@ -419,6 +461,12 @@ class RunService:
                     "capture_sync_grade": CAPTURE_SYNC_GRADE,
                 },
             }
+
+            def refresh_provenance() -> None:
+                instrument_io = services.audit_snapshot()
+                if instrument_io is not None:
+                    provenance["instrument_io"] = instrument_io
+
             try:
                 restore_state = snapshot_source_state(
                     plan,
@@ -482,6 +530,7 @@ class RunService:
                     restore_state,
                     source_service_factory=lambda: self._source_service(services=services),
                 )
+                refresh_provenance()
                 interruption_error: dict[str, Any] = {
                     "type": "KeyboardInterrupt",
                     "message": str(exc) or "run interrupted by user",
@@ -518,6 +567,7 @@ class RunService:
                     restore_state,
                     source_service_factory=lambda: self._source_service(services=services),
                 )
+                refresh_provenance()
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
@@ -568,6 +618,7 @@ class RunService:
                 }
                 if run_failure is not None:
                     restore_failure["cause"] = run_failure
+                refresh_provenance()
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
@@ -582,6 +633,7 @@ class RunService:
                 raise ConfigError("run plan source state restore failed: " + restore_error["message"])
 
             run_status = "failed" if any(record.status == "failed" for record in records) else "ok"
+            refresh_provenance()
             write_run_files(
                 plan=plan,
                 run_json_path=run_json_path,
@@ -1868,24 +1920,52 @@ class RunService:
 
             if "scope" in instruments:
                 logger = CommandLogger()
-                session = ScopeService(config=self.config, logger=logger).open_session()
+                bootstrap = ScopeService(config=self.config, logger=logger)
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                scope = ScopeService(config=self.config, logger=logger, session=session)
+                scope = ScopeService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                )
             if "source" in instruments:
                 logger = CommandLogger()
-                session = SourceService(config=self.config, logger=logger).open_session()
+                bootstrap = SourceService(config=self.config, logger=logger)
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                source = SourceService(config=self.config, logger=logger, session=session)
+                source = SourceService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                )
             if "power" in instruments:
                 logger = CommandLogger()
-                session = PowerService(config=self.config, logger=logger).open_session()
+                bootstrap = PowerService(config=self.config, logger=logger)
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                power = PowerService(config=self.config, logger=logger, session=session)
+                power = PowerService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                )
             if "dmm" in instruments:
                 logger = CommandLogger()
-                session = DmmService(config=self.config, logger=logger).open_session()
+                bootstrap = DmmService(config=self.config, logger=logger)
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                dmm = DmmService(config=self.config, logger=logger, session=session)
+                dmm = DmmService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                )
 
             yield RunInstrumentServices(scope=scope, source=source, power=power, dmm=dmm)
 
@@ -1939,6 +2019,8 @@ class RunService:
                 config=config,
                 logger=services.scope.logger,
                 session=services.scope.session,
+                descriptor=services.scope.descriptor,
+                transport=services.scope.transport,
             )
         return ScopeService(config=config, logger=CommandLogger())
 
@@ -1968,6 +2050,8 @@ class RunService:
                 config=config,
                 logger=services.scope.logger,
                 session=services.scope.session,
+                descriptor=services.scope.descriptor,
+                transport=services.scope.transport,
             )
         return ScopeService(config=config, logger=CommandLogger())
 

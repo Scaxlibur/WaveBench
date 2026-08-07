@@ -64,6 +64,7 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.source_state import RestorableSourceState
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.transport.base import InstrumentTransport
 
 
 @dataclass
@@ -72,6 +73,7 @@ class SourceService:
     logger: CommandLogger
     session: SourceDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         source = self._source_config()
@@ -107,7 +109,12 @@ class SourceService:
             access=getattr(source, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, object] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def open_session(self) -> SourceDriver:
         return self._open_source()

@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import time
-from typing import cast
+from typing import Any, cast
 
 from wavebench.config import DmmConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
@@ -34,6 +34,7 @@ from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.transport.base import InstrumentTransport
 
 
 @dataclass
@@ -42,6 +43,7 @@ class DmmService:
     logger: CommandLogger
     session: DmmDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         dmm = self._dmm_config()
@@ -77,7 +79,12 @@ class DmmService:
             access=getattr(dmm, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def open_session(self) -> DmmDriver:
         return self._open_dmm()

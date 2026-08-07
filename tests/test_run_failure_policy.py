@@ -115,6 +115,43 @@ duration_s = 0.01
         assert "error" not in run_data
 
 
+def test_run_artifact_records_native_instrument_io_counters() -> None:
+    with TemporaryDirectory() as tmp:
+        plan = load_run_plan(
+            _write_plan(
+                tmp,
+                """
+[[steps]]
+kind = "sleep"
+duration_s = 0.01
+""",
+            )
+        )
+        service = _service(tmp)
+        audited = SimpleNamespace(
+            audit_snapshot=lambda: {
+                "schema": "wavebench.instrument_io.v1",
+                "access": "read_only",
+                "counters": {
+                    "instrument_mutation_writes": 0,
+                    "instrument_mutation_writes_completed": 0,
+                },
+            }
+        )
+        services = RunInstrumentServices(source=audited)  # type: ignore[arg-type]
+
+        with patch.object(
+            service, "_run_instrument_services", return_value=nullcontext(services)
+        ):
+            result = service.run(plan)
+
+        run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+        instrument_io = run_data["provenance"]["instrument_io"]
+        assert instrument_io["schema"] == "wavebench.run_instrument_io.v1"
+        assert instrument_io["instrument_mutation_writes"] == 0
+        assert instrument_io["instruments"]["source"]["access"] == "read_only"
+
+
 def test_on_failure_rejects_unknown_policy() -> None:
     with TemporaryDirectory() as tmp:
         plan_path = _write_plan(
