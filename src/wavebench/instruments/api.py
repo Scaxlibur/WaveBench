@@ -6,6 +6,7 @@ from typing import Any, Callable, Literal, Mapping
 
 from wavebench.logging import CommandLogger
 from wavebench.plugins.api import InstrumentPlugin, PluginKind, PluginOrigin
+from wavebench.services.access_policy import AccessMode, normalize_access_mode
 from wavebench.transport.base import InstrumentTransport
 
 EXECUTABLE_PLUGIN_API_VERSION = "wavebench.instrument.v2"
@@ -49,10 +50,12 @@ class DriverContext:
     _transport_factory: TransportFactory = field(repr=False, compare=False)
     settings: Mapping[str, object] = field(default_factory=dict)
     options: Mapping[str, object] = field(default_factory=dict)
+    access: AccessMode = "read_write"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "settings", MappingProxyType(dict(self.settings)))
         object.__setattr__(self, "options", MappingProxyType(dict(self.options)))
+        object.__setattr__(self, "access", normalize_access_mode(self.access, "access"))
 
     def open_transport(self) -> InstrumentTransport:
         return self._transport_factory()

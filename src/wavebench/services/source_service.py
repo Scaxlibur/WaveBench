@@ -104,6 +104,7 @@ class SourceService:
             logger=self.logger,
             settings={"check_errors": source.check_errors},
             options=getattr(source, "options", {}),
+            access=getattr(source, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
         return opened.driver

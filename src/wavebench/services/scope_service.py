@@ -149,6 +149,7 @@ class ScopeService:
             logger=self.logger,
             settings={"check_errors": self.config.scope.check_errors},
             options=getattr(self.config.scope, "options", {}),
+            access=getattr(self.config.scope, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
         return opened.driver

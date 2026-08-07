@@ -56,6 +56,7 @@ class PowerService:
             logger=self.logger,
             settings={"check_errors": power.check_errors},
             options=getattr(power, "options", {}),
+            access=getattr(power, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
         return opened.driver

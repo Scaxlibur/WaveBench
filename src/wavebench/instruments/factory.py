@@ -8,7 +8,9 @@ from wavebench.config import ConnectionConfig, DmmConfig
 from wavebench.errors import ConfigError
 from wavebench.logging import CommandLogger
 from wavebench.plugins.api import PluginKind
+from wavebench.services.access_policy import AccessMode, normalize_access_mode
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.pyvisa_transport import PyVisaTransport
 from wavebench.transport.rsinstrument_transport import RsInstrumentTransport
 from wavebench.transport.serial_transport import SerialTransport
@@ -32,6 +34,7 @@ RSINSTRUMENT_SOCKET_DEFAULT_PORT = 5025
 class OpenedInstrument:
     descriptor: InstrumentDescriptor
     driver: InstrumentDriver
+    transport: InstrumentTransport | None = None
 
 
 def open_instrument_driver(
@@ -48,7 +51,9 @@ def open_instrument_driver(
     settings: Mapping[str, object] | None = None,
     options: Mapping[str, object] | None = None,
     serial_config: DmmConfig | None = None,
+    access: AccessMode = "read_write",
 ) -> OpenedInstrument:
+    normalized_access = normalize_access_mode(access, "access")
     descriptor = resolve_instrument_descriptor(
         driver_reference,
         expected_kind=expected_kind,
@@ -68,7 +73,7 @@ def open_instrument_driver(
                 f"instrument driver {descriptor.driver_id!r} requested more than one transport; "
                 "instrument API v2 factories may open exactly one configured transport"
             )
-        transport = _open_transport(
+        concrete_transport = _open_transport(
             backend=backend,
             resource=resource,
             timeout_ms=timeout_ms,
@@ -78,6 +83,7 @@ def open_instrument_driver(
             logger=logger,
             serial_config=serial_config,
         )
+        transport = GuardedAuditedTransport(concrete_transport, access=normalized_access)
         opened_transports.append(transport)
         return transport
 
@@ -92,6 +98,7 @@ def open_instrument_driver(
         _transport_factory=open_transport,
         settings=settings or {},
         options=validated_options,
+        access=normalized_access,
     )
     try:
         driver = descriptor.factory(context)
@@ -103,7 +110,11 @@ def open_instrument_driver(
         raise ConfigError(
             f"failed to create {expected_kind} instrument driver {descriptor.driver_id!r}: {exc}"
         ) from exc
-    return OpenedInstrument(descriptor=descriptor, driver=cast(InstrumentDriver, driver))
+    return OpenedInstrument(
+        descriptor=descriptor,
+        driver=cast(InstrumentDriver, driver),
+        transport=opened_transports[0] if opened_transports else None,
+    )
 
 
 def _select_backend(configured_backend: str, supported: tuple[str, ...]) -> str:

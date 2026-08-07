@@ -74,6 +74,7 @@ class DmmService:
             logger=self.logger,
             options=getattr(dmm, "options", {}),
             serial_config=dmm,
+            access=getattr(dmm, "access", "read_write"),
         )
         self.descriptor = opened.descriptor
         return opened.driver

@@ -2,11 +2,12 @@ from dataclasses import replace
 
 import pytest
 
-from wavebench.errors import ConfigError
+from wavebench.errors import AccessDeniedError, ConfigError
 from wavebench.instruments.api import DriverContext, InstrumentDescriptor, OptionSpec
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.registry import InstrumentRegistry, build_instrument_registry
 from wavebench.logging import CommandLogger
+from wavebench.transport.guarded import GuardedAuditedTransport
 
 
 class FakeEntryPoint:
@@ -447,10 +448,51 @@ def test_core_factory_builds_context_and_validates_driver_contract(monkeypatch):
     )
 
     assert opened.driver.__class__ is _ScopeDriver
-    assert captured["transport"] is transport
+    assert isinstance(captured["transport"], GuardedAuditedTransport)
+    assert captured["transport"].inner is transport
+    assert opened.transport is captured["transport"]
     assert captured["context"].resource == "configured-resource"
     assert captured["context"].backend == "pyvisa"
     assert captured["context"].settings == {"check_errors": True}
+
+
+def test_core_factory_applies_access_policy_at_transport_boundary(monkeypatch):
+    captured = {}
+    concrete = object()
+
+    def factory(context):
+        captured["context"] = context
+        captured["transport"] = context.open_transport()
+        return _ScopeDriver()
+
+    descriptor = make_descriptor(factory=factory, option_specs=())
+    monkeypatch.setattr(
+        "wavebench.instruments.factory.resolve_instrument_descriptor",
+        lambda reference, expected_kind: descriptor,
+    )
+    monkeypatch.setattr(
+        "wavebench.instruments.factory.PyVisaTransport.open",
+        lambda connection, logger: concrete,
+    )
+
+    opened = open_instrument_driver(
+        driver_reference="example.scope",
+        expected_kind="scope",
+        resource="configured-resource",
+        configured_backend="lan",
+        timeout_ms=1000,
+        opc_timeout_ms=2000,
+        read_retry_attempts=1,
+        read_retry_delay_ms=10,
+        logger=CommandLogger(),
+        access="read_only",
+    )
+
+    assert captured["context"].access == "read_only"
+    assert isinstance(opened.transport, GuardedAuditedTransport)
+    assert opened.transport.access == "read_only"
+    with pytest.raises(AccessDeniedError, match="access policy"):
+        opened.transport.write("blocked")
 
 
 @pytest.mark.parametrize("configured_backend", ["lan", "visa", "pyvisa"])
@@ -493,7 +535,8 @@ def test_core_factory_maps_lan_backends_to_single_rsinstrument_backend(
     )
 
     assert opened.driver.__class__ is _ScopeDriver
-    assert captured == {"backend": "rsinstrument", "transport": transport}
+    assert captured["backend"] == "rsinstrument"
+    assert captured["transport"].inner is transport
 
 
 def test_core_factory_maps_lan_to_first_declared_rsinstrument_backend(monkeypatch):
@@ -543,12 +586,10 @@ def test_core_factory_maps_lan_to_first_declared_rsinstrument_backend(monkeypatc
     )
 
     assert opened.driver.__class__ is _ScopeDriver
-    assert captured == {
-        "backend": "rsinstrument-socket",
-        "transport": transport,
-        "select_visa": "socketio",
-        "resource": "TCPIP::192.0.2.40::5025::SOCKET",
-    }
+    assert captured["backend"] == "rsinstrument-socket"
+    assert captured["transport"].inner is transport
+    assert captured["select_visa"] == "socketio"
+    assert captured["resource"] == "TCPIP::192.0.2.40::5025::SOCKET"
 
 
 @pytest.mark.parametrize(
