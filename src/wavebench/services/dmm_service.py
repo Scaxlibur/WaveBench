@@ -66,6 +66,11 @@ class DmmService:
 
     def _open_dmm(self) -> DmmDriver:
         dmm = self._dmm_config()
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=dmm.resource or "",
+                operation="dmm.session",
+            )
         opened = open_instrument_driver(
             driver_reference=dmm.driver,
             expected_kind="dmm",

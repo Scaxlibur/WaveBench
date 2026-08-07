@@ -51,6 +51,11 @@ class PowerService:
 
     def _open_power(self) -> PowerDriver:
         power = self._power_config()
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=power.resource or "",
+                operation="power.session",
+            )
         opened = open_instrument_driver(
             driver_reference=power.driver,
             expected_kind="power",

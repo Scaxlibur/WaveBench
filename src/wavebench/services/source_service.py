@@ -98,6 +98,11 @@ class SourceService:
 
     def _open_source(self) -> SourceDriver:
         source = self._source_config()
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=source.resource or "",
+                operation="source.session",
+            )
         opened = open_instrument_driver(
             driver_reference=source.driver,
             expected_kind="source",
