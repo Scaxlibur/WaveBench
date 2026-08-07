@@ -14,6 +14,8 @@ from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import PowerMeasurement, PowerProtectionStatus, PowerStatus
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
 
 
 @dataclass
@@ -25,6 +27,10 @@ class PowerService:
 
     def _require(self, operation: str, *capabilities: str) -> None:
         power = self._power_config()
+        access_policy(getattr(power, "access", "read_write"), "power.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             power.driver,
             expected_kind="power",

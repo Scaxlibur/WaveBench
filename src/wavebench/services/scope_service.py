@@ -47,6 +47,8 @@ from wavebench.instruments.models import (
 )
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
 
 HIGH_IMPEDANCE_COUPLINGS = {"DCL", "DCLIMIT", "ACL", "ACLIMIT"}
 LOW_IMPEDANCE_COUPLINGS = {"DC", "AC"}
@@ -124,6 +126,10 @@ class ScopeService:
     descriptor: InstrumentDescriptor | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
+        access_policy(getattr(self.config.scope, "access", "read_write"), "scope.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             self.config.scope.driver,
             expected_kind="scope",

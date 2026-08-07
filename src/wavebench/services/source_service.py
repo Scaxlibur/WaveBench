@@ -62,6 +62,8 @@ from wavebench.instruments.models import (
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.source_state import RestorableSourceState
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
 
 
 @dataclass
@@ -73,6 +75,10 @@ class SourceService:
 
     def _require(self, operation: str, *capabilities: str) -> None:
         source = self._source_config()
+        access_policy(getattr(source, "access", "read_write"), "source.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             source.driver,
             expected_kind="source",

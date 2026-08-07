@@ -5,6 +5,7 @@ from pathlib import Path
 import tomllib
 
 from .errors import ConfigError
+from .services.access_policy import AccessMode, normalize_access_mode
 
 WAVEFORM_POINTS_ALIASES = {
     "def": "DEF",
@@ -65,6 +66,7 @@ class ScopeConfig:
     reset_before_run: bool
     check_errors: bool
     options: dict[str, object] = field(default_factory=dict)
+    access: AccessMode = "read_write"
 
 @dataclass(frozen=True)
 class AutoscaleConfig:
@@ -94,6 +96,7 @@ class SourceConfig:
     ensure_fix_mode_on_set_frequency: bool
     settle_ms_after_set_frequency: int
     options: dict[str, object] = field(default_factory=dict)
+    access: AccessMode = "read_write"
 
 @dataclass(frozen=True)
 class PowerConfig:
@@ -104,6 +107,7 @@ class PowerConfig:
     settle_ms_after_set: int
     settle_ms_after_output: int
     options: dict[str, object] = field(default_factory=dict)
+    access: AccessMode = "read_write"
 
 @dataclass(frozen=True)
 class DmmConfig:
@@ -123,6 +127,7 @@ class DmmConfig:
     xonxoff: bool = False
     rtscts: bool = False
     dsrdtr: bool = False
+    access: AccessMode = "read_write"
 
 @dataclass(frozen=True)
 class OutputConfig:
@@ -338,6 +343,7 @@ class WaveBenchConfig:
                 ensure_fix_mode_on_set_frequency=source.ensure_fix_mode_on_set_frequency,
                 settle_ms_after_set_frequency=source.settle_ms_after_set_frequency,
                 options=source.options,
+                access=source.access,
             ),
             power=self.power,
             dmm=self.dmm,
@@ -371,6 +377,7 @@ class WaveBenchConfig:
                 settle_ms_after_set=power.settle_ms_after_set,
                 settle_ms_after_output=power.settle_ms_after_output,
                 options=power.options,
+                access=power.access,
             ),
             dmm=self.dmm,
             quality=self.quality,
@@ -418,6 +425,7 @@ class WaveBenchConfig:
                 xonxoff=dmm.xonxoff,
                 rtscts=dmm.rtscts,
                 dsrdtr=dmm.dsrdtr,
+                access=dmm.access,
             ),
             quality=self.quality,
             safety_limits=self.safety_limits,
@@ -455,6 +463,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 ensure_fix_mode_on_set_frequency=bool(src.get("ensure_fix_mode_on_set_frequency", True)),
                 settle_ms_after_set_frequency=int(src.get("settle_ms_after_set_frequency", 0)),
                 options=_instrument_options(src, "source"),
+                access=normalize_access_mode(src.get("access", "read_write"), "source.access"),
             )
         pwr = raw.get("power")
         power = None
@@ -467,6 +476,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 settle_ms_after_set=int(pwr.get("settle_ms_after_set", 2000)),
                 settle_ms_after_output=int(pwr.get("settle_ms_after_output", 1000)),
                 options=_instrument_options(pwr, "power"),
+                access=normalize_access_mode(pwr.get("access", "read_write"), "power.access"),
             )
         dmm_raw = raw.get("dmm")
         dmm = None
@@ -490,6 +500,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 xonxoff=_strict_bool(dmm_raw, "xonxoff", False, path="dmm"),
                 rtscts=_strict_bool(dmm_raw, "rtscts", False, path="dmm"),
                 dsrdtr=_strict_bool(dmm_raw, "dsrdtr", False, path="dmm"),
+                access=normalize_access_mode(dmm_raw.get("access", "read_write"), "dmm.access"),
             )
         config = WaveBenchConfig(
             connection=ConnectionConfig(
@@ -507,6 +518,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 reset_before_run=bool(s.get("reset_before_run", False)),
                 check_errors=bool(s.get("check_errors", True)),
                 options=_instrument_options(s, "scope"),
+                access=normalize_access_mode(s.get("access", "read_write"), "scope.access"),
             ),
             autoscale=AutoscaleConfig(
                 wait_opc=bool(a.get("wait_opc", True)),

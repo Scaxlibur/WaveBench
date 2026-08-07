@@ -63,6 +63,11 @@ class ConfigError(WaveBenchError):
     exit_code = 2
     code = "config_error"
 
+
+class AccessDeniedError(ConfigError):
+    exit_code = 2
+    code = "access_denied"
+
 class ConnectionError(WaveBenchError):
     exit_code = 3
     code = "connection_error"

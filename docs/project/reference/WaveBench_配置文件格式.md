@@ -86,6 +86,25 @@ wavebench scope capture --channel 2
 
 则必须按 CH2 执行。
 
+## 仪器访问策略
+
+`[scope]`、`[source]`、`[power]` 和 `[dmm]` 都支持 `access` 字段。该字段只控制
+WaveBench 发起的仪器操作，不会修改配置文件，也不会替代操作系统或仪器自身的权限控制。
+
+```toml
+[scope]
+access = "read_write"
+```
+
+可用值如下：
+
+- `read_write`：默认值，允许已注册的读取、写入和采集操作。
+- `read_only`：允许 `observe` 和 `stateful_read` 操作；会拒绝写入和采集。
+- `disabled`：拒绝所有仪器操作；离线的 `run check`、`run schema` 等命令仍可执行。
+
+访问检查在建立具体操作前执行。旧配置未填写 `access` 时按 `read_write` 处理，以保持
+现有配置的行为不变。需要查看某项操作的能力和风险说明时，可先使用离线的 `run schema`。
+
 ## 第一版配置结构
 
 ```toml
@@ -103,6 +122,7 @@ model_hint = "RTM2032"
 default_channel = 1
 reset_before_run = false
 check_errors = true
+access = "read_write"
 
 [autoscale]
 wait_opc = true
@@ -146,6 +166,7 @@ default_channel = 1
 check_errors = true
 ensure_fix_mode_on_set_frequency = true
 settle_ms_after_set_frequency = 500
+access = "read_write"
 
 [power]
 driver = "dp800"
@@ -154,6 +175,7 @@ default_channel = 1
 check_errors = true
 settle_ms_after_set = 2000
 settle_ms_after_output = 1000
+access = "read_write"
 ```
 
 ## `[connection]`
@@ -197,6 +219,7 @@ model_hint = "RTM2032"
 default_channel = 1
 reset_before_run = false
 check_errors = true
+access = "read_write"
 ```
 
 当前内置 scope driver 的常用配置为：
@@ -350,6 +373,7 @@ default_channel = 1
 check_errors = true
 ensure_fix_mode_on_set_frequency = true
 settle_ms_after_set_frequency = 500
+access = "read_write"
 ```
 
 当前 source 支持 DG4202。`ensure_fix_mode_on_set_frequency = true` 表示设置固定频率前，若设备仍在 sweep 模式，先显式切回 FIX，避免扫频状态污染单点实验。
@@ -364,6 +388,7 @@ default_channel = 1
 check_errors = true
 settle_ms_after_set = 2000
 settle_ms_after_output = 1000
+access = "read_write"
 ```
 
 当前 power 支持 DP800 系列。`power set`、`power output` 与 `power protection` 是独立动作：`power set` 只改电压/限流，`power output` 只改输出开关，`power protection` 只查询或修改 OVP/OCP 保护。两个 settle 配置分别用于写入后等待读回稳定。

@@ -148,6 +148,7 @@ WaveBench 的默认行为包括：
 - 不因设定电压或幅度而自动打开输出；
 - 不自动改变示波器输入阻抗；可能的 50 Ω 输入需要显式确认；
 - `power set` 不改变输出开关，`power output` 不改变电压/限流设定；
+- 各仪器配置支持 `access = "read_write"`、`"read_only"` 或 `"disabled"`；`read_only` 只允许状态和配置读取，`disabled` 只保留离线命令；
 - 启用 source restore 后只覆盖文档注明的 basic 状态，不能当成完整通道快照；
 - run step 默认在失败后停止后续步骤；只有显式 `on_failure = "continue"` 才会继续。需要保护输出时，可用 `[safety] safety_gate = true` 和授权的 OFF 通道列表；安全门会先关闭目标输出再停止 run；
 - HTTP MCP 的工具入口需要认证，当前只提供只读工具；`/health` 是例外，不需要 token。它不提供 raw SCPI 或输出开关。

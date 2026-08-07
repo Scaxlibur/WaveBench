@@ -32,6 +32,8 @@ from wavebench.instruments.models import (
 )
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
 
 
 @dataclass
@@ -43,6 +45,10 @@ class DmmService:
 
     def _require(self, operation: str, *capabilities: str) -> None:
         dmm = self._dmm_config()
+        access_policy(getattr(dmm, "access", "read_write"), "dmm.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             dmm.driver,
             expected_kind="dmm",
