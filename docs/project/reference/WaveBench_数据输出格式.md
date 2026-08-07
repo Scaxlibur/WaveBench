@@ -617,8 +617,10 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 - `run.json.status`：整个流程状态，常见值是 `ok` / `failed`。
 - `run.json.steps[]`：逐 step 记录，包含 `index`、`kind`、`status`、`artifact`，失败时包含 `error`。
 - `run.json.restore`：如果启用 `[restore] source_state = true`，这里记录 snapshot 与 restore 结果。
-- `run.json.provenance`：记录运行 provenance schema、规范化 plan 哈希和频响采集同步等级。
+- `run.json.provenance`：记录运行 provenance schema、规范化 plan 哈希、执行意图和频响采集同步等级。
 - `run.json.provenance.instrument_io`：记录 run 使用的受保护 transport 原生 I/O 计数；不会从 `commands.log` 反推。
+- `run.json.provenance.state_guard`：记录 Source / Power 基础控制写入的 expected state；状态漂移失败的 `error.details` 另保存 `expected`、`actual` 和 `diff`。
+- `run.json.provenance.execution_intent`：记录 `wavebench.execution_intent.v1` 的 plan/config/payload 摘要和规范化操作列表，不写入原始资源地址。
 - `scope.capture` step 的 `artifact.package` 指向普通采集包目录。
 - `scope.capture` step 的 `artifact.quality` 保存质量摘要。
 - `scope.capture` step 的 `artifact.expect` 保存 `[steps.expect]` 检查结果。
@@ -669,7 +671,7 @@ step_index,kind,status,package,metadata,quality_status,quality_warnings,expect_s
 - `blocked_*`：在访问策略边界被拒绝、未调用具体 transport 的次数；
 - `instrument_mutation_writes`：文本和二进制写入的 `transmitted` 总数。
 
-`SerialTransport.query()` 内部为完成查询而发送的串口字节只计入 `query_calls`，不会误报为 mutation write。该证据覆盖 run 使用 factory 打开的 transport；直接绕过 factory 的 discovery、doctor 或独立插件探测路径不应据此宣称已审计。
+`SerialTransport.query()` 内部为完成查询而发送的串口字节只计入 `query_calls`，不会误报为 mutation write。该证据覆盖 run 使用 factory 打开的 transport；discovery、doctor 和独立插件探测虽然也取得资源租约，但不写入该 run provenance，不能据此宣称已被 run I/O 计数覆盖。
 
 ## 双通道频率响应产物
 
