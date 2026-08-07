@@ -6,7 +6,8 @@
 
 | 目标 | 应该做什么 |
 |---|---|
-| 只想记录一个仪器的型号、能力、IDN 查询方式 | 编写插件 metadata 或声明式 SCPI TOML，参阅[插件开发指南](WaveBench_插件开发指南.md)。 |
+| 只想记录一个仪器的型号、能力、IDN 查询方式 | 编写 V1 metadata 或声明式 SCPI TOML，参阅[声明式 SCPI 插件](../reference/plugins/WaveBench_声明式SCPI插件.md)。 |
+| 要以独立 wheel 提供真实 driver | 实现 Instrument API V2，参阅[插件开发指南](WaveBench_插件开发指南.md)和 [API 约定](../reference/plugins/WaveBench_可执行仪器插件API.md)。 |
 | 要新增 CLI 命令连接仪器并读写状态 | 写真实 driver + service + CLI。 |
 | 要让仪器参与 `doctor` / `run verify` | 写配置解析、只读 IDN / safety 检查。 |
 | 要让仪器参与 `run plan` | 写 step schema、执行逻辑、artifact / summary、测试和文档。 |

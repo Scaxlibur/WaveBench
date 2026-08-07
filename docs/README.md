@@ -43,7 +43,8 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 ### 安装或开发插件
 
 - [可安装仪器插件用户指南](project/guides/WaveBench_可安装仪器插件.md)：本地目录/wheel 的检查、安装、升级、卸载和恢复。
-- [插件开发指南](project/contributing/WaveBench_插件开发指南.md)：V2 descriptor、factory、capability 和测试要求。
+- [插件开发指南](project/contributing/WaveBench_插件开发指南.md)：V2 插件的接入流程和发布检查。
+- [可执行仪器插件 API 约定](project/reference/plugins/WaveBench_可执行仪器插件API.md)：descriptor、factory、context、capability 和兼容边界。
 - [新增仪器驱动指南](project/contributing/WaveBench_新增仪器驱动指南.md)：从 driver 到 CLI、run plan 和文档的接入路径。
 - [声明式 SCPI 插件](project/reference/plugins/WaveBench_声明式SCPI插件.md) · [插件注册表](project/reference/plugins/WaveBench_插件注册表.md) · [插件市场索引](project/reference/plugins/WaveBench_插件市场索引.md)
 

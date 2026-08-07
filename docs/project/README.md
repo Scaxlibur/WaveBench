@@ -15,7 +15,8 @@
 - [配置文件格式](reference/WaveBench_配置文件格式.md)
 - [数据输出格式](reference/WaveBench_数据输出格式.md)
 - [错误处理和日志策略](reference/WaveBench_错误处理和日志策略.md)
-- [插件参考](reference/plugins/)
+- [可执行仪器插件 API 约定](reference/plugins/WaveBench_可执行仪器插件API.md)
+- [其他插件参考](reference/plugins/)
 
 ## design：设计说明
 
@@ -26,7 +27,7 @@
 
 ## contributing：开发和接入
 
-- [插件开发指南](contributing/WaveBench_插件开发指南.md)
+- [插件开发指南](contributing/WaveBench_插件开发指南.md)：接入流程和发布检查
 - [新增仪器驱动指南](contributing/WaveBench_新增仪器驱动指南.md)
 
 ## 历史资料与外部资料

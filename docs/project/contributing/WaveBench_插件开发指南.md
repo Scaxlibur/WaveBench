@@ -1,26 +1,49 @@
 # WaveBench 可执行仪器插件开发指南
 
-WaveBench 支持两条互不替代的插件路径：
+本文说明如何把独立 Python 包接入 WaveBench 的真实仪器执行路径。字段、capability 和生命周期的精确定义见[可执行仪器插件 API 约定](../reference/plugins/WaveBench_可执行仪器插件API.md)。
 
-- `wavebench.drivers` / `wavebench.instrument.v1`：只读 metadata，保留向后兼容。
-- `wavebench.instruments` / `wavebench.instrument.v2`：可信 Python 包提供真实仪器 driver factory。
+## 先选扩展类型
 
-V2 插件只替换设备差异层。transport 创建、resource、timeout、命令日志、安全限制、Service、run plan 和 artifact 仍由 WaveBench 核心掌握。声明式 SCPI TOML 仍只用于校验和显式只读 IDN probe，不能进入真实执行路径。
+| 目标 | 扩展方式 | 能否执行仪器操作 |
+| --- | --- | --- |
+| 展示型号、能力和配置字段 | `wavebench.drivers` / Instrument API V1 metadata | 否 |
+| 校验受限 SCPI 描述并显式执行只读 IDN probe | [声明式 SCPI 插件](../reference/plugins/WaveBench_声明式SCPI插件.md) | 仅 IDN probe |
+| 提供真实 driver、transport 接入和 capability | `wavebench.instruments` / Instrument API V2 | 是 |
+
+三条路径相互独立。V1 metadata 或声明式 TOML 不会自动进入 Service、CLI 和 run-plan 执行路径；V2 capability 也不会自动生成新的上层命令。
 
 > [!IMPORTANT]
-> Instrument API V2 与受管插件生命周期从 `v0.8.0` 起正式提供；配套插件必须声明 `wavebench>=0.8,<0.9`，不能与 `v0.7.0` 配套运行。开发和发布插件时仍应使用同一核心版本完成离线 wheel 与生命周期门禁。
+> Instrument API V2 从 `v0.8.0` 起提供。当前 `0.8.x` 插件应同时声明 wheel 依赖 `wavebench>=0.8,<0.9`，以及 descriptor 兼容区间 `>=0.8.0,<0.9.0`。两处版本门必须一致。
+
+## 职责边界
+
+| 插件负责 | WaveBench 核心负责 |
+| --- | --- |
+| 厂商协议、命令拼接和响应解析 | resource、backend 和 timeout 选择 |
+| capability 对应的 driver 方法 | transport 创建和命令日志 |
+| 写后只读核对和仪器错误队列 | Service、CLI、run plan 和 artifact |
+| `close()` 和插件私有资源清理 | safety limit、session 编排和恢复流程 |
+| fake transport 单测和脱敏实机证据 | 插件包检查、受管安装和事务恢复 |
+
+插件不得读取完整 WaveBench 配置、绕过核心另开连接、直接写 run artifact，或从 driver 内部隐式打开输出、reset、autoscale 和 trigger。
 
 ## 最小目录
 
-独立插件源码仓库中的 DS1000Z 包可作为完整模板；WaveBench 核心仓库不再复制厂商插件源码：
+每个 wheel 只提供一个 canonical driver：
 
 ```text
-packages/wavebench-rigol-ds1000z/
+wavebench-example-scope/
+├── LICENSE
+├── README.md
 ├── pyproject.toml
-└── src/wavebench_rigol_ds1000z/
-    ├── __init__.py
-    ├── descriptor.py
-    └── driver.py
+├── src/
+│   └── wavebench_example_scope/
+│       ├── __init__.py
+│       ├── descriptor.py
+│       └── driver.py
+└── tests/
+    ├── test_driver.py
+    └── test_wheel.py
 ```
 
 最小 `pyproject.toml`：
@@ -40,14 +63,14 @@ dependencies = ["wavebench>=0.8,<0.9"]
 "example.scope" = "wavebench_example_scope:descriptor"
 ```
 
-entry point 名必须等于 canonical `driver_id`。普通 metadata 命令不导入 V2 插件；只有配置真正选中该 ID、运行 `plugin info <driver_id> --load`，或运行 `plugin list/doctor --load` 时才导入 descriptor。V1 metadata entry point 仍由独立的 `--include-entry-points` 开关控制。
+entry point 名是 canonical `driver_id`，两者必须完全一致。外置 V2 插件不接受 alias。
 
-## Descriptor 与 factory
+## 实现 descriptor
 
-插件导出一个 `InstrumentDescriptor` 或返回它的无参函数：
+descriptor 模块只声明 metadata 和 factory。导入模块不得连接仪器、发送命令、扫描端口、创建文件或修改全局状态。
 
 ```python
-from wavebench.instruments.api import InstrumentDescriptor, OptionSpec
+from wavebench.instruments import InstrumentDescriptor, OptionSpec
 
 
 def _open_driver(context):
@@ -60,7 +83,7 @@ def _open_driver(context):
     )
 
 
-def descriptor():
+def descriptor() -> InstrumentDescriptor:
     return InstrumentDescriptor(
         driver_id="example.scope",
         kind="scope",
@@ -72,7 +95,9 @@ def descriptor():
         idn_patterns=("EXAMPLE,EX1",),
         backends=("pyvisa",),
         resource_schemes=("tcpip",),
-        option_specs=(OptionSpec("block_points", int, default=250000, minimum=1),),
+        option_specs=(
+            OptionSpec("block_points", int, default=250_000, minimum=1),
+        ),
         permissions=("instrument.io", "configured-resource-only"),
         factory=_open_driver,
         wavebench_min_version="0.8.0",
@@ -81,103 +106,99 @@ def descriptor():
     )
 ```
 
-descriptor 至少声明 canonical ID、kind、API/兼容版本、厂商/型号、capability、IDN pattern、backend、受限选项、权限提示和 factory。仅允许特定 VISA 接口类型的插件还应声明 `resource_schemes`；例如 LAN-only 插件使用 `("tcpip",)`，核心会在打开 transport 前拒绝 `ASRL`、`USB`、`GPIB` 等资源。空 tuple 表示不限制，适用于必须保留多种连接方式的内置兼容实现。当前 V2 外置插件必须使用 `aliases=()`；scope 插件还应准确声明 coupling policy，无法证明输入安全语义时保留 `unknown`，核心会默认拒绝采集。
+`permissions` 当前是展示信息，不是沙箱权限；`config_fields` 当前也是 metadata，不会改变配置解析或授权。能够影响运行时的字段、自动校验范围和未自动校验项见 [API 约定](../reference/plugins/WaveBench_可执行仪器插件API.md)。
 
-`backends` 的顺序是 `connection.backend = "lan"` 的首选顺序，但只在该 descriptor
-声明的后端全部属于 RsInstrument 家族时生效。当前 RsInstrument 后端 token 为
-`rsinstrument-socket`、`rsinstrument`、`rsinstrument-rsvisa` 和
-`rsinstrument-pyvisa-py`；其中 `rsinstrument` 保留 RsInstrument 自身的实现选择和既有
-pyvisa-py 兼容回退。插件不得在已开始的有状态查询或波形传输失败后静默切换后端并重放；
-需要兼容路径时应由配置显式选择并重新打开会话。
+## 实现 driver
 
-核心只对 `rsinstrument-socket` 做受限 resource 规范化：简单的
-`TCPIP::<host>::INSTR` 映射到 `TCPIP::<host>::5025::SOCKET`，已显式给出端口的
-`TCPIP::<host>::<port>::SOCKET` 保留其端口。其他 TCPIP 形式 fail closed，插件不得自行
-猜测端口或设备名。
+driver 采用结构化接口，不必继承 Protocol。实现范围由 descriptor 的 capability 决定：
 
-RsInstrument SocketIO 会话固定启用 `AddTermCharToWriteBinBlock=True` 和
-`DataChunkSize=512`，确保 definite binary block 具有消息终止符并限制 raw socket 单次发送
-长度；显式 VISA 后端保持各自原有 binary write 语义。
+- 始终实现 `close()`；
+- 只声明已实现并测试的 capability；
+- 方法签名和返回 model 与 `wavebench.instruments` 中的 Protocol 保持一致；
+- 通过 `context.open_transport()` 取得唯一 transport；
+- 用公共 model 返回数据，不返回自定义 dict 代替 model；
+- 用 `DataError` 表达无效响应，用 `InstrumentError` 表达设备状态或写后核对失败；
+- 不隐藏写操作，不重试 output、trigger 或其他状态修改。
 
-需要支持重复 `--channel` 的 scope 插件还必须声明 `scope.capture_waveforms` 并实现同名方法。该方法的语义固定为：先配置全部目标通道，只执行一次 acquisition / OPC 等待，再逐通道读取；不得静默退回逐通道重复触发。不声明该能力的插件仍可执行单通道 `scope.capture_waveform`，多通道操作会在打开 transport 前明确拒绝。
+核心只检查方法是否可调用，不检查参数和返回类型。Protocol 一致性必须由插件测试保证。
 
-插件模块导入时不得连接仪器、发送 SCPI、创建文件或修改全局状态。factory 才能调用 `context.open_transport()`，且每次 factory 调用最多只能成功打开一个 transport。
+## 选择 capability
 
-## DriverContext
+capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`。完整 capability 到方法的映射见 [API 约定](../reference/plugins/WaveBench_可执行仪器插件API.md#capability-契约)。
 
-核心传入的 `DriverContext` 只包含当前插件所需的窄上下文：
+不要为了让插件显得完整而声明尚未实现的能力。capability 会参与 Service 和 run-plan 预检；声明过多会把运行期错误伪装成已支持功能，声明过少则会在 transport 打开前被明确拒绝。
 
-- 已解析的 canonical `driver_id` 与 `kind`；
-- 配置中选中的单个 `resource`；
-- 核心选定的 backend、timeout 与 OPC timeout；
-- `CommandLogger`；
-- 只读 core settings 与经过 `OptionSpec` 校验的插件 options；
-- 受控 transport factory。
+多通道 scope 如声明 `scope.capture_waveforms`，必须先配置全部通道，只执行一次 acquisition 和 OPC 等待，再逐通道读取。不得退化为每个通道独立触发。
 
-插件不应读取完整 WaveBench 配置，也不应持有 Service、TUI、RunService 或 artifact writer。
+## 配置 options
 
-## Contracts 与 models
+插件私有配置放在对应的 `[<kind>.options]` 表中，并为每个键定义 `OptionSpec`。适合 `OptionSpec` 的内容包括分块点数、插件专用超时和明确枚举；resource、backend、通用 timeout、安全限制和输出状态仍由核心配置管理。
 
-`capabilities` 是执行契约，不只是展示 metadata。核心会拒绝未知 capability；factory
-返回后，每个已声明 capability 必须能映射到对应的 callable 方法。Service 和 run-plan
-预检还会在 transport 打开前检查当前操作所需 capability，缺失时给出 canonical driver
-ID、操作名和缺失项。
+`OptionSpec` 名称应唯一并使用小写 snake_case。默认值也会接受类型和范围校验；`required=True` 不应与默认值同时使用。
 
-按 `kind` 可参考对应 Protocol 的方法签名：
+## ID、版本和覆盖
 
-- `ScopeDriver`
-- `SourceDriver`
-- `PowerDriver`
-- `DmmDriver`
-- `SweepAnalyzerDriver`
+- canonical ID 使用稳定的小写 dotted 名称，例如 `example.scope`。
+- 外置插件必须使用 `aliases=()`。
+- 当前 WaveBench 版本必须同时落在 wheel 依赖和 descriptor 半开区间内。
+- 外部插件不能覆盖内置 canonical ID 或 alias，除非核心已为指定 distribution 和 canonical ID 建立覆盖白名单。
+- 覆盖槽位不改变短 alias；短 alias 始终选择内置实现，卸载外置包后 canonical ID 恢复内置实现。
 
-公共返回类型来自 `wavebench.instruments.models`，包括 `WaveformHeader`、`WaveformData`、`SourceStatus`、`PowerStatus`、`PowerMeasurement`、`PowerProtectionStatus`、`DmmReading`，以及扫频分析仪使用的 `SweepPlan`、`SweepAnalyzerSnapshot`、`FrequencyResponseTrace`、`TraceIntegrity`、`MarkerReading` 和 `InstrumentMeasurementResult`。不要复制另一套不兼容的数据模型。插件只需实现其声明能力对应的方法以及 `close()`，不必为了通过加载而实现整个 kind 的所有方法。字段和不变量以当前源码中的 models 与 Protocol 定义为准。
+当前受限覆盖绑定见[可安装仪器插件用户指南](../guides/WaveBench_可安装仪器插件.md#查看与诊断)。插件不能自行申请或扩大白名单。
 
-DG4000 系列 source 插件还可从 `wavebench.instruments` 导入稳定的 `DG4000DacBlock` 与 `DG4000ByteOrder`。核心继续负责 CSV/NPY 加载、归一化、DAC14 编码、CLI、Service、安全限制和 artifact；插件只接收已校验的 binary-block 对象并负责厂商协议上传。不要从 `wavebench.arbitrary` 复制或导入核心工作流实现。
+## 开发顺序
 
-factory 返回对象缺少已声明 capability 对应的方法时，核心会拒绝启用该插件并尝试关闭已创建资源。
+建议按以下顺序推进：
 
-## ID、alias 与兼容
-
-- 当前 V2 外置插件只支持 canonical ID，不接受 alias；内置 driver 可继续保留兼容 alias。
-- 除核心显式声明的可选覆盖槽位外，外部插件不能覆盖内置 canonical ID 或 alias；源码中的历史名称 `migration slot` 不表示内置驱动将被移除。
-- entry point 名与 descriptor `driver_id` 必须一致。
-- `kind` 必须与配置槽位一致。
-- 当前 WaveBench 版本必须落在插件声明的半开兼容区间内。
-- 第一阶段不解决同一 Python 环境中互斥 vendor SDK 依赖；出现真实需求后再评估独立进程或 RPC。
-
-WaveBench 主包长期预装 RTM2000、DS1000Z、DG4000、DP800 和 DM3000 五个仪器族。DS1000Z 外置包使用独立 canonical `rigol.ds1000z`；配置 alias `ds1104` / `ds1000z` 继续选择内置实现。这避免外部包覆盖内置 alias，也便于卸载后安全恢复。
-
-可选覆盖槽位是核心内置的窄白名单，不是插件可自行请求的权限。当前共享 canonical ID 的绑定为：`wavebench-rigol-dg4000` / `rigol.dg4202`、`wavebench-rigol-dm3000` / `rigol.dm3000`、`wavebench-rigol-dp800` / `rigol.dp800`、`wavebench-rohde-schwarz-rtm2000` / `rohde-schwarz.rtm2032`。对应短 alias `dg4202`、`dm3000` / `dm3058`、`dp800`、`rtm2032` 始终选择内置基线；卸载外置包后 canonical ID 恢复到内置实现。distribution、canonical ID 或 alias 任一不匹配都会按普通冲突拒绝。
+1. 冻结 canonical ID、kind、支持型号和只读 IDN 样本。
+2. 先实现 `idn()`、`close()` 和一个最小只读 capability。
+3. 用 fake transport 固定命令、终止符、响应解析、timeout 和错误映射。
+4. 增加写 capability，每项都补写前条件、写后核对和失败语义。
+5. 补 `OptionSpec`、公共 model 和 capability 一致性测试。
+6. 构建 wheel，执行包检查和临时 venv 生命周期验证。
+7. 通过离线门禁后，再单独申请实机验收。
 
 ## 测试门槛
 
 至少覆盖：
 
-- descriptor 构建不产生 I/O；
-- canonical ID、alias、kind、版本和冲突校验；
-- OptionSpec 默认值、类型、范围和未知字段；
-- capability 到 callable 的映射，以及缺 capability 时不打开 transport；
-- fake transport 下的核心读写能力、错误队列和 close；
-- timeout、短 bin-block、坏 preamble、截图失败；
-- 坏插件不影响其他内置驱动；
-- wheel 在临时 venv 中安装、entry point 发现、重装和卸载；
-- `plugin package check` 拒绝无效 `RECORD`、重复成员、路径越界、`.pth`、`.data` 重定位、核心 `wavebench/` 覆盖及超出资源上限的 wheel；
-- 受管 install / upgrade / downgrade / remove 在临时 venv 中完成事务、回滚和 recover 测试；
-- 卸载后缺失提示或内置 fallback 行为。
+- descriptor 导入不产生 I/O；
+- entry point 名、canonical ID、kind、版本和 alias；
+- capability 前缀、方法签名和公共返回 model；
+- `OptionSpec` 默认值、required、类型、范围、choices、未知键和重名；
+- fake transport 下的正常响应、短响应、坏数据、超时、错误队列和 close；
+- 只读方法不写入，危险写操作不隐式重试；
+- factory 失败和 capability 不完整时释放 transport；
+- wheel 包检查、安装后 descriptor 加载、卸载和 fallback。
 
-从 WaveBench 仓库根目录运行以下示例：
+独立插件仓库的日常离线检查：
 
 ```bash
-python -m pytest -q packages/wavebench-rigol-ds1000z/tests
-python -m ruff check packages/wavebench-rigol-ds1000z
-python -m wavebench plugin package check ../wavebench-instrument-plugins/packages/wavebench-rigol-ds1000z
-python -m wavebench plugin install ../wavebench-instrument-plugins/packages/wavebench-rigol-ds1000z --dry-run
-python -m wavebench plugin doctor --load
+.venv/bin/python -m pytest
+.venv/bin/python -m ruff check .
+python3 scripts/dev_env.py check
 ```
 
-## 信任与发布边界
+从 WaveBench 仓库检查真实 wheel 或源码目录：
 
-Python entry point 是可信代码扩展，不是安全沙箱。安装插件等价于允许该包及其 build backend 在当前 Python 用户权限下执行代码。WaveBench 提供用户显式指定本地源码/wheel 的受管安装事务，但不提供在线商店、自动下载、自动依赖安装、插件评分或每插件进程隔离。
+```bash
+.venv/bin/python -m wavebench plugin package check <plugin-path>
+.venv/bin/python -m wavebench plugin install <plugin-path> --dry-run
+.venv/bin/python -m wavebench plugin doctor --load
+```
 
-建议每套 WaveBench 使用独立 venv，固定 WaveBench/插件版本，保存 lockfile，并在分发 wheel 时校验 hash。公开示例 resource 使用 RFC 5737 保留地址，例如 `TCPIP::192.0.2.20::INSTR`，不得提交真实实验室地址、序列号、凭据、原始波形或命令日志。
+源码目录检查会执行受信任的 build backend。若要求检查过程不执行构建代码，应先从可信流程取得 wheel，再直接检查 wheel。
+
+## 发布边界
+
+插件发布前应固定 WaveBench 兼容范围、构建 wheel、记录 SHA-256，并在一次性 venv 中完成安装、加载和卸载。不要在同一环境中混用 editable 安装和 WaveBench 受管插件账本。
+
+默认测试不得扫描端口、连接仪器或发送 SCPI。实机测试必须单独授权，并使用脱敏 resource、可恢复状态和明确的输出关闭检查。
+
+## 相关文档
+
+- [可执行仪器插件 API 约定](../reference/plugins/WaveBench_可执行仪器插件API.md)
+- [可安装仪器插件用户指南](../guides/WaveBench_可安装仪器插件.md)
+- [新增仪器驱动指南](WaveBench_新增仪器驱动指南.md)
+- [错误处理和日志策略](../reference/WaveBench_错误处理和日志策略.md)
+- [插件注册表](../reference/plugins/WaveBench_插件注册表.md)

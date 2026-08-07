@@ -25,6 +25,32 @@ WaveBench 是一个用 Python 编写的实验室自动测量台，面向电子�
 - 用明确的命令控制输出，不在后台隐式执行 reset、autoscale 或输出切换。
 - 在主包内使用常见仪器；需要其他型号时，再显式安装受信任的本地插件。
 
+### WaveBench 特色功能
+
+#### 测试报告
+
+`run report` 会读取已有的 `run.json`、采集包和命令记录，生成可离线查看的 HTML 报告。报告汇总运行状态、验收结果、波形与频响分析、警告、恢复状态和原始证据链接，适合复查一次实验到底发生了什么。
+
+![测试报告示例](docs/images/run_plan_result.png)
+
+#### 普通扫频
+
+普通扫频在固定 Vpp 下沿频率轴采集 DUT 的幅频和相频响应。每条曲线对应一次固定幅值的扫频结果，便于观察通带、衰减和相位变化。
+
+![幅频特性曲线](docs/images/magnitude_response.png)
+
+![相频特性曲线](docs/images/phase_response.png)
+
+#### 二维扫频
+
+`sweep.frequency_response` 支持「请求 Vpp × 频率」二维扫频。每个网格点保留输入与输出波形、频率响应和质量状态，可进一步生成二维校准 LUT；安装 `.[report3d]` 后，还能在 HTML 报告中查看交互式三维增益曲面。
+
+![二维频率响应](docs/images/2d_frequency_response.gif)
+
+#### 多仪器 `run plan`
+
+显式 `run plan` 可以把信号源、示波器、电源和万用表编排到同一条实验流程中。执行前先用 `run check` 做离线校验，再用 `run verify` 做连接和安全预检；执行过程中保留每个步骤的状态、测量结果、失败证据和恢复记录。
+
 典型流程是「信号源 → DUT → 示波器 / 万用表」。
 
 ```mermaid
