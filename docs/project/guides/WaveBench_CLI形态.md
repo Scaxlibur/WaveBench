@@ -15,7 +15,7 @@ wavebench
 ```text
 scope    source    power    dmm    sweep    run
 capture  mcp       tui      net    doctor   plugin
-capability
+capability  lock
 ```
 
 命令帮助：
@@ -30,7 +30,7 @@ wavebench run --help
 
 | 类别 | 示例 | 行为 |
 |---|---|---|
-| 离线 | `run schema`、`run template`、`run check`、`run intent`、`run report`、`run compare`、`run resume`、`capability explain`、`capture inspect`、`tui --fake` | 不连接仪器；报告、比较、检查、能力解释和意图生成只读取本地文件 |
+| 离线 | `run schema`、`run template`、`run check`、`run intent`、`run report`、`run compare`、`run resume`、`capability explain`、`lock status`、`capture inspect`、`tui --fake` | 不连接仪器；报告、比较、检查、能力解释、锁查询和意图生成只读取本地文件 |
 | 连接读取 | `doctor`、`net`、`scope idn`、`scope status`、`run verify` | 查询资源、身份或状态，不应修改实验设置 |
 | 显式写入或触发 | `scope auto`、`scope fetch/capture`、source / power setter、`run plan` | 可能改变设置、触发采集或切换输出 |
 

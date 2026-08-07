@@ -96,6 +96,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Access policy override / 访问策略覆盖值",
     )
+    lock_parser = subparsers.add_parser(
+        "lock",
+        help="Inspect local resource leases / 查询本地资源租约",
+    )
+    lock_sub = lock_parser.add_subparsers(dest="command", required=True)
+    lock_status = lock_sub.add_parser(
+        "status",
+        help="Read one resource lease without acquiring it / 查询资源租约但不取得锁",
+    )
+    lock_status.add_argument("resource", help="VISA resource or serial path")
+    lock_status.add_argument("--lock-id", default="", help="Optional logical lock id")
     tui_parser.add_argument("--config", default="wavebench.toml", help="Path to wavebench TOML config")
     tui_parser.add_argument("--resource", help="Override power VISA resource / 覆盖电源 VISA 资源")
     tui_parser.add_argument(

@@ -107,6 +107,7 @@ from .services.execution_intent import (
     load_execution_intent,
     write_execution_intent,
 )
+from .services.resource_lease import ResourceLease
 from .services.frequency_response_calibration import (
     build_frequency_response_calibration,
     load_frequency_response_calibration_config,
@@ -445,6 +446,18 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     _print_capability_explanation(result)
                 return 0 if result.status == "supported" else 2
+        if args.domain == "lock":
+            if args.command == "status":
+                payload = ResourceLease(
+                    resource=args.resource,
+                    lock_id=args.lock_id,
+                ).status()
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    for key, value in payload.items():
+                        print(f"{key}={value}")
+                return 0
         if args.domain == "doctor":
             records = doctor_records(
                 load_config(args.config),

@@ -79,6 +79,9 @@ Service 的一次性 session、`doctor`、网络 discovery 和声明式 SCPI pro
 类本地独占租约；离线命令仍不接触仪器。租约只覆盖当前进程持有的本地 Linux / WSL 文件锁，不能
 替代外部程序或真实设备内部的互斥机制。
 
+可以使用 `lock status <resource>` 查询锁是否被持有、是否存在残留 sidecar；该命令只读取锁状态，
+不会取得租约，也不会连接仪器。
+
 ## run 内状态守卫
 
 `run plan` 对 SourceService 和 PowerService 的基础控制写入启用 compare-before-write。每个受保护
