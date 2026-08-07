@@ -1,0 +1,427 @@
+# WaveBench 可执行仪器插件 API 约定
+
+本文定义 `wavebench.instrument.v2` 的包结构、descriptor、factory、capability 和运行时边界。开发流程见[插件开发指南](../../contributing/WaveBench_插件开发指南.md)，安装与事务边界见[可安装仪器插件用户指南](../../guides/WaveBench_可安装仪器插件.md)。
+
+文中的约束分为三类：
+
+- 「核心强制」：当前 WaveBench 会在包检查、descriptor 加载或 driver 创建时拒绝不符合要求的插件。
+- 「接口约定」：插件必须遵守，但 Python 运行时无法完整验证；插件测试负责兜底。
+- 「建议」：用于降低兼容和维护风险，不作为当前加载门槛。
+
+## 适用范围
+
+WaveBench 有两套不同的 entry point：
+
+| entry point | API | 作用 | 是否提供仪器执行能力 |
+| --- | --- | --- | --- |
+| `wavebench.drivers` | `wavebench.instrument.v1` | 只读 metadata | 否 |
+| `wavebench.instruments` | `wavebench.instrument.v2` | descriptor、factory 和 driver | 是 |
+
+V2 capability 只声明 driver 已实现的能力。它不会自动生成 CLI 命令、Service 或 run-plan step；核心没有对应消费路径时，声明 capability 也不会让该功能自动出现。
+
+V2 插件是可信 Python 代码，不是沙箱。导入 descriptor、构建源码 wheel 和安装包都可能执行插件代码。只应处理来源、版本和哈希均已确认的插件包。
+
+## 包和 entry point
+
+受管插件包必须满足以下条件：
+
+| 项目 | 要求 | 校验位置 |
+| --- | --- | --- |
+| 分发 | 一个纯 Python wheel | 包检查 |
+| Python 版本 | `Requires-Python` 如有声明，必须包含当前解释器版本 | 包检查 |
+| WaveBench 依赖 | 必须恰好有一个当前环境中生效的 `wavebench` 依赖，并包含当前版本 | 包检查 |
+| entry point 数量 | 必须恰好有一个 `wavebench.instruments` entry point | 包检查 |
+| entry point 名 | 非空、无首尾空白、内部无空白 | 包检查 |
+| entry point 目标 | 使用 `module:object` 形式 | 包检查 |
+| driver 身份 | entry point 名必须与 descriptor 的 `driver_id` 完全一致 | 安装后检查和运行时 registry |
+
+最小 `pyproject.toml`：
+
+```toml
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wavebench-example-scope"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["wavebench>=0.8,<0.9"]
+
+[project.entry-points."wavebench.instruments"]
+"example.scope" = "wavebench_example_scope:descriptor"
+```
+
+entry point 可以直接导出 `InstrumentDescriptor`，也可以导出返回 `InstrumentDescriptor` 的无参同步函数。其他返回类型会被拒绝。
+
+descriptor 模块导入时不得连接仪器、调用 `open_transport()`、发送命令、扫描端口、创建文件或修改进程级全局状态。这是接口约定，当前加载器不会尝试撤销导入副作用。
+
+## 导入边界
+
+插件应从 `wavebench.instruments` 使用公开 descriptor、Protocol 和 model，从 `wavebench.errors` 使用公共异常类型：
+
+```python
+from wavebench.errors import DataError, InstrumentError
+from wavebench.instruments import InstrumentDescriptor, OptionSpec, WaveformData
+```
+
+`wavebench.instruments.__all__` 是当前公开名称清单。插件不应依赖以下实现模块：
+
+- `wavebench.instruments.registry` 和 `wavebench.instruments.factory`；
+- `wavebench.services`、`wavebench.cli`、`wavebench.config` 和 `wavebench.tui`；
+- 内置 driver、受管安装账本或私有辅助函数。
+
+Protocol 使用结构化接口。driver 不必继承 Protocol；方法名、参数、返回类型和行为符合约定即可。
+
+## Descriptor
+
+最小 descriptor：
+
+```python
+from wavebench.instruments import InstrumentDescriptor, OptionSpec
+
+
+def _open_driver(context):
+    from .driver import ExampleScope
+
+    return ExampleScope(
+        transport=context.open_transport(),
+        check_errors=bool(context.settings["check_errors"]),
+        block_points=int(context.options["block_points"]),
+    )
+
+
+def descriptor() -> InstrumentDescriptor:
+    return InstrumentDescriptor(
+        driver_id="example.scope",
+        kind="scope",
+        display_name="Example Scope",
+        manufacturer="Example",
+        models=("EX1",),
+        aliases=(),
+        capabilities=("scope.idn", "scope.capture_waveform"),
+        idn_patterns=("EXAMPLE,EX1",),
+        backends=("pyvisa",),
+        resource_schemes=("tcpip",),
+        option_specs=(
+            OptionSpec("block_points", int, default=250_000, minimum=1),
+        ),
+        permissions=("instrument.io", "configured-resource-only"),
+        factory=_open_driver,
+        summary="Example oscilloscope driver.",
+        wavebench_min_version="0.8.0",
+        wavebench_max_version="0.9.0",
+        scope_coupling_policy="unknown",
+    )
+```
+
+### 字段约定
+
+| 字段 | 核心强制 | 接口约定和用途 |
+| --- | --- | --- |
+| `driver_id` | 非空、无首尾空白；外置插件必须与 entry point 名一致 | 使用小写 ASCII canonical ID，推荐 `vendor.model` 形式；发布后不得复用给其他设备族 |
+| `kind` | 配置解析时必须与目标槽位一致 | 只能是 `scope`、`source`、`power`、`dmm` 或 `sweep_analyzer` |
+| `display_name` | 仅要求构造参数存在 | 面向用户的简短名称，不承担型号匹配 |
+| `manufacturer` | 仅要求构造参数存在 | 使用厂商正式名称 |
+| `models` | 至少包含一项 | 每项应为非空型号名称；不要把营销系列名当作已验证型号 |
+| `aliases` | 外置 V2 插件必须为空 | alias 由核心维护，插件只能使用 canonical ID |
+| `capabilities` | 非空；每项必须出现在核心 capability 表中 | 每项必须以当前 `kind` 为前缀，只声明已经实现并测试的能力 |
+| `idn_patterns` | 当前不校验内容 | `doctor` 会删除非字母数字字符后做不区分大小写的子串匹配；它不是正则表达式，也不是设备身份认证 |
+| `backends` | 至少包含一项 | 只使用核心支持的 backend token，见下文「Transport 选择」 |
+| `resource_schemes` | 必须是去重的小写 token；空 tuple 表示不限制 | LAN-only 插件通常声明 `("tcpip",)`；该字段只检查 resource 前缀，不探测设备 |
+| `option_specs` | 配置值按 `OptionSpec` 校验 | 名称必须唯一并使用小写 snake_case；当前核心不自动检查名称重复 |
+| `permissions` | 当前只展示，不参与授权判断 | 常规仪器插件声明 `instrument.io` 和 `configured-resource-only`；不得把该字段描述成沙箱权限 |
+| `factory` | 必须可调用 | 接收一个 `DriverContext`，同步返回 driver 对象 |
+| `summary` | 当前不校验 | 一句话说明设备族和已实现范围 |
+| `api_version` | 必须精确等于 `wavebench.instrument.v2` | 不按语义版本范围匹配；通常保留默认值 |
+| `wavebench_min_version` | 当前核心版本不得低于该值 | 与 `wavebench_max_version` 组成半开区间 |
+| `wavebench_max_version` | 当前核心版本必须低于该值 | `0.8.x` 插件通常使用 `0.9.0` |
+| `distribution`、`version`、`source`、`origin` | entry point 加载后由 registry 按已安装分发覆盖 | 不得用于插件内部授权、信任或功能分支 |
+| `scope_coupling_policy` | 值由类型约定为三种策略 | scope 必须准确声明；无法证明时使用 `unknown`，核心会默认拒绝无法确认高阻的采集 |
+| `config_fields` | 当前只展示；为空时由 `option_specs` 推导 `options.<name>` | 只列出用户实际可配置的字段，不代表核心会按此字段授权 |
+
+### `scope_coupling_policy`
+
+| 值 | 语义 |
+| --- | --- |
+| `fixed-high-impedance` | 仪器的 `AC`、`DC`、`GND` 等 coupling 不切换到低阻终端 |
+| `switchable-termination` | coupling 可能代表高阻或 50 Ω；核心按查询值和显式放行判断 |
+| `unknown` | 无法证明输入阻抗语义；默认 fail closed |
+
+## `OptionSpec`
+
+`OptionSpec` 只处理一层标量配置，不是通用 schema 系统。
+
+| 字段 | 语义 |
+| --- | --- |
+| `name` | `[<kind>.options]` 下的键名 |
+| `value_type` | 使用 `isinstance(value, value_type)` 做运行时检查 |
+| `default` | 非 `None` 时，在配置缺失后写入 `context.options`，并执行同样的校验 |
+| `required` | 为 `True` 且配置缺失时拒绝创建 driver |
+| `minimum`、`maximum` | 将值转换为 `float` 后检查闭区间边界 |
+| `choices` | 使用 Python 相等比较检查允许值 |
+
+校验顺序如下：
+
+1. 拒绝所有未在 `option_specs` 中声明的键。
+2. 校验显式配置值。
+3. 对缺失的 required option 报错。
+4. 对其余缺失项应用非 `None` 默认值。
+
+插件还必须遵守以下约定：
+
+- `OptionSpec.name` 不得重复；当前实现会按名称建立映射，但不会主动报告重复项。
+- 不要同时设置 `required=True` 和非 `None` 默认值；缺失时 required 检查优先。
+- `default=None` 表示「不向 `context.options` 写入该键」，不能表示显式传入 `None`。
+- `minimum` 和 `maximum` 只用于可安全转换为浮点数的数值类型。
+- 容器、联合类型和字段间约束应使用公共 model 或在 factory/driver 中显式检查。
+
+## `DriverContext`
+
+`DriverContext` 是 frozen dataclass。`settings` 和 `options` 会复制为只读 mapping；只读是浅层的，插件不应在其中存放或修改可变对象。
+
+| 属性 | 语义 |
+| --- | --- |
+| `driver_id` | 已解析的 canonical ID |
+| `kind` | 已验证的仪器类型 |
+| `resource` | 配置中的单个 resource 原值 |
+| `backend` | 核心完成 alias 和优先级选择后的 backend token |
+| `timeout_ms` | 普通连接和查询超时 |
+| `opc_timeout_ms` | OPC 等待超时 |
+| `logger` | 当前操作的 `CommandLogger` |
+| `settings` | 核心设置；当前 scope、source 和 power 提供 `check_errors`，DMM 不保证该键存在 |
+| `options` | 经过 `OptionSpec` 校验并补齐默认值的插件选项 |
+| `open_transport()` | 打开核心配置和记录的 transport |
+
+插件不得读取完整 `WaveBenchConfig`，也不得从环境变量或私有配置文件另选 resource。resource、backend、timeout 和日志必须由核心传入。
+
+一次 driver 创建期间最多允许一个 transport 成功打开。第二次调用 `open_transport()` 会抛出 `ConfigError`。当前实现允许 factory 不打开 transport，但真实仪器 driver 应在 factory 中打开并接管唯一 transport，不应保存整个 context 供后台延迟建连。
+
+## Transport 选择
+
+当前核心可以创建以下 backend：
+
+| token | transport |
+| --- | --- |
+| `serial` | `SerialTransport` |
+| `pyvisa` | `PyVisaTransport` |
+| `rsinstrument` | `RsInstrumentTransport` 的兼容选择路径 |
+| `rsinstrument-socket` | RsInstrument SocketIO |
+| `rsinstrument-rsvisa` | RsVisa |
+| `rsinstrument-pyvisa-py` | pyvisa-py |
+
+`lan`、`visa` 和 `pyvisa` 配置通常归一化为 `pyvisa`。当 descriptor 的全部 backend 都属于 RsInstrument 家族且配置为 `lan` 时，核心选择 descriptor 中的第一项。因此，RsInstrument backend 的顺序具有运行时意义。
+
+`resource_schemes` 非空时，核心提取 resource 开头连续的 ASCII 字母并转为小写后匹配。例如 `TCPIP0::...` 的 scheme 为 `tcpip`。路径形式的串口 resource 不以字母开头，通常不应配合非空 `resource_schemes`。
+
+插件不得自行绕过 `context.open_transport()` 创建 PyVISA、串口或 socket 会话，也不得在部分读取、写入或触发失败后静默切换 backend 并重放操作。
+
+## Factory 和资源所有权
+
+factory 的调用顺序为：
+
+1. 核心解析 descriptor，并检查 API 版本、kind、WaveBench 兼容区间和 capability 名。
+2. 核心选择 backend，检查 resource scheme，并校验 options。
+3. 核心构造 `DriverContext` 并调用 factory。
+4. 核心检查 `close()`，以及每个已声明 capability 对应的方法是否可调用。
+5. Service 使用 driver；one-shot 调用或 run session 结束时调用 `close()`。
+
+factory 返回 driver 后，transport 的所有权转移给 driver。`close()` 必须释放 transport 和插件创建的后台资源；建议实现为幂等操作。若 factory 或 capability 检查失败，核心优先调用已返回 driver 的 `close()`；只有 `close()` 不存在或失败时，核心才直接关闭已记录的 transport。
+
+factory 必须同步返回，不得返回 coroutine、context manager 或 `(driver, transport)` tuple。factory 也不得启动无法由 `close()` 停止的线程或子进程。
+
+## Capability 契约
+
+核心在执行操作前检查所需 capability，缺失时不会打开 transport。driver 创建后，核心只检查对应属性是否可调用，不检查参数签名、返回类型、异常类型或操作语义。这些内容由 Protocol、model 和插件测试保证。
+
+capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader 会拒绝未知 capability，但不会单独拒绝「已知但前缀属于其他 kind」的组合；插件测试必须覆盖该项。
+
+方法签名以 [`contracts.py`](../../../../src/wavebench/instruments/contracts.py) 为准，返回对象以 [`models.py`](../../../../src/wavebench/instruments/models.py) 为准。当前 capability 到方法的映射如下。
+
+### Scope
+
+| capability | 必须可调用的方法 |
+| --- | --- |
+| `scope.idn` | `idn` |
+| `scope.errors` | `errors` |
+| `scope.autoscale` | `autoscale` |
+| `scope.fetch_waveform` | `fetch_waveform` |
+| `scope.capture_waveform` | `capture_waveform` |
+| `scope.capture_waveforms` | `capture_waveforms` |
+| `scope.screenshot` | `screenshot_png` |
+| `scope.channel_coupling` | `channel_coupling` |
+| `scope.snapshot` | `get_snapshot` |
+| `scope.acquisition_status` | `get_acquisition_status` |
+| `scope.capture_average` | `capture_average` |
+| `scope.digital_status` | `get_digital_status` |
+| `scope.digital_waveform` | `get_digital_waveform` |
+| `scope.history_timestamps` | `get_history_timestamps` |
+| `scope.measurement_statistics` | `get_measurement_statistics` |
+| `scope.math_metadata` | `get_math_waveform_metadata` |
+| `scope.fft_status` | `get_fft_status` |
+| `scope.reference_metadata` | `get_reference_waveform_metadata` |
+| `scope.cursor_readout` | `get_cursor_readout` |
+
+`scope.capture_waveforms` 的固定语义是：先配置全部目标通道，只执行一次 acquisition 和 OPC 等待，再逐通道读取。不得静默退回逐通道重复触发。回调、失败时部分结果和返回字典的签名以 `MultiChannelScopeDriver` 为准。
+
+### Source
+
+| capability | 必须可调用的方法 |
+| --- | --- |
+| `source.idn` | `idn` |
+| `source.errors` | `errors`、`assert_no_errors` |
+| `source.status` | `get_status` |
+| `source.channel_profile` | `get_channel_profile` |
+| `source.coupling_profile` | `get_coupling_profile` |
+| `source.coupling_configure` | `configure_coupling` |
+| `source.harmonic_profile` | `get_harmonic_profile` |
+| `source.harmonic_configure` | `configure_harmonics` |
+| `source.modulation_am_profile` | `get_am_modulation_profile` |
+| `source.modulation_am_configure` | `configure_am_modulation` |
+| `source.modulation_fm_profile` | `get_fm_modulation_profile` |
+| `source.modulation_fm_configure` | `configure_fm_modulation` |
+| `source.modulation_pm_profile` | `get_pm_modulation_profile` |
+| `source.modulation_pm_configure` | `configure_pm_modulation` |
+| `source.modulation_pwm_profile` | `get_pwm_modulation_profile` |
+| `source.modulation_pwm_configure` | `configure_pwm_modulation` |
+| `source.pulse_profile` | `get_pulse_profile` |
+| `source.pulse_configure` | `configure_pulse` |
+| `source.burst_profile` | `get_burst_profile` |
+| `source.burst_configure` | `configure_burst` |
+| `source.burst_trigger` | `trigger_burst` |
+| `source.sweep_profile` | `get_sweep_profile` |
+| `source.sweep_configure` | `configure_sweep` |
+| `source.sweep_trigger` | `trigger_sweep` |
+| `source.counter_profile` | `get_counter_profile` |
+| `source.set_frequency` | `set_frequency` |
+| `source.set_function` | `set_function` |
+| `source.set_amplitude_vpp` | `set_amplitude_vpp` |
+| `source.set_square_duty_cycle` | `set_square_duty_cycle` |
+| `source.output` | `set_output` |
+| `source.arbitrary_probe` | `probe_arbitrary_queries` |
+| `source.arbitrary_upload` | `upload_dg4000_dac14_block` |
+
+### Power、DMM 和 sweep analyzer
+
+| capability | 必须可调用的方法 |
+| --- | --- |
+| `power.idn` | `idn` |
+| `power.status` | `get_status` |
+| `power.measurement` | `get_measurement` |
+| `power.set_voltage_current_limit` | `set_voltage_current_limit` |
+| `power.output` | `set_output` |
+| `power.protection` | `get_protection_status`、`set_protection` |
+| `dmm.idn` | `idn` |
+| `dmm.read` | `read` |
+| `dmm.function_status` | `function_status` |
+| `dmm.set_function` | `set_function` |
+| `dmm.measurement_profile` | `measurement_profile` |
+| `dmm.trigger_status` | `trigger_status` |
+| `dmm.calculation_status` | `calculation_status` |
+| `dmm.calculation_statistics` | `calculation_statistics` |
+| `dmm.system_interface_status` | `system_interface_status` |
+| `dmm.set_voltage_range` | `set_voltage_range` |
+| `dmm.set_dcv_impedance` | `set_dcv_impedance` |
+| `sweep_analyzer.idn` | `idn` |
+| `sweep_analyzer.status` | `get_snapshot` |
+| `sweep_analyzer.trace` | `fetch_frequency_response` |
+| `sweep_analyzer.configure` | `apply_sweep_plan` |
+| `sweep_analyzer.trigger` | `trigger_single` |
+| `sweep_analyzer.output` | `set_source_output` |
+| `sweep_analyzer.marker` | `read_markers` |
+| `sweep_analyzer.analysis` | `read_measurements` |
+
+`DmmDriver` 还定义了 `apply_function()`。当前 capability 校验只要求 `dmm.set_function` 对应的 `set_function()`；TUI 的复用 session 路径会调用 `apply_function()`。需要支持 TUI 的 DMM 插件必须同时实现这两个方法，并为这一差异添加测试。
+
+## 参数和返回 model
+
+公共 model 用于跨插件保持单位、字段和序列化语义一致。driver 不得返回自定义 dict 代替 Protocol 规定的 model，也不得复制一套同名 dataclass。
+
+| kind | 常用公共返回类型 |
+| --- | --- |
+| scope | `WaveformHeader`、`WaveformData`、`ScopeSnapshot`、`ScopeAcquisitionStatus` 及各分析 model |
+| source | `SourceStatus`、`SourceChannelProfile`、各配置和 profile model |
+| power | `PowerStatus`、`PowerMeasurement`、`PowerProtectionStatus` |
+| dmm | `DmmReading`、`DmmMeasurementProfile`、各状态和配置 model |
+| sweep analyzer | `SweepPlan`、`SweepAnalyzerSnapshot`、`FrequencyResponseTrace`、`TraceIntegrity`、`MarkerReading`、`InstrumentMeasurementResult` |
+
+部分 model 会在 `__post_init__` 中检查有限值、数组维度、字段组合和枚举，另一些只是 frozen 数据容器。插件测试仍需检查以下内容：
+
+- 数值单位与字段名符合公共 model；
+- 波形和 trace 数组是一维、有限值，点数与 header 或 integrity 一致；
+- 时间戳包含时区；
+- 状态查询不隐式修改仪器；
+- 写操作返回写后只读核对得到的状态，而不是直接回显请求参数。
+
+## 异常、日志和重试
+
+异常分类见[错误处理和日志策略](../WaveBench_错误处理和日志策略.md)。插件侧约定如下：
+
+- 无效调用参数或无法解释的仪器响应使用 `DataError`。
+- 仪器错误队列、写后核对失败或设备状态不满足操作条件使用 `InstrumentError`。
+- 连接和超时异常由核心 transport 保留为 `ConnectionError` 和 `OperationTimeout`；插件不应无差别包装成 `RuntimeError`。
+- 配置、descriptor 和 factory 创建失败由核心转换为 `ConfigError`；运行中的设备数据错误不应伪装成配置错误。
+- 所有 I/O 通过核心 transport 执行，以继承 timeout、命令日志和已配置的只读重试策略。
+- 不得自动重试写命令、输出切换、手动 trigger 或已经开始消费响应的数据传输。
+- driver 不得吞掉错误后返回伪造的成功状态。
+
+## 当前不会自动校验的项目
+
+以下内容属于插件发布门槛，但当前核心不会完整验证：
+
+| 项目 | 插件侧验证方式 |
+| --- | --- |
+| `driver_id` 的小写 dotted 命名 | descriptor 单测 |
+| capability 前缀与 `kind` 一致 | 集合断言 |
+| `OptionSpec.name` 唯一 | descriptor 单测 |
+| 方法签名和返回类型符合 Protocol | fake transport 单测和静态类型检查 |
+| `permissions` 对应真实行为 | 人工审查；该字段当前不授权 |
+| `config_fields` 与配置文档一致 | 文档测试或快照测试 |
+| `idn_patterns` 能区分设备族 | 脱敏 IDN 样本测试 |
+| `close()` 真正释放 transport | 失败注入和 close 次数测试 |
+| 导入 descriptor 无 I/O 副作用 | 子进程导入测试 |
+
+## 兼容性
+
+插件包有两层版本门：
+
+1. wheel metadata 中的 `Requires-Dist: wavebench...`；
+2. descriptor 的 `wavebench_min_version` 和 `wavebench_max_version`。
+
+两层都必须包含当前 WaveBench 版本。descriptor 区间为左闭右开；`api_version` 则要求精确字符串相等。
+
+以下变更应视为不兼容：
+
+- 修改现有 capability 的方法名、参数或返回 model；
+- 改变字段单位、枚举含义或写操作的副作用；
+- 让原本只读的方法开始写入或触发；
+- 更换 canonical `driver_id` 指向的设备族；
+- 缩小已发布 model 的有效输入范围，导致旧插件对象无法构造。
+
+新增独立 capability、model 的可选字段或 descriptor 展示字段，通常可以保持现有插件兼容。每次提高最低 WaveBench 版本时，应同步修改 wheel 依赖、descriptor 区间和插件测试矩阵。
+
+## 最小验证矩阵
+
+发布前至少覆盖：
+
+- descriptor 子进程导入无 I/O；
+- entry point 名、canonical ID、kind、API 版本和兼容区间；
+- capability 前缀、方法存在性、签名和返回 model；
+- `OptionSpec` 的默认值、required、类型、范围、choices、未知键和重名；
+- fake transport 下的正常、超时、短响应、坏数据、错误队列和 close；
+- factory 抛错、capability 不完整、`close()` 抛错和第二次 transport 请求；
+- 只读方法无写命令，写操作无隐藏 output 或 trigger；
+- wheel 包检查、一次性 venv 安装、`plugin doctor --load` 和卸载；
+- 如使用受限覆盖槽位，验证 canonical ID 选择外置实现、短 alias 保留内置实现、卸载后回退。
+
+示例命令：
+
+```bash
+python -m pytest -q
+python -m ruff check .
+python -m wavebench plugin package check ./dist/plugin.whl
+python -m wavebench plugin install ./dist/plugin.whl --dry-run
+python -m wavebench plugin doctor --load
+```
+
+默认测试不得扫描端口、连接仪器或发送 SCPI。实机验收应单独授权，并使用脱敏配置和可恢复的状态检查。
