@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, is_dataclass
+import io
 import json
 from pathlib import Path
 import sys
@@ -277,7 +279,7 @@ def _run_plan_payload(plan) -> dict[str, object]:
 
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if "--json" in raw_argv:
@@ -1067,6 +1069,44 @@ def main(argv: list[str] | None = None) -> int:
             print("wavebench: interrupted", file=sys.stderr)
         return 130
     return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the CLI, optionally wrapping every non-interactive result as JSON."""
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--json" not in raw_argv:
+        return _main(raw_argv)
+
+    forwarded = [item for item in raw_argv if item != "--json"]
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = _main(["--json", *forwarded])
+    diagnostics = stderr.getvalue()
+    if diagnostics:
+        sys.stderr.write(diagnostics)
+    text_output = stdout.getvalue().strip()
+    try:
+        payload = json.loads(text_output) if text_output else None
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict) and payload.get("schema") in {
+        "wavebench.cli.result.v1",
+        "wavebench.error.v1",
+    }:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return code
+    if isinstance(payload, dict) and payload.get("schema"):
+        result_payload: object = payload
+    else:
+        result_payload = text_output or None
+    _emit_json_result(
+        result_payload,
+        status="ok" if code == 0 else "failed",
+        exit_code=code,
+    )
+    return code
 
 
 if __name__ == "__main__":

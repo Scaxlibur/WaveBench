@@ -51,6 +51,8 @@ WaveBench 是一个用 Python 编写的实验室自动测量台，面向电子�
 
 显式 `run plan` 可以把信号源、示波器、电源和万用表编排到同一条实验流程中。执行前先用 `run check` 做离线校验，再用 `run verify` 做连接和安全预检；执行过程中保留每个步骤的状态、测量结果、失败证据和恢复记录。
 
+run 内的 Source / Power 基础写入会在实际 setter 前回读并比较状态；状态漂移会停止写入并写入差异。缺少完整 `scope.snapshot` 的驱动可通过 `scope status` 返回 `partial summary`，操作能力可用 `capability explain` 离线核对。需要固定 plan、配置和任意波形输入时，先生成 `run intent`，再用 `run plan --intent` 在打开仪器前核验摘要。
+
 典型流程是「信号源 → DUT → 示波器 / 万用表」。
 
 ```mermaid

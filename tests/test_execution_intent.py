@@ -144,5 +144,6 @@ def test_run_intent_cli_emits_offline_json_without_opening_instruments() -> None
 
         assert code == 0
         payload = json.loads(stdout.getvalue())
-        assert payload["schema"] == INTENT_SCHEMA
-        assert payload["intent_digest"]
+        assert payload["schema"] == "wavebench.cli.result.v1"
+        assert payload["result"]["schema"] == INTENT_SCHEMA
+        assert payload["result"]["intent_digest"]
