@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from math import isfinite
 from pathlib import Path
@@ -19,10 +19,26 @@ FIT_METHODS = (
     "smoothing_spline_db",
     "piecewise_chebyshev_db",
 )
+
+# These defaults are part of the on-disk evidence contract.  Keep them local to
+# this module as well as in the evidence helper so that a FrequencyResponsePoint
+# remains constructible by older callers that do not import the helper module.
+CAPTURE_SYNC_GRADE = "waveforms_atomic_aux_best_effort"
+REFERENCE_PLANE = "scope_input"
+EVIDENCE_SCHEMA = "wavebench.frequency_response_evidence.v1"
+
 BASE_CSV_FIELDS = (
     "index",
-    "amplitude_index",
+    "case_id",
+    "acquisition_id",
+    "capture_sync_grade",
+    "requested_source_vpp",
     "requested_vpp",
+    "reference_plane",
+    "signal_level_evidence",
+    "quality_metrics",
+    "plan_hash",
+    "amplitude_index",
     "requested_frequency_hz",
     "reference_frequency_hz",
     "response_frequency_hz",
@@ -47,7 +63,11 @@ BASE_CSV_FIELDS = (
     "initial_warnings",
     "initial_capture_package",
     "initial_metadata_path",
+    "retry_capture_package",
+    "retry_metadata_path",
     "status",
+    "failure_reason",
+    "exclusion_reason",
     "warnings",
     "error",
     "capture_package",
@@ -85,10 +105,99 @@ class FrequencyResponsePoint:
     initial_warnings: tuple[str, ...] = ()
     initial_capture_package: str = ""
     initial_metadata_path: str = ""
+    retry_capture_package: str = ""
+    retry_metadata_path: str = ""
     warnings: tuple[str, ...] = ()
     error: str = ""
     capture_package: str = ""
     metadata_path: str = ""
+    # Evidence fields are appended after the original fields intentionally: a
+    # few third-party callers construct this dataclass positionally.  Appending
+    # preserves that older positional calling convention while exposing the
+    # richer provenance contract to new callers.
+    case_id: str = ""
+    acquisition_id: str = ""
+    capture_sync_grade: str = CAPTURE_SYNC_GRADE
+    requested_source_vpp: float | None = None
+    reference_plane: str = REFERENCE_PLANE
+    signal_level_evidence: dict[str, Any] = field(default_factory=dict)
+    quality_metrics: dict[str, Any] = field(default_factory=dict)
+    plan_hash: str = ""
+    failure_reason: str = ""
+    exclusion_reason: str = ""
+
+    def __post_init__(self) -> None:
+        """Normalize aliases and preserve an explicit reason for every unusable point.
+
+        ``requested_vpp`` was the original public field.  New code should use
+        ``requested_source_vpp`` because it names the physical reference plane
+        unambiguously, but both fields are kept in each point/CSV row during the
+        compatibility window.  The new field is authoritative when both are
+        supplied; when only the legacy alias is supplied it seeds the new field.
+        """
+
+        requested_source = self.requested_source_vpp
+        requested_alias = self.requested_vpp
+        if requested_source is None:
+            requested_source = requested_alias
+        elif requested_alias is None or requested_alias != requested_source:
+            # Keep the legacy alias as an actual alias, rather than allowing two
+            # subtly different requested levels to enter fit grouping.
+            requested_alias = requested_source
+        object.__setattr__(self, "requested_source_vpp", requested_source)
+        object.__setattr__(self, "requested_vpp", requested_alias)
+
+        grade = str(self.capture_sync_grade or CAPTURE_SYNC_GRADE)
+        plane = str(self.reference_plane or REFERENCE_PLANE)
+        object.__setattr__(self, "capture_sync_grade", grade)
+        object.__setattr__(self, "reference_plane", plane)
+
+        evidence = self.signal_level_evidence
+        if evidence is None:
+            normalized_evidence: dict[str, Any] = {}
+        elif isinstance(evidence, dict):
+            normalized_evidence = dict(evidence)
+        elif isinstance(evidence, str):
+            try:
+                parsed = json.loads(evidence)
+            except json.JSONDecodeError:
+                parsed = {}
+            normalized_evidence = dict(parsed) if isinstance(parsed, dict) else {}
+        else:
+            try:
+                normalized_evidence = dict(evidence)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("signal_level_evidence must be a JSON object") from exc
+        object.__setattr__(self, "signal_level_evidence", normalized_evidence)
+
+        metrics = self.quality_metrics
+        if metrics is None:
+            normalized_metrics: dict[str, Any] = {}
+        elif isinstance(metrics, dict):
+            normalized_metrics = dict(metrics)
+        elif isinstance(metrics, str):
+            try:
+                parsed_metrics = json.loads(metrics)
+            except json.JSONDecodeError:
+                parsed_metrics = {}
+            normalized_metrics = dict(parsed_metrics) if isinstance(parsed_metrics, dict) else {}
+        else:
+            try:
+                normalized_metrics = dict(metrics)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("quality_metrics must be a JSON object") from exc
+        object.__setattr__(self, "quality_metrics", normalized_metrics)
+
+        failure = str(self.failure_reason or "").strip()
+        error = str(self.error or "").strip()
+        if self.status == "failed" and not failure:
+            failure = error
+        object.__setattr__(self, "failure_reason", failure)
+
+        exclusion = str(self.exclusion_reason or "").strip()
+        if self.status == "failed" and not exclusion:
+            exclusion = failure or "failed_point"
+        object.__setattr__(self, "exclusion_reason", exclusion)
 
     @property
     def usable_for_fit(self) -> bool:
@@ -99,11 +208,37 @@ class FrequencyResponsePoint:
             and self.gain_linear > 0
         )
 
+    @property
+    def fit_exclusion_reason(self) -> str:
+        """Return the stable reason used when this point is omitted from a fit."""
+
+        if self.exclusion_reason:
+            return self.exclusion_reason
+        if self.failure_reason:
+            return self.failure_reason
+        if self.status == "failed":
+            return self.error or "failed_point"
+        if self.gain_linear is None:
+            return "missing_gain"
+        if not isfinite(self.gain_linear):
+            return "non_finite_gain"
+        if self.gain_linear <= 0:
+            return "non_positive_gain"
+        return "not_usable_for_fit"
+
     def as_csv_row(self, fit_values: dict[str, tuple[float | None, float | None]] | None = None) -> dict[str, object]:
         row: dict[str, object] = {
             "index": self.index,
-            "amplitude_index": self.amplitude_index,
+            "case_id": self.case_id,
+            "acquisition_id": self.acquisition_id,
+            "capture_sync_grade": self.capture_sync_grade,
+            "requested_source_vpp": self.requested_source_vpp,
             "requested_vpp": self.requested_vpp,
+            "reference_plane": self.reference_plane,
+            "signal_level_evidence": _json_object_text(self.signal_level_evidence),
+            "quality_metrics": _json_object_text(self.quality_metrics),
+            "plan_hash": self.plan_hash,
+            "amplitude_index": self.amplitude_index,
             "requested_frequency_hz": self.requested_frequency_hz,
             "reference_frequency_hz": self.reference_frequency_hz,
             "response_frequency_hz": self.response_frequency_hz,
@@ -128,7 +263,11 @@ class FrequencyResponsePoint:
             "initial_warnings": " | ".join(self.initial_warnings),
             "initial_capture_package": self.initial_capture_package,
             "initial_metadata_path": self.initial_metadata_path,
+            "retry_capture_package": self.retry_capture_package,
+            "retry_metadata_path": self.retry_metadata_path,
             "status": self.status,
+            "failure_reason": self.failure_reason,
+            "exclusion_reason": self.exclusion_reason,
             "warnings": " | ".join(self.warnings),
             "error": self.error,
             "capture_package": self.capture_package,
@@ -155,6 +294,14 @@ def analyze_frequency_response_point(
     adaptive_level: int = 0,
     adaptive_parent_start_hz: float | None = None,
     adaptive_parent_stop_hz: float | None = None,
+    case_id: str = "",
+    acquisition_id: str = "",
+    capture_sync_grade: str = CAPTURE_SYNC_GRADE,
+    reference_plane: str = REFERENCE_PLANE,
+    signal_level_evidence: dict[str, Any] | str | None = None,
+    plan_hash: str = "",
+    failure_reason: str = "",
+    exclusion_reason: str = "",
 ) -> FrequencyResponsePoint:
     """Compute one transfer-function point from a simultaneous two-channel capture."""
     try:
@@ -183,6 +330,12 @@ def analyze_frequency_response_point(
         warnings = _quality_warnings(reference_summary, "reference") + _quality_warnings(
             response_summary, "response"
         )
+        quality_metrics = {
+            "reference": _waveform_quality_metrics(reference_waveform),
+            "response": _waveform_quality_metrics(response_waveform),
+        }
+        reference_vpp = _finite_or_none(reference_summary.get("voltage_vpp_v"))
+        response_vpp = _finite_or_none(response_summary.get("voltage_vpp_v"))
         return FrequencyResponsePoint(
             index=index,
             requested_frequency_hz=requested_frequency_hz,
@@ -190,8 +343,8 @@ def analyze_frequency_response_point(
             response_frequency_hz=_finite_or_none(response_summary.get("frequency_estimate_hz")),
             reference_amplitude_peak_v=reference_amplitude,
             response_amplitude_peak_v=response_amplitude,
-            reference_vpp_v=_finite_or_none(reference_summary.get("voltage_vpp_v")),
-            response_vpp_v=_finite_or_none(response_summary.get("voltage_vpp_v")),
+            reference_vpp_v=reference_vpp,
+            response_vpp_v=response_vpp,
             gain_linear=gain_linear,
             gain_db=gain_db,
             phase_wrapped_deg=phase_wrapped_deg,
@@ -205,6 +358,26 @@ def analyze_frequency_response_point(
             warnings=tuple(warnings),
             capture_package=capture_package,
             metadata_path=metadata_path,
+            case_id=case_id,
+            acquisition_id=acquisition_id,
+            capture_sync_grade=capture_sync_grade,
+            reference_plane=reference_plane,
+            signal_level_evidence=(
+                signal_level_evidence
+                if signal_level_evidence is not None
+                else _default_signal_level_evidence(
+                    requested_source_vpp=requested_vpp,
+                    reference_vpp_v=reference_vpp,
+                    response_vpp_v=response_vpp,
+                    reference_waveform=reference_waveform,
+                    response_waveform=response_waveform,
+                    reference_plane=reference_plane,
+                )
+            ),
+            quality_metrics=quality_metrics,
+            plan_hash=plan_hash,
+            failure_reason=failure_reason,
+            exclusion_reason=exclusion_reason,
         )
     except Exception as exc:  # noqa: BLE001 - every point must remain auditable
         return FrequencyResponsePoint(
@@ -229,6 +402,26 @@ def analyze_frequency_response_point(
             error=f"{type(exc).__name__}: {exc}",
             capture_package=capture_package,
             metadata_path=metadata_path,
+            case_id=case_id,
+            acquisition_id=acquisition_id,
+            capture_sync_grade=capture_sync_grade,
+            reference_plane=reference_plane,
+            signal_level_evidence=(
+                signal_level_evidence
+                if signal_level_evidence is not None
+                else _default_signal_level_evidence(
+                    requested_source_vpp=requested_vpp,
+                    reference_vpp_v=None,
+                    response_vpp_v=None,
+                    reference_waveform=reference_waveform,
+                    response_waveform=response_waveform,
+                    reference_plane=reference_plane,
+                )
+            ),
+            quality_metrics={},
+            plan_hash=plan_hash,
+            failure_reason=failure_reason,
+            exclusion_reason=exclusion_reason,
         )
 
 
@@ -242,6 +435,15 @@ def failed_frequency_response_point(
     adaptive_level: int = 0,
     adaptive_parent_start_hz: float | None = None,
     adaptive_parent_stop_hz: float | None = None,
+    case_id: str = "",
+    acquisition_id: str = "",
+    capture_sync_grade: str = CAPTURE_SYNC_GRADE,
+    reference_plane: str = REFERENCE_PLANE,
+    signal_level_evidence: dict[str, Any] | str | None = None,
+    quality_metrics: dict[str, Any] | str | None = None,
+    plan_hash: str = "",
+    failure_reason: str = "",
+    exclusion_reason: str = "",
 ) -> FrequencyResponsePoint:
     text = str(error)
     if isinstance(error, Exception):
@@ -266,6 +468,15 @@ def failed_frequency_response_point(
         adaptive_parent_start_hz=adaptive_parent_start_hz,
         adaptive_parent_stop_hz=adaptive_parent_stop_hz,
         error=text,
+        case_id=case_id,
+        acquisition_id=acquisition_id,
+        capture_sync_grade=capture_sync_grade,
+        reference_plane=reference_plane,
+        signal_level_evidence=signal_level_evidence,
+        quality_metrics=quality_metrics or {},
+        plan_hash=plan_hash,
+        failure_reason=failure_reason or text,
+        exclusion_reason=exclusion_reason or text,
     )
 
 
@@ -340,7 +551,15 @@ def build_fit_document(
     sample_count = int(fit.get("sample_count", 240))
     usable = sorted((point for point in points if point.usable_for_fit), key=lambda point: point.requested_frequency_hz)
     excluded = [
-        {"index": point.index, "frequency_hz": point.requested_frequency_hz, "reason": point.error or point.status}
+        {
+            "index": point.index,
+            "case_id": point.case_id,
+            "frequency_hz": point.requested_frequency_hz,
+            "requested_vpp": point.requested_source_vpp,
+            "reason": point.fit_exclusion_reason,
+            "failure_reason": point.failure_reason,
+            "exclusion_reason": point.fit_exclusion_reason,
+        }
         for point in points
         if not point.usable_for_fit
     ]
@@ -420,6 +639,132 @@ def write_frequency_response_csv(
     return output
 
 
+def load_frequency_response_points(path: str | Path) -> list[FrequencyResponsePoint]:
+    """Load persisted response rows for an offline resume or re-analysis.
+
+    Unknown/derived CSV columns are ignored, so files from older WaveBench
+    versions remain usable.  The returned points retain failure evidence and are
+    never modified on disk.
+    """
+
+    source = Path(path)
+    if source.is_dir():
+        source = source / "frequency_response.csv"
+    if not source.exists():
+        raise ConfigError(f"frequency response CSV not found: {source}")
+    try:
+        with source.open(newline="", encoding="utf-8") as file:
+            rows = list(csv.DictReader(file))
+    except OSError as exc:
+        raise ConfigError(f"failed to read frequency response CSV: {source}: {exc}") from exc
+    points: list[FrequencyResponsePoint] = []
+    for row_index, row in enumerate(rows):
+        try:
+            frequency = _csv_float(row, "requested_frequency_hz")
+        except ValueError as exc:
+            raise ConfigError(f"frequency response CSV row {row_index} has no valid requested frequency") from exc
+        status = str(row.get("status", "ok") or "ok").strip().lower()
+        if status not in {"ok", "warning", "failed"}:
+            status = "warning"
+        points.append(
+            FrequencyResponsePoint(
+                index=_csv_int(row, "index", row_index),
+                amplitude_index=_csv_int(row, "amplitude_index", 0),
+                requested_vpp=_csv_optional_float(row, "requested_vpp"),
+                requested_source_vpp=_csv_optional_float(row, "requested_source_vpp"),
+                requested_frequency_hz=frequency,
+                reference_frequency_hz=_csv_optional_float(row, "reference_frequency_hz"),
+                response_frequency_hz=_csv_optional_float(row, "response_frequency_hz"),
+                reference_amplitude_peak_v=_csv_optional_float(row, "reference_amplitude_peak_v"),
+                response_amplitude_peak_v=_csv_optional_float(row, "response_amplitude_peak_v"),
+                reference_vpp_v=_csv_optional_float(row, "reference_vpp_v"),
+                response_vpp_v=_csv_optional_float(row, "response_vpp_v"),
+                gain_linear=_csv_optional_float(row, "gain_linear"),
+                gain_db=_csv_optional_float(row, "gain_db"),
+                phase_wrapped_deg=_csv_optional_float(row, "phase_wrapped_deg"),
+                phase_unwrapped_deg=_csv_optional_float(row, "phase_unwrapped_deg"),
+                baseline_gain_db=_csv_optional_float(row, "baseline_gain_db"),
+                baseline_phase_unwrapped_deg=_csv_optional_float(row, "baseline_phase_unwrapped_deg"),
+                gain_linear_corrected=_csv_optional_float(row, "gain_linear_corrected"),
+                gain_db_corrected=_csv_optional_float(row, "gain_db_corrected"),
+                phase_wrapped_corrected_deg=_csv_optional_float(row, "phase_wrapped_corrected_deg"),
+                phase_unwrapped_corrected_deg=_csv_optional_float(row, "phase_unwrapped_corrected_deg"),
+                adaptive_level=_csv_int(row, "adaptive_level", 0),
+                adaptive_parent_start_hz=_csv_optional_float(row, "adaptive_parent_start_hz"),
+                adaptive_parent_stop_hz=_csv_optional_float(row, "adaptive_parent_stop_hz"),
+                quality_retry_count=_csv_int(row, "quality_retry_count", 0),
+                initial_warnings=_csv_tuple(row.get("initial_warnings")),
+                initial_capture_package=str(row.get("initial_capture_package", "") or ""),
+                initial_metadata_path=str(row.get("initial_metadata_path", "") or ""),
+                retry_capture_package=str(row.get("retry_capture_package", "") or ""),
+                retry_metadata_path=str(row.get("retry_metadata_path", "") or ""),
+                status=status,
+                failure_reason=str(row.get("failure_reason", "") or ""),
+                exclusion_reason=str(row.get("exclusion_reason", "") or ""),
+                warnings=_csv_tuple(row.get("warnings")),
+                error=str(row.get("error", "") or ""),
+                capture_package=str(row.get("capture_package", "") or ""),
+                metadata_path=str(row.get("metadata_path", "") or ""),
+                case_id=str(row.get("case_id", "") or ""),
+                acquisition_id=str(row.get("acquisition_id", "") or ""),
+                capture_sync_grade=str(
+                    row.get("capture_sync_grade", CAPTURE_SYNC_GRADE) or CAPTURE_SYNC_GRADE
+                ),
+                reference_plane=str(row.get("reference_plane", REFERENCE_PLANE) or REFERENCE_PLANE),
+                signal_level_evidence=_csv_json_object(row.get("signal_level_evidence")),
+                quality_metrics=_csv_json_object(row.get("quality_metrics")),
+                plan_hash=str(row.get("plan_hash", "") or ""),
+            )
+        )
+    return points
+
+
+def _csv_optional_float(row: dict[str, str], name: str) -> float | None:
+    raw = row.get(name)
+    if raw in (None, "", "None", "null"):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isfinite(value) else None
+
+
+def _csv_float(row: dict[str, str], name: str) -> float:
+    value = _csv_optional_float(row, name)
+    if value is None:
+        raise ValueError(name)
+    return value
+
+
+def _csv_int(row: dict[str, str], name: str, default: int) -> int:
+    raw = row.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _csv_tuple(raw: Any) -> tuple[str, ...]:
+    if raw in (None, ""):
+        return ()
+    return tuple(item.strip() for item in str(raw).split("|") if item.strip())
+
+
+def _csv_json_object(raw: Any) -> dict[str, Any]:
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        value = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def write_fit_document(path: str | Path, document: dict[str, Any] | None) -> Path | None:
     if document is None:
         return None
@@ -488,12 +833,82 @@ def _quality_warnings(summary: dict[str, Any], channel: str) -> list[str]:
     return [f"{channel}: {raw}"] if raw else []
 
 
+def _waveform_quality_metrics(waveform: Any) -> dict[str, Any]:
+    """Compute non-destructive quality telemetry from a captured waveform.
+
+    These values are evidence, not automatic pass/fail gates.  Driver-provided
+    quality warnings remain authoritative for frequency-lock and instrument-specific
+    clipping checks.
+    """
+
+    values = np.asarray(getattr(waveform, "voltages_v"), dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return {"status": "unavailable", "sample_count": 0}
+    centered = finite - float(np.mean(finite))
+    peak = float(np.max(np.abs(centered)))
+    rms = float(np.sqrt(np.mean(np.square(centered))))
+    minimum = float(np.min(finite))
+    maximum = float(np.max(finite))
+    span = maximum - minimum
+    tolerance = max(span * 1e-6, 1e-12)
+    extrema_hits = np.count_nonzero(
+        (np.abs(finite - minimum) <= tolerance) | (np.abs(finite - maximum) <= tolerance)
+    )
+    return {
+        "status": "ok",
+        "sample_count": int(finite.size),
+        "rms_v": rms,
+        "peak_ac_v": peak,
+        "crest_factor": float(peak / rms) if rms > 0 else None,
+        "vpp_v": span,
+        "dc_offset_v": float(np.mean(finite)),
+        "extrema_hit_fraction": float(extrema_hits / finite.size),
+        "finite_fraction": float(finite.size / values.size) if values.size else 0.0,
+    }
+
+
+def _default_signal_level_evidence(
+    *,
+    requested_source_vpp: float | None,
+    reference_vpp_v: float | None,
+    response_vpp_v: float | None,
+    reference_waveform: Any,
+    response_waveform: Any,
+    reference_plane: str,
+) -> dict[str, Any]:
+    """Build a conservative point-level level record for direct service callers.
+
+    ``RunService`` adds the stable case/acquisition identifiers and rewrites this
+    object with the same values after a real capture.  Keeping a useful default
+    here means direct/offline analysis still carries the requested-versus-measured
+    distinction instead of emitting an empty provenance field.
+    """
+
+    return {
+        "schema": EVIDENCE_SCHEMA,
+        "reference_plane": reference_plane,
+        "requested_source_vpp": requested_source_vpp,
+        "measured_reference_vpp": reference_vpp_v,
+        "measured_response_vpp": response_vpp_v,
+        "reference_channel": getattr(reference_waveform, "channel", None),
+        "response_channel": getattr(response_waveform, "channel", None),
+        "conversion": {"applied": False, "assumption": "none"},
+    }
+
+
 def _finite_or_none(value: Any) -> float | None:
     try:
         numeric = float(value)
     except (TypeError, ValueError):
         return None
     return numeric if isfinite(numeric) else None
+
+
+def _json_object_text(value: dict[str, Any]) -> str:
+    """Serialize an evidence object deterministically for a CSV cell."""
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _wrap_phase_deg(value: float) -> float:

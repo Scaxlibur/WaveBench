@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import asdict, is_dataclass
+import io
+import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryFile
@@ -13,13 +17,14 @@ from .discovery import discover_instruments
 from .doctor import doctor_records, has_doctor_errors as has_config_doctor_errors
 from .report.html import write_run_report_html, write_run_report_pdf
 from .report.index import write_report_index
-from .errors import ConfigError, WaveBenchError
+from .errors import ConfigError, WaveBenchError, error_envelope
 from .cli_parser import build_parser
 from .cli_output import (
     _print_arbitrary_probe_results,
     _print_arbitrary_waveform_summary,
     _print_capture_fft_summary,
     _print_capture_package_summary,
+    _print_capability_explanation,
     _print_discovery_results,
     _print_doctor_records,
     _print_dmm_function_set,
@@ -69,6 +74,7 @@ from .cli_output import (
 )
 from .logging import CommandLogger
 from .instruments.registry import build_instrument_registry
+from .instruments.registry import resolve_instrument_descriptor
 from .mcp_http import (
     resolve_mcp_token,
     serve_mcp_http,
@@ -92,6 +98,16 @@ from .services.run_templates import (
     write_run_template,
 )
 from .services.run_service import RunService
+from .services.capability_explain import explain_operation
+from .services.operation_specs import get_operation_spec
+from .services.run_compare import RunCompareError, compare_run_packages_result
+from .services.frequency_response_resume import build_frequency_response_resume
+from .services.execution_intent import (
+    build_execution_intent,
+    load_execution_intent,
+    write_execution_intent,
+)
+from .services.resource_lease import ResourceLease
 from .services.frequency_response_calibration import (
     build_frequency_response_calibration,
     load_frequency_response_calibration_config,
@@ -100,6 +116,9 @@ from .services.frequency_response_calibration import (
     write_fixed_point_calibration,
 )
 from .services.sweep_service import SweepService, parse_frequency_list
+
+
+CLI_RESULT_SCHEMA = "wavebench.cli.result.v1"
 
 
 
@@ -196,10 +215,78 @@ def _load_sweep_service(args: argparse.Namespace) -> SweepService:
     return SweepService(config=config, logger=CommandLogger())
 
 
+def _capability_target(args: argparse.Namespace):
+    spec = get_operation_spec(args.operation)
+    if spec is None or spec.instrument_kind is None:
+        return None, args.access or "read_write"
+    config = load_config(args.config) if args.config else None
+    kind = args.kind or spec.instrument_kind
+    if kind != spec.instrument_kind:
+        raise ConfigError(
+            f"capability explain operation {args.operation!r} requires instrument kind "
+            f"{spec.instrument_kind!r}, not {kind!r}"
+        )
+    section = getattr(config, kind, None) if config is not None else None
+    driver = args.driver or getattr(section, "driver", None)
+    access = args.access or getattr(section, "access", None) or "read_write"
+    if not driver:
+        return None, access
+    return resolve_instrument_descriptor(driver, expected_kind=kind), access
 
-def main(argv: list[str] | None = None) -> int:
+
+def _json_payload(value: object) -> object:
+    if isinstance(value, (list, tuple)):
+        return [_json_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_payload(item) for key, item in value.items()}
+    as_dict = getattr(value, "as_dict", None)
+    if callable(as_dict):
+        return as_dict()
+    if is_dataclass(value):
+        return asdict(value)
+    return value
+
+
+def _emit_json_result(payload: object, *, status: str = "ok", exit_code: int = 0) -> None:
+    print(
+        json.dumps(
+            {
+                "schema": CLI_RESULT_SCHEMA,
+                "status": status,
+                "exit_code": exit_code,
+                "result": payload,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
+def _run_plan_payload(plan) -> dict[str, object]:
+    return {
+        "name": plan.name,
+        "label": plan.label,
+        "safety": _json_payload(plan.safety),
+        "restore": _json_payload(plan.restore),
+        "steps": [
+            {
+                "index": step.index,
+                "kind": step.kind,
+                "fields": _json_payload(step.fields),
+            }
+            for step in plan.steps
+        ],
+    }
+
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--json" in raw_argv:
+        raw_argv = [item for item in raw_argv if item != "--json"]
+        raw_argv.insert(0, "--json")
+    args = parser.parse_args(raw_argv)
     try:
         if args.domain == "plugin":
             lifecycle_commands = {
@@ -341,7 +428,84 @@ def main(argv: list[str] | None = None) -> int:
                     idn_only=args.idn_only,
                     include_visa=not args.no_visa,
                 )
-                _print_discovery_results(results)
+                if args.json:
+                    _emit_json_result(_json_payload(results))
+                else:
+                    _print_discovery_results(results)
+                return 0
+        if args.domain == "capability":
+            if args.command == "explain":
+                if args.candidates:
+                    spec = get_operation_spec(args.operation)
+                    if spec is None:
+                        result = explain_operation(args.operation)
+                        candidates_payload = {
+                            "operation": args.operation,
+                            "candidates": [],
+                            "explanation": result.as_dict(),
+                        }
+                        if args.json:
+                            _emit_json_result(candidates_payload, status=result.status, exit_code=2)
+                        else:
+                            _print_capability_explanation(result)
+                        return 2
+                    if spec.instrument_kind is None:
+                        raise ConfigError("--candidates requires an instrument operation")
+                    registry = build_instrument_registry()
+                    loaded = registry.load_all()
+                    candidates = [
+                        explain_operation(
+                            args.operation,
+                            descriptor=descriptor,
+                            access=args.access or "read_write",
+                        ).as_dict()
+                        for descriptor in loaded.descriptors
+                        if descriptor.kind == spec.instrument_kind
+                    ]
+                    supported = [item for item in candidates if item["status"] == "supported"]
+                    candidates_payload = {
+                        "operation": args.operation,
+                        "candidates": candidates,
+                        "supported_count": len(supported),
+                    }
+                    if args.json:
+                        _emit_json_result(
+                            candidates_payload,
+                            status="ok" if supported else "failed",
+                            exit_code=0 if supported else 2,
+                        )
+                    else:
+                        print(f"operation={args.operation}")
+                        print(f"supported_count={len(supported)}")
+                        for item in candidates:
+                            print(
+                                f"candidate={item.get('driver_id') or 'n/a'}"
+                                f"\tstatus={item['status']}"
+                                f"\tmissing={','.join(item['missing_capabilities']) or 'none'}"
+                            )
+                    return 0 if supported else 2
+                descriptor, access = _capability_target(args)
+                result = explain_operation(
+                    args.operation,
+                    descriptor=descriptor,
+                    access=access,
+                )
+                if args.json:
+                    _emit_json_result(result.as_dict(), status=result.status, exit_code=0 if result.status == "supported" else 2)
+                else:
+                    _print_capability_explanation(result)
+                return 0 if result.status == "supported" else 2
+        if args.domain == "lock":
+            if args.command == "status":
+                payload = ResourceLease(
+                    resource=args.resource,
+                    lock_id=args.lock_id,
+                ).status()
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    for key, value in payload.items():
+                        print(f"{key}={value}")
                 return 0
         if args.domain == "doctor":
             records = doctor_records(
@@ -354,8 +518,16 @@ def main(argv: list[str] | None = None) -> int:
                 discover_max_hosts=args.discover_max_hosts,
                 include_visa=not args.no_visa,
             )
-            _print_doctor_records(records)
-            return 2 if has_config_doctor_errors(records) else 0
+            failed = has_config_doctor_errors(records)
+            if args.json:
+                _emit_json_result(
+                    _json_payload(records),
+                    status="failed" if failed else "ok",
+                    exit_code=2 if failed else 0,
+                )
+            else:
+                _print_doctor_records(records)
+            return 2 if failed else 0
         if args.domain == "tui":
             if args.refresh_interval <= 0:
                 raise ConfigError("--refresh-interval must be > 0 / 刷新间隔必须 > 0")
@@ -391,6 +563,18 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
         if args.domain == "run":
+            if args.command == "intent":
+                plan = load_run_plan(args.plan)
+                service = _load_run_service(args)
+                service.check(plan)
+                intent = build_execution_intent(plan, service.config)
+                if args.output:
+                    output = write_execution_intent(intent, args.output)
+                    if not args.json:
+                        print(f"intent={output}")
+                if args.json or not args.output:
+                    print(json.dumps(intent.as_dict(), indent=2, ensure_ascii=False))
+                return 0
             if args.command == "calibrate":
                 package = load_run_package(args.path)
                 response = package.select_frequency_response(args.response)
@@ -417,6 +601,67 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"calibration_json={json_path}")
                 for name, path in fixed_paths.items():
                     print(f"calibration_fixed_{name}={path}")
+                return 0
+            if args.command == "compare":
+                if len(args.paths) < 2:
+                    raise ConfigError("run compare requires at least two run directories")
+                try:
+                    comparison = compare_run_packages_result(
+                        args.paths,
+                        response_labels=args.response,
+                        output_path=args.output,
+                        gain_tolerance_db=args.gain_tolerance_db,
+                        phase_tolerance_deg=args.phase_tolerance_deg,
+                    )
+                except RunCompareError as exc:
+                    raise ConfigError(str(exc)) from exc
+                payload = comparison.as_dict()
+                if args.json or args.format == "json":
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                else:
+                    print(f"compare_schema={payload['schema_version']}")
+                    print(f"reference={payload['reference'].get('path', '')}")
+                    for item in payload["comparisons"]:
+                        summary = item.get("summary", {})
+                        print(
+                            "candidate="
+                            f"{item.get('candidate', {}).get('path', '')}"
+                            f"\tstatus={item.get('status', '')}"
+                            f"\tmatched={summary.get('matched', 0)}"
+                            f"\tmissing_reference={summary.get('missing_reference', 0)}"
+                            f"\tmissing_candidate={summary.get('missing_candidate', 0)}"
+                        )
+                    if payload.get("errors"):
+                        print(f"errors={len(payload['errors'])}")
+                if args.output and not (args.json or args.format == "json"):
+                    print(f"compare_json={args.output}")
+                statuses = [item.get("status") for item in payload.get("comparisons", [])]
+                if payload.get("errors") or any(
+                    status in {"incompatible", "unavailable", "duplicate", "out_of_tolerance"}
+                    for status in statuses
+                ):
+                    return 2
+                return 0
+            if args.command == "resume":
+                manifest = build_frequency_response_resume(
+                    args.path,
+                    args.plan,
+                    response_label=args.response,
+                )
+                source_path = Path(args.path)
+                output = (
+                    Path(args.output)
+                    if args.output
+                    else (source_path / "frequency_response_resume.json" if source_path.is_dir() else source_path.parent / "frequency_response_resume.json")
+                )
+                if output.suffix.lower() != ".json":
+                    output = output / "frequency_response_resume.json"
+                manifest.write(output)
+                print(f"resume_json={output}")
+                print(f"source_csv={manifest.source_csv}")
+                print(f"reusable={len(manifest.reusable_cases)}")
+                print(f"pending={len(manifest.pending_cases)}")
+                print(f"rejected={len(manifest.rejected_points)}")
                 return 0
             if args.command == "report":
                 if args.pdf_output and not args.pdf:
@@ -450,13 +695,24 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "check":
                 plan = load_run_plan(args.plan)
                 _load_run_service(args).check(plan)
-                _print_run_plan_summary(plan)
-                print("safety_limits=ok / 安全上限=通过")
+                if args.json:
+                    _emit_json_result(
+                        {
+                            "plan": _run_plan_payload(plan),
+                            "safety_limits": "ok",
+                        }
+                    )
+                else:
+                    _print_run_plan_summary(plan)
+                    print("safety_limits=ok / 安全上限=通过")
                 return 0
             if args.command == "verify":
                 plan = load_run_plan(args.plan)
                 records = _load_run_service(args).verify(plan)
-                _print_run_preflight(records)
+                if args.json:
+                    _emit_json_result(_json_payload(records))
+                else:
+                    _print_run_preflight(records)
                 return 0
             if args.command == "schema":
                 print(format_run_plan_schema())
@@ -492,12 +748,32 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "plan":
                 plan = load_run_plan(args.plan)
-                result = _load_run_service(args).run(plan)
-                print(f"run={result.run_dir}")
-                print(f"run_json={result.run_json_path}")
-                print(f"summary={result.summary_csv_path}")
-                print(f"steps={len(result.steps)}")
-                return 0
+                expected_intent = (
+                    load_execution_intent(args.intent) if args.intent else None
+                )
+                service = _load_run_service(args)
+                if expected_intent is None:
+                    result = service.run(plan)
+                else:
+                    result = service.run(plan, execution_intent=expected_intent)
+                failed = any(step.status == "failed" for step in result.steps)
+                if args.json:
+                    _emit_json_result(
+                        {
+                            "run_dir": str(result.run_dir),
+                            "run_json": str(result.run_json_path),
+                            "summary": str(result.summary_csv_path),
+                            "steps": _json_payload(result.steps),
+                        },
+                        status="failed" if failed else "ok",
+                        exit_code=2 if failed else 0,
+                    )
+                else:
+                    print(f"run={result.run_dir}")
+                    print(f"run_json={result.run_json_path}")
+                    print(f"summary={result.summary_csv_path}")
+                    print(f"steps={len(result.steps)}")
+                return 2 if failed else 0
         if args.domain == "dmm":
             service = _load_dmm_service(args)
             if args.command == "idn":
@@ -556,7 +832,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(service.idn())
                 return 0
             if args.command == "status":
-                _print_power_status(service.status(channel=args.channel))
+                result = service.status(channel=args.channel)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    _print_power_status(result)
                 return 0
             if args.command == "set":
                 _print_power_status(
@@ -622,7 +902,11 @@ def main(argv: list[str] | None = None) -> int:
                 _print_arbitrary_probe_results(service.probe_arbitrary_queries(channel=args.channel))
                 return 0
             if args.command == "status":
-                _print_source_status(service.status(channel=args.channel))
+                result = service.status(channel=args.channel)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    _print_source_status(result)
                 return 0
             if args.command == "profile":
                 _print_source_channel_profile(service.channel_profile(channel=args.channel))
@@ -693,7 +977,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "status":
                 channel = args.channel or service.config.scope.default_channel
-                _print_scope_snapshot(service.status(channel=channel))
+                summary = getattr(service, "status_summary", None)
+                if callable(summary):
+                    result = summary(channel=channel, strict=args.strict)
+                else:
+                    result = service.status(channel=channel)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    _print_scope_snapshot(result)
                 return 0
             if args.command == "acquisition-status":
                 _print_scope_acquisition_status(service.acquisition_status())
@@ -827,12 +1119,72 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
         parser.error("unknown command")
     except WaveBenchError as exc:
-        print(f"wavebench: {exc}", file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps(error_envelope(exc), indent=2, ensure_ascii=False))
+        else:
+            print(f"wavebench: {exc}", file=sys.stderr)
         return exc.exit_code
     except KeyboardInterrupt:
-        print("wavebench: interrupted", file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps(error_envelope(KeyboardInterrupt()), indent=2, ensure_ascii=False))
+        else:
+            print("wavebench: interrupted", file=sys.stderr)
         return 130
     return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the CLI, optionally wrapping every non-interactive result as JSON."""
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--json" not in raw_argv:
+        return _main(raw_argv)
+
+    forwarded = [item for item in raw_argv if item != "--json"]
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    try:
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = _main(["--json", *forwarded])
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 2
+        diagnostics = stderr.getvalue()
+        if diagnostics:
+            sys.stderr.write(diagnostics)
+        if code == 0:
+            _emit_json_result(stdout.getvalue().strip() or None, exit_code=0)
+            return 0
+        message = (
+            diagnostics.strip().splitlines()[-1]
+            if diagnostics.strip()
+            else "invalid command line arguments"
+        )
+        print(json.dumps(error_envelope(ConfigError(message)), indent=2, ensure_ascii=False))
+        return code
+    diagnostics = stderr.getvalue()
+    if diagnostics:
+        sys.stderr.write(diagnostics)
+    text_output = stdout.getvalue().strip()
+    try:
+        payload = json.loads(text_output) if text_output else None
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict) and payload.get("schema") in {
+        "wavebench.cli.result.v1",
+        "wavebench.error.v1",
+    }:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return code
+    if isinstance(payload, dict) and payload.get("schema"):
+        result_payload: object = payload
+    else:
+        result_payload = text_output or None
+    _emit_json_result(
+        result_payload,
+        status="ok" if code == 0 else "failed",
+        exit_code=code,
+    )
+    return code
 
 
 if __name__ == "__main__":

@@ -508,6 +508,7 @@ def _build_report_manifest(
                 else None,
                 "status": response.manifest_entry.get("status"),
                 "adaptive": response.manifest_entry.get("adaptive"),
+                "evidence": response.manifest_entry.get("evidence", {}),
             }
             for response in run.frequency_responses
         ],
@@ -965,13 +966,13 @@ def _frequency_response_section(
     if include_table:
         table_rows = "\n".join(_frequency_response_row(row) for row in rows)
         if not table_rows:
-            table_rows = '<tr><td colspan="10">频响 CSV 没有可读取的记录 / No readable response rows.</td></tr>'
+            table_rows = '<tr><td colspan="12">频响 CSV 没有可读取的记录 / No readable response rows.</td></tr>'
         open_attribute = " open" if len(rows) <= 100 else ""
         table_block = f"""<details class="frequency-response-point-log" data-frequency-response-point-log="true"{open_attribute}>
 <summary>逐点日志 / Point log<span class="frequency-response-point-log-summary">{_frequency_response_point_log_summary(rows)}</span></summary>
 <p class="muted frequency-response-point-log-note">完整逐点记录默认收起；CSV 仍是可复算的原始事实源。</p>
 <div class="table compact-table"><table>
-<thead><tr><th>#</th><th>请求幅值 / Requested Vpp</th><th>请求频率 / Requested</th><th>输入峰值 / Input peak</th><th>输出峰值 / Output peak</th><th>线性增益</th><th>增益 / Gain</th><th>相位 / Phase</th><th>展开相位 / Unwrapped</th><th>状态 / Status</th><th>警告或错误 / Warning or error</th></tr></thead>
+<thead><tr><th>#</th><th>案例 / Case</th><th>请求幅值 / Requested Vpp</th><th>请求频率 / Requested</th><th>输入峰值 / Input peak</th><th>输出峰值 / Output peak</th><th>线性增益</th><th>增益 / Gain</th><th>相位 / Phase</th><th>展开相位 / Unwrapped</th><th>状态 / Status</th><th>警告或错误 / Warning or error</th></tr></thead>
 <tbody>
 {table_rows}
 </tbody>
@@ -986,6 +987,7 @@ def _frequency_response_section(
     calibration_block = _frequency_response_calibration_block(response)
     baseline_block = _frequency_response_baseline_block(response)
     adaptive_block = _frequency_response_adaptive_block(response)
+    evidence_block = _frequency_response_evidence_block(response)
     matrix_summary = _frequency_response_matrix_summary(rows)
     title = "频率响应 / Frequency response"
     if multiple:
@@ -993,6 +995,7 @@ def _frequency_response_section(
     return f"""<h2>{title}</h2>
 <p class="muted">响应标签 / Response label: <code>{escape(response.label)}</code>。原始幅相保留为证据；软件基线校正不会改写仪器 deskew 或前面板设置。</p>
 {matrix_summary}
+{evidence_block}
 {baseline_block}
 {adaptive_block}
 {interactive_3d}
@@ -1024,6 +1027,42 @@ def _frequency_response_point_log_summary(rows: list[dict[str, str]]) -> str:
             parts.append(f"{status}: {counts.pop(status):,}")
     parts.extend(f"{status}: {count:,}" for status, count in sorted(counts.items()))
     return escape(" · ".join(parts))
+
+
+def _frequency_response_evidence_block(response: FrequencyResponsePackage) -> str:
+    evidence = response.manifest_entry.get("evidence", {})
+    if not isinstance(evidence, dict):
+        evidence = {}
+    if not evidence and response.rows:
+        case_ids = [row.get("case_id", "") for row in response.rows if row.get("case_id")]
+        acquisition_ids = [
+            row.get("acquisition_id", "") for row in response.rows if row.get("acquisition_id")
+        ]
+        evidence = {
+            "case_ids": sorted(set(case_ids)),
+            "acquisition_ids": sorted(set(acquisition_ids)),
+            "reference_plane": next(
+                (row.get("reference_plane") for row in response.rows if row.get("reference_plane")),
+                "",
+            ),
+            "plan_hash": next(
+                (row.get("plan_hash") for row in response.rows if row.get("plan_hash")),
+                "",
+            ),
+        }
+    if not evidence:
+        return ""
+    case_ids = evidence.get("case_ids", [])
+    acquisition_ids = evidence.get("acquisition_ids", [])
+    case_count = len(case_ids) if isinstance(case_ids, list) else "?"
+    acquisition_count = len(acquisition_ids) if isinstance(acquisition_ids, list) else "?"
+    plan_hash = evidence.get("plan_hash") or "未记录 / not recorded"
+    plane = evidence.get("reference_plane") or "未声明 / not declared"
+    grade = evidence.get("capture_sync_grade") or "未声明 / not declared"
+    return f"""<section class="frequency-response-evidence">
+<h3>测量证据 / Measurement evidence</h3>
+<p class="muted">case_id: {escape(str(case_count))} 个；acquisition_id: {escape(str(acquisition_count))} 个；参考平面: <code>{escape(str(plane))}</code>；同步等级: <code>{escape(str(grade))}</code>；计划哈希: <code>{escape(str(plan_hash))}</code>。</p>
+</section>"""
 
 
 def _frequency_response_baseline_block(response: FrequencyResponsePackage) -> str:
@@ -1063,11 +1102,18 @@ def _frequency_response_adaptive_block(response: FrequencyResponsePackage) -> st
 def _frequency_response_row(row: dict[str, str]) -> str:
     status = str(row.get("status", ""))
     details = " | ".join(
-        value for value in (str(row.get("warnings", "")), str(row.get("error", ""))) if value
+        value
+        for value in (
+            str(row.get("warnings", "")),
+            str(row.get("failure_reason", "")),
+            str(row.get("error", "")),
+        )
+        if value
     )
     return (
         f'<tr class="{escape(status)}">'
         f"<td>{escape(str(row.get('index', '')))}</td>"
+        f"<td><code>{escape(str(row.get('case_id', '')))}</code></td>"
         f"<td>{escape(_format_metric(row.get('requested_vpp'), 'Vpp'))}</td>"
         f"<td>{escape(_format_metric(row.get('requested_frequency_hz'), 'Hz'))}</td>"
         f"<td>{escape(_format_metric(row.get('reference_amplitude_peak_v'), 'V'))}</td>"

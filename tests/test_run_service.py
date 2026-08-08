@@ -942,6 +942,7 @@ output_on = true
 """,
                 )
             )
+            (Path(tmp) / "waveform.npy").write_bytes(b"test-waveform")
             fake_status = SimpleNamespace(as_dict=lambda: {"channel": 1, "function": "USER"})
             with patch("wavebench.services.run_service.SourceService") as source_cls:
                 source = source_cls.return_value
@@ -951,7 +952,7 @@ output_on = true
 
                 source.upload_arbitrary_waveform.assert_called_once_with(
                     channel=1,
-                    file_path="waveform.npy",
+                    file_path=str(Path(tmp) / "waveform.npy"),
                     playback_frequency_hz=1000.0,
                     amplitude_vpp=1.0,
                     offset_v=0.1,
@@ -1473,7 +1474,11 @@ settle_s = 0
             self.assertEqual(run_data["status"], "failed")
             self.assertEqual(run_data["steps"][0]["kind"], "sweep.frequency_response")
             self.assertEqual(run_data["steps"][0]["status"], "failed")
-            self.assertEqual(run_data["error"], {"type": "ConfigError", "message": "set failed"})
+            self.assertEqual(run_data["error"]["schema"], "wavebench.error.v1")
+            self.assertEqual(run_data["error"]["code"], "run_failed")
+            self.assertEqual(run_data["error"]["exit_code"], 2)
+            self.assertEqual(run_data["error"]["type"], "ConfigError")
+            self.assertEqual(run_data["error"]["message"], "set failed")
             self.assertEqual(run_data["restore"]["status"], "ok")
             step_record = json.loads(
                 (run_dir / "steps" / "00_sweep_frequency_response.json").read_text(encoding="utf-8")

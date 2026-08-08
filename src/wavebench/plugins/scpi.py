@@ -8,6 +8,7 @@ import tomllib
 from wavebench.config import ConnectionConfig
 from wavebench.errors import ConfigError, WaveBenchError
 from wavebench.logging import CommandLogger
+from wavebench.services.resource_lease import ResourceLease
 from wavebench.transport.pyvisa_transport import PyVisaTransport
 from wavebench.transport.rsinstrument_transport import RsInstrumentTransport
 
@@ -103,11 +104,12 @@ def probe_scpi_plugin(
         opc_timeout_ms=timeout_ms,
     )
     factory = transport_factory or _transport_factory(normalized_backend)
-    transport = factory(config, CommandLogger())
-    try:
-        response = transport.query(scpi_plugin.idn_query).strip()
-    finally:
-        transport.close()
+    with ResourceLease(resource=config.resource, operation="scpi.probe"):
+        transport = factory(config, CommandLogger())
+        try:
+            response = transport.query(scpi_plugin.idn_query).strip()
+        finally:
+            transport.close()
     return ScpiProbeResult(
         driver_id=scpi_plugin.plugin.driver_id,
         resource=config.resource,

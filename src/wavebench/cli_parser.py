@@ -13,6 +13,11 @@ def add_runtime_options(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wavebench")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one versioned machine-readable result / 输出一个版本化机器可读结果",
+    )
     subparsers = parser.add_subparsers(dest="domain", required=True)
 
     scope_parser = subparsers.add_parser("scope", help="Oscilloscope commands")
@@ -59,6 +64,54 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip PyVISA resource-manager discovery / 跳过 PyVISA 资源枚举",
     )
+    capability_parser = subparsers.add_parser(
+        "capability",
+        help="Explain offline operation capability decisions / 离线解释操作能力",
+    )
+    capability_sub = capability_parser.add_subparsers(dest="command", required=True)
+    capability_explain = capability_sub.add_parser(
+        "explain",
+        help="Explain one operation against a driver or config / 解释一个操作对驱动或配置的要求",
+    )
+    capability_explain.add_argument("operation", help="Registered operation name, e.g. source.output")
+    capability_explain.add_argument(
+        "--driver",
+        default=None,
+        help="Instrument driver reference, e.g. dg4202 / 仪器驱动引用",
+    )
+    capability_explain.add_argument(
+        "--kind",
+        choices=("scope", "source", "power", "dmm"),
+        default=None,
+        help="Instrument kind when selecting a configured driver / 仪器类型",
+    )
+    capability_explain.add_argument(
+        "--config",
+        default=None,
+        help="Use driver and access settings from a WaveBench TOML config / 从配置读取驱动和访问策略",
+    )
+    capability_explain.add_argument(
+        "--access",
+        choices=("read_only", "read_write", "disabled"),
+        default=None,
+        help="Access policy override / 访问策略覆盖值",
+    )
+    capability_explain.add_argument(
+        "--candidates",
+        action="store_true",
+        help="List local drivers that can perform the operation / 列出本地可执行该操作的驱动",
+    )
+    lock_parser = subparsers.add_parser(
+        "lock",
+        help="Inspect local resource leases / 查询本地资源租约",
+    )
+    lock_sub = lock_parser.add_subparsers(dest="command", required=True)
+    lock_status = lock_sub.add_parser(
+        "status",
+        help="Read one resource lease without acquiring it / 查询资源租约但不取得锁",
+    )
+    lock_status.add_argument("resource", help="VISA resource or serial path")
+    lock_status.add_argument("--lock-id", default="", help="Optional logical lock id")
     tui_parser.add_argument("--config", default="wavebench.toml", help="Path to wavebench TOML config")
     tui_parser.add_argument("--resource", help="Override power VISA resource / 覆盖电源 VISA 资源")
     tui_parser.add_argument(
@@ -307,6 +360,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_check.add_argument("--plan", required=True, help="Path to a WaveBench run plan TOML file")
     add_runtime_options(run_check)
+    run_intent = run_sub.add_parser(
+        "intent",
+        help="Build an offline execution intent for a run plan / 为运行计划生成离线执行意图",
+    )
+    run_intent.add_argument("--plan", required=True, help="Path to a WaveBench run plan TOML file")
+    run_intent.add_argument("--output", default=None, help="Write the execution intent JSON to this path")
+    add_runtime_options(run_intent)
     run_verify = run_sub.add_parser(
         "verify",
         help="Verify / 预检 instruments referenced by a run plan with read-only *IDN? queries",
@@ -336,6 +396,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_template.add_argument("--current-limit", type=float, default=0.1, help="Template power current limit in A")
     run_plan = run_sub.add_parser("plan", help="Execute a WaveBench run plan")
     run_plan.add_argument("--plan", required=True, help="Path to a WaveBench run plan TOML file")
+    run_plan.add_argument(
+        "--intent",
+        default=None,
+        help="Verify this execution intent before opening instrument sessions / 打开仪器会话前核验执行意图",
+    )
     add_runtime_options(run_plan)
     run_calibrate = run_sub.add_parser(
         "calibrate", help="Build an offline 2D frequency-response calibration LUT from an existing run"
@@ -349,6 +414,54 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Frequency-response label for a multi-response run / 多频响 run 的响应标签",
     )
+    run_compare = run_sub.add_parser(
+        "compare",
+        help="Compare frequency-response results from existing runs offline",
+    )
+    run_compare.add_argument(
+        "paths",
+        nargs="+",
+        help="Two or more data/runs/<run_dir> paths to compare / 要比较的 run 目录",
+    )
+    run_compare.add_argument(
+        "--response",
+        default=None,
+        help="Frequency-response label to select in each run / 每个 run 中选择的频响标签",
+    )
+    run_compare.add_argument(
+        "--output",
+        default=None,
+        help="Write the machine-readable comparison JSON to this path",
+    )
+    run_compare.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format; JSON is suitable for automation",
+    )
+    run_compare.add_argument(
+        "--gain-tolerance-db",
+        type=float,
+        default=None,
+        help="Optional absolute gain-difference limit in dB",
+    )
+    run_compare.add_argument(
+        "--phase-tolerance-deg",
+        type=float,
+        default=None,
+        help="Optional absolute phase-difference limit in degrees",
+    )
+    run_resume = run_sub.add_parser(
+        "resume",
+        help="Prepare an offline frequency-response remeasurement manifest",
+    )
+    run_resume.add_argument(
+        "path",
+        help="Existing run directory or frequency_response.csv path",
+    )
+    run_resume.add_argument("--plan", required=True, help="Current run plan TOML file")
+    run_resume.add_argument("--response", default=None, help="Frequency-response label for a multi-response run")
+    run_resume.add_argument("--output", default=None, help="Write the resume manifest JSON to this path")
     run_report = run_sub.add_parser("report", help="Generate an offline HTML report for a run package")
     run_report.add_argument("path", help="Path to data/runs/<run_dir>")
     run_report.add_argument("--output", default=None, help="Output HTML path; defaults to <run_dir>/report.html")
@@ -638,6 +751,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read a typed, non-mutating oscilloscope state snapshot",
     )
     status.add_argument("--channel", type=int, default=None)
+    status.add_argument(
+        "--strict",
+        action="store_true",
+        help="Require the complete scope.snapshot capability / 要求完整 scope.snapshot 能力",
+    )
     add_runtime_options(status)
 
     acquisition_status = scope_sub.add_parser(

@@ -1,0 +1,6 @@
+interface:
+  display_name: "WaveBench"
+  short_description: "安全规划、诊断与执行 WaveBench 仪器测量任务"
+  default_prompt: "使用 $wavebench 先检查环境与权限，再按授权执行任务并输出可复核证据。"
+policy:
+  allow_implicit_invocation: true

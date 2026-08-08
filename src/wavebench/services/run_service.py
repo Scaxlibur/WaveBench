@@ -7,12 +7,12 @@ from math import isfinite
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from wavebench.config import WaveBenchConfig
-from wavebench.data.package import new_package_dir
+from wavebench.data.package import new_package_dir, safe_label
 from wavebench.data.packages import load_run_package
-from wavebench.errors import ConfigError
+from wavebench.errors import ConfigError, StateDriftError, error_envelope
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
@@ -23,6 +23,7 @@ from wavebench.services.frequency_response import (
     build_fit_document,
     ensure_fit_dependencies,
     failed_frequency_response_point,
+    load_frequency_response_points,
     unwrap_frequency_response_phase,
     write_fit_document,
     write_frequency_response_csv,
@@ -40,6 +41,18 @@ from wavebench.services.frequency_response_calibration import (
     write_frequency_response_calibration_csv,
     write_frequency_response_calibration_json,
 )
+from wavebench.services.frequency_response_evidence import (
+    CAPTURE_SYNC_GRADE,
+    acquisition_id,
+    annotate_capture_metadata,
+    case_id,
+    plan_digest,
+    signal_level_evidence,
+)
+from wavebench.services.execution_intent import (
+    build_execution_intent,
+    verify_execution_intent,
+)
 from wavebench.services.run_artifacts import RunStepRecord, write_run_files, write_step_record
 from wavebench.services.run_analysis import (
     capture_consistency,
@@ -55,9 +68,15 @@ from wavebench.services.run_safety import (
     reject_unsupported_steps,
     run_scope_safety_guards,
 )
+from wavebench.services.resource_lease import (
+    ResourceLease,
+    ResourceLeaseManager,
+    resource_fingerprint,
+)
 from wavebench.services.scope_service import ScopeService
 from wavebench.services.source_service import SourceService
 from wavebench.services.source_state import RestorableSourceState
+from wavebench.services.state_guard import PowerStateGuard, SourceStateGuard
 
 
 @dataclass(frozen=True)
@@ -82,6 +101,59 @@ class RunInstrumentServices:
     power: PowerService | None = None
     dmm: DmmService | None = None
 
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        """Return transport-native counters without deriving them from logs."""
+
+        instruments: dict[str, dict[str, Any]] = {}
+        for name, service in (
+            ("scope", self.scope),
+            ("source", self.source),
+            ("power", self.power),
+            ("dmm", self.dmm),
+        ):
+            if service is None:
+                continue
+            getter = getattr(service, "audit_snapshot", None)
+            if not callable(getter):
+                continue
+            try:
+                snapshot = getter()
+            except Exception:  # noqa: BLE001 - audit must not mask run failures
+                continue
+            if isinstance(snapshot, dict):
+                instruments[name] = snapshot
+        if not instruments:
+            return None
+
+        mutation_writes = 0
+        mutation_writes_completed = 0
+        for snapshot in instruments.values():
+            counters = snapshot.get("counters")
+            if not isinstance(counters, dict):
+                continue
+            mutation_writes += int(counters.get("instrument_mutation_writes", 0))
+            mutation_writes_completed += int(
+                counters.get("instrument_mutation_writes_completed", 0)
+            )
+        return {
+            "schema": "wavebench.run_instrument_io.v1",
+            "coverage": "run_factory_transports",
+            "instruments": instruments,
+            "instrument_mutation_writes": mutation_writes,
+            "instrument_mutation_writes_completed": mutation_writes_completed,
+        }
+
+    def state_snapshot(self) -> dict[str, dict[str, dict[str, object]]]:
+        snapshots: dict[str, dict[str, dict[str, object]]] = {}
+        for name, service in (("source", self.source), ("power", self.power)):
+            if service is None:
+                continue
+            getter = getattr(service, "state_guard_snapshot", None)
+            snapshot = getter() if callable(getter) else None
+            if isinstance(snapshot, dict) and snapshot:
+                snapshots[name] = snapshot
+        return snapshots
+
 
 class _FrequencyResponseExecutionError(Exception):
     """Carry the partial sweep artifact so a fatal source failure remains auditable."""
@@ -100,6 +172,7 @@ def run_output_base(config: WaveBenchConfig) -> Path:
 class RunService:
     config: WaveBenchConfig
     logger: CommandLogger
+    lease_manager: ResourceLeaseManager | None = None
 
     def verify(self, plan: RunPlan) -> list[RunPreflightRecord]:
         self.check(plan)
@@ -153,7 +226,24 @@ class RunService:
         check_run_plan_safety_limits(plan, self.config.safety_limits)
         reject_unsupported_steps(plan)
         self._check_frequency_response_baselines(plan)
+        self._check_frequency_response_resumes(plan)
         self._check_plan_capabilities(plan)
+
+    def _check_frequency_response_resumes(self, plan: RunPlan) -> None:
+        """Validate resume CSVs before any instrument session is opened."""
+
+        plan_hash = plan_digest(plan)
+        for step in plan.steps:
+            if step.kind != "sweep.frequency_response" or not step.fields.get("resume_from"):
+                continue
+            requested_amplitudes = step.fields.get("amplitudes_vpp") or [None]
+            self._load_frequency_response_resume(
+                plan,
+                step,
+                label=step.fields.get("label", f"frequency_response_{step.index:02d}"),
+                requested_amplitudes=requested_amplitudes,
+                plan_hash=plan_hash,
+            )
 
     def _check_frequency_response_baselines(self, plan: RunPlan) -> None:
         """Validate referenced baseline evidence offline, before an instrument is opened."""
@@ -285,6 +375,18 @@ class RunService:
             elif step.kind == "dmm.read":
                 add("dmm", "dmm.read")
 
+            gate = step.fields.get("safety_gate")
+            if isinstance(gate, dict) and gate.get("enabled"):
+                if (
+                    gate.get("source_channels")
+                    or step.kind.startswith("source.")
+                    or step.kind == "sweep.frequency_response"
+                    or plan.restore.source_state
+                ):
+                    add("source", "source.output")
+                if gate.get("power_channels") or step.kind.startswith("power."):
+                    add("power", "power.output")
+
         if plan.restore.source_state:
             add(
                 "source",
@@ -295,6 +397,16 @@ class RunService:
                 "source.set_square_duty_cycle",
                 "source.output",
             )
+        if plan.safety.safety_gate:
+            if plan.safety.off_source_channels or any(
+                item.kind.startswith("source.") or item.kind == "sweep.frequency_response"
+                for item in plan.steps
+            ):
+                add("source", "source.output")
+            if plan.safety.off_power_channels or any(
+                item.kind.startswith("power.") for item in plan.steps
+            ):
+                add("power", "power.output")
         if plan_scope_guard_channels(plan, self.config.scope.default_channel):
             add("scope", "scope.channel_coupling")
 
@@ -330,10 +442,31 @@ class RunService:
             instruments.add("scope")
         if plan_scope_guard_channels(plan, self.config.scope.default_channel):
             instruments.add("scope")
+        if plan.safety.off_source_channels:
+            instruments.add("source")
+        if plan.safety.off_power_channels:
+            instruments.add("power")
+        for step in plan.steps:
+            gate = step.fields.get("safety_gate")
+            if not isinstance(gate, dict) or not gate.get("enabled"):
+                continue
+            if gate.get("source_channels"):
+                instruments.add("source")
+            if gate.get("power_channels"):
+                instruments.add("power")
         return instruments
 
-    def run(self, plan: RunPlan) -> RunResult:
+    def run(
+        self,
+        plan: RunPlan,
+        *,
+        execution_intent: Mapping[str, Any] | None = None,
+    ) -> RunResult:
         self.check(plan)
+        intent = build_execution_intent(plan, self.config)
+        if execution_intent is not None:
+            intent = verify_execution_intent(execution_intent, plan, self.config)
+        plan_hash = intent.plan_digest
         with self._run_instrument_services(plan) as services:
             self._run_safety_guards(plan, services=services)
             run_dir = new_package_dir(run_output_base(self.config), plan.label)
@@ -346,17 +479,120 @@ class RunService:
             run_json_path = run_dir / "run.json"
             summary_csv_path = run_dir / "summary.csv"
             restore_state: list[RestorableSourceState] | None = None
-            restore_error: dict[str, str] | None = None
+            restore_error: dict[str, Any] | None = None
+            run_failure: dict[str, Any] | None = None
+            safety_gate_step: RunStep | None = None
+            safety_gate_config: dict[str, Any] | None = None
+            provenance = {
+                "schema": "wavebench.run_provenance.v1",
+                "plan_hash": plan_hash,
+                "execution_intent": intent.as_dict(),
+                "frequency_response": {
+                    "schema": "wavebench.frequency_response_evidence.v1",
+                    "capture_sync_grade": CAPTURE_SYNC_GRADE,
+                },
+            }
+
+            def refresh_provenance() -> None:
+                instrument_io = services.audit_snapshot()
+                if instrument_io is not None:
+                    provenance["instrument_io"] = instrument_io
+                state_snapshot = services.state_snapshot()
+                if state_snapshot:
+                    provenance["state_guard"] = {
+                        "schema": "wavebench.state_guard.v1",
+                        "expected": state_snapshot,
+                    }
+
             try:
                 restore_state = snapshot_source_state(
                     plan,
                     source_service_factory=lambda: self._source_service(services=services),
                 )
                 for step in plan.steps:
-                    record = self._run_step(plan, step, run_dir=run_dir, services=services)
+                    record = self._run_step(
+                        plan, step, run_dir=run_dir, services=services, plan_hash=plan_hash
+                    )
+                    safety_gate = self._safety_gate_for_step(plan, step)
+                    gate_triggered = safety_gate["enabled"] and record.status in {
+                        "failed",
+                        "warning",
+                    }
+                    trigger_status = record.status
+                    if gate_triggered:
+                        try:
+                            gate_result = self._apply_safety_gate(step, safety_gate, services=services)
+                        except Exception as exc:  # noqa: BLE001 - retain gate failure in run artifact
+                            gate_result = {
+                                "status": "failed",
+                                "error": {
+                                    "type": type(exc).__name__,
+                                    "message": str(exc),
+                                },
+                            }
+                        record = replace(
+                            record,
+                            status="failed",
+                            artifact={**record.artifact, "safety_gate": gate_result},
+                        )
                     records.append(record)
                     write_step_record(steps_dir, record)
                     self._update_frequency_responses_manifest(run_dir, record)
+                    if gate_triggered:
+                        safety_gate_step = step
+                        safety_gate_config = safety_gate
+                        run_failure = {
+                            "type": "SafetyGateFailure",
+                            "code": "safety_gate_failed",
+                            "message": f"safety gate stopped run step {step.index} ({step.kind})",
+                            "step_index": step.index,
+                            "step_kind": step.kind,
+                            "policy": "stop",
+                            "trigger_status": trigger_status,
+                            "safety_gate": gate_result,
+                        }
+                        break
+                    if record.status == "failed" and step.fields.get("on_failure", "stop") == "stop":
+                        run_failure = {
+                            "type": "StepFailure",
+                            "code": "step_failed",
+                            "message": f"run step {step.index} ({step.kind}) failed",
+                            "step_index": step.index,
+                            "step_kind": step.kind,
+                            "policy": "stop",
+                        }
+                        break
+            except KeyboardInterrupt as exc:
+                restore_error = restore_source_state(
+                    restore_state,
+                    source_service_factory=lambda: self._source_service(services=services),
+                )
+                refresh_provenance()
+                interruption_error: dict[str, Any] = {
+                    "type": "KeyboardInterrupt",
+                    "message": str(exc) or "run interrupted by user",
+                }
+                if restore_error is not None:
+                    interruption_error["cause"] = dict(interruption_error)
+                    interruption_error["type"] = "RestoreError"
+                    interruption_error["message"] = _restore_error_message(restore_error)
+                write_run_files(
+                    plan=plan,
+                    run_json_path=run_json_path,
+                    summary_csv_path=summary_csv_path,
+                    status="failed",
+                    records=records,
+                    error=interruption_error,
+                    restore_state=restore_state,
+                    restore_error=restore_error,
+                    provenance=provenance,
+                )
+                if restore_error is not None:
+                    raise ConfigError(
+                        "run plan source state restore failed: "
+                        + _restore_error_message(restore_error)
+                    ) from exc
+                raise
             except Exception as exc:
                 failure = exc
                 if isinstance(exc, _FrequencyResponseExecutionError):
@@ -368,15 +604,22 @@ class RunService:
                     restore_state,
                     source_service_factory=lambda: self._source_service(services=services),
                 )
+                refresh_provenance()
+                failure_error: dict[str, Any]
+                if isinstance(failure, StateDriftError):
+                    failure_error = error_envelope(failure)
+                else:
+                    failure_error = {"type": type(failure).__name__, "message": str(failure)}
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
                     summary_csv_path=summary_csv_path,
                     status="failed",
                     records=records,
-                    error={"type": type(failure).__name__, "message": str(failure)},
+                    error=failure_error,
                     restore_state=restore_state,
                     restore_error=restore_error,
+                    provenance=provenance,
                 )
                 if isinstance(exc, _FrequencyResponseExecutionError):
                     raise failure from None
@@ -386,29 +629,63 @@ class RunService:
                 restore_state,
                 source_service_factory=lambda: self._source_service(services=services),
             )
+            if (
+                safety_gate_step is not None
+                and safety_gate_config is not None
+                and restore_state is not None
+            ):
+                try:
+                    post_restore_gate = self._apply_safety_gate(
+                        safety_gate_step,
+                        safety_gate_config,
+                        services=services,
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain final OFF evidence
+                    post_restore_gate = {
+                        "status": "failed",
+                        "error": {
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    }
+                if run_failure is not None:
+                    gate_error = run_failure.get("safety_gate")
+                    if isinstance(gate_error, dict):
+                        gate_error["post_restore"] = post_restore_gate
             if restore_error is not None:
+                restore_failure: dict[str, Any] = {
+                    "type": "ConfigError",
+                    "code": "restore_failed",
+                    "message": "source state restore failed",
+                }
+                if run_failure is not None:
+                    restore_failure["cause"] = run_failure
+                refresh_provenance()
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
                     summary_csv_path=summary_csv_path,
                     status="failed",
                     records=records,
-                    error={"type": "ConfigError", "message": "source state restore failed"},
+                    error=restore_failure,
                     restore_state=restore_state,
                     restore_error=restore_error,
+                    provenance=provenance,
                 )
                 raise ConfigError("run plan source state restore failed: " + restore_error["message"])
 
             run_status = "failed" if any(record.status == "failed" for record in records) else "ok"
+            refresh_provenance()
             write_run_files(
                 plan=plan,
                 run_json_path=run_json_path,
                 summary_csv_path=summary_csv_path,
                 status=run_status,
                 records=records,
-                error=None,
+                error=run_failure,
                 restore_state=restore_state,
                 restore_error=None,
+                provenance=provenance,
             )
             return RunResult(
                 run_dir=run_dir,
@@ -416,6 +693,148 @@ class RunService:
                 summary_csv_path=summary_csv_path,
                 steps=records,
             )
+
+    def _safety_gate_for_step(self, plan: RunPlan, step: RunStep) -> dict[str, Any]:
+        local = step.fields.get("safety_gate")
+        local_gate = local if isinstance(local, dict) else {"enabled": False}
+        enabled = bool(plan.safety.safety_gate or local_gate.get("enabled", False))
+        source_channels = tuple(
+            int(channel)
+            for channel in (
+                local_gate.get("source_channels") or plan.safety.off_source_channels
+            )
+        )
+        power_channels = tuple(
+            int(channel)
+            for channel in (
+                local_gate.get("power_channels") or plan.safety.off_power_channels
+            )
+        )
+        if (
+            enabled
+            and not source_channels
+            and not power_channels
+            and local_gate.get("enabled", False)
+            and not plan.safety.safety_gate
+        ):
+            source_channels = tuple(self._inferred_source_gate_channels(plan, step))
+            power_channels = tuple(self._inferred_power_gate_channels(plan, step))
+        return {
+            "enabled": enabled,
+            "source_channels": list(source_channels),
+            "power_channels": list(power_channels),
+        }
+
+    def _inferred_source_gate_channels(self, plan: RunPlan, step: RunStep) -> list[int]:
+        channels: list[int] = []
+
+        def add(value: Any) -> None:
+            if value is None:
+                return
+            channel = int(value)
+            if channel not in channels:
+                channels.append(channel)
+
+        if step.kind.startswith("source.") or step.kind == "sweep.frequency_response":
+            add(step.fields.get("source_channel") or step.fields.get("channel"))
+        for item in plan.steps:
+            if item.kind.startswith("source.") or item.kind == "sweep.frequency_response":
+                add(item.fields.get("source_channel") or item.fields.get("channel"))
+        for channel in plan.restore.source_channels:
+            add(channel)
+        if not channels and "source" in self._plan_instruments(plan) and self.config.source is not None:
+            add(self.config.source.default_channel)
+        return channels
+
+    def _inferred_power_gate_channels(self, plan: RunPlan, step: RunStep) -> list[int]:
+        channels: list[int] = []
+
+        def add(value: Any) -> None:
+            if value is None:
+                return
+            channel = int(value)
+            if channel not in channels:
+                channels.append(channel)
+
+        if step.kind.startswith("power."):
+            add(step.fields.get("channel"))
+        for item in plan.steps:
+            if item.kind.startswith("power."):
+                add(item.fields.get("channel"))
+        if not channels and "power" in self._plan_instruments(plan) and self.config.power is not None:
+            add(self.config.power.default_channel)
+        return channels
+
+    def _apply_safety_gate(
+        self,
+        step: RunStep,
+        gate: dict[str, Any],
+        *,
+        services: RunInstrumentServices | None = None,
+    ) -> dict[str, Any]:
+        source_channels = [int(channel) for channel in gate.get("source_channels", [])]
+        power_channels = [int(channel) for channel in gate.get("power_channels", [])]
+        if not source_channels and not power_channels:
+            raise ConfigError(
+                f"step {step.index} safety gate has no authorized OFF targets"
+            )
+        result: dict[str, Any] = {
+            "status": "ok",
+            "source_channels": source_channels,
+            "power_channels": power_channels,
+            "actions": [],
+        }
+        errors: list[dict[str, Any]] = []
+        for channel in source_channels:
+            try:
+                status = self._source_service(services=services).set_output(
+                    channel=channel,
+                    enabled=False,
+                )
+                result["actions"].append(
+                    {
+                        "instrument": "source",
+                        "channel": channel,
+                        "state": "off",
+                        "status": _status_payload(status),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - attempt every authorized OFF target
+                errors.append(
+                    {
+                        "instrument": "source",
+                        "channel": channel,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+        for channel in power_channels:
+            try:
+                status = self._power_service(services=services).set_output(
+                    channel=channel,
+                    enabled=False,
+                )
+                result["actions"].append(
+                    {
+                        "instrument": "power",
+                        "channel": channel,
+                        "state": "off",
+                        "status": _status_payload(status),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - attempt every authorized OFF target
+                errors.append(
+                    {
+                        "instrument": "power",
+                        "channel": channel,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+        if errors:
+            result["status"] = "failed"
+            result["errors"] = errors
+        return result
 
     def _run_safety_guards(
         self,
@@ -436,6 +855,7 @@ class RunService:
         *,
         run_dir: Path,
         services: RunInstrumentServices | None = None,
+        plan_hash: str = "",
     ) -> RunStepRecord:
         if step.kind == "power.status":
             status = self._power_service(services=services).status(channel=step.fields.get("channel"))
@@ -463,9 +883,12 @@ class RunService:
             )
             artifact = {"source_status": _status_payload(status)}
         elif step.kind == "source.arb_load":
+            waveform_path = Path(step.fields["file"])
+            if not waveform_path.is_absolute():
+                waveform_path = plan.path.parent / waveform_path
             status = self._source_service(services=services).upload_arbitrary_waveform(
                 channel=step.fields.get("channel"),
-                file_path=step.fields["file"],
+                file_path=str(waveform_path),
                 playback_frequency_hz=step.fields["frequency_hz"],
                 amplitude_vpp=step.fields["amplitude_vpp"],
                 offset_v=step.fields.get("offset_v", 0.0),
@@ -513,6 +936,7 @@ class RunService:
                     item.kind == "sweep.frequency_response" for item in plan.steps
                 ) > 1,
                 services=services,
+                plan_hash=plan_hash,
             )
         elif step.kind == "dmm.read":
             reading = self._dmm_service(services=services).read(function=step.fields.get("function", "dcv"))
@@ -541,6 +965,7 @@ class RunService:
         run_dir: Path,
         multiple_responses: bool,
         services: RunInstrumentServices | None = None,
+        plan_hash: str = "",
     ) -> dict[str, Any]:
         source_channel = step.fields.get("source_channel")
         source = self._source_service(services=services)
@@ -592,7 +1017,14 @@ class RunService:
             ) from exc
 
         requested_amplitudes = step.fields.get("amplitudes_vpp") or [None]
-        point_index = 0
+        points, resumed_keys, resume_summary = self._load_frequency_response_resume(
+            plan,
+            step,
+            label=label,
+            requested_amplitudes=requested_amplitudes,
+            plan_hash=plan_hash,
+        )
+        point_index = max((point.index for point in points), default=-1) + 1
         pending = [
             (frequency_hz, 0, None, None)
             for frequency_hz in step.fields["frequencies_hz"]
@@ -625,14 +1057,43 @@ class RunService:
                             reference_channel=reference_channel, response_channel=response_channel,
                         ) from error
                 for frequency_index, (frequency_hz, adaptive_level, parent_start, parent_stop) in enumerate(pending):
+                    point_key = self._frequency_response_point_key(
+                        amplitude_index, requested_vpp, frequency_hz
+                    )
+                    if point_key in resumed_keys:
+                        continue
+                    point_case_id = case_id(
+                        plan_name=plan.name,
+                        step_index=step.index,
+                        label=label,
+                        frequency_hz=frequency_hz,
+                        requested_vpp=requested_vpp,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                    )
                     try:
                         source_status = source.set_frequency(channel=source_channel, value_hz=frequency_hz)
                     except Exception as exc:
-                        points.append(failed_frequency_response_point(
-                            index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
-                            requested_frequency_hz=frequency_hz, error=exc, adaptive_level=adaptive_level,
-                            adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
-                        ))
+                        points.append(
+                            self._annotate_frequency_point(
+                                failed_frequency_response_point(
+                                    index=point_index,
+                                    amplitude_index=amplitude_index,
+                                    requested_vpp=requested_vpp,
+                                    requested_frequency_hz=frequency_hz,
+                                    error=exc,
+                                    adaptive_level=adaptive_level,
+                                    adaptive_parent_start_hz=parent_start,
+                                    adaptive_parent_stop_hz=parent_stop,
+                                ),
+                                case_id_value=point_case_id,
+                                plan_hash=plan_hash,
+                                reference_channel=reference_channel,
+                                response_channel=response_channel,
+                                requested_frequency_hz=frequency_hz,
+                                requested_vpp=requested_vpp,
+                            )
+                        )
                         write_frequency_response_csv(csv_path, points)
                         raise self._frequency_response_execution_error(
                             step, exc, points=points, csv_path=csv_path, fit_path=None,
@@ -643,11 +1104,26 @@ class RunService:
                         error = ConfigError(
                             f"source output is {source_status.output} after setting {frequency_hz:.12g} Hz"
                         )
-                        points.append(failed_frequency_response_point(
-                            index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
-                            requested_frequency_hz=frequency_hz, error=error, adaptive_level=adaptive_level,
-                            adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
-                        ))
+                        points.append(
+                            self._annotate_frequency_point(
+                                failed_frequency_response_point(
+                                    index=point_index,
+                                    amplitude_index=amplitude_index,
+                                    requested_vpp=requested_vpp,
+                                    requested_frequency_hz=frequency_hz,
+                                    error=error,
+                                    adaptive_level=adaptive_level,
+                                    adaptive_parent_start_hz=parent_start,
+                                    adaptive_parent_stop_hz=parent_stop,
+                                ),
+                                case_id_value=point_case_id,
+                                plan_hash=plan_hash,
+                                reference_channel=reference_channel,
+                                response_channel=response_channel,
+                                requested_frequency_hz=frequency_hz,
+                                requested_vpp=requested_vpp,
+                            )
+                        )
                         write_frequency_response_csv(csv_path, points)
                         raise self._frequency_response_execution_error(
                             step, error, points=points, csv_path=csv_path, fit_path=None,
@@ -663,13 +1139,13 @@ class RunService:
                         scope.autoscale()
                         if step.fields["settle_s"]:
                             time.sleep(step.fields["settle_s"])
+                    amplitude_label = (
+                        f"{label}_{point_index:03d}_{frequency_hz:.12g}hz"
+                        if requested_vpp is None
+                        else f"{label}_a{amplitude_index:02d}_{requested_vpp:.12g}vpp_"
+                        f"l{adaptive_level}_{frequency_index:03d}_{frequency_hz:.12g}hz"
+                    )
                     try:
-                        amplitude_label = (
-                            f"{label}_{point_index:03d}_{frequency_hz:.12g}hz"
-                            if requested_vpp is None
-                            else f"{label}_a{amplitude_index:02d}_{requested_vpp:.12g}vpp_"
-                            f"l{adaptive_level}_{frequency_index:03d}_{frequency_hz:.12g}hz"
-                        )
                         capture = scope.capture_waveforms(
                             channels=[reference_channel, response_channel], label=amplitude_label
                         )
@@ -682,6 +1158,15 @@ class RunService:
                             metadata_path=str(capture.metadata_path), adaptive_level=adaptive_level,
                             min_signal_vpp=step.fields["min_signal_vpp"],
                             adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
+                        )
+                        point = self._annotate_frequency_point(
+                            point,
+                            case_id_value=point_case_id,
+                            plan_hash=plan_hash,
+                            reference_channel=reference_channel,
+                            response_channel=response_channel,
+                            requested_frequency_hz=frequency_hz,
+                            requested_vpp=requested_vpp,
                         )
                         if point.status == "warning" and step.fields["retry_warning_with_autoscale"]:
                             initial_point = point
@@ -703,6 +1188,16 @@ class RunService:
                                     adaptive_level=adaptive_level, adaptive_parent_start_hz=parent_start,
                                     adaptive_parent_stop_hz=parent_stop,
                                 )
+                                retry_point = self._annotate_frequency_point(
+                                    retry_point,
+                                    case_id_value=point_case_id,
+                                    plan_hash=plan_hash,
+                                    reference_channel=reference_channel,
+                                    response_channel=response_channel,
+                                    requested_frequency_hz=frequency_hz,
+                                    requested_vpp=requested_vpp,
+                                    retry_of=getattr(initial_point, "acquisition_id", None),
+                                )
                                 point = replace(
                                     retry_point,
                                     status="failed" if retry_point.status == "warning" else retry_point.status,
@@ -710,6 +1205,8 @@ class RunService:
                                     initial_warnings=initial_point.warnings,
                                     initial_capture_package=initial_point.capture_package,
                                     initial_metadata_path=initial_point.metadata_path,
+                                    retry_capture_package=retry_point.capture_package,
+                                    retry_metadata_path=retry_point.metadata_path,
                                     error=(
                                         "quality_retry_exhausted: initial warnings="
                                         + " | ".join(initial_point.warnings)
@@ -717,6 +1214,9 @@ class RunService:
                                     ) if retry_point.status == "warning" else retry_point.error,
                                 )
                             except Exception as retry_exc:  # noqa: BLE001 - retain the first capture evidence
+                                failed_retry_capture = self._find_failed_frequency_capture(
+                                    f"{amplitude_label}_retry1"
+                                )
                                 point = replace(
                                     initial_point,
                                     status="failed",
@@ -724,17 +1224,69 @@ class RunService:
                                     initial_warnings=initial_point.warnings,
                                     initial_capture_package=initial_point.capture_package,
                                     initial_metadata_path=initial_point.metadata_path,
+                                    retry_capture_package=(
+                                        str(failed_retry_capture) if failed_retry_capture is not None else ""
+                                    ),
+                                    retry_metadata_path=(
+                                        str(failed_retry_capture / "metadata.partial.json")
+                                        if failed_retry_capture is not None
+                                        else ""
+                                    ),
                                     error=f"quality_retry_failed: {type(retry_exc).__name__}: {retry_exc}",
                                 )
                         points.append(point)
                     except Exception as exc:  # noqa: BLE001 - retain failed points and continue the sweep
-                        points.append(failed_frequency_response_point(
+                        failed_capture = self._find_failed_frequency_capture(amplitude_label)
+                        failed_point = failed_frequency_response_point(
                             index=point_index, amplitude_index=amplitude_index, requested_vpp=requested_vpp,
                             requested_frequency_hz=frequency_hz, error=exc, adaptive_level=adaptive_level,
                             adaptive_parent_start_hz=parent_start, adaptive_parent_stop_hz=parent_stop,
-                        ))
+                        )
+                        if failed_capture is not None:
+                            failed_point = replace(
+                                failed_point,
+                                capture_package=str(failed_capture),
+                                metadata_path=str(failed_capture / "metadata.partial.json"),
+                            )
+                        points.append(
+                            self._annotate_frequency_point(
+                                failed_point,
+                                case_id_value=point_case_id,
+                                plan_hash=plan_hash,
+                                reference_channel=reference_channel,
+                                response_channel=response_channel,
+                                requested_frequency_hz=frequency_hz,
+                                requested_vpp=requested_vpp,
+                            )
+                        )
+                    stop_reason = self._frequency_response_stop_reason(
+                        points, step.fields.get("stop_conditions")
+                    )
                     point_index += 1
                     write_frequency_response_csv(csv_path, points)
+                    if stop_reason is not None:
+                        error = ConfigError(
+                            f"frequency response stop condition triggered: {stop_reason}"
+                        )
+                        raise self._frequency_response_execution_error(
+                            step,
+                            error,
+                            points=points,
+                            csv_path=csv_path,
+                            fit_path=None,
+                            label=label,
+                            response_dir=response_dir,
+                            source_channel=source_channel,
+                            reference_channel=reference_channel,
+                            response_channel=response_channel,
+                            stop_conditions=step.fields.get("stop_conditions"),
+                            stop_reason=stop_reason,
+                            adaptive=adaptive_summary,
+                            # The summary is initialized before the first point;
+                            # preserve it if an explicit group stop aborts the step.
+                            # (The helper accepts None for non-resume runs.)
+                            resume=resume_summary,
+                        ) from error
 
             points = unwrap_frequency_response_phase(points)
             if baseline_response is not None:
@@ -829,7 +1381,250 @@ class RunService:
             calibration_json_path=written_calibration_json,
             fixed_point_paths=fixed_point_paths,
             calibration_error=calibration_error,
+            resume=resume_summary,
+            stop_conditions=step.fields.get("stop_conditions"),
         )
+
+    def _annotate_frequency_point(
+        self,
+        point: Any,
+        *,
+        case_id_value: str,
+        plan_hash: str,
+        reference_channel: int,
+        response_channel: int,
+        requested_frequency_hz: float,
+        requested_vpp: float | None,
+        retry_of: str | None = None,
+    ) -> Any:
+        """Attach stable point/capture evidence without making capture fragile.
+
+        Capture metadata is an audit artifact.  If an older or synthetic capture has
+        no writable metadata path, the measured point is retained and the annotation
+        failure becomes a warning on that point instead of discarding the measurement.
+        """
+
+        capture_path = getattr(point, "capture_package", "")
+        metadata_path = getattr(point, "metadata_path", "")
+        acquisition = ""
+        annotation_error = ""
+        if capture_path:
+            acquisition = acquisition_id(capture_path, label=case_id_value)
+            if metadata_path:
+                try:
+                    annotate_capture_metadata(
+                        metadata_path,
+                        case=case_id_value,
+                        acquisition=acquisition,
+                        requested_frequency_hz=requested_frequency_hz,
+                        requested_source_vpp=requested_vpp,
+                        reference_channel=reference_channel,
+                        response_channel=response_channel,
+                        reference_vpp_v=getattr(point, "reference_vpp_v", None),
+                        response_vpp_v=getattr(point, "response_vpp_v", None),
+                        plan_hash=plan_hash,
+                        retry_of=retry_of,
+                    )
+                except Exception as exc:  # noqa: BLE001 - preserve the measurement evidence
+                    annotation_error = f"evidence_annotation_failed: {type(exc).__name__}: {exc}"
+
+        updates: dict[str, Any] = {}
+        available = getattr(point, "__dataclass_fields__", {})
+        if "case_id" in available:
+            updates["case_id"] = case_id_value
+        if "acquisition_id" in available:
+            updates["acquisition_id"] = acquisition
+        if "capture_sync_grade" in available:
+            updates["capture_sync_grade"] = CAPTURE_SYNC_GRADE if capture_path else "unknown"
+        if "plan_hash" in available:
+            updates["plan_hash"] = plan_hash
+        if "requested_source_vpp" in available:
+            updates["requested_source_vpp"] = requested_vpp
+        if "reference_plane" in available:
+            updates["reference_plane"] = "scope_input"
+        if "signal_level_evidence" in available:
+            updates["signal_level_evidence"] = signal_level_evidence(
+                requested_source_vpp=requested_vpp,
+                reference_vpp_v=getattr(point, "reference_vpp_v", None),
+                response_vpp_v=getattr(point, "response_vpp_v", None),
+                reference_channel=reference_channel,
+                response_channel=response_channel,
+            )
+        if annotation_error:
+            existing_warnings = tuple(getattr(point, "warnings", ()) or ())
+            updates["warnings"] = existing_warnings + (annotation_error,)
+            if getattr(point, "status", "ok") == "ok":
+                updates["status"] = "warning"
+        return replace(point, **updates) if updates else point
+
+    def _find_failed_frequency_capture(self, label: str) -> Path | None:
+        """Find the most recent partial package left by a failed capture."""
+
+        try:
+            candidates = sorted(
+                (
+                    path
+                    for path in self.config.output.directory.glob(f"*_{safe_label(label)}_failed")
+                    if path.is_dir()
+                ),
+                key=lambda path: path.stat().st_mtime_ns,
+                reverse=True,
+            )
+        except OSError:
+            return None
+        return candidates[0] if candidates else None
+
+    @staticmethod
+    def _resume_csv_from_manifest(run_dir: Path, label: str) -> Path:
+        manifest_path = run_dir / "frequency_responses.json"
+        try:
+            document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConfigError(f"frequency responses manifest is unreadable: {manifest_path}") from exc
+        entries = document.get("responses") if isinstance(document, dict) else None
+        if not isinstance(entries, list):
+            raise ConfigError(f"frequency responses manifest has no responses array: {manifest_path}")
+        selected = next(
+            (entry for entry in entries if isinstance(entry, dict) and entry.get("label") == label),
+            None,
+        )
+        if not isinstance(selected, dict):
+            raise ConfigError(f"frequency response {label!r} was not found in {manifest_path}")
+        directory = Path(str(selected.get("directory", ".")))
+        if not directory.is_absolute():
+            directory = run_dir / directory
+        return directory / str(selected.get("csv", "frequency_response.csv"))
+
+    def _load_frequency_response_resume(
+        self,
+        plan: RunPlan,
+        step: RunStep,
+        *,
+        label: str,
+        requested_amplitudes: list[float | None],
+        plan_hash: str,
+    ) -> tuple[list[Any], set[tuple[int, float | None, str]], dict[str, Any] | None]:
+        raw_path = step.fields.get("resume_from")
+        if not raw_path:
+            return [], set(), None
+        source = Path(str(raw_path))
+        if not source.is_absolute():
+            source = plan.path.parent / source
+        if source.is_dir() and (source / "frequency_responses.json").exists():
+            source = self._resume_csv_from_manifest(source, label)
+        loaded = load_frequency_response_points(source)
+        usable: list[Any] = []
+        resumed_keys: set[tuple[int, float | None, str]] = set()
+        rejected: list[dict[str, Any]] = []
+        expected_amplitudes = {
+            None if value is None else float(value) for value in requested_amplitudes
+        }
+        for point in loaded:
+            if point.plan_hash and point.plan_hash != plan_hash:
+                raise ConfigError(
+                    "resume response plan hash does not match the current plan: "
+                    f"{point.plan_hash} != {plan_hash}"
+                )
+            requested_vpp = point.requested_source_vpp
+            if requested_vpp not in expected_amplitudes:
+                rejected.append({"index": point.index, "reason": "amplitude_not_in_current_plan"})
+                continue
+            expected_case = case_id(
+                plan_name=plan.name,
+                step_index=step.index,
+                label=label,
+                frequency_hz=point.requested_frequency_hz,
+                requested_vpp=requested_vpp,
+                reference_channel=step.fields["reference_channel"],
+                response_channel=step.fields["response_channel"],
+            )
+            if point.case_id and point.case_id != expected_case:
+                raise ConfigError(
+                    "resume response case identity does not match the current plan: "
+                    f"{point.case_id} != {expected_case}"
+                )
+            if point.status == "ok" and point.usable_for_fit:
+                usable.append(replace(point, case_id=expected_case, plan_hash=plan_hash))
+                resolved_amplitude_index = (
+                    requested_amplitudes.index(requested_vpp)
+                    if requested_vpp in requested_amplitudes
+                    else point.amplitude_index
+                )
+                resumed_keys.add(
+                    self._frequency_response_point_key(
+                        resolved_amplitude_index, requested_vpp, point.requested_frequency_hz
+                    )
+                )
+            else:
+                rejected.append(
+                    {
+                        "index": point.index,
+                        "case_id": point.case_id or expected_case,
+                        "status": point.status,
+                        "reason": point.failure_reason or point.error or "not_reusable",
+                    }
+                )
+        return usable, resumed_keys, {
+            "source": str(source),
+            "reused_point_count": len(usable),
+            "rejected_point_count": len(rejected),
+            "rejected_points": rejected,
+        }
+
+    @staticmethod
+    def _frequency_response_point_key(
+        amplitude_index: int, requested_vpp: float | None, frequency_hz: float
+    ) -> tuple[int, float | None, str]:
+        return (
+            int(amplitude_index),
+            None if requested_vpp is None else float(requested_vpp),
+            format(float(frequency_hz), ".12g"),
+        )
+
+    @staticmethod
+    def _frequency_response_stop_reason(
+        points: list[Any], conditions: dict[str, Any] | None
+    ) -> str | None:
+        if not conditions:
+            return None
+        failed_count = sum(getattr(point, "status", "") == "failed" for point in points)
+        warning_count = sum(getattr(point, "status", "") == "warning" for point in points)
+        if "max_failed_points" in conditions and failed_count >= conditions["max_failed_points"]:
+            return f"max_failed_points={conditions['max_failed_points']} (actual {failed_count})"
+        if "max_warning_points" in conditions and warning_count >= conditions["max_warning_points"]:
+            return f"max_warning_points={conditions['max_warning_points']} (actual {warning_count})"
+        if "max_consecutive_failed_points" in conditions:
+            consecutive = 0
+            for point in reversed(points):
+                if getattr(point, "status", "") != "failed":
+                    break
+                consecutive += 1
+            if consecutive >= conditions["max_consecutive_failed_points"]:
+                return (
+                    "max_consecutive_failed_points="
+                    f"{conditions['max_consecutive_failed_points']} (actual {consecutive})"
+                )
+        limit = conditions.get("max_gain_jump_db")
+        if limit is not None and len(points) >= 2:
+            current = points[-1]
+            current_gain = getattr(current, "gain_db", None)
+            if current_gain is not None and getattr(current, "status", "") != "failed":
+                previous = next(
+                    (
+                        point
+                        for point in reversed(points[:-1])
+                        if getattr(point, "amplitude_index", None)
+                        == getattr(current, "amplitude_index", None)
+                        and getattr(point, "gain_db", None) is not None
+                        and getattr(point, "status", "") != "failed"
+                    ),
+                    None,
+                )
+                if previous is not None:
+                    jump = abs(float(current_gain) - float(previous.gain_db))
+                    if jump > float(limit):
+                        return f"max_gain_jump_db={limit:g} (actual {jump:g})"
+        return None
 
     def _frequency_response_execution_error(
         self,
@@ -849,6 +1644,8 @@ class RunService:
         calibration_csv_path: Path | None = None,
         calibration_json_path: Path | None = None,
         fixed_point_paths: dict[str, Path] | None = None,
+        stop_conditions: dict[str, Any] | None = None,
+        stop_reason: str | None = None,
     ) -> _FrequencyResponseExecutionError:
         artifact = self._frequency_response_artifact(
             points=points,
@@ -864,6 +1661,8 @@ class RunService:
             calibration_csv_path=calibration_csv_path,
             calibration_json_path=calibration_json_path,
             fixed_point_paths=fixed_point_paths,
+            stop_conditions=stop_conditions,
+            stop_reason=stop_reason,
             error=cause,
         )
         record = RunStepRecord(
@@ -892,6 +1691,9 @@ class RunService:
         calibration_json_path: Path | None = None,
         fixed_point_paths: dict[str, Path] | None = None,
         calibration_error: str | None = None,
+        resume: dict[str, Any] | None = None,
+        stop_conditions: dict[str, Any] | None = None,
+        stop_reason: str | None = None,
         error: Exception | None = None,
     ) -> dict[str, Any]:
         failed_points = sum(point.status == "failed" for point in points)
@@ -899,6 +1701,14 @@ class RunService:
         captures = [
             {
                 "index": point.index,
+                "case_id": getattr(point, "case_id", ""),
+                "acquisition_id": getattr(point, "acquisition_id", ""),
+                "capture_sync_grade": getattr(
+                    point, "capture_sync_grade", CAPTURE_SYNC_GRADE
+                ),
+                "quality_metrics": getattr(point, "quality_metrics", {}),
+                "retry_package": getattr(point, "retry_capture_package", ""),
+                "retry_metadata": getattr(point, "retry_metadata_path", ""),
                 "package": point.capture_package,
                 "metadata": point.metadata_path,
             }
@@ -926,6 +1736,43 @@ class RunService:
             "reference_channel": reference_channel,
             "response_channel": response_channel,
             "captures": captures,
+            "evidence": {
+                "schema": "wavebench.frequency_response_evidence.v1",
+                "plan_hash": next(
+                    (
+                        getattr(point, "plan_hash", "")
+                        for point in points
+                        if getattr(point, "plan_hash", "")
+                    ),
+                    "",
+                ),
+                "reference_plane": "scope_input",
+                "capture_sync_grade": next(
+                    (
+                        getattr(point, "capture_sync_grade", "")
+                        for point in points
+                        if getattr(point, "capture_sync_grade", "")
+                    ),
+                    CAPTURE_SYNC_GRADE,
+                ),
+                "case_ids": [
+                    getattr(point, "case_id", "") for point in points if getattr(point, "case_id", "")
+                ],
+                "acquisition_ids": [
+                    getattr(point, "acquisition_id", "")
+                    for point in points
+                    if getattr(point, "acquisition_id", "")
+                ],
+                "excluded_points": [
+                    {
+                        "case_id": getattr(point, "case_id", ""),
+                        "index": point.index,
+                        "reason": point.error or point.status,
+                    }
+                    for point in points
+                    if not point.usable_for_fit
+                ],
+            },
         }
         if error is not None:
             response["error"] = f"{type(error).__name__}: {error}"
@@ -933,6 +1780,12 @@ class RunService:
             response["calibration_error"] = calibration_error
         if adaptive is not None:
             response["adaptive"] = adaptive
+        if resume is not None:
+            response["resume"] = resume
+        if stop_conditions is not None:
+            response["stop_conditions"] = stop_conditions
+        if stop_reason is not None:
+            response["stop_reason"] = stop_reason
         return {"frequency_response": response}
 
     @staticmethod
@@ -984,6 +1837,9 @@ class RunService:
             "status": response.get("status", record.status),
             "adaptive": response.get("adaptive"),
             "fixed_point": response.get("fixed_point", {}),
+            "evidence": response.get("evidence", {}),
+            "resume": response.get("resume"),
+            "stop_reason": response.get("stop_reason", ""),
         }
         entries = [item for item in existing["responses"] if not (
             isinstance(item, dict) and item.get("label") == entry["label"]
@@ -1102,33 +1958,130 @@ class RunService:
     def _run_instrument_services(self, plan: RunPlan) -> Iterator[RunInstrumentServices]:
         instruments = self._plan_instruments(plan)
         with ExitStack() as stack:
+            resources = self._plan_resource_values(instruments)
+            lease_manager = self.lease_manager or ResourceLeaseManager()
+            leases = lease_manager.acquire_many(
+                resources,
+                operation=f"run plan {plan.label}",
+            )
+            for lease in leases:
+                # Borrowed leases are released after all driver sessions close.
+                stack.callback(lease.release)
+            leases_by_fingerprint = {lease.fingerprint: lease for lease in leases}
+
+            def lease_for(resource: str) -> ResourceLease:
+                try:
+                    return leases_by_fingerprint[resource_fingerprint(resource)]
+                except KeyError as exc:
+                    raise ConfigError("run resource lease mapping is incomplete") from exc
+
             scope: ScopeService | None = None
             source: SourceService | None = None
             power: PowerService | None = None
             dmm: DmmService | None = None
+            source_guard = SourceStateGuard()
+            power_guard = PowerStateGuard()
 
             if "scope" in instruments:
                 logger = CommandLogger()
-                session = ScopeService(config=self.config, logger=logger).open_session()
+                scope_lease = lease_for(self.config.connection.resource)
+                bootstrap = ScopeService(
+                    config=self.config,
+                    logger=logger,
+                    lease=scope_lease,
+                )
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                scope = ScopeService(config=self.config, logger=logger, session=session)
+                scope = ScopeService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                    lease=scope_lease,
+                )
             if "source" in instruments:
                 logger = CommandLogger()
-                session = SourceService(config=self.config, logger=logger).open_session()
+                source_config = self.config.source
+                if source_config is None or not source_config.resource:
+                    raise ConfigError("source resource is required by this run plan")
+                source_lease = lease_for(source_config.resource)
+                bootstrap = SourceService(
+                    config=self.config,
+                    logger=logger,
+                    lease=source_lease,
+                    state_guard=source_guard,
+                )
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                source = SourceService(config=self.config, logger=logger, session=session)
+                source = SourceService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                    lease=source_lease,
+                    state_guard=source_guard,
+                )
             if "power" in instruments:
                 logger = CommandLogger()
-                session = PowerService(config=self.config, logger=logger).open_session()
+                power_config = self.config.power
+                if power_config is None or not power_config.resource:
+                    raise ConfigError("power resource is required by this run plan")
+                power_lease = lease_for(power_config.resource)
+                bootstrap = PowerService(
+                    config=self.config,
+                    logger=logger,
+                    lease=power_lease,
+                    state_guard=power_guard,
+                )
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                power = PowerService(config=self.config, logger=logger, session=session)
+                power = PowerService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                    lease=power_lease,
+                    state_guard=power_guard,
+                )
             if "dmm" in instruments:
                 logger = CommandLogger()
-                session = DmmService(config=self.config, logger=logger).open_session()
+                dmm_config = self.config.dmm
+                if dmm_config is None or not dmm_config.resource:
+                    raise ConfigError("dmm resource is required by this run plan")
+                dmm_lease = lease_for(dmm_config.resource)
+                bootstrap = DmmService(
+                    config=self.config,
+                    logger=logger,
+                    lease=dmm_lease,
+                )
+                session = bootstrap.open_session()
                 stack.callback(session.close)
-                dmm = DmmService(config=self.config, logger=logger, session=session)
+                dmm = DmmService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                    lease=dmm_lease,
+                )
 
             yield RunInstrumentServices(scope=scope, source=source, power=power, dmm=dmm)
+
+    def _plan_resource_values(self, instruments: set[str]) -> list[str]:
+        resources: list[str] = []
+        if "scope" in instruments:
+            resources.append(self.config.connection.resource)
+        for kind in ("source", "power", "dmm"):
+            if kind not in instruments:
+                continue
+            section = getattr(self.config, kind)
+            if section is None or not section.resource:
+                raise ConfigError(f"{kind} resource is required by this run plan")
+            resources.append(section.resource)
+        return resources
 
     def _power_service(self, *, services: RunInstrumentServices | None = None) -> PowerService:
         if services is not None and services.power is not None:
@@ -1180,6 +2133,9 @@ class RunService:
                 config=config,
                 logger=services.scope.logger,
                 session=services.scope.session,
+                descriptor=services.scope.descriptor,
+                transport=services.scope.transport,
+                lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())
 
@@ -1209,6 +2165,9 @@ class RunService:
                 config=config,
                 logger=services.scope.logger,
                 session=services.scope.session,
+                descriptor=services.scope.descriptor,
+                transport=services.scope.transport,
+                lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())
 
@@ -1246,3 +2205,18 @@ def _first_finite_row_value(row: dict[str, Any], *names: str) -> float | None:
         if isfinite(value):
             return value
     return None
+
+
+def _restore_error_message(error: dict[str, Any]) -> str:
+    """Expose the first concrete channel error while retaining the full payload."""
+
+    errors = error.get("errors")
+    if isinstance(errors, list):
+        details = [
+            str(item.get("message"))
+            for item in errors
+            if isinstance(item, dict) and item.get("message")
+        ]
+        if details:
+            return "; ".join(details)
+    return str(error.get("message", "source state restore failed"))

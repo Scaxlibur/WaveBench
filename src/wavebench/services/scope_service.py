@@ -6,7 +6,7 @@ import os
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -47,9 +47,39 @@ from wavebench.instruments.models import (
 )
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.resource_lease import ResourceLease
+from wavebench.transport.base import InstrumentTransport
 
 HIGH_IMPEDANCE_COUPLINGS = {"DCL", "DCLIMIT", "ACL", "ACLIMIT"}
 LOW_IMPEDANCE_COUPLINGS = {"DC", "AC"}
+
+
+@dataclass(frozen=True)
+class ScopeStatusSummary:
+    """Stable scope status result that can represent a partial capability set."""
+
+    status: str
+    channel: int
+    snapshot: ScopeSnapshot | None = None
+    idn: str | None = None
+    coupling: str | None = None
+    missing_capabilities: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "status": self.status,
+            "channel": self.channel,
+            "idn": self.idn,
+            "coupling": self.coupling,
+            "missing_capabilities": list(self.missing_capabilities),
+        }
+        if self.snapshot is not None:
+            payload["snapshot"] = asdict(self.snapshot)
+        return payload
+
+
 def normalize_coupling(value: str) -> str:
     return value.strip().upper()
 
@@ -122,8 +152,14 @@ class ScopeService:
     logger: CommandLogger
     session: ScopeDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
+    lease: ResourceLease | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
+        access_policy(getattr(self.config.scope, "access", "read_write"), "scope.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             self.config.scope.driver,
             expected_kind="scope",
@@ -131,6 +167,11 @@ class ScopeService:
         require_capabilities(descriptor, capabilities, operation=operation)
 
     def _open_scope(self) -> ScopeDriver:
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=self.config.connection.resource,
+                operation="scope.session",
+            )
         opened = open_instrument_driver(
             driver_reference=self.config.scope.driver,
             expected_kind="scope",
@@ -143,9 +184,16 @@ class ScopeService:
             logger=self.logger,
             settings={"check_errors": self.config.scope.check_errors},
             options=getattr(self.config.scope, "options", {}),
+            access=getattr(self.config.scope, "access", "read_write"),
+            lease=self.lease,
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def open_session(self) -> ScopeDriver:
         return self._open_scope()
@@ -175,6 +223,41 @@ class ScopeService:
         self._require("scope.status", "scope.snapshot")
         with self._scope_session() as scope:
             return cast(ScopeSnapshotDriver, scope).get_snapshot(channel)
+
+    def status_summary(self, channel: int, *, strict: bool = False) -> ScopeStatusSummary:
+        """Return a complete snapshot when available, otherwise a read-only partial summary."""
+
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        if "scope.snapshot" in descriptor.capabilities:
+            snapshot = self.status(channel)
+            return ScopeStatusSummary(
+                status="ok",
+                channel=channel,
+                snapshot=snapshot,
+                coupling=snapshot.channel.coupling,
+            )
+        if strict:
+            self._require("scope.status", "scope.snapshot")
+        self._require("scope.status", "scope.idn")
+        missing = ["scope.snapshot"]
+        identity: str | None = None
+        coupling: str | None = None
+        with self._scope_session() as scope:
+            identity = scope.idn()
+            if "scope.channel_coupling" in descriptor.capabilities:
+                coupling = scope.channel_coupling(channel)
+            else:
+                missing.append("scope.channel_coupling")
+        return ScopeStatusSummary(
+            status="partial",
+            channel=channel,
+            idn=identity,
+            coupling=coupling,
+            missing_capabilities=tuple(missing),
+        )
 
     def acquisition_status(self) -> ScopeAcquisitionStatus:
         self._require("scope.acquisition_status", "scope.acquisition_status")

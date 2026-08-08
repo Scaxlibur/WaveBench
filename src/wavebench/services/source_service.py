@@ -62,6 +62,11 @@ from wavebench.instruments.models import (
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.source_state import RestorableSourceState
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.resource_lease import ResourceLease
+from wavebench.services.state_guard import SourceStateGuard
+from wavebench.transport.base import InstrumentTransport
 
 
 @dataclass
@@ -70,9 +75,16 @@ class SourceService:
     logger: CommandLogger
     session: SourceDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
+    lease: ResourceLease | None = None
+    state_guard: SourceStateGuard | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         source = self._source_config()
+        access_policy(getattr(source, "access", "read_write"), "source.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             source.driver,
             expected_kind="source",
@@ -86,6 +98,11 @@ class SourceService:
 
     def _open_source(self) -> SourceDriver:
         source = self._source_config()
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=source.resource or "",
+                operation="source.session",
+            )
         opened = open_instrument_driver(
             driver_reference=source.driver,
             expected_kind="source",
@@ -98,9 +115,34 @@ class SourceService:
             logger=self.logger,
             settings={"check_errors": source.check_errors},
             options=getattr(source, "options", {}),
+            access=getattr(source, "access", "read_write"),
+            lease=self.lease,
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, object] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
+
+    def state_guard_snapshot(self) -> dict[str, dict[str, object]] | None:
+        return self.state_guard.snapshot() if self.state_guard is not None else None
+
+    def _state_guard_before_write(
+        self,
+        source: SourceDriver,
+        channel: int,
+        *,
+        force_off: bool = False,
+    ) -> None:
+        if self.state_guard is None:
+            return
+        self.state_guard.before_write(source.get_status(channel), force_off=force_off)
+
+    def _state_guard_after_write(self, status: SourceStatus) -> None:
+        if self.state_guard is not None:
+            self.state_guard.after_write(status)
 
     def open_session(self) -> SourceDriver:
         return self._open_source()
@@ -131,7 +173,10 @@ class SourceService:
         channel = source_cfg.default_channel if channel is None else channel
         self._require("source.status", "source.status")
         with self._source_session() as source:
-            return source.get_status(channel)
+            status = source.get_status(channel)
+            if self.state_guard is not None:
+                self.state_guard.observe(status)
+            return status
 
     def channel_profile(self, channel: int | None = None) -> SourceChannelProfile:
         source_cfg = self._source_config()
@@ -483,8 +528,11 @@ class SourceService:
             required.append("source.status")
         if source_cfg.check_errors:
             required.append("source.errors")
+        if self.state_guard is not None:
+            required.append("source.status")
         self._require("source.set_frequency", *required)
         with self._source_session() as source:
+            self._state_guard_before_write(source, channel)
             status = source.set_frequency(
                 channel,
                 value_hz,
@@ -496,6 +544,7 @@ class SourceService:
                 status = source.get_status(channel)
             if source_cfg.check_errors:
                 source.assert_no_errors()
+            self._state_guard_after_write(status)
             return status
 
     def set_output(self, channel: int | None, enabled: bool) -> SourceStatus:
@@ -504,34 +553,71 @@ class SourceService:
         required = ["source.output"]
         if enabled:
             required.append("source.status")
+        if self.state_guard is not None and "source.status" not in required:
+            required.append("source.status")
         self._require("source.output", *required)
         with self._source_session() as source:
+            current = None
+            if enabled or self.state_guard is not None:
+                current = source.get_status(channel)
             if enabled:
-                status = source.get_status(channel)
+                status = current
+                assert status is not None
                 self._check_source_vpp(status.amplitude, field="source output amplitude / 信号源输出幅度")
-            return source.set_output(channel, enabled, check_errors=source_cfg.check_errors)
+            if self.state_guard is not None:
+                assert current is not None
+                self.state_guard.before_write(current, force_off=not enabled)
+            result = source.set_output(channel, enabled, check_errors=source_cfg.check_errors)
+            self._state_guard_after_write(result)
+            return result
 
     def set_function(self, channel: int | None, function: str) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        self._require("source.set_function", "source.set_function")
+        required = ["source.set_function"]
+        if self.state_guard is not None:
+            required.append("source.status")
+        self._require("source.set_function", *required)
         with self._source_session() as source:
-            return source.set_function(channel, function, check_errors=source_cfg.check_errors)
+            self._state_guard_before_write(source, channel)
+            result = source.set_function(channel, function, check_errors=source_cfg.check_errors)
+            self._state_guard_after_write(result)
+            return result
 
     def set_square_duty_cycle(self, channel: int | None, duty_percent: float) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        self._require("source.set_square_duty_cycle", "source.set_square_duty_cycle")
+        required = ["source.set_square_duty_cycle"]
+        if self.state_guard is not None:
+            required.append("source.status")
+        self._require("source.set_square_duty_cycle", *required)
         with self._source_session() as source:
-            return source.set_square_duty_cycle(channel, duty_percent, check_errors=source_cfg.check_errors)
+            self._state_guard_before_write(source, channel)
+            result = source.set_square_duty_cycle(
+                channel,
+                duty_percent,
+                check_errors=source_cfg.check_errors,
+            )
+            self._state_guard_after_write(result)
+            return result
 
     def set_amplitude_vpp(self, channel: int | None, value_vpp: float) -> SourceStatus:
         source_cfg = self._source_config()
         self._check_source_vpp(value_vpp, field="source amplitude / 信号源幅度")
         channel = source_cfg.default_channel if channel is None else channel
-        self._require("source.set_amplitude_vpp", "source.set_amplitude_vpp")
+        required = ["source.set_amplitude_vpp"]
+        if self.state_guard is not None:
+            required.append("source.status")
+        self._require("source.set_amplitude_vpp", *required)
         with self._source_session() as source:
-            return source.set_amplitude_vpp(channel, value_vpp, check_errors=source_cfg.check_errors)
+            self._state_guard_before_write(source, channel)
+            result = source.set_amplitude_vpp(
+                channel,
+                value_vpp,
+                check_errors=source_cfg.check_errors,
+            )
+            self._state_guard_after_write(result)
+            return result
 
 
     def upload_arbitrary_waveform(
@@ -561,9 +647,13 @@ class SourceService:
             max_points=max_points,
         )
         block = build_dg4000_dac14_binary_block(waveform, byte_order=byte_order)
-        self._require("source.arbitrary_upload", "source.arbitrary_upload")
+        required = ["source.arbitrary_upload"]
+        if self.state_guard is not None:
+            required.append("source.status")
+        self._require("source.arbitrary_upload", *required)
         with self._source_session() as source:
-            return source.upload_dg4000_dac14_block(
+            self._state_guard_before_write(source, channel)
+            result = source.upload_dg4000_dac14_block(
                 channel=channel,
                 block=block,
                 playback_frequency_hz=playback_frequency_hz,
@@ -572,6 +662,8 @@ class SourceService:
                 output_on=output_on,
                 check_errors=source_cfg.check_errors,
             )
+            self._state_guard_after_write(result)
+            return result
 
     def _check_source_vpp(self, value_vpp: float, *, field: str) -> None:
         self._require_finite(value_vpp, field=field)

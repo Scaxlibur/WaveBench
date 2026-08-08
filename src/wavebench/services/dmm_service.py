@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import time
-from typing import cast
+from typing import Any, cast
 
 from wavebench.config import DmmConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
@@ -32,6 +32,10 @@ from wavebench.instruments.models import (
 )
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.resource_lease import ResourceLease
+from wavebench.transport.base import InstrumentTransport
 
 
 @dataclass
@@ -40,9 +44,15 @@ class DmmService:
     logger: CommandLogger
     session: DmmDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
+    lease: ResourceLease | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         dmm = self._dmm_config()
+        access_policy(getattr(dmm, "access", "read_write"), "dmm.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             dmm.driver,
             expected_kind="dmm",
@@ -56,6 +66,11 @@ class DmmService:
 
     def _open_dmm(self) -> DmmDriver:
         dmm = self._dmm_config()
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=dmm.resource or "",
+                operation="dmm.session",
+            )
         opened = open_instrument_driver(
             driver_reference=dmm.driver,
             expected_kind="dmm",
@@ -68,9 +83,16 @@ class DmmService:
             logger=self.logger,
             options=getattr(dmm, "options", {}),
             serial_config=dmm,
+            access=getattr(dmm, "access", "read_write"),
+            lease=self.lease,
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def open_session(self) -> DmmDriver:
         return self._open_dmm()

@@ -45,6 +45,10 @@ reset_before_run = false
 # Query SYST:ERR? after important operations when possible.
 check_errors = true
 
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits status/profile reads but blocks writes and acquisitions.
+access = "read_write"
+
 # External RTM2000 0.2+ applies this timeout only to MAX/DMAX waveform data
 # reads. DEF and ordinary SCPI queries keep connection.timeout_ms.
 # [scope.options]
@@ -147,6 +151,10 @@ default_channel = 1
 # Query SYST:ERR? after source operations when possible.
 check_errors = true
 
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits status/profile reads but blocks writes and acquisitions.
+access = "read_write"
+
 # When setting a fixed frequency, switch SWE -> FIX first if needed.
 ensure_fix_mode_on_set_frequency = true
 
@@ -166,6 +174,10 @@ default_channel = 1
 
 # Query SYST:ERR? after explicit power set operations when possible.
 check_errors = true
+
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits status/profile reads but blocks writes and acquisitions.
+access = "read_write"
 
 # Wait after setting voltage/current limit before reading measured values.
 settle_ms_after_set = 2000
@@ -203,6 +215,10 @@ read_termination = "lf"
 xonxoff = false
 rtscts = false
 dsrdtr = false
+
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits measurement reads but blocks writes and acquisitions.
+access = "read_write"
 
 # Optional DMM stabilization wait before each reading. Set 0 for no wait.
 # 每次万用表读数前的可选稳定等待时间。设为 0 表示不等待。

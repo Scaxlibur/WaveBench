@@ -15,6 +15,7 @@ wavebench
 ```text
 scope    source    power    dmm    sweep    run
 capture  mcp       tui      net    doctor   plugin
+capability  lock
 ```
 
 命令帮助：
@@ -29,7 +30,7 @@ wavebench run --help
 
 | 类别 | 示例 | 行为 |
 |---|---|---|
-| 离线 | `run schema`、`run template`、`run check`、`run report`、`capture inspect`、`tui --fake` | 不连接仪器；报告和检查只读取本地产物 |
+| 离线 | `run schema`、`run template`、`run check`、`run intent`、`run report`、`run compare`、`run resume`、`capability explain`、`lock status`、`capture inspect`、`tui --fake` | 不连接仪器；报告、比较、检查、能力解释、锁查询和意图生成只读取本地文件 |
 | 连接读取 | `doctor`、`net`、`scope idn`、`scope status`、`run verify` | 查询资源、身份或状态，不应修改实验设置 |
 | 显式写入或触发 | `scope auto`、`scope fetch/capture`、source / power setter、`run plan` | 可能改变设置、触发采集或切换输出 |
 
@@ -56,6 +57,29 @@ wavebench run report data/runs/<run-dir>
 
 `run check` 只解析 TOML 和字段，不连接仪器；`run verify` 做执行前的只读预检；`run plan` 才会执行真实实验。
 
+`scope status` 在驱动没有完整 `scope.snapshot` 时返回 `status=partial`，并列出缺少的能力；需要
+完整快照时追加 `--strict`。能力解释不会连接仪器：
+
+```bash
+wavebench capability explain scope.status --driver rtm2032
+wavebench capability explain source.output --config wavebench.toml --json
+wavebench capability explain source.output --candidates --json
+```
+
+`--candidates` 只筛选当前本地 registry 中的驱动，不安装、不下载插件。
+
+`--json` 可以放在命令行任意位置。非交互命令输出 `wavebench.cli.result.v1`；错误输出
+`wavebench.error.v1`，诊断信息写入 stderr。TUI 和 HTTP MCP 不使用 one-shot JSON 包装。
+
+频响结果的离线处理使用以下命令：
+
+```bash
+wavebench run compare data/runs/<reference-run> data/runs/<candidate-run> --format json
+wavebench run resume data/runs/<candidate-run> --plan plans/<plan>.toml
+```
+
+`run compare` 按 `case_id` 比较增益、相位和测量状态；`run resume` 生成可复用点与待补测点清单。两条命令都不会打开仪器 session。
+
 ## 示波器命令
 
 ### 查询和状态
@@ -66,7 +90,7 @@ wavebench scope errors --resource TCPIP::192.0.2.10::INSTR
 wavebench scope status --config wavebench.toml
 ```
 
-`scope idn` 查询 `*IDN?`；`scope errors` 读取 `SYST:ERR?`，直到仪器返回无错误；`scope status` 读取已定义的只读状态快照。
+`scope idn` 查询 `*IDN?`；`scope errors` 读取 `SYST:ERR?`，直到仪器返回无错误；`scope status` 读取只读状态，缺少完整快照能力时返回 partial summary。
 
 ### `auto`、`fetch` 和 `capture`
 

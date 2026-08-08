@@ -60,4 +60,19 @@ wavebench run check --plan plans/example_scope_expect_quality.toml
 
 `[restore] source_state = true` 只恢复文档注明的 basic source 状态，不等于完整通道快照。计划失败时要保留生成的 artifact，并重新查询仪器最终状态。
 
+## 失败策略与安全门
+
+每个 `[[steps]]` 默认使用 `on_failure = "stop"`。断言失败、启用 `quality_gate` 后仍有质量 warning，都会把当前 step 标记为 `failed`，并停止后续步骤。只有明确写出 `on_failure = "continue"` 时，失败 step 才会继续执行后续步骤；频响 step 内部的点级失败仍按自身的 `stop_conditions` 处理。
+
+需要在 gate 失败后关闭已授权输出时，可在计划级显式声明安全门：
+
+```toml
+[safety]
+safety_gate = true
+off_source_channels = [1]
+off_power_channels = [1]
+```
+
+安全门触发后会先对列出的信号源和电源通道执行 OFF，再停止 run；即使该 step 声明 `on_failure = "continue"` 也不会绕过安全门。若同时启用 source restore，恢复配置后会再次确认这些授权通道为 OFF，避免恢复操作重新打开输出。OFF 操作的结果、失败原因和授权通道会写入该 step 的 artifact 与 `run.json`。没有声明 OFF 目标时，安全门会拒绝继续并保留失败证据；它不会猜测或自动开启其他输出。
+
 公开计划应使用保留地址、占位符和相对路径；不要把真实 IP、序列号、串口路径或 `data/` 下的实验产物写进仓库。

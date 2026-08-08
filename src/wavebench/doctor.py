@@ -5,8 +5,9 @@ from typing import Callable, Sequence
 
 from .config import DmmConfig, WaveBenchConfig
 from .discovery import DEFAULT_DISCOVERY_PORTS, DiscoveryResult, discover_instruments
-from .errors import ConfigError
+from .errors import ConfigError, ResourceBusyError
 from .instruments.registry import resolve_instrument_descriptor
+from .services.resource_lease import ResourceLease
 from .transport.serial_transport import SerialTransport
 
 
@@ -74,31 +75,34 @@ def query_resource_idn(resource: str, timeout_ms: int) -> str | None:
         import pyvisa  # type: ignore[import-not-found]
     except Exception:
         return None
-    manager = None
-    session = None
-    try:
-        manager = pyvisa.ResourceManager()
-        session = manager.open_resource(resource)
+    with ResourceLease(resource=resource, operation="doctor.idn"):
+        manager = None
+        session = None
         try:
-            session.timeout = timeout_ms
-            session.read_termination = "\n"
-            session.write_termination = "\n"
+            manager = pyvisa.ResourceManager()
+            session = manager.open_resource(resource)
+            try:
+                session.timeout = timeout_ms
+                session.read_termination = "\n"
+                session.write_termination = "\n"
+            except Exception:
+                pass
+            return str(session.query("*IDN?")).strip() or None
+        except ResourceBusyError:
+            raise
         except Exception:
-            pass
-        return str(session.query("*IDN?")).strip() or None
-    except Exception:
-        return None
-    finally:
-        if session is not None:
-            try:
-                session.close()
-            except Exception:
-                pass
-        if manager is not None:
-            try:
-                manager.close()
-            except Exception:
-                pass
+            return None
+        finally:
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+            if manager is not None:
+                try:
+                    manager.close()
+                except Exception:
+                    pass
 
 
 def query_target_idn(target: DoctorTarget, timeout_ms: int) -> str | None:
@@ -106,13 +110,17 @@ def query_target_idn(target: DoctorTarget, timeout_ms: int) -> str | None:
         return query_resource_idn(target.resource or "", timeout_ms)
     transport = None
     try:
-        transport = SerialTransport.open(replace(target.serial_config, timeout_ms=timeout_ms))
-        return transport.query("*IDN?") or None
+        with ResourceLease(resource=target.resource or "", operation="doctor.idn"):
+            try:
+                transport = SerialTransport.open(replace(target.serial_config, timeout_ms=timeout_ms))
+                return transport.query("*IDN?") or None
+            finally:
+                if transport is not None:
+                    transport.close()
+    except ResourceBusyError:
+        raise
     except Exception:
         return None
-    finally:
-        if transport is not None:
-            transport.close()
 
 
 def _doctor_target(

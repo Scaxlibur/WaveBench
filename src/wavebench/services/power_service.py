@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import math
+from typing import Any
 
 from wavebench.config import PowerConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
@@ -14,6 +15,11 @@ from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import PowerMeasurement, PowerProtectionStatus, PowerStatus
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.resource_lease import ResourceLease
+from wavebench.services.state_guard import PowerStateGuard
+from wavebench.transport.base import InstrumentTransport
 
 
 @dataclass
@@ -22,9 +28,16 @@ class PowerService:
     logger: CommandLogger
     session: PowerDriver | None = None
     descriptor: InstrumentDescriptor | None = None
+    transport: InstrumentTransport | None = None
+    lease: ResourceLease | None = None
+    state_guard: PowerStateGuard | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
         power = self._power_config()
+        access_policy(getattr(power, "access", "read_write"), "power.access").require(
+            require_operation_spec(operation),
+            operation=operation,
+        )
         descriptor = self.descriptor or resolve_instrument_descriptor(
             power.driver,
             expected_kind="power",
@@ -38,6 +51,11 @@ class PowerService:
 
     def _open_power(self) -> PowerDriver:
         power = self._power_config()
+        if self.lease is None:
+            self.lease = ResourceLease(
+                resource=power.resource or "",
+                operation="power.session",
+            )
         opened = open_instrument_driver(
             driver_reference=power.driver,
             expected_kind="power",
@@ -50,9 +68,34 @@ class PowerService:
             logger=self.logger,
             settings={"check_errors": power.check_errors},
             options=getattr(power, "options", {}),
+            access=getattr(power, "access", "read_write"),
+            lease=self.lease,
         )
         self.descriptor = opened.descriptor
+        self.transport = opened.transport
         return opened.driver
+
+    def audit_snapshot(self) -> dict[str, Any] | None:
+        snapshot = getattr(self.transport, "audit_snapshot", None)
+        return snapshot() if callable(snapshot) else None
+
+    def state_guard_snapshot(self) -> dict[str, dict[str, object]] | None:
+        return self.state_guard.snapshot() if self.state_guard is not None else None
+
+    def _state_guard_before_write(
+        self,
+        power: PowerDriver,
+        channel: int,
+        *,
+        force_off: bool = False,
+    ) -> None:
+        if self.state_guard is None:
+            return
+        self.state_guard.before_write(power.get_status(channel), force_off=force_off)
+
+    def _state_guard_after_write(self, status: PowerStatus) -> None:
+        if self.state_guard is not None:
+            self.state_guard.after_write(status)
 
     def open_session(self) -> PowerDriver:
         return self._open_power()
@@ -78,7 +121,10 @@ class PowerService:
         channel = power_cfg.default_channel if channel is None else channel
         self._require("power.status", "power.status")
         with self._power_session() as power:
-            return power.get_status(channel)
+            status = power.get_status(channel)
+            if self.state_guard is not None:
+                self.state_guard.observe(status)
+            return status
 
     def measurement(self, channel: int | None = None) -> PowerMeasurement:
         power_cfg = self._power_config()
@@ -140,18 +186,21 @@ class PowerService:
         power_cfg = self._power_config()
         self._check_power_limits(voltage_v=voltage_v, current_limit_a=current_limit_a)
         channel = power_cfg.default_channel if channel is None else channel
-        self._require(
-            "power.set_voltage_current_limit",
-            "power.set_voltage_current_limit",
-        )
+        required = ["power.set_voltage_current_limit"]
+        if self.state_guard is not None:
+            required.append("power.status")
+        self._require("power.set_voltage_current_limit", *required)
         with self._power_session() as power:
-            return power.set_voltage_current_limit(
+            self._state_guard_before_write(power, channel)
+            result = power.set_voltage_current_limit(
                 channel,
                 voltage_v,
                 current_limit_a,
                 check_errors=power_cfg.check_errors,
                 settle_ms_after_set=power_cfg.settle_ms_after_set,
             )
+            self._state_guard_after_write(result)
+            return result
 
     def _check_power_limits(self, *, voltage_v: float | None, current_limit_a: float | None) -> None:
         if voltage_v is not None and not math.isfinite(voltage_v):
@@ -196,10 +245,16 @@ class PowerService:
         required = ["power.output"]
         if enabled:
             required.extend(("power.status", "power.protection"))
+        if self.state_guard is not None and "power.status" not in required:
+            required.append("power.status")
         self._require("power.output", *required)
         with self._power_session() as power:
+            current = None
+            if self.state_guard is not None:
+                current = power.get_status(channel)
+                self.state_guard.before_write(current, force_off=not enabled)
             if enabled:
-                status = power.get_status(channel)
+                status = current if current is not None else power.get_status(channel)
                 protection = power.get_protection_status(channel)
                 self._check_power_limits(
                     voltage_v=status.set_voltage_v,
@@ -216,9 +271,11 @@ class PowerService:
                         "power output ON rejected: protection trip is active / "
                         "电源输出开启被拒绝：保护已触发"
                     )
-            return power.set_output(
+            result = power.set_output(
                 channel,
                 enabled,
                 check_errors=power_cfg.check_errors,
                 settle_ms_after_output=power_cfg.settle_ms_after_output,
             )
+            self._state_guard_after_write(result)
+            return result

@@ -51,6 +51,8 @@ WaveBench 是一个用 Python 编写的实验室自动测量台，面向电子�
 
 显式 `run plan` 可以把信号源、示波器、电源和万用表编排到同一条实验流程中。执行前先用 `run check` 做离线校验，再用 `run verify` 做连接和安全预检；执行过程中保留每个步骤的状态、测量结果、失败证据和恢复记录。
 
+run 内的 Source / Power 基础写入会在实际 setter 前回读并比较状态；状态漂移会停止写入并写入差异。缺少完整 `scope.snapshot` 的驱动可通过 `scope status` 返回 `partial summary`，操作能力可用 `capability explain` 离线核对。需要固定 plan、配置和任意波形输入时，先生成 `run intent`，再用 `run plan --intent` 在打开仪器前核验摘要。
+
 典型流程是「信号源 → DUT → 示波器 / 万用表」。
 
 ```mermaid
@@ -132,11 +134,13 @@ DP800 的设定值、保护和输出是三类独立操作。示例计划见 [pla
 
 使用 `source-scope-frequency-response` 模板可以生成 reference / response 双通道扫频 plan。基础频响采集不要求额外依赖；PCHIP、平滑样条和二维校准需要 `analysis`，PDF 报告需要 `pdf`，交互式三维 HTML 需要 `report3d`。详细说明见 [run plan 使用指南](docs/project/guides/WaveBench_run_plan_使用指南.md)；执行前仍需确认真实接线。
 
+频响结果可用 `run compare` 离线比较多个 run，并用 `run resume` 生成缺失点补测清单；两条命令都不会连接仪器。每个已生成采集包的频响点会保存 `case_id`、`acquisition_id`、请求 Vpp 与参考通道实测 Vpp，便于复查测量来源。
+
 ## 命令的安全边界
 
 | 类别 | 例子 | 说明 |
 | --- | --- | --- |
-| 离线 | `run schema`、`run template`、`run check`、`run report`、`capture inspect`、`tui --fake` | 不连接仪器；TUI 可能写本地日志 |
+| 离线 | `run schema`、`run template`、`run check`、`run report`、`run compare`、`run resume`、`capture inspect`、`tui --fake` | 不连接仪器；TUI 可能写本地日志 |
 | 连接读取 | `doctor`、`idn`、`status`、`run verify` | 会查询设备；仍应把它当作有状态的 I/O |
 | 修改设备 | `scope fetch/capture/autoscale`、source/power setter、output、`run plan`、非 fake TUI | 可能改变设置、触发采集或切换输出 |
 
@@ -146,7 +150,9 @@ WaveBench 的默认行为包括：
 - 不因设定电压或幅度而自动打开输出；
 - 不自动改变示波器输入阻抗；可能的 50 Ω 输入需要显式确认；
 - `power set` 不改变输出开关，`power output` 不改变电压/限流设定；
+- 各仪器配置支持 `access = "read_write"`、`"read_only"` 或 `"disabled"`；`read_only` 只允许状态和配置读取，`disabled` 只保留离线命令；
 - 启用 source restore 后只覆盖文档注明的 basic 状态，不能当成完整通道快照；
+- run step 默认在失败后停止后续步骤；只有显式 `on_failure = "continue"` 才会继续。需要保护输出时，可用 `[safety] safety_gate = true` 和授权的 OFF 通道列表；安全门会先关闭目标输出再停止 run；
 - HTTP MCP 的工具入口需要认证，当前只提供只读工具；`/health` 是例外，不需要 token。它不提供 raw SCPI 或输出开关。
 
 外部 Python 插件按当前用户权限运行，不是安全沙箱。仅安装来源已确认的本地目录或 wheel；公开文档不得包含真实 IP、序列号、串口路径、凭据或实验产物。

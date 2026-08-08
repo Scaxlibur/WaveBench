@@ -61,6 +61,90 @@ wavebench run verify --config wavebench.toml --plan plans/dp800_scope_probe_volt
 
 `run` 是独立 domain，不塞进 `scope` / `source` / `power`。
 
+## 资源租约
+
+`run plan` 在打开任何仪器 session 前，会为计划涉及的 `scope`、`source`、`power` 和
+`dmm` 资源按规范化资源键排序，并一次性取得本地 Linux / WSL 独占租约。任一资源已被
+其他进程占用时，后续 transport 不会打开，已取得的前置租约会全部释放，并返回稳定错误码
+`resource_busy`。
+
+租约使用 POSIX `flock`。锁目录优先读取环境变量 `WAVEBENCH_LEASE_DIR`，其次使用
+`XDG_RUNTIME_DIR` 下的 WaveBench 目录，最后回退到用户缓存目录。锁文件名只包含资源身份的
+哈希，不写入 IP 或串口路径；holder 信息保存在权限为 `0600` 的同名 JSON sidecar 中。
+正常释放只删除当前 lease 的 sidecar，不删除 `.lock` 文件。进程崩溃后，内核负责释放锁；
+残留 sidecar 只能在再次取得非阻塞锁后清理，不能根据 PID 删除活动锁。
+
+`run check`、离线报告和比较命令不会取得资源租约。run 使用 factory 打开的 transport、独立
+Service 的一次性 session、`doctor`、网络 discovery 和声明式 SCPI probe 均在实际 I/O 前取得同一
+类本地独占租约；离线命令仍不接触仪器。租约只覆盖当前进程持有的本地 Linux / WSL 文件锁，不能
+替代外部程序或真实设备内部的互斥机制。
+
+可以使用 `lock status <resource>` 查询锁是否被持有、是否存在残留 sidecar；该命令只读取锁状态，
+不会取得租约，也不会连接仪器。
+
+## run 内状态守卫
+
+`run plan` 对 SourceService 和 PowerService 的基础控制写入启用 compare-before-write。每个受保护
+通道先读取一次结构化状态，与当前 run 保存的 expected state 按字段比较；发现外部或仪器自身的
+状态变化时，写入操作立即失败，底层 setter 不会被调用。
+
+当前保护范围包括：
+
+- source：`source.set_freq`、`source.set_func`、`source.set_vpp`、`source.set_duty`、`source.output`
+  以及 Service 层的任意波形上传；
+- power：`power.set`、`power.output`。
+
+比较字段只包含控制状态，例如输出状态、函数、频率、幅度、偏置、相位、模式和设定值。实时
+测量值不参与比较。写入成功后，expected state 使用写后回读的结构化状态更新；首次观察某个通道
+时只建立基线，不凭空判定漂移。数值字段使用固定容差，避免仪器分辨率造成误报。
+
+状态不一致会使用稳定错误码 `state_drift`，并在 run 工件的 `error.details` 中保存
+`expected`、`actual` 和 `diff`。`run.json.provenance.state_guard` 同时保存最终 expected state，
+便于复核执行过程中记录的控制状态。
+
+授权的 OFF 操作可以从漂移状态收敛，用于安全门和恢复路径；该操作仍受 `access` 策略、能力检查
+和资源租约约束，并记录实际回读结果。状态守卫是查询后写入的保护，不是硬件原子
+compare-and-swap；前面板或其他进程仍可能在查询与写入之间改变状态，因此文档和报告不能将其
+描述为原子事务。当前实现只覆盖上述 Source/Power 基础控制，不代表调制、扫描、保护参数、触发
+等全部 Service 写操作都已纳入状态守卫。
+
+## scope status 与能力解释
+
+`scope status` 默认优先返回完整 `scope.snapshot`。当驱动没有该能力时，命令仍可使用基础只读
+能力返回 `status=partial`，并列出缺少的 capability；当前内建 RTM2032 路径至少提供 `*IDN?` 和
+通道耦合信息。需要完整字段时使用 `scope status --strict`，缺少 `scope.snapshot` 会以非零状态
+失败，不使用伪造的默认值。
+
+`capability explain <operation>` 只读取本地 registry、驱动 descriptor 和配置，不打开 transport。
+结果会说明操作的 effect、租约模式、风险字段、缺少的 capability、访问策略是否拒绝，以及可用的
+安全替代操作。例如：
+
+```text
+wavebench capability explain source.output --driver dg4202
+wavebench --json capability explain source.output --config wavebench.toml
+```
+
+本地候选只用于解释和过滤，不会触发插件安装、网络下载或仪器连接。
+
+## execution intent
+
+可在打开仪器前生成规范化执行意图：
+
+```text
+wavebench run intent --config wavebench.toml --plan plans/example.toml \
+  --output data/intents/example.json
+wavebench run plan --config wavebench.toml --plan plans/example.toml \
+  --intent data/intents/example.json
+```
+
+意图文件使用 `wavebench.execution_intent.v1`，保存 plan digest、脱敏后的 config digest、任意波形
+payload 的 SHA-256 和每个 step 对应的 `OperationSpec`。`run plan --intent` 会在取得资源租约前重新
+计算摘要；计划、配置或 payload 改变时返回 `execution_intent_mismatch`，不会打开仪器 session。没有
+外部意图文件时，run 仍会生成同一意图并写入 `run.json.provenance.execution_intent`。
+
+非交互命令可在命令行任意位置使用 `--json`，输出一个 `wavebench.cli.result.v1` 结果；错误使用
+`wavebench.error.v1`，诊断文本写入 stderr。TUI 和 HTTP MCP 服务不套用这一 one-shot JSON 包装。
+
 ## 计划文件格式
 
 第一版建议用 TOML，原因是项目已经使用 TOML，用户不用再学一种新格式。
@@ -205,7 +289,7 @@ Top-level tables:
 | Table | Fields | Notes |
 |---|---|---|
 | `[experiment]` | `name`, `label` | Optional metadata; defaults to the plan filename. |
-| `[safety]` | `scope_guard_channel`, `require_scope_coupling_not` | Optional read-only guard. It may refuse execution but must not auto-correct hardware settings. |
+| `[safety]` | `scope_guard_channel`, `require_scope_coupling_not`, `safety_gate`, `off_source_channels`, `off_power_channels` | Optional read-only guard and explicit failure OFF policy. The OFF policy is inactive unless `safety_gate = true`. |
 | `[restore]` | `source_state`, `source_channel` | Optional source snapshot/restore. Restore is attempted on success and failure. |
 | `[[steps]]` | `kind` plus kind-specific fields | Steps execute in order. |
 
@@ -222,9 +306,9 @@ Supported `[[steps]]` kinds:
 | `source.set_freq` | `frequency_hz` | `channel` |
 | `source.set_duty` | `duty_percent` | `channel` |
 | `source.output` | `state` | `channel` |
-| `scope.auto` | - | - |
-| `scope.capture` | - | `channel`, `label`, `points`, `time_range_s`, `window_frequency_hz`, `target_cycles`, `expect_frequency_hz`, `frequency_tolerance`, `save_csv`, `save_npy`, `quality_gate`, `auto_recover`, `[steps.expect]` |
-| `sleep` | `duration_s` | - |
+| `scope.auto` | - | `on_failure`, `safety_gate` |
+| `scope.capture` | - | `channel`, `label`, `points`, `time_range_s`, `window_frequency_hz`, `target_cycles`, `expect_frequency_hz`, `frequency_tolerance`, `save_csv`, `save_npy`, `quality_gate`, `auto_recover`, `on_failure`, `safety_gate`, `[steps.expect]` |
+| `sleep` | `duration_s` | `on_failure`, `safety_gate` |
 
 `[steps.expect]` belongs under a `scope.capture` step. Each metric accepts `{ min = ..., max = ... }`. Common metrics are `frequency_estimate_hz`, `frequency_error_ratio`, `voltage_vpp_v`, `voltage_mean_v`, and `duty_cycle`.
 
@@ -288,6 +372,17 @@ scope_guard_channel = 2
 
 注意：guard 只能查询，不能自动修改示波器输入阻抗。
 
+计划还可以声明失败时的安全门：
+
+```toml
+[safety]
+safety_gate = true
+off_source_channels = [1]
+off_power_channels = [1]
+```
+
+安全门与 `on_failure` 分开判断。失败或质量 gate warning 触发后，执行器先对授权通道执行 OFF，再停止 run；若启用 source restore，恢复配置后会再次确认授权通道为 OFF。OFF 结果写入 step artifact 和 `run.json.error`。`on_failure = "continue"` 只适用于未触发安全门的普通失败；未配置 OFF 目标的安全门会以配置失败结束，不会自动选择通道。
+
 ## 输出目录
 
 流程级输出建议：
@@ -317,13 +412,15 @@ data/runs/YYYYMMDD_HHMMSS_<experiment_label>/
 
 ## 错误处理
 
-如果某一步失败：
+如果某一步失败，默认行为是：
 
 - 立即停止；
 - 写 `run.json`，标记 `status = "failed"`；
 - 记录失败 step、错误类型、错误消息；
 - 已经生成的 capture package 保留；
 - 不执行后续步骤。
+
+需要继续采点时，step 必须显式声明 `on_failure = "continue"`。安全门触发时始终停止，并先执行已授权的 OFF 策略。
 
 第一版不做自动 rollback。
 
@@ -341,6 +438,11 @@ quality : `scope.capture` 可记录质量状态；`auto_recover = true` 时按�
 expect : `scope.capture` 可设置指标 min/max 断言，失败时 run 状态为 failed
 output  : data/runs/YYYYMMDD_HHMMSS_<label>/run.json + summary.csv + step records
 restore : `[restore] source_state = true` 时 snapshot source 状态，并在成功/失败路径恢复
+state guard : run 内 Source/Power 基础控制写入执行 compare-before-write；漂移时零 setter 调用，
+并将 `state_drift` 与状态差异写入工件
+scope status : 缺少 `scope.snapshot` 时返回 `status=partial`；`--strict` 路径保持完整快照门槛
+capability : `capability explain` 离线解释 OperationSpec、descriptor、access 和安全替代
+intent : `run intent` / `run plan --intent` 校验 plan、config 和 payload digest
 ```
 
 DP800 电压阶跃实机 smoke：

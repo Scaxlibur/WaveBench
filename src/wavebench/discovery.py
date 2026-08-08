@@ -7,7 +7,8 @@ import re
 import socket
 from typing import Callable, Iterable, Sequence
 
-from wavebench.errors import ConfigError
+from wavebench.errors import ConfigError, ResourceBusyError
+from wavebench.services.resource_lease import ResourceLease
 
 
 DEFAULT_DISCOVERY_PORTS = (5025, 5555, 111)
@@ -213,31 +214,35 @@ def _probe_host(
 
 
 def _probe_scpi_socket(address: str, port: int, timeout_s: float) -> PortProbe:
-    try:
-        with socket.create_connection((address, port), timeout=timeout_s) as sock:
-            sock.settimeout(timeout_s)
-            try:
-                sock.sendall(b"*IDN?\n")
-            except OSError as exc:
-                return PortProbe(open=True, note=f"write failed: {type(exc).__name__}")
-            try:
-                raw = sock.recv(4096)
-            except socket.timeout:
-                return PortProbe(open=True, note="idn timeout")
-            except OSError as exc:
-                return PortProbe(open=True, note=f"read failed: {type(exc).__name__}")
-    except OSError:
-        return PortProbe(open=False)
+    resource = f"TCPIP::{address}::{port}::SOCKET"
+    with ResourceLease(resource=resource, operation="discovery.probe"):
+        try:
+            with socket.create_connection((address, port), timeout=timeout_s) as sock:
+                sock.settimeout(timeout_s)
+                try:
+                    sock.sendall(b"*IDN?\n")
+                except OSError as exc:
+                    return PortProbe(open=True, note=f"write failed: {type(exc).__name__}")
+                try:
+                    raw = sock.recv(4096)
+                except socket.timeout:
+                    return PortProbe(open=True, note="idn timeout")
+                except OSError as exc:
+                    return PortProbe(open=True, note=f"read failed: {type(exc).__name__}")
+        except OSError:
+            return PortProbe(open=False)
     idn = raw.decode("utf-8", errors="replace").strip("\x00\r\n \t")
     return PortProbe(open=True, idn=idn or None)
 
 
 def _is_tcp_port_open(address: str, port: int, timeout_s: float) -> bool:
-    try:
-        with socket.create_connection((address, port), timeout=timeout_s):
-            return True
-    except OSError:
-        return False
+    resource = f"TCPIP::{address}::{port}::SOCKET"
+    with ResourceLease(resource=resource, operation="discovery.probe"):
+        try:
+            with socket.create_connection((address, port), timeout=timeout_s):
+                return True
+        except OSError:
+            return False
 
 
 def _result_from_port_probe(address: str, port: int, probe: PortProbe) -> DiscoveryResult:
@@ -275,27 +280,30 @@ def _open_port_result(address: str, port: int) -> DiscoveryResult:
 
 
 def _query_visa_idn(manager: object, resource: str, timeout_ms: int) -> str | None:
-    session = None
-    try:
-        session = manager.open_resource(resource)  # type: ignore[attr-defined]
+    with ResourceLease(resource=resource, operation="discovery.visa_idn"):
+        session = None
         try:
-            session.timeout = timeout_ms
-        except Exception:
-            pass
-        try:
-            session.read_termination = "\n"
-            session.write_termination = "\n"
-        except Exception:
-            pass
-        return str(session.query("*IDN?")).strip() or None
-    except Exception:
-        return None
-    finally:
-        if session is not None:
+            session = manager.open_resource(resource)  # type: ignore[attr-defined]
             try:
-                session.close()
+                session.timeout = timeout_ms
             except Exception:
                 pass
+            try:
+                session.read_termination = "\n"
+                session.write_termination = "\n"
+            except Exception:
+                pass
+            return str(session.query("*IDN?")).strip() or None
+        except ResourceBusyError:
+            raise
+        except Exception:
+            return None
+        finally:
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
 
 
 def _address_from_visa_resource(resource: str) -> str:
