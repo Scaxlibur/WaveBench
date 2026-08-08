@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from wavebench.errors import ConfigError, ResourceBusyError
-from wavebench.services import resource_lease as lease_module
+from wavebench.services import file_lock
 from wavebench.services.resource_lease import (
     ResourceLease,
     ResourceLeaseManager,
@@ -18,6 +18,9 @@ from wavebench.services.resource_lease import (
 def test_resource_identity_normalizes_visa_case_and_serial_paths() -> None:
     assert normalize_resource(" TCPIP::Bench::INSTR ") == "tcpip::bench::instr"
     assert normalize_resource("/dev/ttyUSB0") == "/dev/ttyUSB0"
+    assert normalize_resource("COM3") == "com3"
+    assert normalize_resource(r"\\.\COM3") == "com3"
+    assert normalize_resource("COM003") == "com3"
     assert resource_fingerprint("TCPIP::Bench::INSTR") == resource_fingerprint(
         "tcpip::bench::instr"
     )
@@ -83,7 +86,13 @@ def test_hold_many_releases_all_leases(tmp_path: Path) -> None:
     )
 
 
-def test_unsupported_platform_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(lease_module, "fcntl", None)
-    with pytest.raises(ConfigError, match="POSIX flock"):
+def test_unavailable_lock_backend_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        file_lock,
+        "backend_info",
+        lambda: file_lock.LockBackendInfo(
+            name="test", available=False, reason="injected-unavailable"
+        ),
+    )
+    with pytest.raises(ConfigError, match="injected-unavailable"):
         ResourceLease("TCPIP::bench::INSTR", directory=tmp_path).acquire()
