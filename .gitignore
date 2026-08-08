@@ -2,7 +2,11 @@
 tool-of-rei/
 
 # Local agent/Codex metadata
-.agents/*
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/wavebench/
+!/.agents/skills/wavebench/**
 .codex/
 
 # Local WaveBench config and generated data
