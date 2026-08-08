@@ -53,10 +53,11 @@ def build_subprocess_environment() -> dict[str, str]:
     """Build a minimal, platform-safe environment for package subprocesses."""
 
     environment: dict[str, str] = {}
-    wanted = {key.casefold() for key in _SUBPROCESS_ENV_KEYS}
+    wanted = {key.casefold(): key for key in _SUBPROCESS_ENV_KEYS}
     for key, value in os.environ.items():
-        if key.casefold() in wanted:
-            environment[key] = value
+        canonical = wanted.get(key.casefold())
+        if canonical is not None:
+            environment[canonical] = value
     environment.setdefault("PATH", os.environ.get("PATH", os.defpath))
     if "HOME" not in environment:
         try:

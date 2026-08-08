@@ -98,7 +98,7 @@ def default_lease_directory() -> Path:
     configured = os.environ.get("WAVEBENCH_LEASE_DIR")
     if configured:
         return Path(configured).expanduser()
-    if os.name == "nt":
+    if _is_windows():
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
             return Path(local_app_data) / "WaveBench" / "resource-leases-v1"
@@ -110,6 +110,10 @@ def default_lease_directory() -> Path:
     if runtime and os.access(runtime, os.W_OK):
         return Path(runtime) / "wavebench" / "resource-leases-v1"
     return Path.home() / ".cache" / "wavebench" / "resource-leases-v1"
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 @dataclass

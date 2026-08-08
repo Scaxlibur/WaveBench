@@ -8,6 +8,7 @@ import pytest
 
 from wavebench.errors import ConfigError, ResourceBusyError
 from wavebench.services import file_lock
+from wavebench.services import resource_lease as lease_module
 from wavebench.services.resource_lease import (
     ResourceLease,
     ResourceLeaseManager,
@@ -25,6 +26,18 @@ def test_resource_identity_normalizes_visa_case_and_serial_paths() -> None:
     assert resource_fingerprint("TCPIP::Bench::INSTR") == resource_fingerprint(
         "tcpip::bench::instr"
     )
+
+
+def test_windows_default_lease_directory_uses_local_app_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(lease_module, "_is_windows", lambda: True)
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\\Users\\tester\\AppData\\Local")
+
+    directory = lease_module.default_lease_directory()
+
+    assert str(directory).endswith("WaveBench/resource-leases-v1")
+    assert "AppData" in str(directory)
 
 
 def test_lease_busy_error_and_private_metadata(tmp_path: Path) -> None:
@@ -75,6 +88,19 @@ def test_acquire_many_releases_partial_batch_on_busy_resource(tmp_path: Path) ->
         free.release()
     finally:
         held.release()
+
+
+def test_acquire_many_deduplicates_windows_com_aliases(tmp_path: Path) -> None:
+    manager = ResourceLeaseManager(tmp_path)
+
+    leases = manager.acquire_many(["COM3", r"\\.\COM3"])
+
+    try:
+        assert len(leases) == 1
+        assert leases[0].resource == "com3"
+    finally:
+        for lease in leases:
+            lease.release()
 
 
 def test_hold_many_releases_all_leases(tmp_path: Path) -> None:

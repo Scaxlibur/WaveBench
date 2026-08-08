@@ -32,7 +32,7 @@ def _looks_windows_path(value: str) -> bool:
 
 
 def _quote_url(value: str) -> str:
-    return quote(value, safe="/.:@?&=+$,;~!()'_-" )
+    return quote(value, safe="/.:@?&=+$,;~!()'_-")
 
 
 def _windows_file_uri(value: str) -> str:

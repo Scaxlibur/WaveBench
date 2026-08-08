@@ -18,6 +18,8 @@ from wavebench.plugins.package_inspect import (
 
 
 def test_subprocess_environment_preserves_required_windows_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PATH", raising=False)
+    monkeypatch.setenv("Path", r"C:\\Windows\\System32")
     monkeypatch.setenv("SystemRoot", r"C:\\Windows")
     monkeypatch.setenv("TEMP", r"C:\\Temp")
     monkeypatch.setenv("USERPROFILE", r"C:\\Users\\tester")
@@ -26,6 +28,8 @@ def test_subprocess_environment_preserves_required_windows_context(monkeypatch: 
 
     environment = build_subprocess_environment()
 
+    assert environment["PATH"] == r"C:\\Windows\\System32"
+    assert "Path" not in environment
     assert environment["SystemRoot"] == r"C:\\Windows"
     assert environment["TEMP"] == r"C:\\Temp"
     assert environment["USERPROFILE"] == r"C:\\Users\\tester"
