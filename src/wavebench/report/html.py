@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from html import escape
 import json
 import math
-import os
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +18,7 @@ from wavebench.report.plot3d import (
     render_surface_card,
     write_plotly_asset,
 )
+from wavebench.report.path_utils import artifact_url
 
 
 def write_run_report_html(run: RunPackage, output_path: str | Path | None = None) -> Path:
@@ -2493,8 +2493,4 @@ def _project_root_from_run_path(run_path: Path) -> Path:
 
 
 def _relative_url(path: Path, output_dir: Path) -> str:
-    try:
-        relative = os.path.relpath(path, start=output_dir)
-    except ValueError:
-        relative = str(path)
-    return relative.replace(os.sep, "/")
+    return artifact_url(path, output_dir)

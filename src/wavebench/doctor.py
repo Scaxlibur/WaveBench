@@ -88,7 +88,7 @@ def query_resource_idn(resource: str, timeout_ms: int) -> str | None:
             except Exception:
                 pass
             return str(session.query("*IDN?")).strip() or None
-        except ResourceBusyError:
+        except (ResourceBusyError, ConfigError):
             raise
         except Exception:
             return None
@@ -117,7 +117,7 @@ def query_target_idn(target: DoctorTarget, timeout_ms: int) -> str | None:
             finally:
                 if transport is not None:
                     transport.close()
-    except ResourceBusyError:
+    except (ResourceBusyError, ConfigError):
         raise
     except Exception:
         return None
@@ -275,7 +275,12 @@ def _resource_suggestion(resource: str) -> str:
             "check power, Ethernet cable, IP address, subnet route, and instrument remote setting / "
             "检查电源、网线、IP、网段路由和仪器远程控制设置"
         )
-    if resource.upper().startswith("ASRL") or resource.startswith("/dev/"):
+    if (
+        resource.upper().startswith("ASRL")
+        or resource.upper().startswith("COM")
+        or resource.startswith("\\\\.\\")
+        or resource.startswith("/dev/")
+    ):
         return "check serial device path, USB adapter, baudrate, and permissions / 检查串口路径、转接器、波特率和权限"
     return "check resource string and instrument connection / 检查资源字符串和仪器连接"
 

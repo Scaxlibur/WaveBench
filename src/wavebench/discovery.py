@@ -294,7 +294,7 @@ def _query_visa_idn(manager: object, resource: str, timeout_ms: int) -> str | No
             except Exception:
                 pass
             return str(session.query("*IDN?")).strip() or None
-        except ResourceBusyError:
+        except (ResourceBusyError, ConfigError):
             raise
         except Exception:
             return None

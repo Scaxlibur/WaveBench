@@ -1,10 +1,27 @@
 import unittest
 
-from wavebench.discovery import PortProbe, discover_network, parse_discovery_ports
+from unittest.mock import patch
+
+from wavebench.discovery import PortProbe, _probe_scpi_socket, discover_network, parse_discovery_ports
 from wavebench.errors import ConfigError
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_scpi_probe_does_not_hide_lease_backend_failure(self):
+        class BrokenLease:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                raise ConfigError("lock backend unavailable")
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        with patch("wavebench.discovery.ResourceLease", BrokenLease):
+            with self.assertRaisesRegex(ConfigError, "lock backend unavailable"):
+                _probe_scpi_socket("192.0.2.10", 5025, 0.01)
+
     def test_parse_discovery_ports_deduplicates_and_validates(self):
         self.assertEqual(parse_discovery_ports("5025, 5555,5025"), (5025, 5555))
         with self.assertRaisesRegex(ConfigError, "发现端口无效"):
