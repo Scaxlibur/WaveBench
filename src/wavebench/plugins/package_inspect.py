@@ -31,6 +31,43 @@ MAX_WHEEL_BYTES = 64 * 1024 * 1024
 MAX_WHEEL_MEMBERS = 4096
 MAX_WHEEL_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 
+_SUBPROCESS_ENV_KEYS = (
+    "PATH",
+    "HOME",
+    "SystemRoot",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "PATHEXT",
+    "ComSpec",
+    "VIRTUAL_ENV",
+)
+
+
+def build_subprocess_environment() -> dict[str, str]:
+    """Build a minimal, platform-safe environment for package subprocesses."""
+
+    environment: dict[str, str] = {}
+    wanted = {key.casefold() for key in _SUBPROCESS_ENV_KEYS}
+    for key, value in os.environ.items():
+        if key.casefold() in wanted:
+            environment[key] = value
+    environment.setdefault("PATH", os.environ.get("PATH", os.defpath))
+    if "HOME" not in environment:
+        try:
+            environment["HOME"] = str(Path.home())
+        except RuntimeError:
+            pass
+    environment["PIP_CONFIG_FILE"] = os.devnull
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment["PYTHONUTF8"] = "1"
+    return environment
+
 
 @dataclass(frozen=True)
 class WheelEntryPoint:
@@ -189,15 +226,11 @@ def build_source_wheel(
         completed = subprocess.run(
             command,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=timeout_s,
             check=False,
-            env={
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "HOME": os.environ.get("HOME", str(Path.home())),
-                "PIP_CONFIG_FILE": os.devnull,
-                "PYTHONNOUSERSITE": "1",
-            },
+            env=build_subprocess_environment(),
         )
     except subprocess.TimeoutExpired as exc:
         raise ConfigError("plugin wheel build timed out / 插件 wheel 构建超时") from exc

@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-try:
-    import fcntl
-except ModuleNotFoundError:
-    fcntl = None
 from hashlib import sha256
 import json
 import os
@@ -22,7 +18,14 @@ from wavebench.errors import ConfigError
 from wavebench.instruments.builtin import BUILTIN_INSTRUMENTS
 from wavebench.instruments.migrations import BUILTIN_MIGRATION_DISTRIBUTIONS
 
-from .package_inspect import PluginPackage, inspect_plugin_package
+from wavebench.services.file_lock import FileLock, FileLockBusy, FileLockError, FileLockUnavailable
+from wavebench.services.platform_io import atomic_write_json, ensure_private_directory
+
+from .package_inspect import (
+    PluginPackage,
+    build_subprocess_environment,
+    inspect_plugin_package,
+)
 
 
 LEDGER_SCHEMA_VERSION = 1
@@ -1061,20 +1064,15 @@ print(json.dumps({
                 raise
 
     def _run_command(self, command: list[str], *, action: str) -> subprocess.CompletedProcess[str]:
-        environment = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": os.environ.get("HOME", str(Path.home())),
-            "PIP_CONFIG_FILE": os.devnull,
-            "PYTHONNOUSERSITE": "1",
-        }
         try:
             completed = subprocess.run(
                 command,
                 text=True,
+                encoding="utf-8",
                 capture_output=True,
                 check=False,
                 timeout=180,
-                env=environment,
+                env=build_subprocess_environment(),
             )
         except subprocess.TimeoutExpired as exc:
             raise ConfigError(f"{action} timed out / 操作超时") from exc
@@ -1092,24 +1090,18 @@ print(json.dumps({
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        if fcntl is None:
-            raise ConfigError(
-                "plugin lifecycle is not supported on Windows / "
-                "插件生命周期暂不支持 Windows"
-            )
-        self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        descriptor = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        ensure_private_directory(self.state_dir)
+        lock = FileLock(self.lock_path, mode="exclusive")
         try:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
+                lock.acquire()
+            except FileLockBusy as exc:
                 raise ConfigError("plugin environment is busy / 插件环境正被其他操作占用") from exc
+            except (FileLockUnavailable, FileLockError) as exc:
+                raise ConfigError(f"plugin environment lock unavailable / 插件环境锁不可用: {exc}") from exc
             yield
         finally:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            finally:
-                os.close(descriptor)
+            lock.release()
 
     def _load_ledger(self, environment: EnvironmentInfo) -> dict[str, object]:
         if not self.ledger_path.exists():
@@ -1222,27 +1214,18 @@ print(json.dumps({
         return payload
 
     def _write_json(self, path: Path, payload: dict[str, object]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temporary = path.parent / f".{path.name}.tmp-{os.getpid()}"
-        data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            self._fsync_directory(path.parent)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_json(path, payload, indent=2)
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
-        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        # Kept as a compatibility helper for callers/tests.  The shared
+        # atomic writer performs the platform-appropriate durability step.
+        if os.name != "nt":
+            descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
 
     @staticmethod
     def _sha256_file(path: Path) -> str:

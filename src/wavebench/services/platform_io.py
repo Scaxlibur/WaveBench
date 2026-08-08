@@ -40,7 +40,12 @@ def ensure_private_file(path: str | Path) -> None:
             raise ConfigError(f"unable to restrict state file permissions: {path}: {exc}") from exc
 
 
-def atomic_write_json(path: str | Path, value: dict[str, Any]) -> None:
+def atomic_write_json(
+    path: str | Path,
+    value: dict[str, Any],
+    *,
+    indent: int | None = None,
+) -> None:
     """Write one JSON object atomically and durably enough for its platform."""
 
     target = Path(path)
@@ -54,7 +59,9 @@ def atomic_write_json(path: str | Path, value: dict[str, Any]) -> None:
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
         descriptor = os.open(temporary, flags, 0o600)
-        encoded = (json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        encoded = (
+            json.dumps(value, ensure_ascii=False, sort_keys=True, indent=indent) + "\n"
+        ).encode("utf-8")
         with os.fdopen(descriptor, "wb") as handle:
             descriptor = None
             handle.write(encoded)
