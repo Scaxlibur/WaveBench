@@ -18,13 +18,13 @@ def ensure_private_directory(path: str | Path) -> Path:
 
     directory = Path(path).expanduser()
     try:
+        if os.name == "nt":
+            _validate_windows_state_path(directory)
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if not directory.is_dir():
             raise OSError("path is not a directory")
         if os.name != "nt":
             os.chmod(directory, 0o700)
-        else:
-            _validate_windows_state_path(directory)
     except (OSError, ValueError) as exc:
         raise ConfigError(f"unable to prepare private state directory: {directory}: {exc}") from exc
     return directory

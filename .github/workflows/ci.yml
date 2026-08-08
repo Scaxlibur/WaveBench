@@ -34,3 +34,44 @@ jobs:
 
       - name: Run unit tests
         run: python -m pytest -q
+
+  test-windows:
+    name: Windows Python ${{ matrix.python-version }} tests
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and Windows test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,analysis,tui]"
+          python -m pip check
+
+      - name: Run Ruff
+        run: python -m ruff check .
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+      - name: Run offline CLI smoke tests
+        shell: pwsh
+        run: |
+          python -m wavebench --help
+          python -m wavebench run schema | Out-Null
+          python -m wavebench run template --list
+          python -m wavebench lock status TCPIP::192.0.2.10::INSTR

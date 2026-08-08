@@ -64,20 +64,23 @@ wavebench run verify --config wavebench.toml --plan plans/dp800_scope_probe_volt
 ## 资源租约
 
 `run plan` 在打开任何仪器 session 前，会为计划涉及的 `scope`、`source`、`power` 和
-`dmm` 资源按规范化资源键排序，并一次性取得本地 Linux / WSL 独占租约。任一资源已被
+`dmm` 资源按规范化资源键排序，并一次性取得本机独占租约。任一资源已被
 其他进程占用时，后续 transport 不会打开，已取得的前置租约会全部释放，并返回稳定错误码
 `resource_busy`。
 
-租约使用 POSIX `flock`。锁目录优先读取环境变量 `WAVEBENCH_LEASE_DIR`，其次使用
-`XDG_RUNTIME_DIR` 下的 WaveBench 目录，最后回退到用户缓存目录。锁文件名只包含资源身份的
-哈希，不写入 IP 或串口路径；holder 信息保存在权限为 `0600` 的同名 JSON sidecar 中。
-正常释放只删除当前 lease 的 sidecar，不删除 `.lock` 文件。进程崩溃后，内核负责释放锁；
-残留 sidecar 只能在再次取得非阻塞锁后清理，不能根据 PID 删除活动锁。
+租约使用统一的跨平台文件锁后端：Linux / WSL 使用 POSIX `flock`，原生 Windows 使用
+`portalocker[win32]` 的 Win32 `LockFileEx`。锁目录优先读取环境变量 `WAVEBENCH_LEASE_DIR`；
+Linux / WSL 其次使用 `XDG_RUNTIME_DIR` 或用户缓存目录，Windows 默认使用
+`%LOCALAPPDATA%\WaveBench\resource-leases-v1`。锁文件名只包含资源身份的哈希，不写入 IP
+或串口路径；holder 信息保存在同名 JSON sidecar 中。正常释放只删除当前 lease 的 sidecar，
+不删除 `.lock` 文件。进程崩溃后，内核负责释放锁；残留 sidecar 只能在再次取得非阻塞锁后
+清理，不能根据 PID 删除活动锁。
 
 `run check`、离线报告和比较命令不会取得资源租约。run 使用 factory 打开的 transport、独立
 Service 的一次性 session、`doctor`、网络 discovery 和声明式 SCPI probe 均在实际 I/O 前取得同一
-类本地独占租约；离线命令仍不接触仪器。租约只覆盖当前进程持有的本地 Linux / WSL 文件锁，不能
-替代外部程序或真实设备内部的互斥机制。
+类本地独占租约；离线命令仍不接触仪器。租约只覆盖当前运行环境、本机可信文件系统上的
+WaveBench 文件锁，不能替代外部程序或真实设备内部的互斥机制。原生 Windows 与 WSL 之间
+不承诺锁互操作；同一台仪器应固定由一种运行环境访问。
 
 可以使用 `lock status <resource>` 查询锁是否被持有、是否存在残留 sidecar；该命令只读取锁状态，
 不会取得租约，也不会连接仪器。

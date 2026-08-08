@@ -15,6 +15,9 @@
 
 按风险选择最窄的验证集合：
 
+以下命令以 POSIX 虚拟环境路径为例；原生 Windows 将 `.venv/bin/python` 替换为
+`.venv\Scripts\python.exe`，将 `.venv/bin/ruff` 替换为 `.venv\Scripts\ruff.exe`。
+
 ```bash
 .venv/bin/python -m pytest -q tests/<focused-test>.py
 .venv/bin/python -m pytest -q

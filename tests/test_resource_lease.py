@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,8 @@ def test_lease_busy_error_and_private_metadata(tmp_path: Path) -> None:
             manager.acquire("tcpip::192.0.2.10::instr", operation="other")
         assert raised.value.code == "resource_busy"
         assert raised.value.exit_code == 7
-        assert first.lock_path.stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert first.lock_path.stat().st_mode & 0o777 == 0o600
         payload = json.loads(first.metadata_path.read_text(encoding="utf-8"))
         assert payload["schema"] == "wavebench.resource_lease.v1"
         assert payload["lease_id"]

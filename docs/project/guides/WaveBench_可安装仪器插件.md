@@ -14,9 +14,17 @@ python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
+原生 Windows 使用 PowerShell 时，对应命令为：
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
 上例从 `v0.8.0` 源码树建立开发环境。本指南中的 V2 插件命令不兼容 `wavebench==0.7.0`。
 
 WaveBench 的受管插件命令只允许在当前 venv 中运行，拒绝系统 Python。它只接受用户明确指定的本地源码目录或 wheel，不联网、不自动安装依赖，也不修改 `wavebench.toml`。
+当前原生 Windows 生命周期支持纯 Python wheel；包含原生 DLL 的 wheel 需要单独验证，不在本支持声明内。
 
 从 WaveBench 仓库根目录先做包检查和安装 dry-run：
 
@@ -115,6 +123,9 @@ VXI-11、RsVisa 或 pyvisa-py 会话。RTM2032 0.2.0 实机验收确认 SocketIO
 ```
 
 只有能证明环境处于精确旧态或精确目标态时才会自动恢复；状态不唯一时会停止并要求人工检查。不要通过手工删除账本或 journal 来掩盖未知状态。
+
+PowerShell 中将上例的 `.venv/bin/python` 替换为 `.\.venv\Scripts\python.exe`。插件环境锁只保证
+同一原生 Windows 运行环境内的 WaveBench 进程；不要让原生 Windows 与 WSL 同时管理同一 venv。
 
 卸载 DG4000、DM3000、DP800 或 RTM2000 的外置包后，共享的 canonical ID 会自动恢复为内置实现。DS1000Z 的 `rigol.ds1000z` 是独立插件 canonical ID，卸载后会提示该 canonical driver 未安装；可重新安装固定版本，或把配置改为内置 alias `ds1104` / `ds1000z`。内置兼容短名包括 `dg4202`、`dm3000` / `dm3058`、`dp800` 和 `rtm2032`，安装外置包不会改变其解析结果；其中只有 DM3000 内置 alias 保留 serial backend。
 

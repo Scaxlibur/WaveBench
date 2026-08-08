@@ -204,6 +204,20 @@ LAN 资源示例：
 TCPIP::<instrument-ip>::INSTR
 ```
 
+串口资源示例：
+
+```toml
+backend = "serial"
+resource = "COM3"
+```
+
+Windows 也接受 `\\.\COM10`；资源租约会将它与 `COM10` 规范化为同一身份。Linux / WSL
+继续使用 `/dev/serial/by-id/...` 等设备路径。`ASRLn::INSTR` 是 VISA 资源写法，不与
+`COMn` 自动合并；同一台仪器应固定使用一种后端和一种资源写法。
+
+Windows 原生租约目录默认位于 `%LOCALAPPDATA%\WaveBench\resource-leases-v1`，也可通过
+`WAVEBENCH_LEASE_DIR` 指定本地目录。UNC、SMB 和 WSL 挂载路径不属于跨环境互斥保证范围。
+
 `read_retry_attempts` 是短文本只读 query 失败后的额外重试次数，默认 1。写操作、
 二进制块 query 和浮点列表 query 都不会在原 session 自动重放。后两类读取失败时，
 响应可能已被部分消费；应关闭并重建仪器 session，再从完整采集流程起点重试。

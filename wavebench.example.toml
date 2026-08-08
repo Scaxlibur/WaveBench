@@ -196,8 +196,8 @@ driver = "dm3058"
 # Use "lan" for DM3058 over Ethernet/VISA, or "serial" for RS-232.
 backend = "lan"
 
-# DM3058 LAN resource verified from WSL. For RS-232, prefer the stable Linux
-# path under /dev/serial/by-id rather than an enumeration-dependent ttyUSB name.
+# DM3058 LAN resource. For RS-232 on native Windows, use COM3/COM10; on
+# Linux/WSL, prefer a stable path under /dev/serial/by-id.
 resource = "TCPIP::192.0.2.15::INSTR"
 
 # Serial-only settings. Ignored by LAN/VISA backends, kept here so switching

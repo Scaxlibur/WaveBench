@@ -70,7 +70,8 @@ flowchart LR
 ## 先在没有仪器时跑通
 
 下面的命令只生成和检查 plan，不会连接仪器，也不会打开输出。
-示例以 Linux / WSL 为准；Windows 环境建议在 WSL 中运行。
+原生 Windows 与 Linux / WSL 均可运行离线命令。Windows 原生硬件访问使用
+`portalocker[win32]` 提供的跨进程锁；Windows 与 WSL 不共享同一锁域，同一台仪器应固定由一种运行环境访问。
 
 ```bash
 python3 -m venv .venv
@@ -81,6 +82,20 @@ wavebench run template --list
 wavebench run template source-scope-sine --output /tmp/wavebench-demo.toml --force
 wavebench run check --plan /tmp/wavebench-demo.toml
 ```
+
+PowerShell 示例：
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,analysis,tui]"
+.\.venv\Scripts\python.exe -m wavebench run template --list
+```
+
+Windows 串口资源使用 `COM3`、`COM10` 等形式；`\\.\COM10` 也会规范化为同一串口身份。
+VISA、SocketIO 和 USB 设备仍需安装对应的厂商驱动或后端。纯 Python 插件支持原生 Windows 的安装、升级、删除和恢复；包含原生 DLL 的插件不在本轮支持范围内。
+
+Windows 原生环境暂不保证与 WSL 进程对同一资源互相阻塞。需要使用 WSL 时，可继续使用
+[`scripts/wsl-run.ps1`](scripts/wsl-run.ps1) 作为兼容入口。
 
 查看终端界面时，可另外安装 TUI 依赖。`--fake` 使用模拟设备，不连接实验台：
 
