@@ -276,7 +276,10 @@ if _TEXTUAL_IMPORT_ERROR is None:
             self._set_source_write_controls_enabled(False)
             self._append_persistent_log_line("TUI session started / TUI 会话开始")
             self._refresh_timer = self.set_interval(self.refresh_interval_s, self.action_auto_refresh)
-            self.action_refresh()
+            # Give Textual one refresh cycle to mount the complete widget tree
+            # before worker callbacks start querying controls.  This avoids a
+            # platform-dependent startup race on Windows.
+            self.call_after_refresh(self.action_refresh)
 
         def action_refresh(self) -> None:
             if self._shutting_down:
@@ -553,6 +556,8 @@ if _TEXTUAL_IMPORT_ERROR is None:
             )
 
         def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+            if self._shutting_down or not self.is_attached or not self.is_mounted:
+                return
             worker = event.worker
             if event.state not in {
                 WorkerState.CANCELLED,

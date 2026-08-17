@@ -9,8 +9,8 @@ description: >-
   VISA/SCPI projects.
 license: MIT
 compatibility: >-
-  Codex or a compatible Agent Skills host; Python 3.11+; Linux or WSL
-  recommended. Live instrument operations require the project virtual
+  Codex or a compatible Agent Skills host; Python 3.11+; Linux, WSL, and
+  native Windows are supported. Live instrument operations require the project virtual
   environment, configured LAN/VISA access, confirmed wiring, and explicit
   authority for writes.
 metadata:
@@ -85,7 +85,11 @@ Reference 只从本入口直接链接，保持一层目录；详细命令和型�
 
 ## Environment and data boundaries
 
-- 要求 Python 3.11+；优先使用 `.venv/bin/python` 和 `.venv/bin/wavebench`。
+- 要求 Python 3.11+；优先使用项目虚拟环境中的 Python。POSIX 示例使用
+  `.venv/bin/python`，原生 Windows 使用 `.venv\Scripts\python.exe`。
+- 原生 Windows 的资源租约依赖 `portalocker[win32]`，默认锁目录为
+  `%LOCALAPPDATA%\WaveBench\resource-leases-v1`。Windows 与 WSL 不共享锁域，
+  同一台仪器应固定由一种运行环境访问。
 - `.venv` 不存在或过期时，先说明安装影响；禁止未经授权修改系统 Python。
 - `wavebench.toml` 是本地实验室状态；不要把真实资源地址、序列号或设备标识写入跟踪文件。
 - `data/` 是生成证据；提交采集包、截图、快照或日志前先检查敏感标识。

@@ -10,7 +10,8 @@ WaveBench is a Python measurement bench for laboratory debugging. It combines ex
 ## Start without instruments
 
 The following commands generate and check a plan locally. They do not connect to instruments or enable an output:
-The example uses Linux/WSL; Windows users should run it in WSL.
+Native Windows and Linux/WSL are supported for offline commands. Native Windows uses the
+`portalocker[win32]` lock backend; native Windows and WSL do not share a lock domain.
 
 ```bash
 python3 -m venv .venv
@@ -21,6 +22,20 @@ wavebench run template --list
 wavebench run template source-scope-sine --output /tmp/wavebench-demo.toml --force
 wavebench run check --plan /tmp/wavebench-demo.toml
 ```
+
+PowerShell equivalent:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,analysis,tui]"
+.\.venv\Scripts\python.exe -m wavebench run template --list
+```
+
+Use `COM3` or `COM10` for native Windows serial resources. `\\.\COM10` is normalized to the
+same serial identity. VISA, SocketIO, and USB access still depend on the corresponding vendor
+driver or backend. Pure-Python plugins support the native Windows lifecycle; native-DLL plugins
+require separate validation. The existing [`scripts/wsl-run.ps1`](../scripts/wsl-run.ps1) bridge
+remains available for WSL workflows.
 
 For the terminal UI, install `.[tui]` and run `wavebench tui --fake`. The fake mode uses simulated devices.
 

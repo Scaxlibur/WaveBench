@@ -5,6 +5,7 @@ import csv
 from hashlib import sha256
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -25,7 +26,7 @@ def _run(command: list[str], *, check: bool = True) -> subprocess.CompletedProce
 def _target_venv(root: Path) -> Path:
     target = root / "venv"
     venv.EnvBuilder(with_pip=True).create(target)
-    python = target / "bin" / "python"
+    python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     purelib = _run(
         [str(python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"]
     ).stdout.strip()
@@ -190,7 +191,8 @@ def descriptor():
 
 
 def test_lifecycle_rejects_system_python():
-    lifecycle = PluginLifecycle(python_executable=Path(sys.base_prefix) / "bin" / "python3")
+    system_python = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
+    lifecycle = PluginLifecycle(python_executable=system_python)
 
     with pytest.raises(ConfigError, match="virtual environment"):
         lifecycle.installed()
@@ -199,7 +201,12 @@ def test_lifecycle_rejects_system_python():
 def test_lifecycle_preserves_venv_launcher_path(tmp_path):
     python = _target_venv(tmp_path)
     launcher = python.parent / "wavebench-python-link"
-    launcher.symlink_to("python")
+    try:
+        launcher.symlink_to(python.name)
+    except OSError as exc:
+        if os.name == "nt":
+            pytest.skip(f"Windows symlink privilege unavailable: {exc}")
+        raise
     lifecycle = PluginLifecycle(python_executable=launcher)
 
     environment = lifecycle.environment()

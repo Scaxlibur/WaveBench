@@ -10,7 +10,32 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 from wavebench.errors import ConfigError
-from wavebench.plugins.package_inspect import inspect_plugin_package, inspect_plugin_wheel
+from wavebench.plugins.package_inspect import (
+    build_subprocess_environment,
+    inspect_plugin_package,
+    inspect_plugin_wheel,
+)
+
+
+def test_subprocess_environment_preserves_required_windows_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PATH", raising=False)
+    monkeypatch.setenv("Path", r"C:\\Windows\\System32")
+    monkeypatch.setenv("SystemRoot", r"C:\\Windows")
+    monkeypatch.setenv("TEMP", r"C:\\Temp")
+    monkeypatch.setenv("USERPROFILE", r"C:\\Users\\tester")
+    monkeypatch.setenv("ComSpec", r"C:\\Windows\\System32\\cmd.exe")
+    monkeypatch.setenv("PIP_CONFIG_FILE", "should-not-survive")
+
+    environment = build_subprocess_environment()
+
+    assert environment["PATH"] == r"C:\\Windows\\System32"
+    assert "Path" not in environment
+    assert environment["SystemRoot"] == r"C:\\Windows"
+    assert environment["TEMP"] == r"C:\\Temp"
+    assert environment["USERPROFILE"] == r"C:\\Users\\tester"
+    assert environment["ComSpec"].endswith("cmd.exe")
+    assert environment["PIP_CONFIG_FILE"] != "should-not-survive"
+    assert environment["PYTHONNOUSERSITE"] == "1"
 
 
 def _wheel(

@@ -10,6 +10,7 @@ from typing import Any
 
 from wavebench.data.packages import load_run_package
 from wavebench.errors import ConfigError
+from wavebench.report.path_utils import artifact_url
 
 
 @dataclass(frozen=True)
@@ -232,10 +233,7 @@ def _html_link(path_text: str | None, output_dir: Path, label: str) -> str:
 
 
 def _relative_path(path: Path, output_dir: Path) -> str:
-    try:
-        return path.relative_to(output_dir).as_posix()
-    except ValueError:
-        return path.as_posix()
+    return artifact_url(path, output_dir)
 
 
 def _nested(obj: dict[str, Any], *keys: str) -> Any:

@@ -11,7 +11,7 @@ from wavebench.config import (
     WaveformConfig,
 )
 from wavebench.discovery import DiscoveryResult
-from wavebench.doctor import doctor_records, has_doctor_errors
+from wavebench.doctor import _resource_suggestion, doctor_records, has_doctor_errors
 
 
 def make_config(*, source_resource="TCPIP::192.0.2.127::INSTR"):
@@ -85,6 +85,11 @@ def test_doctor_reports_idn_mismatch_as_warning():
 
     assert [record.severity for record in records] == ["warning", "warning"]
     assert not has_doctor_errors(records)
+
+
+def test_doctor_suggests_windows_serial_resources():
+    for resource in ("COM3", r"\\.\COM10"):
+        assert "串口" in _resource_suggestion(resource)
 
 
 def test_doctor_appends_candidate_for_unreachable_matching_idn():

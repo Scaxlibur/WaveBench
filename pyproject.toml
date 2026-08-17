@@ -10,7 +10,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Scaxlibur" }]
-dependencies = ["RsInstrument>=1.90.0", "numpy>=2.0.0", "packaging>=24.0", "pyserial>=3.5", "pyvisa-py>=0.8.1"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX",
+]
+dependencies = ["RsInstrument>=1.90.0", "numpy>=2.0.0", "packaging>=24.0", "portalocker[win32]>=4.1.0,<5.0.0", "pyserial>=3.5", "pyvisa-py>=0.8.1"]
 
 [project.optional-dependencies]
 analysis = ["scipy>=1.14.0"]

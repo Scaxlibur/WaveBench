@@ -226,10 +226,11 @@ Try:
 
 > 脚本刚才到底对仪器说了什么？
 
-同一个物理 resource 当前按串行独占使用。不要同时启动两个 WaveBench CLI 进程访问同一台
-仪器；VXI-11/SCPI 响应可能被不同 session 交叉消费，出现 IDN、错误队列或二进制响应
-串线。当前版本尚无跨进程 resource lock。完成或失败一个命令并关闭 session 后，再执行
-下一条命令。
+同一个物理 resource 当前按串行独占使用。WaveBench CLI 进程会在打开 transport 前取得
+跨进程 resource lock；锁忙时返回 `resource_busy`，不会打开后续 transport。VXI-11/SCPI
+响应仍可能被未使用 WaveBench 锁的外部程序交叉消费，出现 IDN、错误队列或二进制响应串线。
+完成或失败一个命令并关闭 session 后，再执行下一条命令。原生 Windows 与 WSL 的锁互操作
+不在当前保证范围内。
 
 ## 采集包生成规则
 
