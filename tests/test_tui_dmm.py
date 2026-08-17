@@ -328,6 +328,11 @@ class TuiDmmBusyBehaviorTests(unittest.IsolatedAsyncioTestCase):
         )
         async with app.run_test() as pilot:
             await pilot.pause(0.25)
+            for _ in range(20):
+                if not app._dmm_read_in_flight:
+                    break
+                await pilot.pause(0.05)
+            self.assertFalse(app._dmm_read_in_flight)
             app._read_dmm()
             await pilot.pause(0.02)
             self.assertTrue(app.query_one("#dmm-read", Button).disabled)
