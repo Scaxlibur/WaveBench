@@ -36,7 +36,7 @@ def test_windows_default_lease_directory_uses_local_app_data(
 
     directory = lease_module.default_lease_directory()
 
-    assert str(directory).endswith("WaveBench/resource-leases-v1")
+    assert directory.parts[-2:] == ("WaveBench", "resource-leases-v1")
     assert "AppData" in str(directory)
 
 

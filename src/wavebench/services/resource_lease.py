@@ -14,6 +14,7 @@ import hashlib
 import json
 import ntpath
 import os
+import posixpath
 from pathlib import Path
 import re
 import socket
@@ -56,7 +57,11 @@ def normalize_resource(resource: object) -> str:
         number = int(com_match.group("number"))
         if number > 0:
             return f"com{number}"
-    if stripped.startswith(("/", "~/")):
+    if stripped.startswith("/"):
+        # Keep POSIX device paths stable even when a Windows process sees a
+        # leading slash as a drive-relative path (for example ``/dev/ttyUSB0``).
+        return posixpath.realpath(stripped)
+    if stripped.startswith("~/"):
         return os.path.realpath(os.path.expanduser(stripped))
     if stripped.startswith("\\\\") or _WINDOWS_DRIVE.match(stripped):
         return ntpath.normcase(ntpath.normpath(stripped))
