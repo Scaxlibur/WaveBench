@@ -556,6 +556,8 @@ if _TEXTUAL_IMPORT_ERROR is None:
             )
 
         def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+            if self._shutting_down or not self.is_attached or not self.is_mounted:
+                return
             worker = event.worker
             if event.state not in {
                 WorkerState.CANCELLED,
