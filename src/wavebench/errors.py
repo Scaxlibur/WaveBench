@@ -3,6 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from wavebench.transport.contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
+)
+
 
 ERROR_SCHEMA = "wavebench.error.v1"
 
@@ -114,6 +122,71 @@ class ConnectionError(WaveBenchError):
 class InstrumentError(WaveBenchError):
     exit_code = 4
     code = "instrument_error"
+
+
+class TransportIOError(InstrumentError):
+    """Structured transport failure without command or response payloads."""
+
+    code = "transport_io_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str,
+        phase: TransportPhase,
+        replay_policy: ReplayPolicy,
+        command_transmission: CommandTransmission,
+        response_progress: ResponseProgress,
+        synchronization: Synchronization,
+        attempts: int,
+    ) -> None:
+        super().__init__(message)
+        if attempts < 0:
+            raise ValueError("transport attempts must be >= 0")
+        if phase is TransportPhase.BEFORE_SEND and (
+            command_transmission is not CommandTransmission.NOT_SENT
+            or response_progress is not ResponseProgress.NONE
+            or synchronization is not Synchronization.PROVEN
+            or attempts != 0
+        ):
+            raise ValueError("before_send failures must prove zero command transmissions")
+        if command_transmission is CommandTransmission.NOT_SENT and attempts != 0:
+            raise ValueError("not_sent failures must have zero command transmissions")
+        if response_progress in {ResponseProgress.PARTIAL, ResponseProgress.COMPLETE} and attempts == 0:
+            raise ValueError("response progress requires at least one command transmission")
+        self.operation = operation
+        self.phase = phase
+        self.replay_policy = replay_policy
+        self.command_transmission = command_transmission
+        self.response_progress = response_progress
+        self.synchronization = synchronization
+        self.attempts = attempts
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        merged = dict(details or {})
+        merged.update(
+            {
+                "transport_operation": self.operation,
+                "phase": self.phase.value,
+                "replay_policy": self.replay_policy.value,
+                "command_transmission": self.command_transmission.value,
+                "response_progress": self.response_progress.value,
+                "synchronization": self.synchronization.value,
+                "attempts": self.attempts,
+            }
+        )
+        return super().to_envelope(
+            operation=operation,
+            details=merged,
+            cause=self.__cause__ if cause is None else cause,
+        )
 
 
 class StateDriftError(InstrumentError):
