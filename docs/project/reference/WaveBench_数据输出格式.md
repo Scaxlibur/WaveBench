@@ -653,10 +653,18 @@ step_index,kind,status,package,metadata,quality_status,quality_warnings,expect_s
         "query_calls": 2,
         "binary_query_calls": 0,
         "write_requests": 0,
+        "write_attempts": 0,
         "write_transmitted": 0,
         "write_completed": 0,
+        "write_outcome_unknown": 0,
         "blocked_write_requests": 0,
+        "blocked_session_io": 0,
         "instrument_mutation_writes": 0
+      },
+      "session": {
+        "epoch_id": "<opaque-epoch>",
+        "health": "healthy",
+        "verified_fields": []
       }
     }
   }
@@ -666,10 +674,17 @@ step_index,kind,status,package,metadata,quality_status,quality_warnings,expect_s
 计数含义：
 
 - `*_requests`：调用方请求执行的次数；
-- `*_transmitted`：已委托给具体 transport 的次数；底层抛出异常时仍按可能已发送计数；
+- `*_attempts`：进入具体 transport 的发送尝试次数；
+- `*_transmitted`：已确认委托给具体 transport 的次数；
 - `*_completed`：具体 transport 调用未抛出异常的次数；不表示仪器已经完成内部处理；
+- `*_outcome_unknown`：调用抛出异常且命令是否到达仪器无法证明的次数；不得把它当作零发送；
 - `blocked_*`：在访问策略边界被拒绝、未调用具体 transport 的次数；
+- `blocked_session_io`：共享 session 健康门禁拒绝、保证零仪器 I/O 的次数；
 - `instrument_mutation_writes`：文本和二进制写入的 `transmitted` 总数。
+
+`session.epoch_id` 是不透明的连接代次标识；`health` 为 `healthy`、`uncertain`、`poisoned`
+或 `closed`。重建 Service 不会清除锁存，重连必须产生新的代次。关闭失败也会写入
+`provenance.session_lifecycle.close_errors`，不会静默把已写入的运行结果当作完整成功。
 
 `SerialTransport.query()` 内部为完成查询而发送的串口字节只计入 `query_calls`，不会误报为 mutation write。该证据覆盖 run 使用 factory 打开的 transport；discovery、doctor 和独立插件探测虽然也取得资源租约，但不写入该 run provenance，不能据此宣称已被 run I/O 计数覆盖。
 

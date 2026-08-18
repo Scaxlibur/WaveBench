@@ -218,9 +218,10 @@ Windows 也接受 `\\.\COM10`；资源租约会将它与 `COM10` 规范化为同
 Windows 原生租约目录默认位于 `%LOCALAPPDATA%\WaveBench\resource-leases-v1`，也可通过
 `WAVEBENCH_LEASE_DIR` 指定本地目录。UNC、SMB 和 WSL 挂载路径不属于跨环境互斥保证范围。
 
-`read_retry_attempts` 是短文本只读 query 失败后的额外重试次数，默认 1。写操作、
-二进制块 query 和浮点列表 query 都不会在原 session 自动重放。后两类读取失败时，
-响应可能已被部分消费；应关闭并重建仪器 session，再从完整采集流程起点重试。
+`read_retry_attempts` 是显式 `safe_to_replay` query 失败后的额外完整命令重放次数，默认 1。
+核心 driver 的查询首版均显式采用 `no_replay`，因此增大该值不会让普通状态查询、
+`SYST:ERR?`、`*OPC?`、二进制块或浮点列表查询自动重发。命令结果未知、响应部分到达或
+通信同步无法证明时，应关闭旧 session、建立新 session，再从完整采集流程起点重试。
 
 `read_retry_delay_ms` 是两次短文本只读 query 之间的等待时间，默认 200 ms。
 

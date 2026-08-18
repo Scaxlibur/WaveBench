@@ -3,12 +3,12 @@
 > 状态：`Accepted`
 > 修订：`R1`
 > 核心基线：WaveBench `0.8.22`
-> 核心实现：尚未开始
+> 核心实现：`M1–M7 implemented-unreleased`（开发分支）
 > 目标版本：下一个开发版本
 
 ## 摘要
 
-WaveBench 当前没有统一的查询重放合同，也没有绑定物理连接代次的共享 session 健康状态。`PyVisaTransport` 会按 `read_retry_attempts` 重发文本 query 和 `*OPC?`，其他 backend 没有相同的显式行为；二进制块和浮点列表查询则已经采用失败后不重放的路径。
+在 R1 实施前，WaveBench 没有统一的查询重放合同，也没有绑定物理连接代次的共享 session 健康状态。旧版 `PyVisaTransport` 会按 `read_retry_attempts` 重发文本 query 和 `*OPC?`，其他 backend 没有相同的显式行为；二进制块和浮点列表查询则已经采用失败后不重放的路径。
 
 这类差异会让读后清除寄存器、与 acquisition 绑定的 `*OPC?`、部分响应和写入结果未知产生不可证明的后果。临时重建 Service 还会继续复用原 driver 与 transport，因此健康状态不能存放在单个 Service 中。
 
@@ -23,7 +23,17 @@ WaveBench 当前没有统一的查询重放合同，也没有绑定物理连接�
 7. capture/fetch 的副作用、字段范围和恢复覆盖必须重新审计；
 8. 行为变化通过核心版本、插件 wheel、descriptor 版本范围和 `api_version` 共同管理。
 
-本文件是已接受的实现合同，但不表示上述接口已经实现或可供插件依赖。只有状态改为 `Implemented`、稳定用法同步到 `reference/` 且对应版本发布后，插件才能提高最低核心版本并使用新合同。
+本文件是已接受的实现合同。M1–M7 已在当前开发分支完成并通过离线验证，稳定用法已同步到 `reference/`；核心版本尚未发布，因此插件仍不能提高最低核心版本或依赖新合同。开发分支实现不等于发布承诺，实机验收仍须在发布后单独授权。
+
+## 实施状态
+
+| 范围 | 状态 | 说明 |
+| --- | --- | --- |
+| M1–M2 | `complete` | 合同、重放策略、结构化错误和 session 模型已冻结并有单元测试 |
+| M3–M4 | `complete` | PyVISA、RsInstrument、Serial、fake 和 guarded transport 已接入显式策略与健康门禁 |
+| M5–M6 | `complete` | factory、Service alias、run 调度、恢复和生命周期关闭证据已接入共享 session |
+| M7 | `complete` | 核心调用点已显式分类，capture/fetch `OperationSpec` 已审计，稳定参考文档已同步 |
+| 插件采用 | `blocked-until-release` | SDS3000 仍保持 `wavebench>=0.8.22,<0.9`，待首个包含 R1 的核心版本发布后再升级 |
 
 ## 目标
 
@@ -44,21 +54,21 @@ WaveBench 当前没有统一的查询重放合同，也没有绑定物理连接�
 - 不以实机 happy path 代替故障注入和状态机单元测试。
 - 不在合同冻结前提高任何插件的最低 WaveBench 版本。
 
-## 当前实现事实
+## R1 实现后的事实
 
 | 对象 | 当前行为 | 风险或缺口 |
 | --- | --- | --- |
-| `InstrumentTransport` | 只有 `write()`、`query()`、二进制/浮点查询和 `query_opc()` | 没有 replay policy、发送结果或 session health |
-| `PyVisaTransport.query()` | `session.query()` 失败后可重发完整 query | 读后清除、动作型 query 和状态消费可能重复执行 |
-| `PyVisaTransport.query_opc()` | 与普通文本 query 共用重试路径 | acquisition-bound `*OPC?` 可能重复发送 |
-| PyVISA 二进制/浮点查询 | 失败后不在原 session 重放 | 已有方向正确，但错误仍缺少统一结构 |
-| `RsInstrumentTransport` | 文本 query 没有 WaveBench 自己的显式重试 | 与 PyVISA 的可观察行为不同 |
-| `SerialTransport` | 写命令后读取一次终止符响应 | 不支持继续读取合同，也没有共享健康状态 |
-| `GuardedAuditedTransport` | 执行 access 门禁和 I/O 计数 | 不拥有 session health、连接代次和恢复授权 |
-| Service/run session | 新 Service 可以复用同一 driver 与 transport | Service 私有锁存会被对象重建绕过 |
-| `OperationSpec` | 描述 effect、`changed_fields`、恢复覆盖和风险 | 没有 recovery/verification 目的分类、验证字段或显式 timeout 来源；capture/fetch 字段不足 |
+| `InstrumentTransport` | `query()`、`query_opc()`、二进制/浮点查询都接受关键字 `replay`；失败返回结构化传输错误 | 外部旧调用仍保持语法兼容，但默认行为为 `no_replay` |
+| `PyVisaTransport.query()` | 只有显式 `safe_to_replay` 才按配置重发；`no_replay` 最多一次发送 | backend 无法证明发送或同步时进入保守状态，不猜测 SCPI 幂等性 |
+| `PyVisaTransport.query_opc()` | acquisition-bound 调用显式 `no_replay` | 不再进入普通文本查询的隐式重试路径 |
+| PyVISA 二进制/浮点查询 | 默认 `no_replay`，结构化记录部分响应和同步状态 | 原 session 不做完整命令重放 |
+| `RsInstrumentTransport` | 与核心 replay contract 同形，调用点显式传策略 | 未声明 continuation 能力时发送前失败，不退化为重发 |
+| `SerialTransport` | 查询使用显式策略并保持单次发送语义 | 串口响应读取不伪造 continuation 证明 |
+| `GuardedAuditedTransport` | 在每次 I/O 前执行共享 health/授权门禁并记录计数 | `uncertain`/`poisoned` 普通 I/O 发送前拒绝，close 仍可执行 |
+| Service/run session | factory 创建唯一 `InstrumentSessionState`，OpenedInstrument、driver 和 Service alias 共享 | 重建 Service 不清除锁存；close/reconnect 产生新连接代次 |
+| `OperationSpec` | 已包含 `session_purpose`、前置/后置验证字段和 `timeout_source` | capture/fetch 的受影响字段闭包与恢复/验证范围已纳入合同测试 |
 
-现有《错误处理和日志策略》把 `*OPC?` 描述为不自动重试，但当前 PyVISA 实现会进入文本 query 重试路径。代码是当前行为事实源；本 RFC 将该差异视为需要修复的 P0 问题。实现完成后再同步稳定参考文档。
+实现前的行为差异曾使《错误处理和日志策略》与 PyVISA 代码不一致；R1 已将 `*OPC?` 和消费型读取迁移到显式 `no_replay`，并同步稳定参考文档。核心 driver 的结构化异常路径会原样保留 `TransportIOError`/`SessionHealthError`，避免包装成会掩盖发送结果的普通超时。
 
 ## 术语
 
@@ -101,13 +111,13 @@ read_continuation_only
 | `no_replay` | 最多一次 | 返回结构化失败，不再次发送命令 | 默认策略、读后清除、动作型 query、acquisition-bound `*OPC?` |
 | `read_continuation_only` | 最多一次 | backend 只继续读取当前响应；不支持时直接失败 | 能证明响应边界的分块或长响应 |
 
-首版建议把所有 query 的默认策略冻结为 `no_replay`。仓库内调用点必须显式分类；未迁移的外部插件调用仍可运行，但采用安全的默认行为。
+R1 已将所有 query 的默认策略冻结为 `no_replay`。仓库内调用点必须显式分类；未迁移的外部插件调用仍可运行，但采用安全的默认行为。
 
 `safe_to_replay` 不表示任意 backend 异常都能重发。只有上一次 exchange 的结构证据同时表明 `response_progress=none`、`synchronization=proven`，且命令确认未发送或调用点已明确承担重发已发送幂等命令的风险时，才能进入下一次尝试。`partial`、`unknown`、`unproven` 或 `lost` 一律不重发。PyVISA 和 RsInstrument 高层 API 的不透明异常默认不能提供该证明。
 
 ### 公共方法形态
 
-R0 推荐保留现有方法名，并增加可选关键字：
+R1 保留现有方法名，并增加可选关键字：
 
 ```python
 def query(
@@ -124,7 +134,7 @@ def query_opc(
 ) -> str: ...
 ```
 
-二进制块和浮点列表查询使用同一策略类型，默认仍为 `no_replay`。是否保留统一关键字形态，以及 `read_continuation_only` 的 backend 能力表示，属于 R0 必须冻结的 API 决策。
+二进制块和浮点列表查询使用同一策略类型，默认仍为 `no_replay`。R1 已冻结统一关键字形态；`read_continuation_only` 的 backend 能力必须显式声明，首版 backend 均不声明该能力。
 
 现有不带关键字的调用保持语法有效，但默认行为改变属于可观察兼容性变化。第三方 duck-typed fake 如果需要使用新策略，必须增加对应关键字；核心不能用捕获 `TypeError` 后退回旧调用的方式绕过合同。
 
@@ -151,7 +161,7 @@ M7 增加静态合同测试，检查核心 driver 中所有 transport query 都�
 
 ## 结构化传输错误
 
-transport 失败需要提供稳定字段，而不是只拼接错误字符串。R0 建议新增 `TransportIOError`，并保持它属于现有 `WaveBenchError`/`InstrumentError` 体系。
+transport 失败需要提供稳定字段，而不是只拼接错误字符串。R1 已新增 `TransportIOError`，并保持它属于现有 `WaveBenchError`/`InstrumentError` 体系。
 
 最低字段如下：
 
@@ -213,7 +223,7 @@ healthy -> uncertain -> poisoned -> closed
 
 ## health 与操作目的矩阵
 
-R0 建议为 `OperationSpec` 增加独立的 `session_purpose`，取值为 `normal`、`recovery`、`verification` 或 `lifecycle`。该字段不替代现有 effect 和 access policy。
+R1 为 `OperationSpec` 增加独立的 `session_purpose`，取值为 `normal`、`recovery`、`verification` 或 `lifecycle`。该字段不替代现有 effect 和 access policy。
 
 | session health | `normal` | `recovery` | `verification` | `lifecycle` |
 | --- | --- | --- | --- | --- |
@@ -243,7 +253,7 @@ R0 建议为 `OperationSpec` 增加独立的 `session_purpose`，取值为 `norm
 
 ## `OperationSpec` 接入
 
-除 `session_purpose` 外，R0 还需要冻结以下语义：
+除 `session_purpose` 外，R1 冻结以下语义：
 
 - `changed_fields` 表示操作期间可能触碰的字段，不只表示最终保留的变化；
 - `required_verified_fields` 表示普通操作开始前必须在当前连接代次中已独立验证的字段闭包；
@@ -272,7 +282,7 @@ scope.fetch_waveform
 | 旧核心 + 新插件 | wheel 和 descriptor 最低版本在 driver factory 前拒绝 |
 | 新核心 + 新插件 | 使用完整 replay/session 合同 |
 
-R0 需要单独裁决 `wavebench.instrument.v2` 是否保持兼容。只有现有插件方法和调用语法仍然有效时才保留 V2；若最终 API 要求插件实现不兼容的新合同，则必须升级核心 API 常量和 descriptor。
+R1 裁决 `wavebench.instrument.v2` 保持兼容：新参数属于核心提供的 transport 合同，现有 driver 方法和插件 factory 形态不变。若未来需要不兼容的可执行插件合同，仍必须升级核心 API 常量和 descriptor。
 
 插件采用新能力前必须同时检查：
 
@@ -308,7 +318,7 @@ R0 需要单独裁决 `wavebench.instrument.v2` 是否保持兼容。只有现�
 | M4 | 在 `GuardedAuditedTransport` 接入健康门禁和核心授权 | `uncertain` 普通 I/O 零发送，`poisoned` 只允许 close |
 | M5 | 在 factory、`OpenedInstrument` 和 Service alias 共享连接代次 | Service 重建不清除锁存，close/reconnect 产生新代次 |
 | M6 | 接入 run 调度和审计证据 | `on_failure=continue` 不允许已中毒 session 继续 I/O |
-| M7 | 审计 capture/fetch `OperationSpec`，迁移核心调用点并同步稳定文档 | 零个未分类核心调用，全量离线测试通过 |
+| M7 | 审计 capture/fetch `OperationSpec`，迁移核心调用点并同步稳定文档 | 零个未分类核心调用，全量离线测试通过；当前开发分支已完成 |
 
 M7 完成后仍不自动进行实机验证。实机验证必须在核心版本发布后单独授权，且不替代上述离线发送次数和状态机测试。
 
@@ -327,10 +337,10 @@ M7 完成后仍不自动进行实机验证。实机验证必须在核心版本�
 - `query()`、`query_opc()`、二进制块和浮点列表查询都增加只能以关键字传入的 `replay` 参数，不增加平行方法。
 - 全部查询的默认策略为 `no_replay`；`read_retry_attempts` 只影响显式 `safe_to_replay`。
 - 首版 backend 均不声明 continuation 能力；收到 `read_continuation_only` 时在发送前返回 `TransportIOError`，`attempts=0`。后续 backend 只能通过明确能力和专项测试加入。
-- `TransportIOError` 继承 `InstrumentError`，保存本 RFC 定义的结构字段，通过现有 `wavebench.error.v1` envelope 的 `details` 对外表示。
+- `TransportIOError` 继承 `InstrumentError`，保存本 RFC 定义的结构字段，通过现有 `wavebench.error.v1` envelope 的稳定 `details` 对外表示；调用方传入的任意 details 不会覆盖或注入 transport 字段。`SessionHealthError` 同样只输出稳定的 session 字段。
 - factory 在具体 transport 打开后创建唯一 `InstrumentSessionState`；`OpenedInstrument`、guarded transport 和所有 Service alias 共享该对象。close 只能进入 `closed`，reconnect 创建新对象和新 `epoch_id`。
 - session 事务锁由 `InstrumentSessionState` 持有；恢复与验证授权只能由核心 transaction coordinator 在持锁的动态范围内安装。
 - `OperationSpec` 增加 `session_purpose`、`required_verified_fields`、`verification_fields` 和 `timeout_source`；默认分别为 `normal`、空集合、空集合和 `connection.timeout_ms`。`required_verified_fields` 是操作前置，`verification_fields` 是恢复后置，两者不得合并或互相推导。
 - 新连接的通信初始为 `healthy`，`verified_fields` 初始为空。身份和配置基线由具体操作的前置字段声明决定，不把一次 IDN 成功扩大为全局验证。
 - `wavebench.instrument.v2` 保持不变：新参数属于核心提供的 transport 合同，现有 driver 方法和插件 factory 形态不变。
-- 核心 driver 调用点在 M7 前全部显式分类。外部旧插件保持调用语法有效并获得 `no_replay` 默认；新插件的 wheel、descriptor 和四组合版本测试只在核心发布后更新。
+- 核心 driver 调用点已在 M7 全部显式分类；driver 对结构化传输/健康异常保持异常优先级，并在失败后不执行未经授权的二次恢复 I/O。外部旧插件保持调用语法有效并获得 `no_replay` 默认；新插件的 wheel、descriptor 和四组合版本测试只在核心发布后更新。

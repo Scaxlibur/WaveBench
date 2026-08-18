@@ -315,19 +315,24 @@ SYST:ERR?
 
 ## 重试策略
 
-当前不对连接、`*OPC?` 超时和波形读取执行自动重试。
+所有通过 `InstrumentTransport` 发起的 query 都携带显式 `ReplayPolicy`；核心 driver
+当前统一使用 `no_replay`。默认规则如下：
 
-默认规则：
+| 策略 | 命令行为 | 适用范围 |
+| --- | --- | --- |
+| `safe_to_replay` | 只有调用点显式声明且 transport 证明可重放时，才按配置重新发送 | 后续专项审计确认幂等的状态查询 |
+| `no_replay` | 命令最多发送一次；失败后不重新发送 | 默认策略、`SYST:ERR?`、触发/采集相关查询、波形和截图读取、`*OPC?` |
+| `read_continuation_only` | 只在同一响应边界继续读取；backend 不支持时发送前失败 | 当前核心暂无已证明的调用点 |
 
-```text
-连接失败：不自动重试
-*OPC? 超时：不自动重试
-波形读取超时：不自动重试
-```
+`read_retry_attempts` 只影响显式 `safe_to_replay` 的完整命令重放，不会改变
+`no_replay` 或不支持的 continuation。连接失败、`*OPC?` 超时和波形读取默认不自动重放；
+自动化流程应在需要时关闭旧 session、建立新 session，再从完整操作起点执行。
 
-原因：自动重试可能让仪器状态更乱。
-
-短文本只读查询可以通过配置的 `read_retry_attempts` 重试；写操作、触发操作和可能已部分消费响应的读取不自动重放。
+transport 失败使用结构化 `TransportIOError`，至少记录 operation、phase、replay policy、
+command transmission、response progress、synchronization 和 attempts；不记录完整命令、响应、
+资源串或凭据。健康门禁拒绝的调用使用 `SessionHealthError`，固定表示零仪器 I/O，并包含
+当前连接代次。`uncertain`/`poisoned` session 上的普通操作在发送前拒绝，
+`on_failure = "continue"` 不会清除该锁存。
 
 ## 异常类设计
 
