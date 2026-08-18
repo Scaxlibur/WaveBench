@@ -189,6 +189,55 @@ def ok_power_status() -> PowerStatus:
 
 
 class RunServiceTests(unittest.TestCase):
+    def test_session_close_failure_is_recorded_after_run_artifacts_are_written(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+""",
+                )
+            )
+
+            class CloseReportingRunService(RunService):
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    yield RunInstrumentServices(
+                        close_errors=[
+                            {
+                                "operation": "session.close.scope",
+                                "type": "RuntimeError",
+                                "error": {
+                                    "schema": "wavebench.error.v1",
+                                    "code": "unexpected_error",
+                                    "type": "RuntimeError",
+                                    "message": "close failed",
+                                    "exit_code": 1,
+                                    "operation": "session.close.scope",
+                                },
+                            }
+                        ]
+                    )
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    return None
+
+            result = CloseReportingRunService(
+                config=make_config(tmp),
+                logger=CommandLogger(),
+            ).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(run_data["status"], "failed")
+            self.assertEqual(run_data["error"]["code"], "session_close_failed")
+            self.assertEqual(
+                run_data["provenance"]["session_lifecycle"]["close_errors"][0]["operation"],
+                "session.close.scope",
+            )
+
     def test_transport_failure_continue_is_recorded_and_latched_session_blocks_next_step(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(
@@ -1602,7 +1651,7 @@ settle_s = 0
             self.assertEqual(run_data["steps"][0]["kind"], "sweep.frequency_response")
             self.assertEqual(run_data["steps"][0]["status"], "failed")
             self.assertEqual(run_data["error"]["schema"], "wavebench.error.v1")
-            self.assertEqual(run_data["error"]["code"], "run_failed")
+            self.assertEqual(run_data["error"]["code"], "config_error")
             self.assertEqual(run_data["error"]["exit_code"], 2)
             self.assertEqual(run_data["error"]["type"], "ConfigError")
             self.assertEqual(run_data["error"]["message"], "set failed")
