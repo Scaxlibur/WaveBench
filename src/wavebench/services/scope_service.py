@@ -50,6 +50,7 @@ from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
+from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.session import InstrumentSessionState
 
@@ -148,7 +149,7 @@ class MultiCaptureResult:
     commands_log_path: Path | None
 
 @dataclass
-class ScopeService:
+class ScopeService(SessionStateAliasMixin):
     config: WaveBenchConfig
     logger: CommandLogger
     session: ScopeDriver | None = None
@@ -169,6 +170,7 @@ class ScopeService:
         require_capabilities(descriptor, capabilities, operation=operation)
 
     def _open_scope(self) -> ScopeDriver:
+        self._prepare_session_open("scope")
         if self.lease is None:
             self.lease = ResourceLease(
                 resource=self.config.connection.resource,

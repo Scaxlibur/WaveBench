@@ -65,13 +65,14 @@ from wavebench.services.source_state import RestorableSourceState
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
+from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.services.state_guard import SourceStateGuard
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.session import InstrumentSessionState
 
 
 @dataclass
-class SourceService:
+class SourceService(SessionStateAliasMixin):
     config: WaveBenchConfig
     logger: CommandLogger
     session: SourceDriver | None = None
@@ -100,6 +101,7 @@ class SourceService:
 
     def _open_source(self) -> SourceDriver:
         source = self._source_config()
+        self._prepare_session_open("source")
         if self.lease is None:
             self.lease = ResourceLease(
                 resource=source.resource or "",

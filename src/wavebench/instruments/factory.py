@@ -85,6 +85,7 @@ def open_instrument_driver(
         if lease is not None and not lease.acquired:
             lease.acquire()
             lease_acquired_here = True
+        concrete_transport: InstrumentTransport | None = None
         try:
             concrete_transport = _open_transport(
                 backend=backend,
@@ -106,6 +107,11 @@ def open_instrument_driver(
             )
             opened_session_state = session_state
         except Exception:
+            if concrete_transport is not None:
+                try:
+                    concrete_transport.close()
+                except Exception:
+                    pass
             if lease_acquired_here:
                 lease.release()
             raise

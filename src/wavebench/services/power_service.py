@@ -18,13 +18,14 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
+from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.services.state_guard import PowerStateGuard
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.session import InstrumentSessionState
 
 
 @dataclass
-class PowerService:
+class PowerService(SessionStateAliasMixin):
     config: WaveBenchConfig
     logger: CommandLogger
     session: PowerDriver | None = None
@@ -53,6 +54,7 @@ class PowerService:
 
     def _open_power(self) -> PowerDriver:
         power = self._power_config()
+        self._prepare_session_open("power")
         if self.lease is None:
             self.lease = ResourceLease(
                 resource=power.resource or "",

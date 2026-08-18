@@ -1025,6 +1025,34 @@ def test_core_factory_closes_transport_when_factory_raises(monkeypatch):
     assert transport.close_count == 1
 
 
+def test_core_factory_closes_concrete_transport_when_guard_construction_fails(monkeypatch):
+    transport = _FakeTransport()
+
+    def factory(context):
+        context.open_transport()
+        return _ScopeDriver()
+
+    descriptor = make_descriptor(factory=factory, option_specs=())
+    monkeypatch.setattr(
+        "wavebench.instruments.factory.resolve_instrument_descriptor",
+        lambda reference, expected_kind: descriptor,
+    )
+    monkeypatch.setattr(
+        "wavebench.instruments.factory._open_transport",
+        lambda **kwargs: transport,
+    )
+
+    def fail_guard(*args, **kwargs):
+        raise RuntimeError("guard construction failed")
+
+    monkeypatch.setattr("wavebench.instruments.factory.GuardedAuditedTransport", fail_guard)
+
+    with pytest.raises(ConfigError, match="guard construction failed"):
+        _open_example_scope()
+
+    assert transport.close_count == 1
+
+
 def test_core_factory_rejects_second_transport_and_closes_first(monkeypatch):
     transport = _FakeTransport()
 
