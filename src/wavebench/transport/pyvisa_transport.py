@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 from wavebench.config import ConnectionConfig
-from wavebench.errors import ConnectionError, TransportIOError
+from wavebench.errors import ConnectionError, SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
 
 from .contracts import (
@@ -394,11 +394,14 @@ class PyVisaTransport:
         )
 
     def close(self) -> None:
+        failures: list[tuple[str, BaseException]] = []
         try:
             self.session.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            failures.append(("session", exc))
         try:
             self.resource_manager.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            failures.append(("resource_manager", exc))
+        if failures:
+            raise SessionCloseError(failures)

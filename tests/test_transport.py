@@ -1,7 +1,7 @@
 
 import unittest
 
-from wavebench.errors import TransportIOError
+from wavebench.errors import SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
 from wavebench.transport.contracts import (
     CommandTransmission,
@@ -121,6 +121,38 @@ class FakeResourceManager:
 
 
 class PyVisaTransportTests(unittest.TestCase):
+    def test_close_attempts_session_and_resource_manager_then_reports_failures(self):
+        calls = []
+
+        class FailingSession(FakePyVisaSession):
+            def close(self):
+                calls.append("session")
+                raise RuntimeError("private session failure")
+
+        class FailingResourceManager:
+            def close(self):
+                calls.append("resource_manager")
+                raise OSError("private manager failure")
+
+        transport = PyVisaTransport(
+            "TCPIP::x::INSTR",
+            FailingResourceManager(),
+            FailingSession(),
+            CommandLogger(),
+        )
+
+        with self.assertRaises(SessionCloseError) as raised:
+            transport.close()
+
+        self.assertEqual(calls, ["session", "resource_manager"])
+        self.assertEqual(
+            raised.exception.failures,
+            (
+                {"component": "session", "type": "RuntimeError"},
+                {"component": "resource_manager", "type": "OSError"},
+            ),
+        )
+
     def test_query_float_list_falls_back_to_ascii_values(self):
         transport = PyVisaTransport("TCPIP::x::INSTR", FakeResourceManager(), FakePyVisaSession(), CommandLogger())
 

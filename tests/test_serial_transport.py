@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from wavebench.config import DmmConfig
-from wavebench.errors import TransportIOError
+from wavebench.errors import SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
 from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.serial_transport import SerialTransport
@@ -32,6 +32,23 @@ class FakeSerialSession:
 
 
 class SerialTransportTests(unittest.TestCase):
+    def test_close_reports_backend_failure(self):
+        session = FakeSerialSession()
+
+        def fail_close():
+            raise OSError("private serial resource")
+
+        session.close = fail_close
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaises(SessionCloseError) as raised:
+            transport.close()
+
+        self.assertEqual(
+            raised.exception.failures,
+            ({"component": "session", "type": "OSError"},),
+        )
+
     def test_open_applies_configured_framing_and_disables_flow_control(self):
         session = FakeSerialSession()
         config = DmmConfig(

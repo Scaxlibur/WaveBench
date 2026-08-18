@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from wavebench.errors import TransportIOError
+from wavebench.errors import SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
 from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.rsinstrument_transport import (
@@ -197,3 +197,14 @@ def test_rsinstrument_continuation_rejects_before_send():
 
     assert raised.value.attempts == 0
     assert raised.value.command_transmission.value == "not_sent"
+
+
+def test_rsinstrument_close_reports_backend_failure():
+    session = FakeSession()
+    session.close = lambda: (_ for _ in ()).throw(RuntimeError("private close failure"))
+    transport = RsInstrumentTransport("TCPIP::x::INSTR", session, CommandLogger())
+
+    with pytest.raises(SessionCloseError) as raised:
+        transport.close()
+
+    assert raised.value.failures == ({"component": "session", "type": "RuntimeError"},)

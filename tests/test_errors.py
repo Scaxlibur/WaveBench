@@ -7,6 +7,7 @@ from wavebench.errors import (
     ConfigError,
     ErrorEnvelope,
     InstrumentError,
+    SessionCloseError,
     SessionHealthError,
     TransportIOError,
     error_envelope,
@@ -127,6 +128,27 @@ def test_transport_error_sanitizes_mapping_cause_tokens() -> None:
     )
 
     assert payload["cause"] == {"type": "BackendError", "code": "backend_error"}
+
+
+def test_session_close_error_exposes_only_component_and_exception_type() -> None:
+    error = SessionCloseError(
+        [
+            ("session", RuntimeError("SECRET resource TCPIP::private")),
+            ("resource_manager", OSError("/private/path")),
+        ]
+    )
+
+    payload = error_envelope(error, operation="session.close.scope")
+
+    assert payload["code"] == "session_close_failed"
+    assert payload["details"] == {
+        "failed_components": [
+            {"component": "session", "type": "RuntimeError"},
+            {"component": "resource_manager", "type": "OSError"},
+        ]
+    }
+    assert "SECRET" not in json.dumps(payload)
+    assert "/private/path" not in json.dumps(payload)
 
 
 def test_legacy_error_mapping_is_augmented_without_dropping_custom_fields() -> None:

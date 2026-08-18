@@ -120,6 +120,46 @@ class ConnectionError(WaveBenchError):
     exit_code = 3
     code = "connection_error"
 
+
+class SessionCloseError(ConnectionError):
+    """One or more backend resources failed to close.
+
+    Close failures may contain resource strings or vendor payloads.  Keep only
+    fixed component names and exception types in the public envelope.
+    """
+
+    code = "session_close_failed"
+
+    def __init__(self, failures: list[tuple[str, BaseException]]) -> None:
+        if not failures:
+            raise ValueError("session close failures must not be empty")
+        normalized: list[dict[str, str]] = []
+        for component, exc in failures:
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", component) is None:
+                raise ValueError("invalid session close component")
+            normalized.append(
+                {
+                    "component": component,
+                    "type": _safe_cause_token(type(exc).__name__, "BackendError"),
+                }
+            )
+        super().__init__("one or more instrument session resources failed to close")
+        self.failures = tuple(normalized)
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        return super().to_envelope(
+            operation=operation,
+            details={"failed_components": [dict(item) for item in self.failures]},
+            cause=None,
+        )
+
+
 class InstrumentError(WaveBenchError):
     exit_code = 4
     code = "instrument_error"

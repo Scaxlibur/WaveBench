@@ -7,7 +7,7 @@ from math import isfinite
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from wavebench.config import WaveBenchConfig
 from wavebench.data.package import new_package_dir, safe_label
@@ -109,6 +109,11 @@ class RunInstrumentServices:
     # ExitStack close callbacks append lifecycle failures here without
     # replacing a completed run with an unhandled close exception.
     close_errors: list[dict[str, Any]] = field(default_factory=list, compare=False, repr=False)
+    close_reporters: list[Callable[[], None]] = field(
+        default_factory=list,
+        compare=False,
+        repr=False,
+    )
 
     def audit_snapshot(self) -> dict[str, Any] | None:
         """Return transport-native counters without deriving them from logs."""
@@ -476,7 +481,7 @@ class RunService:
         if execution_intent is not None:
             intent = verify_execution_intent(execution_intent, plan, self.config)
         plan_hash = intent.plan_digest
-        with self._run_instrument_services(plan) as services:
+        with self._run_instrument_lifecycle(plan) as services:
             self._run_safety_guards(plan, services=services)
             run_dir = new_package_dir(run_output_base(self.config), plan.label)
             steps_dir = run_dir / "steps"
@@ -490,6 +495,7 @@ class RunService:
             restore_state: list[RestorableSourceState] | None = None
             restore_error: dict[str, Any] | None = None
             run_failure: dict[str, Any] | None = None
+            terminal_error: dict[str, Any] | None = None
             safety_gate_step: RunStep | None = None
             safety_gate_config: dict[str, Any] | None = None
             provenance = {
@@ -512,6 +518,36 @@ class RunService:
                         "schema": "wavebench.state_guard.v1",
                         "expected": state_snapshot,
                     }
+
+            def report_close_errors() -> None:
+                close_errors = services.close_errors
+                if not close_errors:
+                    return
+                refresh_provenance()
+                close_failure: dict[str, Any] = {
+                    "type": "SessionCloseError",
+                    "code": "session_close_failed",
+                    "message": "one or more instrument session close operations failed",
+                    "errors": close_errors,
+                }
+                if terminal_error is not None:
+                    close_failure["cause"] = terminal_error
+                provenance["session_lifecycle"] = {
+                    "close_errors": close_errors,
+                }
+                write_run_files(
+                    plan=plan,
+                    run_json_path=run_json_path,
+                    summary_csv_path=summary_csv_path,
+                    status="failed",
+                    records=records,
+                    error=close_failure,
+                    restore_state=restore_state,
+                    restore_error=restore_error,
+                    provenance=provenance,
+                )
+
+            services.close_reporters.append(report_close_errors)
 
             try:
                 restore_state = snapshot_source_state(
@@ -639,6 +675,7 @@ class RunService:
                     interruption_error["cause"] = dict(interruption_error)
                     interruption_error["type"] = "RestoreError"
                     interruption_error["message"] = _restore_error_message(restore_error)
+                terminal_error = interruption_error
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
@@ -673,6 +710,7 @@ class RunService:
                     failure_error = error_envelope(failure)
                 else:
                     failure_error = {"type": type(failure).__name__, "message": str(failure)}
+                terminal_error = failure_error
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
@@ -724,6 +762,7 @@ class RunService:
                 }
                 if run_failure is not None:
                     restore_failure["cause"] = run_failure
+                terminal_error = restore_failure
                 refresh_provenance()
                 write_run_files(
                     plan=plan,
@@ -739,6 +778,7 @@ class RunService:
                 raise ConfigError("run plan source state restore failed: " + restore_error["message"])
 
             run_status = "failed" if any(record.status == "failed" for record in records) else "ok"
+            terminal_error = run_failure
             refresh_provenance()
             write_run_files(
                 plan=plan,
@@ -758,31 +798,52 @@ class RunService:
                 steps=records,
             )
 
-        close_errors = getattr(services, "close_errors", [])
-        if close_errors:
-            close_failure: dict[str, Any] = {
-                "type": "SessionCloseError",
-                "code": "session_close_failed",
-                "message": "one or more instrument session close operations failed",
-                "errors": close_errors,
-            }
-            if run_failure is not None:
-                close_failure["cause"] = run_failure
-            provenance["session_lifecycle"] = {
-                "close_errors": close_errors,
-            }
-            write_run_files(
-                plan=plan,
-                run_json_path=run_json_path,
-                summary_csv_path=summary_csv_path,
-                status="failed",
-                records=records,
-                error=close_failure,
-                restore_state=restore_state,
-                restore_error=restore_error,
-                provenance=provenance,
-            )
         return result
+
+    @contextmanager
+    def _run_instrument_lifecycle(
+        self,
+        plan: RunPlan,
+    ) -> Iterator[RunInstrumentServices]:
+        """Close every session, report close failures, then re-raise body failures."""
+
+        services: RunInstrumentServices | None = None
+        pending: BaseException | None = None
+        traceback = None
+        try:
+            with self._run_instrument_services(plan) as opened:
+                services = opened
+                try:
+                    yield services
+                except BaseException as exc:  # preserve interrupts through close/report
+                    pending = exc
+                    traceback = exc.__traceback__
+        except BaseException as exc:
+            if pending is None:
+                pending = exc
+                traceback = exc.__traceback__
+            else:
+                pending.add_note(
+                    f"instrument lifecycle context also failed with {type(exc).__name__}"
+                )
+
+        report_failure: BaseException | None = None
+        if services is not None:
+            for reporter in services.close_reporters:
+                try:
+                    reporter()
+                except BaseException as exc:
+                    report_failure = exc
+                    break
+        if pending is not None:
+            if report_failure is not None:
+                pending.add_note(
+                    "session close failure reporting also failed with "
+                    f"{type(report_failure).__name__}"
+                )
+            raise pending.with_traceback(traceback)
+        if report_failure is not None:
+            raise report_failure
 
     def _safety_gate_for_step(self, plan: RunPlan, step: RunStep) -> dict[str, Any]:
         local = step.fields.get("safety_gate")

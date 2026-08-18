@@ -332,32 +332,38 @@ transport 失败使用结构化 `TransportIOError`，至少记录 operation、ph
 command transmission、response progress、synchronization 和 attempts；不记录完整命令、响应、
 资源串或凭据。健康门禁拒绝的调用使用 `SessionHealthError`，固定表示零仪器 I/O，并包含
 当前连接代次。`uncertain`/`poisoned` session 上的普通操作在发送前拒绝，
-`on_failure = "continue"` 不会清除该锁存。
+`on_failure = "continue"` 不会清除该锁存。transport 或资源管理器关闭失败使用
+`SessionCloseError`，只记录失败组件和异常类型，并写入运行产物的
+`provenance.session_lifecycle.close_errors`。
 
 ## 异常类设计
 
-建议定义：
+当前核心定义：
 
 ```python
 class WaveBenchError(Exception): ...
 class ConfigError(WaveBenchError): ...
 class ConnectionError(WaveBenchError): ...
 class InstrumentError(WaveBenchError): ...
+class TransportIOError(InstrumentError): ...
+class SessionHealthError(InstrumentError): ...
+class SessionCloseError(ConnectionError): ...
 class OperationTimeout(WaveBenchError): ...
 class DataError(WaveBenchError): ...
 ```
 
-错误对象应尽量携带上下文：
+结构化错误只输出稳定字段，不把命令、完整响应、真实资源串或凭据复制到 envelope：
 
 ```python
-raise InstrumentError(
-    message="Instrument returned SCPI error",
-    command="CHAN1:DATA:POIN DMAX",
-    error_queue=["-113,\"Undefined header\""],
-)
+raise InstrumentError("Instrument returned an SCPI error")
 ```
 
-当前实现不引入复杂异常系统，但错误信息应尽量包含命令和仪器响应。
+命令和响应只在经过脱敏的 `commands.log` 或专用诊断上下文中按项目策略记录；错误 envelope
+只保留可供程序判断的分类、发送证据和连接代次。
+
+核心服务在执行声明了 `required_verified_fields` 的普通操作前，会针对当前连接代次检查
+`verified_fields`；缺少字段时只允许核心验证器执行有界只读验证，通信状态不是 `healthy` 时
+在 transport I/O 前返回 `SessionHealthError`。这些字段不会因为 Service 重建或重连而继承。
 
 ## 当前结论
 
@@ -376,6 +382,9 @@ metadata.partial.json：失败时保留已有上下文
 ConfigError
 ConnectionError
 InstrumentError
+TransportIOError
+SessionHealthError
+SessionCloseError
 OperationTimeout
 DataError
 ```

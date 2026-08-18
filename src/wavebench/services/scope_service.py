@@ -14,7 +14,7 @@ import numpy as np
 
 from wavebench.config import WaveBenchConfig
 from wavebench.data.package import new_package_dir
-from wavebench.errors import ConfigError, WaveBenchError
+from wavebench.errors import ConfigError, DataError, SessionHealthError, WaveBenchError
 from wavebench.instruments.api import InstrumentDescriptor, ScopeCouplingPolicy
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.contracts import (
@@ -48,11 +48,16 @@ from wavebench.instruments.models import (
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
-from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.operation_specs import OperationSpec, require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
 from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.transport.base import InstrumentTransport
-from wavebench.transport.session import InstrumentSessionState
+from wavebench.transport.session import (
+    InstrumentSessionState,
+    SessionHealth,
+    SessionPurpose,
+    SessionTransactionCoordinator,
+)
 
 HIGH_IMPEDANCE_COUPLINGS = {"DCL", "DCLIMIT", "ACL", "ACLIMIT"}
 LOW_IMPEDANCE_COUPLINGS = {"DC", "AC"}
@@ -158,9 +163,15 @@ class ScopeService(SessionStateAliasMixin):
     session_state: InstrumentSessionState | None = None
     lease: ResourceLease | None = None
 
-    def _require(self, operation: str, *capabilities: str) -> None:
+    def _require(self, operation: str, *capabilities: str) -> OperationSpec:
+        spec = require_operation_spec(operation)
+        if spec.session_purpose != "normal":
+            raise ConfigError(
+                f"public scope operation {operation!r} cannot use session purpose "
+                f"{spec.session_purpose!r}"
+            )
         access_policy(getattr(self.config.scope, "access", "read_write"), "scope.access").require(
-            require_operation_spec(operation),
+            spec,
             operation=operation,
         )
         descriptor = self.descriptor or resolve_instrument_descriptor(
@@ -168,6 +179,95 @@ class ScopeService(SessionStateAliasMixin):
             expected_kind="scope",
         )
         require_capabilities(descriptor, capabilities, operation=operation)
+        return spec
+
+    def _operation_timeout_ms(self, spec: OperationSpec) -> int:
+        if spec.timeout_source == "connection.timeout_ms":
+            return self.config.connection.timeout_ms
+        raise ConfigError(
+            f"unsupported timeout source {spec.timeout_source!r} for {spec.operation!r}"
+        )
+
+    def _session_preflight(
+        self,
+        operation: str,
+        scope: ScopeDriver,
+    ) -> dict[str, str]:
+        """Verify required fields for a normal operation before it can mutate I/O state."""
+
+        spec = require_operation_spec(operation)
+        required = frozenset(spec.required_verified_fields)
+        if not required:
+            return {}
+        state = self.session_state
+        if state is None:
+            # Test doubles and legacy no-transport drivers have no physical
+            # connection epoch.  A real core transport must always expose its
+            # state; fail closed if only that alias is missing.
+            if self.transport is not None:
+                raise ConfigError(
+                    f"operation {operation!r} requires a shared instrument session state"
+                )
+            return {}
+        with state.transaction_lock:
+            if state.health is not SessionHealth.HEALTHY:
+                raise SessionHealthError(
+                    "normal operation requires a healthy session",
+                    health=state.health.value,
+                    io_kind="operation_preflight",
+                    epoch_id=state.epoch_id,
+                )
+
+            missing = required - state.verified_fields
+            unsupported = missing - {"scope.identity"}
+            if unsupported:
+                raise ConfigError(
+                    f"operation {operation!r} has no verifier for required fields: "
+                    + ", ".join(sorted(unsupported))
+                )
+            evidence: dict[str, str] = {}
+            if "scope.identity" in missing:
+                evidence["scope.identity"] = self._verify_scope_identity(
+                    scope,
+                    spec=spec,
+                )
+            remaining = required - state.verified_fields
+            if remaining:
+                raise ConfigError(
+                    f"operation {operation!r} is missing verified fields: "
+                    + ", ".join(sorted(remaining))
+                )
+            return evidence
+
+    def _verify_scope_identity(self, scope: ScopeDriver, *, spec: OperationSpec) -> str:
+        state = self.session_state
+        if state is None:
+            return scope.idn()
+        with state.transaction_lock:
+            if state.health is not SessionHealth.HEALTHY:
+                raise SessionHealthError(
+                    "normal operation requires a healthy session",
+                    health=state.health.value,
+                    io_kind="operation_preflight",
+                    epoch_id=state.epoch_id,
+                )
+            coordinator = SessionTransactionCoordinator(state)
+            fields = ("scope.identity",)
+            with coordinator.authorize(
+                operation_id=f"{spec.operation}.identity",
+                purpose=SessionPurpose.VERIFICATION,
+                allowed_io=("query",),
+                fields=fields,
+                timeout_ms=self._operation_timeout_ms(spec),
+                max_steps=1,
+                evidence_fields={"query": fields},
+            ) as authorization:
+                identity = scope.idn()
+                if not isinstance(identity, str) or not identity.strip():
+                    raise DataError("scope identity verification returned an empty response")
+                coordinator.record_evidence(authorization, "query", fields)
+                coordinator.complete_verification(authorization)
+                return identity
 
     def _open_scope(self) -> ScopeDriver:
         self._prepare_session_open("scope")
@@ -215,9 +315,19 @@ class ScopeService(SessionStateAliasMixin):
             scope.close()
 
     def idn(self) -> str:
-        self._require("scope.idn", "scope.idn")
+        spec = self._require("scope.idn", "scope.idn")
         with self._scope_session() as scope:
-            return scope.idn()
+            state = self.session_state
+            if state is None or "scope.identity" in state.verified_fields:
+                return scope.idn()
+            if state.health is not SessionHealth.HEALTHY:
+                raise SessionHealthError(
+                    "normal operation requires a healthy session",
+                    health=state.health.value,
+                    io_kind="operation_preflight",
+                    epoch_id=state.epoch_id,
+                )
+            return self._verify_scope_identity(scope, spec=spec)
 
     def errors(self) -> list[str]:
         self._require("scope.errors", "scope.errors")
@@ -426,6 +536,7 @@ class ScopeService(SessionStateAliasMixin):
             required.append("scope.errors")
         self._require("scope.fetch_waveform", *required)
         with self._scope_session() as scope:
+            self._session_preflight("scope.fetch_waveform", scope)
             return scope.fetch_waveform(
                 channel=channel,
                 points=self.config.waveform.points,
@@ -565,7 +676,8 @@ class ScopeService(SessionStateAliasMixin):
         screenshot_error: dict[str, str] | None = None
         try:
             with self._scope_session() as scope:
-                instrument_idn = scope.idn()
+                evidence = self._session_preflight("scope.capture", scope)
+                instrument_idn = evidence.get("scope.identity") or scope.idn()
                 capture_kwargs = {
                     "channel": channel,
                     "points": self.config.waveform.points,
@@ -654,7 +766,8 @@ class ScopeService(SessionStateAliasMixin):
                 scope = opened_scope
                 try:
                     stage = "identify"
-                    instrument_idn = scope.idn()
+                    evidence = self._session_preflight("scope.capture_multiple", scope)
+                    instrument_idn = evidence.get("scope.identity") or scope.idn()
                     capture_kwargs: dict[str, Any] = {
                         "channels": channels,
                         "points": self.config.waveform.points,

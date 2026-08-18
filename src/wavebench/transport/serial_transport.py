@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 from wavebench.config import DmmConfig
-from wavebench.errors import ConfigError, ConnectionError, TransportIOError
+from wavebench.errors import ConfigError, ConnectionError, SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
 
 from .contracts import (
@@ -396,5 +396,5 @@ class SerialTransport:
     def close(self) -> None:
         try:
             self.session.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            raise SessionCloseError([("session", exc)]) from None

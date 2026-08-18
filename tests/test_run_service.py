@@ -238,6 +238,63 @@ duration_s = 0.001
                 "session.close.scope",
             )
 
+    def test_session_close_failure_is_recorded_before_run_exception_is_reraised(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+""",
+                )
+            )
+
+            class FailingRunService(RunService):
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    services = RunInstrumentServices()
+                    try:
+                        yield services
+                    finally:
+                        services.close_errors.append(
+                            {
+                                "operation": "session.close.scope",
+                                "type": "SessionCloseError",
+                                "error": {
+                                    "schema": "wavebench.error.v1",
+                                    "code": "session_close_failed",
+                                    "type": "SessionCloseError",
+                                    "message": "close failed",
+                                    "exit_code": 3,
+                                    "operation": "session.close.scope",
+                                },
+                            }
+                        )
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    return None
+
+                def _run_step(self, *args, **kwargs):
+                    raise RuntimeError("step execution failed")
+
+            with self.assertRaisesRegex(RuntimeError, "step execution failed"):
+                FailingRunService(
+                    config=make_config(tmp),
+                    logger=CommandLogger(),
+                ).run(plan)
+
+            [run_json_path] = (Path(tmp) / "data" / "runs").glob("*/run.json")
+            run_data = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_data["status"], "failed")
+            self.assertEqual(run_data["error"]["code"], "session_close_failed")
+            self.assertEqual(run_data["error"]["cause"]["type"], "RuntimeError")
+            self.assertEqual(
+                run_data["provenance"]["session_lifecycle"]["close_errors"][0]["operation"],
+                "session.close.scope",
+            )
+
     def test_transport_failure_continue_is_recorded_and_latched_session_blocks_next_step(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(
