@@ -451,9 +451,39 @@ def test_core_factory_builds_context_and_validates_driver_contract(monkeypatch):
     assert isinstance(captured["transport"], GuardedAuditedTransport)
     assert captured["transport"].inner is transport
     assert opened.transport is captured["transport"]
+    assert opened.session_state is captured["transport"].session_state
+    assert opened.session_state is not None
     assert captured["context"].resource == "configured-resource"
     assert captured["context"].backend == "pyvisa"
     assert captured["context"].settings == {"check_errors": True}
+
+
+def test_core_factory_reconnect_creates_a_fresh_session_epoch(monkeypatch):
+    concrete_transports = []
+
+    def open_fake(**kwargs):
+        transport = _FakeTransport()
+        concrete_transports.append(transport)
+        return transport
+
+    descriptor = make_descriptor(
+        factory=lambda context: (context.open_transport(), _ScopeDriver())[1],
+        option_specs=(),
+    )
+    monkeypatch.setattr(
+        "wavebench.instruments.factory.resolve_instrument_descriptor",
+        lambda reference, expected_kind: descriptor,
+    )
+    monkeypatch.setattr("wavebench.instruments.factory._open_transport", open_fake)
+
+    first = _open_example_scope()
+    first_epoch = first.session_state.epoch_id
+    first.transport.close()
+    second = _open_example_scope()
+
+    assert second.session_state is second.transport.session_state
+    assert second.session_state.epoch_id != first_epoch
+    assert first.session_state.health.value == "closed"
 
 
 def test_core_factory_applies_access_policy_at_transport_boundary(monkeypatch):

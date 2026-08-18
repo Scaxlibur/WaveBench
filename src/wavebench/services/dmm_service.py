@@ -36,6 +36,7 @@ from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.session import InstrumentSessionState
 
 
 @dataclass
@@ -45,6 +46,7 @@ class DmmService:
     session: DmmDriver | None = None
     descriptor: InstrumentDescriptor | None = None
     transport: InstrumentTransport | None = None
+    session_state: InstrumentSessionState | None = None
     lease: ResourceLease | None = None
 
     def _require(self, operation: str, *capabilities: str) -> None:
@@ -88,6 +90,7 @@ class DmmService:
         )
         self.descriptor = opened.descriptor
         self.transport = opened.transport
+        self.session_state = getattr(opened, "session_state", None)
         return opened.driver
 
     def audit_snapshot(self) -> dict[str, Any] | None:

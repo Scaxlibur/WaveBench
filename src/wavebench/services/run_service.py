@@ -1998,6 +1998,7 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=scope_lease,
                 )
             if "source" in instruments:
@@ -2020,6 +2021,7 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=source_lease,
                     state_guard=source_guard,
                 )
@@ -2043,6 +2045,7 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=power_lease,
                     state_guard=power_guard,
                 )
@@ -2065,6 +2068,7 @@ class RunService:
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=dmm_lease,
                 )
 
@@ -2135,6 +2139,7 @@ class RunService:
                 session=services.scope.session,
                 descriptor=services.scope.descriptor,
                 transport=services.scope.transport,
+                session_state=services.scope.session_state,
                 lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())
@@ -2167,6 +2172,7 @@ class RunService:
                 session=services.scope.session,
                 descriptor=services.scope.descriptor,
                 transport=services.scope.transport,
+                session_state=services.scope.session_state,
                 lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())

@@ -15,6 +15,7 @@ from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.pyvisa_transport import PyVisaTransport
 from wavebench.transport.rsinstrument_transport import RsInstrumentTransport
 from wavebench.transport.serial_transport import SerialTransport
+from wavebench.transport.session import InstrumentSessionState
 
 from .api import DriverContext, InstrumentDescriptor
 from .capabilities import validate_declared_capabilities
@@ -36,6 +37,7 @@ class OpenedInstrument:
     descriptor: InstrumentDescriptor
     driver: InstrumentDriver
     transport: InstrumentTransport | None = None
+    session_state: InstrumentSessionState | None = None
 
 
 def open_instrument_driver(
@@ -70,8 +72,10 @@ def open_instrument_driver(
         raise ConfigError(f"invalid options for instrument driver {descriptor.driver_id!r}: {exc}") from exc
 
     opened_transports: list[InstrumentTransport] = []
+    opened_session_state: InstrumentSessionState | None = None
 
     def open_transport() -> InstrumentTransport:
+        nonlocal opened_session_state
         if opened_transports:
             raise ConfigError(
                 f"instrument driver {descriptor.driver_id!r} requested more than one transport; "
@@ -92,12 +96,15 @@ def open_instrument_driver(
                 logger=logger,
                 serial_config=serial_config,
             )
+            session_state = InstrumentSessionState()
             transport = GuardedAuditedTransport(
                 concrete_transport,
                 access=normalized_access,
                 lease=lease,
                 release_lease_on_close=lease_acquired_here,
+                session_state=session_state,
             )
+            opened_session_state = session_state
         except Exception:
             if lease_acquired_here:
                 lease.release()
@@ -132,6 +139,7 @@ def open_instrument_driver(
         descriptor=descriptor,
         driver=cast(InstrumentDriver, driver),
         transport=opened_transports[0] if opened_transports else None,
+        session_state=opened_session_state,
     )
 
 
@@ -262,7 +270,6 @@ def _close_factory_failure(
     if driver is not None and callable(getattr(driver, "close", None)):
         try:
             driver.close()
-            return
         except Exception:
             pass
     for transport in reversed(opened_transports):

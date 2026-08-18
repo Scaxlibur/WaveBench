@@ -20,6 +20,7 @@ from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
 from wavebench.services.state_guard import PowerStateGuard
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.session import InstrumentSessionState
 
 
 @dataclass
@@ -29,6 +30,7 @@ class PowerService:
     session: PowerDriver | None = None
     descriptor: InstrumentDescriptor | None = None
     transport: InstrumentTransport | None = None
+    session_state: InstrumentSessionState | None = None
     lease: ResourceLease | None = None
     state_guard: PowerStateGuard | None = None
 
@@ -73,6 +75,7 @@ class PowerService:
         )
         self.descriptor = opened.descriptor
         self.transport = opened.transport
+        self.session_state = getattr(opened, "session_state", None)
         return opened.driver
 
     def audit_snapshot(self) -> dict[str, Any] | None:
