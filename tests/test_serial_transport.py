@@ -2,7 +2,9 @@ import unittest
 from unittest.mock import patch
 
 from wavebench.config import DmmConfig
+from wavebench.errors import TransportIOError
 from wavebench.logging import CommandLogger
+from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.serial_transport import SerialTransport
 
 
@@ -133,8 +135,9 @@ class SerialTransportTests(unittest.TestCase):
         session.read_until = lambda expected: b""
         transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
 
-        with self.assertRaisesRegex(Exception, "timed out waiting"):
+        with self.assertRaisesRegex(TransportIOError, "timed out waiting") as raised:
             transport.query("*IDN?")
+        self.assertEqual(raised.exception.attempts, 1)
 
     def test_write_replaces_existing_line_ending_with_configured_termination(self):
         session = FakeSerialSession()
@@ -159,7 +162,7 @@ class SerialTransportTests(unittest.TestCase):
             read_termination=b"\n",
         )
 
-        with self.assertRaisesRegex(Exception, "response ended before"):
+        with self.assertRaisesRegex(TransportIOError, "response ended before"):
             transport.query("*IDN?")
 
     def test_write_rejects_short_serial_write(self):
@@ -167,8 +170,36 @@ class SerialTransportTests(unittest.TestCase):
         session.write = lambda payload: len(payload) - 1
         transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
 
-        with self.assertRaisesRegex(Exception, "short serial write"):
+        with self.assertRaisesRegex(TransportIOError, "short serial write"):
             transport.write("*IDN?")
+
+    def test_query_retries_only_when_explicitly_safe(self):
+        session = FakeSerialSession()
+        responses = [b"", b"1.23e+00\n"]
+        session.read_until = lambda expected: responses.pop(0)
+        transport = SerialTransport(
+            "/dev/ttyUSB0",
+            session,
+            CommandLogger(),
+            read_retry_attempts=1,
+            read_retry_delay_ms=0,
+        )
+
+        self.assertEqual(
+            transport.query("MEAS?", replay=ReplayPolicy.SAFE_TO_REPLAY),
+            "1.23e+00",
+        )
+        self.assertEqual(session.writes, [b"MEAS?\n", b"MEAS?\n"])
+
+    def test_continuation_rejects_before_serial_write(self):
+        session = FakeSerialSession()
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("MEAS?", replay=ReplayPolicy.READ_CONTINUATION_ONLY)
+
+        self.assertEqual(raised.exception.attempts, 0)
+        self.assertEqual(session.writes, [])
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
 
 import unittest
 
-from wavebench.errors import InstrumentError
+from wavebench.errors import TransportIOError
 from wavebench.logging import CommandLogger
+from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.pyvisa_transport import PyVisaTransport
 
 
@@ -95,12 +96,12 @@ class PyVisaTransportTests(unittest.TestCase):
 
         self.assertEqual(transport.query_float_list("VALUES?"), [1.0, 2.5, 3.0])
 
-    def test_query_reads_again_after_empty_socket_response(self):
+    def test_query_does_not_continue_reading_after_empty_response(self):
         session = FakePyVisaSession()
         transport = PyVisaTransport("TCPIP::x::INSTR", FakeResourceManager(), session, CommandLogger())
 
-        self.assertEqual(transport.query("EMPTY_THEN_READ?"), "DELAYED")
-        self.assertEqual(session.reads, ["read"])
+        self.assertEqual(transport.query("EMPTY_THEN_READ?"), "")
+        self.assertEqual(session.reads, [])
 
     def test_query_bin_block_and_opc(self):
         logger = CommandLogger()
@@ -130,9 +131,11 @@ class PyVisaTransportTests(unittest.TestCase):
             read_retry_delay_ms=0,
         )
 
-        with self.assertRaisesRegex(InstrumentError, "reopen.*session"):
+        with self.assertRaises(TransportIOError) as raised:
             transport.query_bin_block("DATA?")
 
+        self.assertEqual(raised.exception.attempts, 1)
+        self.assertEqual(raised.exception.replay_policy, ReplayPolicy.NO_REPLAY)
         self.assertEqual(session.binary_attempts, 1)
         self.assertEqual(session.queries, ["DATA?"])
         self.assertFalse(any(entry.direction == "retry" for entry in logger.entries))
@@ -141,7 +144,7 @@ class PyVisaTransportTests(unittest.TestCase):
                 entry.direction == "telemetry"
                 and "operation=query_binary" in entry.text
                 and "status=failed" in entry.text
-                and "replay=disabled" in entry.text
+                and "replay=no_replay" in entry.text
                 for entry in logger.entries
             )
         )
@@ -157,7 +160,7 @@ class PyVisaTransportTests(unittest.TestCase):
             read_retry_delay_ms=0,
         )
 
-        with self.assertRaisesRegex(InstrumentError, "reopen.*session"):
+        with self.assertRaises(TransportIOError):
             transport.query_float_list("VALUES?")
 
         self.assertEqual(session.queries, ["VALUES?"])
@@ -165,10 +168,11 @@ class PyVisaTransportTests(unittest.TestCase):
     def test_query_timeout_is_wrapped_as_instrument_error(self):
         transport = PyVisaTransport("TCPIP::x::INSTR", FakeResourceManager(), FailingQuerySession(), CommandLogger())
 
-        with self.assertRaisesRegex(InstrumentError, "pyvisa query failed"):
+        with self.assertRaisesRegex(TransportIOError, "pyvisa query failed") as raised:
             transport.query("OUTP?")
+        self.assertEqual(raised.exception.attempts, 1)
 
-    def test_query_retries_transient_read_failures(self):
+    def test_query_only_retries_after_explicit_safe_to_replay(self):
         session = FlakyQuerySession()
         transport = PyVisaTransport(
             "TCPIP::x::INSTR",
@@ -179,16 +183,37 @@ class PyVisaTransportTests(unittest.TestCase):
             read_retry_delay_ms=0,
         )
 
-        self.assertEqual(transport.query("OUTP?"), "OK")
+        self.assertEqual(
+            transport.query("OUTP?", replay=ReplayPolicy.SAFE_TO_REPLAY),
+            "OK",
+        )
         self.assertEqual(session.queries, ["OUTP?", "OUTP?"])
 
     def test_write_failure_is_wrapped_as_instrument_error(self):
         session = FailingWriteSession()
         transport = PyVisaTransport("TCPIP::x::INSTR", FakeResourceManager(), session, CommandLogger())
 
-        with self.assertRaisesRegex(InstrumentError, "pyvisa write failed"):
+        with self.assertRaisesRegex(TransportIOError, "pyvisa write failed") as raised:
             transport.write("VOLT 1")
         self.assertEqual(session.writes, ["VOLT 1"])
+        self.assertEqual(raised.exception.command_transmission.value, "unknown")
+        self.assertEqual(raised.exception.synchronization.value, "proven")
+
+    def test_unsupported_continuation_fails_before_send(self):
+        session = FakePyVisaSession()
+        transport = PyVisaTransport(
+            "TCPIP::x::INSTR",
+            FakeResourceManager(),
+            session,
+            CommandLogger(),
+        )
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("OUTP?", replay=ReplayPolicy.READ_CONTINUATION_ONLY)
+
+        self.assertEqual(raised.exception.attempts, 0)
+        self.assertEqual(raised.exception.command_transmission.value, "not_sent")
+        self.assertEqual(session.queries, [])
 
 
 if __name__ == "__main__":

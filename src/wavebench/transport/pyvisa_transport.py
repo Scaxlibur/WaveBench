@@ -5,8 +5,16 @@ import time
 from typing import Any
 
 from wavebench.config import ConnectionConfig
-from wavebench.errors import ConnectionError, InstrumentError
+from wavebench.errors import ConnectionError, TransportIOError
 from wavebench.logging import CommandLogger
+
+from .contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
+)
 
 
 @dataclass
@@ -59,7 +67,7 @@ class PyVisaTransport:
         try:
             self.session.write(command)
         except Exception as exc:
-            raise self._instrument_io_error("write", command, exc) from exc
+            raise self._write_error("write", exc) from exc
 
     def write_bytes(self, command: bytes) -> None:
         self.logger.record("write_binary", f"<bytes len={len(command)}>")
@@ -68,19 +76,30 @@ class PyVisaTransport:
         try:
             self.session.write_raw(command)
         except Exception as exc:
-            raise self._instrument_io_error("write_binary", "<bytes>", exc) from exc
+            raise self._write_error("write_binary", exc) from exc
 
-    def query(self, command: str) -> str:
+    def query(
+        self,
+        command: str,
+        *,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> str:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query", replay)
         self.logger.record("query", command)
+        attempts = 0
+
+        def read_once() -> str:
+            nonlocal attempts
+            attempts += 1
+            return str(self.session.query(command)).strip()
+
         try:
-            response = str(self._read_with_retry("query", command, lambda: self.session.query(command))).strip()
-            if response == "" and hasattr(self.session, "read"):
-                for _ in range(2):
-                    response = str(self.session.read()).strip()
-                    if response:
-                        break
+            response = self._read_with_policy("query", command, replay, read_once)
         except Exception as exc:
-            raise self._instrument_io_error("query", command, exc) from exc
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query", replay, attempts, exc) from exc
         self.logger.record("response", response)
         return response
 
@@ -89,23 +108,40 @@ class PyVisaTransport:
         command: str,
         *,
         timeout_ms: int | None = None,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
     ) -> list[float]:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query_float_list", replay)
         self.logger.record("query", command)
         started = time.perf_counter()
         original_timeout = None
+        attempts = 0
+
+        def read_once() -> list[float]:
+            nonlocal attempts
+            attempts += 1
+            return self._parse_ascii_float_list(self.session.query(command))
+
         try:
             if timeout_ms is not None:
                 original_timeout = self.session.timeout
                 self.session.timeout = timeout_ms
-            values = self._parse_ascii_float_list(self.session.query(command))
+            values = self._read_with_policy(
+                "query_float_list",
+                command,
+                replay,
+                read_once,
+            )
         except Exception as exc:
             self._record_query_telemetry(
                 operation="query_float_list",
                 started=started,
                 status="failed",
-                replay="disabled",
+                replay=replay.value,
             )
-            raise self._nonreplayable_query_error("query_float_list", command, exc) from exc
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query_float_list", replay, attempts, exc) from exc
         finally:
             if timeout_ms is not None:
                 self.session.timeout = original_timeout
@@ -114,7 +150,7 @@ class PyVisaTransport:
             operation="query_float_list",
             started=started,
             status="ok",
-            replay="disabled",
+            replay=replay.value,
             items=len(values),
         )
         return values
@@ -127,29 +163,48 @@ class PyVisaTransport:
             if item.strip()
         ]
 
-    def query_bin_block(self, command: str) -> bytes:
+    def query_bin_block(
+        self,
+        command: str,
+        *,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> bytes:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query_binary", replay)
         self.logger.record("query_binary", command)
         if not hasattr(self.session, "query_binary_values"):
             raise ConnectionError("pyvisa session does not support binary block queries")
         started = time.perf_counter()
+        attempts = 0
+
+        def read_once() -> bytes:
+            nonlocal attempts
+            attempts += 1
+            return bytes(self.session.query_binary_values(command, datatype="B", container=bytes))
+
         try:
-            data = bytes(
-                self.session.query_binary_values(command, datatype="B", container=bytes)
+            data = self._read_with_policy(
+                "query_binary",
+                command,
+                replay,
+                read_once,
             )
         except Exception as exc:
             self._record_query_telemetry(
                 operation="query_binary",
                 started=started,
                 status="failed",
-                replay="disabled",
+                replay=replay.value,
             )
-            raise self._nonreplayable_query_error("query_binary", command, exc) from exc
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query_binary", replay, attempts, exc) from exc
         self.logger.record("response", f"<bin_block len={len(data)}>")
         self._record_query_telemetry(
             operation="query_binary",
             started=started,
             status="ok",
-            replay="disabled",
+            replay=replay.value,
             bytes_count=len(data),
         )
         return data
@@ -179,29 +234,38 @@ class PyVisaTransport:
             fields.append(f"items={items}")
         self.logger.record("telemetry", " ".join(fields))
 
-    def _nonreplayable_query_error(
+    def query_opc(
         self,
-        operation: str,
-        command: str,
-        exc: Exception,
-    ) -> InstrumentError:
-        return InstrumentError(
-            f"pyvisa {operation} failed on {self.resource} command {command!r}: "
-            f"{type(exc).__name__}: {exc}. The response state may be partial; reopen the "
-            "instrument session and restart the complete acquisition before retrying."
-        )
-
-    def query_opc(self) -> str:
+        *,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> str:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query_opc", replay)
         self.logger.record("query", "*OPC?")
+        attempts = 0
+
+        def read_once() -> str:
+            nonlocal attempts
+            attempts += 1
+            return str(self.session.query("*OPC?")).strip()
+
         try:
-            response = str(self._read_with_retry("query", "*OPC?", lambda: self.session.query("*OPC?"))).strip()
+            response = self._read_with_policy("query_opc", "*OPC?", replay, read_once)
         except Exception as exc:
-            raise self._instrument_io_error("query", "*OPC?", exc) from exc
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query_opc", replay, attempts, exc) from exc
         self.logger.record("response", response)
         return response
 
-    def _read_with_retry(self, operation: str, command: str, read_once: Any) -> Any:
-        attempts = self.read_retry_attempts + 1
+    def _read_with_policy(
+        self,
+        operation: str,
+        command: str,
+        replay: ReplayPolicy,
+        read_once: Any,
+    ) -> Any:
+        attempts = self.read_retry_attempts + 1 if replay is ReplayPolicy.SAFE_TO_REPLAY else 1
         last_exc: Exception | None = None
         for attempt in range(attempts):
             try:
@@ -216,10 +280,50 @@ class PyVisaTransport:
         assert last_exc is not None
         raise last_exc
 
-    def _instrument_io_error(self, operation: str, command: str, exc: Exception) -> InstrumentError:
-        return InstrumentError(
-            f"pyvisa {operation} failed on {self.resource} command {command!r}: "
-            f"{type(exc).__name__}: {exc}"
+    @staticmethod
+    def _reject_continuation(operation: str, replay: ReplayPolicy) -> None:
+        if replay is not ReplayPolicy.READ_CONTINUATION_ONLY:
+            return
+        raise TransportIOError(
+            f"pyvisa does not support read continuation for {operation}",
+            operation=operation,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+        )
+
+    @staticmethod
+    def _query_error(
+        operation: str,
+        replay: ReplayPolicy,
+        attempts: int,
+        exc: Exception,
+    ) -> TransportIOError:
+        return TransportIOError(
+            f"pyvisa {operation} failed: {type(exc).__name__}: {exc}",
+            operation=operation,
+            phase=TransportPhase.READING,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.UNKNOWN,
+            response_progress=ResponseProgress.UNKNOWN,
+            synchronization=Synchronization.UNPROVEN,
+            attempts=attempts,
+        )
+
+    @staticmethod
+    def _write_error(operation: str, exc: Exception) -> TransportIOError:
+        return TransportIOError(
+            f"pyvisa {operation} failed: {type(exc).__name__}: {exc}",
+            operation=operation,
+            phase=TransportPhase.SENDING,
+            replay_policy=ReplayPolicy.NO_REPLAY,
+            command_transmission=CommandTransmission.UNKNOWN,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=1,
         )
 
     def close(self) -> None:

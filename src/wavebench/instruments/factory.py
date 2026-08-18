@@ -213,7 +213,12 @@ def _open_transport(
     if backend == "serial":
         if serial_config is None:
             raise ConfigError("serial instrument driver requires serial configuration")
-        return SerialTransport.open(serial_config, logger=logger)
+        return SerialTransport.open(
+            serial_config,
+            logger=logger,
+            read_retry_attempts=read_retry_attempts,
+            read_retry_delay_ms=read_retry_delay_ms,
+        )
     connection = ConnectionConfig(
         backend="lan",
         resource=resource,
