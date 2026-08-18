@@ -12,7 +12,13 @@ from typing import Any, Iterator, Mapping
 from wavebench.config import WaveBenchConfig
 from wavebench.data.package import new_package_dir, safe_label
 from wavebench.data.packages import load_run_package
-from wavebench.errors import ConfigError, StateDriftError, error_envelope
+from wavebench.errors import (
+    ConfigError,
+    SessionHealthError,
+    StateDriftError,
+    TransportIOError,
+    error_envelope,
+)
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
@@ -510,9 +516,40 @@ class RunService:
                     source_service_factory=lambda: self._source_service(services=services),
                 )
                 for step in plan.steps:
-                    record = self._run_step(
-                        plan, step, run_dir=run_dir, services=services, plan_hash=plan_hash
-                    )
+                    step_failure: BaseException | None = None
+                    try:
+                        record = self._run_step(
+                            plan, step, run_dir=run_dir, services=services, plan_hash=plan_hash
+                        )
+                    except _FrequencyResponseExecutionError as exc:
+                        if not isinstance(exc.cause, (TransportIOError, SessionHealthError)):
+                            raise
+                        step_failure = exc.cause
+                        record = exc.record
+                        record = replace(
+                            record,
+                            artifact={
+                                **record.artifact,
+                                "error": error_envelope(
+                                    exc.cause,
+                                    operation=f"run.step.{step.kind}",
+                                ),
+                            },
+                        )
+                    except (TransportIOError, SessionHealthError) as exc:
+                        step_failure = exc
+                        record = RunStepRecord(
+                            index=step.index,
+                            kind=step.kind,
+                            status="failed",
+                            fields=step.fields,
+                            artifact={
+                                "error": error_envelope(
+                                    exc,
+                                    operation=f"run.step.{step.kind}",
+                                )
+                            },
+                        )
                     safety_gate = self._safety_gate_for_step(plan, step)
                     gate_triggered = safety_gate["enabled"] and record.status in {
                         "failed",
@@ -551,7 +588,29 @@ class RunService:
                             "trigger_status": trigger_status,
                             "safety_gate": gate_result,
                         }
+                        if step_failure is not None:
+                            run_failure["step_error"] = error_envelope(
+                                step_failure,
+                                operation=f"run.step.{step.kind}",
+                            )
                         break
+                    if step_failure is not None:
+                        failure_payload = error_envelope(
+                            step_failure,
+                            operation=f"run.step.{step.kind}",
+                        )
+                        if step.fields.get("on_failure", "stop") == "stop":
+                            run_failure = {
+                                "type": "StepFailure",
+                                "code": "step_failed",
+                                "message": f"run step {step.index} ({step.kind}) failed",
+                                "step_index": step.index,
+                                "step_kind": step.kind,
+                                "policy": "stop",
+                                "error": failure_payload,
+                            }
+                            break
+                        continue
                     if record.status == "failed" and step.fields.get("on_failure", "stop") == "stop":
                         run_failure = {
                             "type": "StepFailure",
@@ -805,7 +864,14 @@ class RunService:
                         "instrument": "source",
                         "channel": channel,
                         "type": type(exc).__name__,
-                        "message": str(exc),
+                        "message": error_envelope(
+                            exc,
+                            operation=f"safety_gate.source.{channel}.off",
+                        )["message"],
+                        "error": error_envelope(
+                            exc,
+                            operation=f"safety_gate.source.{channel}.off",
+                        ),
                     }
                 )
         for channel in power_channels:
@@ -828,7 +894,14 @@ class RunService:
                         "instrument": "power",
                         "channel": channel,
                         "type": type(exc).__name__,
-                        "message": str(exc),
+                        "message": error_envelope(
+                            exc,
+                            operation=f"safety_gate.power.{channel}.off",
+                        )["message"],
+                        "error": error_envelope(
+                            exc,
+                            operation=f"safety_gate.power.{channel}.off",
+                        ),
                     }
                 )
         if errors:

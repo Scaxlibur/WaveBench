@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from wavebench.errors import error_envelope
 from wavebench.services.run_plan import RunPlan
 from wavebench.services.source_state import RestorableSourceState
 
@@ -41,8 +42,17 @@ def restore_source_state(
         try:
             service.restore_restorable_state(state)
         except Exception as exc:  # pragma: no cover - defensive, covered through mocks
+            envelope = error_envelope(
+                exc,
+                operation=f"restore.source.{state.channel}",
+            )
             errors.append(
-                {"channel": state.channel, "type": type(exc).__name__, "message": str(exc)}
+                {
+                    "channel": state.channel,
+                    "type": type(exc).__name__,
+                    "message": envelope["message"],
+                    "error": envelope,
+                }
             )
     if errors:
         return {
