@@ -4,9 +4,15 @@ from dataclasses import dataclass, field
 from math import isclose, isfinite
 from threading import RLock
 
-from wavebench.errors import DataError, InstrumentError
+from wavebench.errors import (
+    DataError,
+    InstrumentError,
+    SessionHealthError,
+    TransportIOError,
+)
 from wavebench.instruments.dg4000 import DG4000DacBlock
 from wavebench.instruments.models import ArbitraryQueryProbeResult, SourceStatus
+from wavebench.transport.contracts import ReplayPolicy
 
 
 ARBITRARY_QUERY_CANDIDATES: tuple[tuple[str, str], ...] = (
@@ -147,11 +153,11 @@ class DG4202Source:
     _configuration_writes_blocked: bool = field(default=False, init=False, repr=False)
 
     def _query_finite_float(self, command: str, *, field_name: str) -> float:
-        return _finite_float(self.transport.query(command), field_name=field_name)
+        return _finite_float(self.transport.query(command, replay=ReplayPolicy.NO_REPLAY), field_name=field_name)
 
     def _ensure_identity(self, *, write: bool = False) -> tuple[str, str, str, str]:
         if self._identity is None:
-            self._identity = _parse_identity(self.transport.query("*IDN?"))
+            self._identity = _parse_identity(self.transport.query("*IDN?", replay=ReplayPolicy.NO_REPLAY))
         if write and self._identity[1] not in _WRITE_ACCEPTED_MODELS:
             raise DataError(
                 f"DG4000 configuration writes are not accepted on model {self._identity[1]}"
@@ -171,6 +177,8 @@ class DG4202Source:
     def _write(self, command: str) -> None:
         try:
             self.transport.write(command)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as exc:
             raise _AmbiguousWriteError(
                 f"DG4000 write result is unknown for {command!r}: {exc}"
@@ -184,6 +192,8 @@ class DG4202Source:
                     "transport does not support binary arbitrary waveform upload"
                 )
             writer(command)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as exc:
             raise _AmbiguousWriteError(
                 "DG4000 binary write result is unknown; the volatile waveform may "
@@ -192,28 +202,28 @@ class DG4202Source:
 
     def _query_output(self, channel: int) -> str:
         return _normalize_enum(
-            self.transport.query(f":OUTP{channel}?"),
+            self.transport.query(f":OUTP{channel}?", replay=ReplayPolicy.NO_REPLAY),
             field_name="output state",
             aliases={"0": "OFF", "OFF": "OFF", "1": "ON", "ON": "ON"},
         )
 
     def _query_function(self, channel: int) -> str:
         return _normalize_enum(
-            self.transport.query(f":SOUR{channel}:FUNC?"),
+            self.transport.query(f":SOUR{channel}:FUNC?", replay=ReplayPolicy.NO_REPLAY),
             field_name="function",
             aliases=_FUNCTION_ALIASES,
         )
 
     def _query_amplitude_unit(self, channel: int) -> str:
         return _normalize_enum(
-            self.transport.query(f":SOUR{channel}:VOLT:UNIT?"),
+            self.transport.query(f":SOUR{channel}:VOLT:UNIT?", replay=ReplayPolicy.NO_REPLAY),
             field_name="amplitude unit",
             aliases={"VPP": "VPP", "VRMS": "VRMS", "DBM": "DBM"},
         )
 
     def _query_frequency_mode(self, channel: int) -> str:
         return _normalize_enum(
-            self.transport.query(f":SOUR{channel}:FREQ:MODE?"),
+            self.transport.query(f":SOUR{channel}:FREQ:MODE?", replay=ReplayPolicy.NO_REPLAY),
             field_name="frequency mode",
             aliases={"FIX": "FIX", "SWE": "SWE"},
         )
@@ -330,6 +340,8 @@ class DG4202Source:
         ambiguous = isinstance(original_error, _AmbiguousWriteError)
         try:
             self._restore_basic_status(snapshot)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as recovery_error:
             self._configuration_writes_blocked = True
             raise InstrumentError(
@@ -352,6 +364,8 @@ class DG4202Source:
         self._configuration_writes_blocked = True
         try:
             self._restore_basic_status(snapshot)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as recovery_error:
             raise InstrumentError(
                 "DG4000 arbitrary upload failed after the volatile waveform write was "
@@ -377,7 +391,7 @@ class DG4202Source:
 
     def idn(self) -> str:
         with self._io_lock:
-            response = self.transport.query("*IDN?")
+            response = self.transport.query("*IDN?", replay=ReplayPolicy.NO_REPLAY)
             self._identity = _parse_identity(response)
             return response
 
@@ -387,7 +401,7 @@ class DG4202Source:
         with self._io_lock:
             errors: list[str] = []
             for _ in range(limit):
-                response = self.transport.query("SYST:ERR?").strip()
+                response = self.transport.query("SYST:ERR?", replay=ReplayPolicy.NO_REPLAY).strip()
                 if not response:
                     raise DataError("empty DG4000 error-queue response")
                 errors.append(response)
@@ -426,11 +440,11 @@ class DG4202Source:
             )
             frequency_mode = self._query_frequency_mode(channel)
             sweep_enabled = _normalize_enum(
-                self.transport.query(f":SOUR{channel}:SWE:STAT?"),
+                self.transport.query(f":SOUR{channel}:SWE:STAT?", replay=ReplayPolicy.NO_REPLAY),
                 field_name="sweep state",
                 aliases={"0": "OFF", "OFF": "OFF", "1": "ON", "ON": "ON"},
             )
-            apply_raw = self.transport.query(f":SOUR{channel}:APPL?").strip()
+            apply_raw = self.transport.query(f":SOUR{channel}:APPL?", replay=ReplayPolicy.NO_REPLAY).strip()
             _validate_apply_response(apply_raw)
             duty = self._query_finite_float(
                 f":SOUR{channel}:FUNC:SQU:DCYC?", field_name="square duty cycle"
@@ -490,6 +504,8 @@ class DG4202Source:
                     channel=channel,
                     check_errors=check_errors,
                 )
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 self._recover_configuration_failure(
                     snapshot=snapshot,
@@ -523,10 +539,14 @@ class DG4202Source:
                     channel=channel,
                     check_errors=check_errors,
                 )
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 ambiguous = isinstance(exc, _AmbiguousWriteError)
                 try:
                     self._force_output_off(channel)
+                except (TransportIOError, SessionHealthError):
+                    raise
                 except Exception as recovery_error:
                     self._configuration_writes_blocked = True
                     raise InstrumentError(
@@ -570,6 +590,8 @@ class DG4202Source:
                     channel=channel,
                     check_errors=check_errors,
                 )
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 self._recover_configuration_failure(
                     snapshot=snapshot,
@@ -608,6 +630,8 @@ class DG4202Source:
                     channel=channel,
                     check_errors=check_errors,
                 )
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 self._recover_configuration_failure(
                     snapshot=snapshot,
@@ -644,6 +668,8 @@ class DG4202Source:
                     channel=channel,
                     check_errors=check_errors,
                 )
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 self._recover_configuration_failure(
                     snapshot=snapshot,
@@ -690,6 +716,8 @@ class DG4202Source:
 
             try:
                 self._write("*CLS")
+            except (TransportIOError, SessionHealthError):
+                raise
             except _AmbiguousWriteError:
                 self._configuration_writes_blocked = True
                 raise InstrumentError(
@@ -756,6 +784,8 @@ class DG4202Source:
                 ):
                     raise InstrumentError("DG4000 arbitrary upload final readback mismatch")
                 return status
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 if binary_attempted:
                     self._recover_arbitrary_upload_failure(
@@ -781,7 +811,9 @@ class DG4202Source:
                 response: str | None = None
                 exception: str | None = None
                 try:
-                    response = self.transport.query(command)
+                    response = self.transport.query(command, replay=ReplayPolicy.NO_REPLAY)
+                except (TransportIOError, SessionHealthError):
+                    raise
                 except Exception as exc:
                     exception = f"{type(exc).__name__}: {exc}"
                 results.append(

@@ -48,7 +48,7 @@ class FakeTransport:
     def write_bytes(self, command: bytes) -> None:
         self.byte_writes.append(command)
 
-    def query(self, command: str) -> str:
+    def query(self, command: str, *, replay=None) -> str:
         if command == "SYST:ERR?":
             if self.error_queue:
                 return self.error_queue.pop(0)
@@ -134,10 +134,10 @@ class DG4202Tests(unittest.TestCase):
 
         original_query = transport.query
 
-        def query(command: str) -> str:
+        def query(command: str, *, replay=None) -> str:
             if command == ":SOUR2:FUNC?":
                 raise InstrumentError("injected query failure")
-            return original_query(command)
+            return original_query(command, replay=replay)
 
         transport.query = query
 

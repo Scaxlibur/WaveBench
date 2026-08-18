@@ -34,17 +34,17 @@ class FakeTransport:
     def write(self, command):
         self.writes.append(command)
 
-    def query(self, command):
+    def query(self, command, *, replay=None):
         self.queries.append(command)
         return self.responses[command]
 
-    def query_bin_block(self, command):
+    def query_bin_block(self, command, *, replay=None):
         self.queries.append(command)
         if self.binary_reader is not None:
             return self.binary_reader(self, command)
         return self.responses[command]
 
-    def query_opc(self):
+    def query_opc(self, *, replay=None):
         self.queries.append("*OPC?")
         return "1"
 

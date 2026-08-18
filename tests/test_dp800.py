@@ -62,7 +62,7 @@ class FakeTransport:
         elif command.startswith(":OUTP:OCP CH1,"):
             self.responses[":OUTP:OCP? CH1"] = command.rsplit(",", 1)[1]
 
-    def query(self, command: str) -> str:
+    def query(self, command: str, *, replay=None) -> str:
         self.queries.append(command)
         self.query_counts[command] = self.query_counts.get(command, 0) + 1
         if command == self.fail_command:
@@ -441,10 +441,10 @@ class DP800Tests(unittest.TestCase):
                 super().__init__()
                 self.query_threads = []
 
-            def query(self, command: str) -> str:
+            def query(self, command: str, *, replay=None) -> str:
                 self.query_threads.append(get_ident())
                 time.sleep(0.001)
-                return super().query(command)
+                return super().query(command, replay=replay)
 
         transport = SlowTransport()
         driver = DP800Power(transport=transport)

@@ -5,9 +5,16 @@ from collections.abc import Callable
 
 import numpy as np
 
-from wavebench.errors import DataError, InstrumentError, OperationTimeout
+from wavebench.errors import (
+    DataError,
+    InstrumentError,
+    OperationTimeout,
+    SessionHealthError,
+    TransportIOError,
+)
 from wavebench.instruments.models import WaveformData, WaveformHeader
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.contracts import ReplayPolicy
 
 def parse_waveform_header(response: str) -> WaveformHeader:
     parts = [item.strip() for item in response.split(",")]
@@ -30,7 +37,7 @@ class RTM2032Scope:
     check_errors_after_ops: bool = True
 
     def idn(self) -> str:
-        return self.transport.query("*IDN?")
+        return self.transport.query("*IDN?", replay=ReplayPolicy.NO_REPLAY)
 
     def clear_status(self) -> None:
         self.transport.write("*CLS")
@@ -38,12 +45,12 @@ class RTM2032Scope:
     def channel_coupling(self, channel: int) -> str:
         if channel < 1:
             raise DataError("channel must be >= 1")
-        return self.transport.query(f"CHAN{channel}:COUP?").strip().upper()
+        return self.transport.query(f"CHAN{channel}:COUP?", replay=ReplayPolicy.NO_REPLAY).strip().upper()
 
     def errors(self, limit: int = 16) -> list[str]:
         errors: list[str] = []
         for _ in range(limit):
-            response = self.transport.query("SYST:ERR?")
+            response = self.transport.query("SYST:ERR?", replay=ReplayPolicy.NO_REPLAY)
             errors.append(response)
             if response.startswith("0") or "No error" in response:
                 break
@@ -58,7 +65,7 @@ class RTM2032Scope:
     def autoscale(self, wait_opc: bool = True, check_errors: bool = True) -> None:
         self.transport.write("AUToscale")
         if wait_opc:
-            self.transport.query_opc()
+            self.transport.query_opc(replay=ReplayPolicy.NO_REPLAY)
         if check_errors:
             self.assert_no_errors()
 
@@ -85,8 +92,8 @@ class RTM2032Scope:
         self.transport.write(f"CHAN:DATA:POIN {points.upper()}")
 
     def _read_waveform(self, channel: int) -> WaveformData:
-        header = parse_waveform_header(self.transport.query(f"CHAN{channel}:DATA:HEAD?"))
-        voltages = np.asarray(self.transport.query_float_list(f"CHAN{channel}:DATA?"), dtype=np.float64)
+        header = parse_waveform_header(self.transport.query(f"CHAN{channel}:DATA:HEAD?", replay=ReplayPolicy.NO_REPLAY))
+        voltages = np.asarray(self.transport.query_float_list(f"CHAN{channel}:DATA?", replay=ReplayPolicy.NO_REPLAY), dtype=np.float64)
         if voltages.size != header.points:
             raise DataError(f"waveform length mismatch: header says {header.points}, got {voltages.size}")
         return WaveformData(channel=channel, header=header, voltages_v=voltages)
@@ -109,7 +116,11 @@ class RTM2032Scope:
         self._setup_real_waveform_transfer(channel=channel, points=points)
         self.transport.write("SINGle")
         try:
-            self.transport.query_opc()
+            self.transport.query_opc(replay=ReplayPolicy.NO_REPLAY)
+        except (TransportIOError, SessionHealthError):
+            # Keep structured exchange/session failures intact; only ordinary
+            # backend timeout-like errors get the user-facing OPC translation.
+            raise
         except Exception as exc:
             raise OperationTimeout(
                 "single acquisition timed out while waiting for *OPC?. "
@@ -140,7 +151,7 @@ class RTM2032Scope:
                 self.set_vertical_scale(channel, vertical_scale_v_per_div)
             else:
                 self.transport.write(f"CHAN{channel}:STAT ON")
-            state = self.transport.query(f"CHAN{channel}:STAT?").strip().upper()
+            state = self.transport.query(f"CHAN{channel}:STAT?", replay=ReplayPolicy.NO_REPLAY).strip().upper()
             if state not in {"1", "ON"}:
                 raise DataError(
                     f"channel {channel} did not become active before single acquisition: "
@@ -148,7 +159,9 @@ class RTM2032Scope:
                 )
         self.transport.write("SINGle")
         try:
-            self.transport.query_opc()
+            self.transport.query_opc(replay=ReplayPolicy.NO_REPLAY)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as exc:
             raise OperationTimeout(
                 "single acquisition timed out while waiting for *OPC?. "
@@ -173,7 +186,7 @@ class RTM2032Scope:
         self.transport.write("HCOP:LANG PNG")
         self.transport.write(f"HCOP:COL:SCH {color_scheme}")
         self.transport.write(f"HCOP:MENU {'ON' if include_menu else 'OFF'}")
-        data = self.transport.query_bin_block("HCOP:DATA?")
+        data = self.transport.query_bin_block("HCOP:DATA?", replay=ReplayPolicy.NO_REPLAY)
         if not data.startswith(b"\x89PNG\r\n\x1a\n"):
             raise DataError("screenshot response is not a PNG image")
         return data

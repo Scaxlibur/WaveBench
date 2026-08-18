@@ -13,7 +13,7 @@ class FakeTransport:
         self.dcv_impedance = "10M"
         self.calculation_function = "NONE"
 
-    def query(self, command: str) -> str:
+    def query(self, command: str, *, replay=None) -> str:
         self.commands.append(command)
         if command == "*IDN?":
             return "RIGOL TECHNOLOGIES,DM3068,DM3A000000000,01.00"
@@ -197,11 +197,11 @@ class DM3000DriverTests(unittest.TestCase):
         transport.calculation_function = "AVERAGE"
         original_query = transport.query
 
-        def query(command: str) -> str:
+        def query(command: str, *, replay=None) -> str:
             if command == ":CALCulate:STATistic:COUNt?":
                 transport.commands.append(command)
                 return "3"
-            return original_query(command)
+            return original_query(command, replay=replay)
 
         transport.query = query
 
@@ -263,8 +263,8 @@ class DM3000DriverTests(unittest.TestCase):
     def test_system_interface_status_rejects_sensitive_serial_like_response(self):
         transport = FakeTransport()
         original_query = transport.query
-        transport.query = lambda command: (
-            "SERIAL123" if command == ":SYSTem:LANserial?" else original_query(command)
+        transport.query = lambda command, *, replay=None: (
+            "SERIAL123" if command == ":SYSTem:LANserial?" else original_query(command, replay=replay)
         )
 
         with self.assertRaisesRegex(DataError, "LAN interface status"):
@@ -273,8 +273,8 @@ class DM3000DriverTests(unittest.TestCase):
     def test_trigger_status_rejects_invalid_unit_response(self):
         transport = FakeTransport()
         original_query = transport.query
-        transport.query = lambda command: (
-            "400" if command == ":TRIGger:AUTO:INTerval?" else original_query(command)
+        transport.query = lambda command, *, replay=None: (
+            "400" if command == ":TRIGger:AUTO:INTerval?" else original_query(command, replay=replay)
         )
 
         with self.assertRaisesRegex(DataError, "trigger auto interval"):
@@ -283,8 +283,8 @@ class DM3000DriverTests(unittest.TestCase):
     def test_trigger_status_rejects_out_of_contract_discrete_response(self):
         transport = FakeTransport()
         original_query = transport.query
-        transport.query = lambda command: (
-            "UNKNOWN" if command == ":TRIGger:SOURce?" else original_query(command)
+        transport.query = lambda command, *, replay=None: (
+            "UNKNOWN" if command == ":TRIGger:SOURce?" else original_query(command, replay=replay)
         )
 
         with self.assertRaisesRegex(DataError, "unsupported DMM trigger source"):
@@ -293,8 +293,8 @@ class DM3000DriverTests(unittest.TestCase):
     def test_calculation_status_rejects_nonfinite_reference(self):
         transport = FakeTransport()
         original_query = transport.query
-        transport.query = lambda command: (
-            "nan" if command == ":CALCulate:DB:REFerence?" else original_query(command)
+        transport.query = lambda command, *, replay=None: (
+            "nan" if command == ":CALCulate:DB:REFerence?" else original_query(command, replay=replay)
         )
 
         with self.assertRaisesRegex(DataError, "non-finite.*dB reference"):
@@ -372,8 +372,8 @@ class DM3000DriverTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 transport = FakeTransport()
                 original_query = transport.query
-                transport.query = lambda command, raw=raw: (
-                    raw if command == ":MEASure:VOLTage:DC?" else original_query(command)
+                transport.query = lambda command, *, replay=None, raw=raw: (
+                    raw if command == ":MEASure:VOLTage:DC?" else original_query(command, replay=replay)
                 )
                 with self.assertRaisesRegex(DataError, "non-finite DM3000 reading"):
                     DM3000Dmm(transport).read("dcv")
@@ -555,5 +555,5 @@ if __name__ == "__main__":
 class DM3058LanCompatibilityTests(unittest.TestCase):
     def test_dm3058_idn_uses_same_common_scpi_query(self):
         transport = FakeTransport()
-        transport.query = lambda command: "Rigol Technologies,DM3058,<serial>,<firmware>" if command == "*IDN?" else "0"
+        transport.query = lambda command, *, replay=None: "Rigol Technologies,DM3058,<serial>,<firmware>" if command == "*IDN?" else "0"
         self.assertIn("DM3058", DM3000Dmm(transport).idn())

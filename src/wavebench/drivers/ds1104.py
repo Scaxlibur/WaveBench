@@ -6,9 +6,16 @@ import time
 
 import numpy as np
 
-from wavebench.errors import DataError, InstrumentError, OperationTimeout
+from wavebench.errors import (
+    DataError,
+    InstrumentError,
+    OperationTimeout,
+    SessionHealthError,
+    TransportIOError,
+)
 from wavebench.instruments.models import WaveformData, WaveformHeader
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.contracts import ReplayPolicy
 
 
 _RAW_POINTS_ALIASES = {"MAX", "DMAX"}
@@ -81,7 +88,7 @@ class DS1104Scope:
             recorder("telemetry", text)
 
     def idn(self) -> str:
-        return self.transport.query("*IDN?")
+        return self.transport.query("*IDN?", replay=ReplayPolicy.NO_REPLAY)
 
     def clear_status(self) -> None:
         self.transport.write("*CLS")
@@ -93,12 +100,12 @@ class DS1104Scope:
 
     def channel_coupling(self, channel: int) -> str:
         self._validate_channel(channel)
-        return self.transport.query(f":CHANnel{channel}:COUPling?").strip().upper()
+        return self.transport.query(f":CHANnel{channel}:COUPling?", replay=ReplayPolicy.NO_REPLAY).strip().upper()
 
     def errors(self, limit: int = 16) -> list[str]:
         errors: list[str] = []
         for _ in range(limit):
-            response = self.transport.query(":SYSTem:ERRor?")
+            response = self.transport.query(":SYSTem:ERRor?", replay=ReplayPolicy.NO_REPLAY)
             errors.append(response)
             normalized = response.strip().lower()
             if normalized.startswith("0") or "no error" in normalized:
@@ -118,7 +125,7 @@ class DS1104Scope:
     def autoscale(self, wait_opc: bool = True, check_errors: bool = True) -> None:
         self.transport.write(":AUToscale")
         if wait_opc:
-            self.transport.query_opc()
+            self.transport.query_opc(replay=ReplayPolicy.NO_REPLAY)
         if check_errors:
             self.assert_no_errors()
 
@@ -159,7 +166,7 @@ class DS1104Scope:
             self.transport.write(f":WAVeform:STOP {stop}")
             chunk_started = time.perf_counter()
             try:
-                chunk = self.transport.query_bin_block(":WAVeform:DATA?")
+                chunk = self.transport.query_bin_block(":WAVeform:DATA?", replay=ReplayPolicy.NO_REPLAY)
             except Exception:
                 chunk_elapsed = max(time.perf_counter() - chunk_started, 0.0)
                 self._record_telemetry(
@@ -199,7 +206,7 @@ class DS1104Scope:
         read_started = time.perf_counter()
         preamble_started = time.perf_counter()
         preamble = parse_rigol_waveform_preamble(
-            self.transport.query(":WAVeform:PREamble?")
+            self.transport.query(":WAVeform:PREamble?", replay=ReplayPolicy.NO_REPLAY)
         )
         preamble_elapsed = max(time.perf_counter() - preamble_started, 0.0)
         self._record_telemetry(
@@ -265,7 +272,11 @@ class DS1104Scope:
             self.transport.write(f":CHANnel{channel}:DISPlay ON")
         self.transport.write(":SINGle")
         try:
-            self.transport.query_opc()
+            self.transport.query_opc(replay=ReplayPolicy.NO_REPLAY)
+        except (TransportIOError, SessionHealthError):
+            # Preserve the transport/session evidence.  In particular, an
+            # OPC gate failure must not be flattened into a generic timeout.
+            raise
         except Exception as exc:
             raise OperationTimeout(
                 "single acquisition timed out while waiting for *OPC?. "
@@ -299,7 +310,9 @@ class DS1104Scope:
                 self.transport.write(f":CHANnel{channel}:DISPlay ON")
         self.transport.write(":SINGle")
         try:
-            self.transport.query_opc()
+            self.transport.query_opc(replay=ReplayPolicy.NO_REPLAY)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as exc:
             raise OperationTimeout(
                 "single acquisition timed out while waiting for *OPC?. "
@@ -323,7 +336,7 @@ class DS1104Scope:
     def screenshot_png(self, *, include_menu: bool = False, color_scheme: str = "COL") -> bytes:
         del include_menu
         color = "ON" if color_scheme.strip().upper() != "MONO" else "OFF"
-        data = self.transport.query_bin_block(f":DISPlay:DATA? {color},OFF,PNG")
+        data = self.transport.query_bin_block(f":DISPlay:DATA? {color},OFF,PNG", replay=ReplayPolicy.NO_REPLAY)
         if not data.startswith(b"\x89PNG\r\n\x1a\n"):
             raise DataError("screenshot response is not a PNG image")
         return data
