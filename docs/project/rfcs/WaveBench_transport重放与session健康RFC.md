@@ -242,6 +242,7 @@ R0 建议为 `OperationSpec` 增加独立的 `session_purpose`，取值为 `norm
 除 `session_purpose` 外，R0 还需要冻结以下语义：
 
 - `changed_fields` 表示操作期间可能触碰的字段，不只表示最终保留的变化；
+- `required_verified_fields` 表示普通操作开始前必须在当前连接代次中已独立验证的字段闭包；
 - `verification_fields` 表示恢复后必须独立验证的相关字段闭包；
 - `restore_coverage` 说明哪些字段有正式恢复合同；
 - `timeout_source` 或等价字段说明普通操作、恢复和验证分别受哪个已配置 timeout 约束；
@@ -325,7 +326,7 @@ M7 完成后仍不自动进行实机验证。实机验证必须在核心版本�
 - `TransportIOError` 继承 `InstrumentError`，保存本 RFC 定义的结构字段，通过现有 `wavebench.error.v1` envelope 的 `details` 对外表示。
 - factory 在具体 transport 打开后创建唯一 `InstrumentSessionState`；`OpenedInstrument`、guarded transport 和所有 Service alias 共享该对象。close 只能进入 `closed`，reconnect 创建新对象和新 `epoch_id`。
 - session 事务锁由 `InstrumentSessionState` 持有；恢复与验证授权只能由核心 transaction coordinator 在持锁的动态范围内安装。
-- `OperationSpec` 增加 `session_purpose`、`verification_fields` 和 `timeout_source`；默认分别为 `normal`、空集合和 `connection.timeout_ms`。
+- `OperationSpec` 增加 `session_purpose`、`required_verified_fields`、`verification_fields` 和 `timeout_source`；默认分别为 `normal`、空集合、空集合和 `connection.timeout_ms`。`required_verified_fields` 是操作前置，`verification_fields` 是恢复后置，两者不得合并或互相推导。
 - 新连接的通信初始为 `healthy`，`verified_fields` 初始为空。身份和配置基线由具体操作的前置字段声明决定，不把一次 IDN 成功扩大为全局验证。
 - `wavebench.instrument.v2` 保持不变：新参数属于核心提供的 transport 合同，现有 driver 方法和插件 factory 形态不变。
 - 核心 driver 调用点在 M7 前全部显式分类。外部旧插件保持调用语法有效并获得 `no_replay` 默认；新插件的 wheel、descriptor 和四组合版本测试只在核心发布后更新。
