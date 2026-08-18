@@ -25,6 +25,11 @@
 - [多仪器流程设计](design/WaveBench_多仪器协同流程设计.md)
 - [sweep 状态保存与恢复](design/WaveBench_sweep状态恢复设计.md)
 
+## rfcs：接口提案与决策
+
+- [RFC 索引](rfcs/README.md)
+- [transport 重放与 session 健康 RFC](rfcs/WaveBench_transport重放与session健康RFC.md)
+
 ## contributing：开发和接入
 
 - [插件开发指南](contributing/WaveBench_插件开发指南.md)：接入流程和发布检查
