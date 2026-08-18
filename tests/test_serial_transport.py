@@ -173,6 +173,24 @@ class SerialTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportIOError, "serial write failed"):
             transport.write("*IDN?")
 
+    def test_zero_byte_write_is_proven_not_sent(self):
+        session = FakeSerialSession()
+        session.write = lambda payload: 0
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaisesRegex(TransportIOError, "not transmitted") as raised:
+            transport.write("*IDN?")
+        self.assertEqual(raised.exception.attempts, 0)
+        self.assertEqual(raised.exception.command_transmission.value, "not_sent")
+
+    def test_partial_binary_write_is_not_reported_as_completed(self):
+        session = FakeSerialSession()
+        session.write = lambda payload: len(payload) - 1
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaisesRegex(TransportIOError, "write_binary failed"):
+            transport.write_bytes(b"payload")
+
     def test_query_retries_only_after_a_proven_zero_byte_transmission(self):
         session = FakeSerialSession()
         write_results = [0, None]

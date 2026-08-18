@@ -95,20 +95,35 @@ class SerialTransport:
         self.logger.record("write", command)
         try:
             payload = command.rstrip("\r\n").encode("ascii") + self.write_termination
+        except Exception as exc:
+            raise self._preflight_error("write", ReplayPolicy.NO_REPLAY) from exc
+        try:
             written = self.session.write(payload)
+            if written == 0:
+                raise self._not_sent_error("write")
             if written is not None and written != len(payload):
                 raise OSError(f"short serial write: wrote {written} of {len(payload)} bytes")
             if hasattr(self.session, "flush"):
                 self.session.flush()
+        except TransportIOError:
+            raise
         except Exception as exc:
             raise self._write_error("write", exc) from exc
 
     def write_bytes(self, command: bytes) -> None:
         self.logger.record("write_binary", f"<bytes len={len(command)}>")
         try:
-            self.session.write(command)
+            written = self.session.write(command)
+            if written == 0:
+                raise self._not_sent_error("write_binary")
+            if written is not None and written != len(command):
+                raise OSError(
+                    f"short serial binary write: wrote {written} of {len(command)} bytes"
+                )
             if hasattr(self.session, "flush"):
                 self.session.flush()
+        except TransportIOError:
+            raise
         except Exception as exc:
             raise self._write_error("write_binary", exc) from exc
 
@@ -125,13 +140,16 @@ class SerialTransport:
 
         def read_once() -> str:
             nonlocal attempts
-            payload = command.rstrip("\r\n").encode("ascii") + self.write_termination
+            try:
+                payload = command.rstrip("\r\n").encode("ascii") + self.write_termination
+            except Exception as exc:
+                raise self._preflight_error("query", replay) from exc
             written = self.session.write(payload)
             if written == 0:
                 raise TransportIOError(
                     "serial query command was not transmitted",
                     operation="query",
-                    phase=TransportPhase.SENDING,
+                    phase=TransportPhase.BEFORE_SEND,
                     replay_policy=replay,
                     command_transmission=CommandTransmission.NOT_SENT,
                     response_progress=ResponseProgress.NONE,
@@ -199,8 +217,9 @@ class SerialTransport:
         timeout_ms: int | None = None,
         replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
     ) -> list[float]:
+        replay = ReplayPolicy(replay)
         if timeout_ms is not None and timeout_ms < 1:
-            raise ValueError("timeout_ms must be >= 1")
+            raise self._preflight_error("query_float_list", replay)
         original_timeout = getattr(self.session, "timeout", None)
         if timeout_ms is not None and hasattr(self.session, "timeout"):
             self.session.timeout = timeout_ms / 1000.0
@@ -342,6 +361,32 @@ class SerialTransport:
             response_progress=ResponseProgress.NONE,
             synchronization=Synchronization.UNPROVEN,
             attempts=1,
+        )
+
+    @staticmethod
+    def _not_sent_error(operation: str) -> TransportIOError:
+        return TransportIOError(
+            f"serial {operation} command was not transmitted",
+            operation=operation,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=ReplayPolicy.NO_REPLAY,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+        )
+
+    @staticmethod
+    def _preflight_error(operation: str, replay: ReplayPolicy) -> TransportIOError:
+        return TransportIOError(
+            f"serial {operation} request was rejected before transmission",
+            operation=operation,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
         )
 
     def close(self) -> None:

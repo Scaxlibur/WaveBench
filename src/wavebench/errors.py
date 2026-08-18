@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping
 
 from wavebench.transport.contracts import (
@@ -142,6 +143,11 @@ class TransportIOError(InstrumentError):
         attempts: int,
     ) -> None:
         super().__init__(message)
+        phase = TransportPhase(phase)
+        replay_policy = ReplayPolicy(replay_policy)
+        command_transmission = CommandTransmission(command_transmission)
+        response_progress = ResponseProgress(response_progress)
+        synchronization = Synchronization(synchronization)
         if attempts < 0:
             raise ValueError("transport attempts must be >= 0")
         if phase is TransportPhase.BEFORE_SEND and (
@@ -153,6 +159,14 @@ class TransportIOError(InstrumentError):
             raise ValueError("before_send failures must prove zero command transmissions")
         if command_transmission is CommandTransmission.NOT_SENT and attempts != 0:
             raise ValueError("not_sent failures must have zero command transmissions")
+        if command_transmission is CommandTransmission.NOT_SENT and (
+            phase is not TransportPhase.BEFORE_SEND
+            or response_progress is not ResponseProgress.NONE
+            or synchronization is not Synchronization.PROVEN
+        ):
+            raise ValueError("not_sent failures must be proven before_send failures")
+        if phase is not TransportPhase.BEFORE_SEND and attempts == 0:
+            raise ValueError("post-send failures must report at least one attempt")
         if response_progress in {ResponseProgress.PARTIAL, ResponseProgress.COMPLETE} and attempts == 0:
             raise ValueError("response progress requires at least one command transmission")
         self.operation = operation
@@ -202,6 +216,60 @@ class TransportIOError(InstrumentError):
                 if cause is None
                 else _sanitized_transport_cause(cause)
             ),
+        )
+
+
+class SessionHealthError(InstrumentError):
+    """An instrument exchange was rejected by the shared session gate."""
+
+    code = "session_health_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        health: str,
+        io_kind: str,
+        epoch_id: str,
+    ) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", health):
+            raise ValueError("invalid session health code")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", io_kind):
+            raise ValueError("invalid session I/O kind")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", epoch_id):
+            raise ValueError("invalid session epoch id")
+        # Ignore caller text: this error may cross an untrusted transport
+        # boundary, so its stable message must never echo command/response data.
+        super().__init__(
+            f"transport {io_kind} is blocked because session health is {health!r}"
+        )
+        self.health = health
+        self.io_kind = io_kind
+        self.epoch_id = epoch_id
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        merged = dict(details or {})
+        merged.update(
+            {
+                "session_health": self.health,
+                "io_kind": self.io_kind,
+                "command_transmission": "not_sent",
+                "response_progress": "none",
+                "synchronization": "proven",
+                "attempts": 0,
+                "epoch_id": self.epoch_id,
+            }
+        )
+        return super().to_envelope(
+            operation=operation,
+            details=merged,
+            cause=None,
         )
 
 

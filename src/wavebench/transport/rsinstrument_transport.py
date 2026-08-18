@@ -91,7 +91,11 @@ class RsInstrumentTransport:
     def write(self, command: str) -> None:
         self.logger.record("write", command)
         try:
-            self.session.write_str(command)
+            written = self.session.write_str(command)
+            if written == 0:
+                raise self._not_sent_error("write")
+        except TransportIOError:
+            raise
         except Exception as exc:
             raise self._write_error("write", exc) from exc
 
@@ -419,6 +423,19 @@ class RsInstrumentTransport:
             response_progress=ResponseProgress.NONE,
             synchronization=Synchronization.UNPROVEN,
             attempts=1,
+        )
+
+    @staticmethod
+    def _not_sent_error(operation: str) -> TransportIOError:
+        return TransportIOError(
+            f"RsInstrument {operation} command was not transmitted",
+            operation=operation,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=ReplayPolicy.NO_REPLAY,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
         )
 
     def close(self) -> None:

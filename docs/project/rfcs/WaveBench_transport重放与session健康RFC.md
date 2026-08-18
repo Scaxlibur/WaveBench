@@ -237,6 +237,8 @@ R0 建议为 `OperationSpec` 增加独立的 `session_purpose`，取值为 `norm
 
 授权只在持有 session 事务锁的动态范围内有效。普通 Service、run step、插件和调用方不能构造授权 token，也不能用布尔参数绕过门禁。`GuardedAuditedTransport` 在每次真实 I/O 前复核健康状态、授权、连接代次和 access policy。
 
+验证授权的 transport 成功只证明一次交换完成，不能直接证明仪器返回值满足配置不变量。核心验证器必须在成功的只读交换后调用 core-only 的 `SessionTransactionCoordinator.record_evidence(authorization, io_kind, fields)`，再调用 `complete_verification()`；该 hook 不对插件或普通 Service 暴露。没有成功交换、字段超出映射范围、授权过期或证据闭包不完整时，session 保持 `uncertain`。
+
 插件可以实现已冻结的恢复和验证动作，但不能提供 raw SCPI、调用方命令列表或任意字段范围。恢复成功后，核心仍需执行独立验证；验证闭包不完整时保持 `uncertain`。
 
 ## `OperationSpec` 接入
