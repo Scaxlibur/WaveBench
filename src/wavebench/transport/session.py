@@ -337,6 +337,7 @@ class SessionTransactionCoordinator:
         max_steps: int,
         evidence_fields: dict[str, Iterable[str]] | None = None,
     ) -> Iterator[SessionAuthorization]:
+        purpose = SessionPurpose(purpose)
         if purpose not in {SessionPurpose.RECOVERY, SessionPurpose.VERIFICATION}:
             raise ValueError("only recovery or verification can receive session authorization")
         if not operation_id or _SAFE_REASON.fullmatch(operation_id) is None:

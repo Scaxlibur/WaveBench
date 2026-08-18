@@ -196,18 +196,18 @@ class TransportIOError(InstrumentError):
         details: Mapping[str, Any] | None = None,
         cause: Mapping[str, Any] | BaseException | None = None,
     ) -> ErrorEnvelope:
-        merged = dict(details or {})
-        merged.update(
-            {
-                "transport_operation": self.operation,
-                "phase": self.phase.value,
-                "replay_policy": self.replay_policy.value,
-                "command_transmission": self.command_transmission.value,
-                "response_progress": self.response_progress.value,
-                "synchronization": self.synchronization.value,
-                "attempts": self.attempts,
-            }
-        )
+        # Transport envelopes are deliberately limited to the RFC's stable
+        # fields.  Arbitrary caller details could contain a command, response,
+        # or resource string, so they must not cross this boundary.
+        merged = {
+            "transport_operation": self.operation,
+            "phase": self.phase.value,
+            "replay_policy": self.replay_policy.value,
+            "command_transmission": self.command_transmission.value,
+            "response_progress": self.response_progress.value,
+            "synchronization": self.synchronization.value,
+            "attempts": self.attempts,
+        }
         return super().to_envelope(
             operation=operation,
             details=merged,
@@ -254,18 +254,18 @@ class SessionHealthError(InstrumentError):
         details: Mapping[str, Any] | None = None,
         cause: Mapping[str, Any] | BaseException | None = None,
     ) -> ErrorEnvelope:
-        merged = dict(details or {})
-        merged.update(
-            {
-                "session_health": self.health,
-                "io_kind": self.io_kind,
-                "command_transmission": "not_sent",
-                "response_progress": "none",
-                "synchronization": "proven",
-                "attempts": 0,
-                "epoch_id": self.epoch_id,
-            }
-        )
+        # Session gate errors are emitted before an exchange and may be built
+        # from a caller that has seen command/resource data.  Keep the
+        # envelope strictly structural instead of copying arbitrary details.
+        merged = {
+            "session_health": self.health,
+            "io_kind": self.io_kind,
+            "command_transmission": "not_sent",
+            "response_progress": "none",
+            "synchronization": "proven",
+            "attempts": 0,
+            "epoch_id": self.epoch_id,
+        }
         return super().to_envelope(
             operation=operation,
             details=merged,
@@ -386,8 +386,16 @@ def _sanitized_transport_cause(
     if cause is None:
         return None
     if isinstance(cause, Mapping):
-        payload = {"type": str(cause.get("type", "BackendError"))}
+        payload = {"type": _safe_cause_token(cause.get("type"), "BackendError")}
         if "code" in cause:
-            payload["code"] = str(cause["code"])
+            payload["code"] = _safe_cause_token(cause["code"], "backend_error")
         return payload
     return {"type": type(cause).__name__}
+
+
+_SAFE_CAUSE_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$")
+
+
+def _safe_cause_token(value: Any, fallback: str) -> str:
+    token = str(value) if value is not None else ""
+    return token if _SAFE_CAUSE_TOKEN.fullmatch(token) else fallback

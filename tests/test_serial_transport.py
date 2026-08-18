@@ -183,6 +183,22 @@ class SerialTransportTests(unittest.TestCase):
         self.assertEqual(raised.exception.attempts, 0)
         self.assertEqual(raised.exception.command_transmission.value, "not_sent")
 
+    def test_query_write_exception_keeps_unknown_attempt_evidence(self):
+        session = FakeSerialSession()
+
+        def fail_write(payload):
+            raise OSError("serial backend stopped while writing")
+
+        session.write = fail_write
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("MEAS?")
+
+        self.assertEqual(raised.exception.attempts, 1)
+        self.assertEqual(raised.exception.command_transmission.value, "unknown")
+        self.assertEqual(raised.exception.synchronization.value, "unproven")
+
     def test_partial_binary_write_is_not_reported_as_completed(self):
         session = FakeSerialSession()
         session.write = lambda payload: len(payload) - 1

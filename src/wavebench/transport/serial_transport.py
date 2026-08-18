@@ -144,8 +144,13 @@ class SerialTransport:
                 payload = command.rstrip("\r\n").encode("ascii") + self.write_termination
             except Exception as exc:
                 raise self._preflight_error("query", replay) from exc
+            # A backend exception does not prove that zero bytes reached the
+            # device.  Count the attempted exchange conservatively; a return
+            # value of zero is handled below as the only proven not-sent case.
+            attempts += 1
             written = self.session.write(payload)
             if written == 0:
+                attempts -= 1
                 raise TransportIOError(
                     "serial query command was not transmitted",
                     operation="query",
@@ -156,7 +161,6 @@ class SerialTransport:
                     synchronization=Synchronization.PROVEN,
                     attempts=0,
                 )
-            attempts += 1
             if written is not None and written != len(payload):
                 raise TransportIOError(
                     "serial query command transmission was partial",

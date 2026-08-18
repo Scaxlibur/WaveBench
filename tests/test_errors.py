@@ -8,8 +8,16 @@ from wavebench.errors import (
     ErrorEnvelope,
     InstrumentError,
     SessionHealthError,
+    TransportIOError,
     error_envelope,
     ensure_error_envelope,
+)
+from wavebench.transport.contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
 )
 
 
@@ -84,6 +92,41 @@ def test_session_health_error_is_zero_io_and_does_not_serialize_reason_or_cause(
     }
     assert "cause" not in payload
     assert json.loads(json.dumps(payload)) == payload
+
+
+def test_session_health_error_drops_caller_details() -> None:
+    payload = error_envelope(
+        SessionHealthError(
+            "ignored",
+            health="uncertain",
+            io_kind="query",
+            epoch_id="epoch-2",
+        ),
+        details={"command": "SECRET", "resource": "/private/device"},
+    )
+
+    assert "command" not in payload["details"]
+    assert "resource" not in payload["details"]
+
+
+def test_transport_error_sanitizes_mapping_cause_tokens() -> None:
+    error = TransportIOError(
+        "query failed",
+        operation="query",
+        phase=TransportPhase.READING,
+        replay_policy=ReplayPolicy.NO_REPLAY,
+        command_transmission=CommandTransmission.SENT,
+        response_progress=ResponseProgress.UNKNOWN,
+        synchronization=Synchronization.UNPROVEN,
+        attempts=1,
+    )
+
+    payload = error_envelope(
+        error,
+        cause={"type": "SECRET command payload", "code": "bad code with spaces"},
+    )
+
+    assert payload["cause"] == {"type": "BackendError", "code": "backend_error"}
 
 
 def test_legacy_error_mapping_is_augmented_without_dropping_custom_fields() -> None:
