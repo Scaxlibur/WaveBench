@@ -90,6 +90,12 @@ def build_execution_intent(plan: RunPlan, config: WaveBenchConfig) -> ExecutionI
             "lease_mode": spec.lease_mode if spec else None,
             "changed_fields": list(spec.changed_fields) if spec else [],
             "restore_coverage": spec.restore_coverage if spec else "none",
+            "session_purpose": spec.session_purpose if spec else "normal",
+            "required_verified_fields": (
+                list(spec.required_verified_fields) if spec else []
+            ),
+            "verification_fields": list(spec.verification_fields) if spec else [],
+            "timeout_source": spec.timeout_source if spec else "connection.timeout_ms",
             "risk_flags": list(spec.risk_flags) if spec else [],
             "parameters": _safe_parameters(fields),
             "policy": {

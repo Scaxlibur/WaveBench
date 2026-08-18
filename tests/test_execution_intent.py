@@ -47,6 +47,10 @@ def test_execution_intent_is_stable_and_does_not_expose_resources() -> None:
         assert first == second
         assert first.schema == INTENT_SCHEMA
         assert first.operations[0]["operation"] == "run.sleep"
+        assert first.operations[0]["session_purpose"] == "normal"
+        assert first.operations[0]["required_verified_fields"] == []
+        assert first.operations[0]["verification_fields"] == []
+        assert first.operations[0]["timeout_source"] == "connection.timeout_ms"
         assert "TCPIP::" not in json.dumps(first.as_dict())
 
 
