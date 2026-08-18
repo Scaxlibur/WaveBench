@@ -135,7 +135,7 @@ class SerialTransportTests(unittest.TestCase):
         session.read_until = lambda expected: b""
         transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
 
-        with self.assertRaisesRegex(TransportIOError, "timed out waiting") as raised:
+        with self.assertRaisesRegex(TransportIOError, "timed out") as raised:
             transport.query("*IDN?")
         self.assertEqual(raised.exception.attempts, 1)
 
@@ -170,13 +170,18 @@ class SerialTransportTests(unittest.TestCase):
         session.write = lambda payload: len(payload) - 1
         transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
 
-        with self.assertRaisesRegex(TransportIOError, "short serial write"):
+        with self.assertRaisesRegex(TransportIOError, "serial write failed"):
             transport.write("*IDN?")
 
-    def test_query_retries_only_when_explicitly_safe(self):
+    def test_query_retries_only_after_a_proven_zero_byte_transmission(self):
         session = FakeSerialSession()
-        responses = [b"", b"1.23e+00\n"]
-        session.read_until = lambda expected: responses.pop(0)
+        write_results = [0, None]
+
+        def write(payload):
+            session.writes.append(payload)
+            return write_results.pop(0)
+
+        session.write = write
         transport = SerialTransport(
             "/dev/ttyUSB0",
             session,
@@ -190,6 +195,25 @@ class SerialTransportTests(unittest.TestCase):
             "1.23e+00",
         )
         self.assertEqual(session.writes, [b"MEAS?\n", b"MEAS?\n"])
+
+    def test_safe_query_does_not_retry_after_a_sent_command_times_out(self):
+        session = FakeSerialSession()
+        session.read_until = lambda expected: b""
+        transport = SerialTransport(
+            "/dev/ttyUSB0",
+            session,
+            CommandLogger(),
+            read_retry_attempts=2,
+            read_retry_delay_ms=0,
+        )
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("MEAS?", replay=ReplayPolicy.SAFE_TO_REPLAY)
+
+        self.assertEqual(raised.exception.command_transmission.value, "sent")
+        self.assertEqual(raised.exception.response_progress.value, "none")
+        self.assertEqual(raised.exception.synchronization.value, "unproven")
+        self.assertEqual(session.writes, [b"MEAS?\n"])
 
     def test_continuation_rejects_before_serial_write(self):
         session = FakeSerialSession()

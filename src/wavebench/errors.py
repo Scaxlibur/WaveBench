@@ -163,6 +163,18 @@ class TransportIOError(InstrumentError):
         self.synchronization = synchronization
         self.attempts = attempts
 
+    def with_attempts(self, attempts: int) -> "TransportIOError":
+        return TransportIOError(
+            str(self),
+            operation=self.operation,
+            phase=self.phase,
+            replay_policy=self.replay_policy,
+            command_transmission=self.command_transmission,
+            response_progress=self.response_progress,
+            synchronization=self.synchronization,
+            attempts=attempts,
+        )
+
     def to_envelope(
         self,
         *,
@@ -185,7 +197,11 @@ class TransportIOError(InstrumentError):
         return super().to_envelope(
             operation=operation,
             details=merged,
-            cause=self.__cause__ if cause is None else cause,
+            cause=(
+                _sanitized_transport_cause(self.__cause__)
+                if cause is None
+                else _sanitized_transport_cause(cause)
+            ),
         )
 
 
@@ -294,3 +310,16 @@ def _cause_payload(cause: Mapping[str, Any] | BaseException | None) -> dict[str,
     if isinstance(cause, Mapping):
         return dict(cause)
     return error_envelope(cause)
+
+
+def _sanitized_transport_cause(
+    cause: Mapping[str, Any] | BaseException | None,
+) -> dict[str, Any] | None:
+    if cause is None:
+        return None
+    if isinstance(cause, Mapping):
+        payload = {"type": str(cause.get("type", "BackendError"))}
+        if "code" in cause:
+            payload["code"] = str(cause["code"])
+        return payload
+    return {"type": type(cause).__name__}

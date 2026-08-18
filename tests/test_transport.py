@@ -3,7 +3,13 @@ import unittest
 
 from wavebench.errors import TransportIOError
 from wavebench.logging import CommandLogger
-from wavebench.transport.contracts import ReplayPolicy
+from wavebench.transport.contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
+)
 from wavebench.transport.pyvisa_transport import PyVisaTransport
 
 
@@ -56,6 +62,30 @@ class FlakyQuerySession(FakePyVisaSession):
             self.failures_remaining -= 1
             raise TimeoutError("transient timeout")
         return "OK"
+
+
+class ProvenReplayableQuerySession(FlakyQuerySession):
+    def query(self, command: str) -> str:
+        self.queries.append(command)
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise TransportIOError(
+                "response did not start and synchronization is proven",
+                operation="query",
+                phase=TransportPhase.READING,
+                replay_policy=ReplayPolicy.SAFE_TO_REPLAY,
+                command_transmission=CommandTransmission.SENT,
+                response_progress=ResponseProgress.NONE,
+                synchronization=Synchronization.PROVEN,
+                attempts=1,
+            )
+        return "OK"
+
+
+class ExhaustedProvenReplayableQuerySession(ProvenReplayableQuerySession):
+    def __init__(self):
+        super().__init__()
+        self.failures_remaining = 2
 
 
 class FailingBinaryQuerySession(FakePyVisaSession):
@@ -172,8 +202,25 @@ class PyVisaTransportTests(unittest.TestCase):
             transport.query("OUTP?")
         self.assertEqual(raised.exception.attempts, 1)
 
-    def test_query_only_retries_after_explicit_safe_to_replay(self):
+    def test_safe_to_replay_does_not_retry_an_opaque_backend_timeout(self):
         session = FlakyQuerySession()
+        transport = PyVisaTransport(
+            "TCPIP::x::INSTR",
+            FakeResourceManager(),
+            session,
+            CommandLogger(),
+            read_retry_attempts=1,
+            read_retry_delay_ms=0,
+        )
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("OUTP?", replay=ReplayPolicy.SAFE_TO_REPLAY)
+
+        self.assertEqual(raised.exception.synchronization.value, "unproven")
+        self.assertEqual(session.queries, ["OUTP?"])
+
+    def test_safe_to_replay_retries_only_after_structured_sync_proof(self):
+        session = ProvenReplayableQuerySession()
         transport = PyVisaTransport(
             "TCPIP::x::INSTR",
             FakeResourceManager(),
@@ -189,6 +236,23 @@ class PyVisaTransportTests(unittest.TestCase):
         )
         self.assertEqual(session.queries, ["OUTP?", "OUTP?"])
 
+    def test_safe_to_replay_reports_all_transmitted_attempts(self):
+        session = ExhaustedProvenReplayableQuerySession()
+        transport = PyVisaTransport(
+            "TCPIP::x::INSTR",
+            FakeResourceManager(),
+            session,
+            CommandLogger(),
+            read_retry_attempts=1,
+            read_retry_delay_ms=0,
+        )
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("OUTP?", replay=ReplayPolicy.SAFE_TO_REPLAY)
+
+        self.assertEqual(raised.exception.attempts, 2)
+        self.assertEqual(session.queries, ["OUTP?", "OUTP?"])
+
     def test_write_failure_is_wrapped_as_instrument_error(self):
         session = FailingWriteSession()
         transport = PyVisaTransport("TCPIP::x::INSTR", FakeResourceManager(), session, CommandLogger())
@@ -197,7 +261,7 @@ class PyVisaTransportTests(unittest.TestCase):
             transport.write("VOLT 1")
         self.assertEqual(session.writes, ["VOLT 1"])
         self.assertEqual(raised.exception.command_transmission.value, "unknown")
-        self.assertEqual(raised.exception.synchronization.value, "proven")
+        self.assertEqual(raised.exception.synchronization.value, "unproven")
 
     def test_unsupported_continuation_fails_before_send(self):
         session = FakePyVisaSession()

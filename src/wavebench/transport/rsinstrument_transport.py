@@ -342,21 +342,38 @@ class RsInstrumentTransport:
             self.read_retry_attempts + 1 if replay is ReplayPolicy.SAFE_TO_REPLAY else 1
         )
         last_exc: Exception | None = None
+        transmitted_attempts = 0
         for attempt in range(attempt_limit):
             try:
                 return read_once()
             except Exception as exc:
                 last_exc = exc
-                if attempt >= attempt_limit - 1:
+                if isinstance(exc, TransportIOError):
+                    transmitted_attempts += exc.attempts
+                if attempt >= attempt_limit - 1 or not self._can_retry(exc, replay):
                     break
                 if self.read_retry_delay_ms > 0:
                     time.sleep(self.read_retry_delay_ms / 1000.0)
                 self.logger.record(
                     "retry",
-                    f"{operation} {command} attempt {attempt + 2}/{attempt_limit}",
+                    f"operation={operation} attempt={attempt + 2}/{attempt_limit}",
                 )
         assert last_exc is not None
+        if isinstance(last_exc, TransportIOError) and last_exc.attempts != transmitted_attempts:
+            raise last_exc.with_attempts(transmitted_attempts) from last_exc
         raise last_exc
+
+    @staticmethod
+    def _can_retry(exc: Exception, replay: ReplayPolicy) -> bool:
+        return (
+            replay is ReplayPolicy.SAFE_TO_REPLAY
+            and isinstance(exc, TransportIOError)
+            and exc.replay_policy is ReplayPolicy.SAFE_TO_REPLAY
+            and exc.response_progress is ResponseProgress.NONE
+            and exc.synchronization is Synchronization.PROVEN
+            and exc.command_transmission
+            in {CommandTransmission.NOT_SENT, CommandTransmission.SENT}
+        )
 
     @staticmethod
     def _reject_continuation(operation: str, replay: ReplayPolicy) -> None:
@@ -381,7 +398,7 @@ class RsInstrumentTransport:
         exc: Exception,
     ) -> TransportIOError:
         return TransportIOError(
-            f"RsInstrument {operation} failed: {type(exc).__name__}: {exc}",
+            f"RsInstrument {operation} failed with {type(exc).__name__}",
             operation=operation,
             phase=TransportPhase.READING,
             replay_policy=replay,
@@ -394,13 +411,13 @@ class RsInstrumentTransport:
     @staticmethod
     def _write_error(operation: str, exc: Exception) -> TransportIOError:
         return TransportIOError(
-            f"RsInstrument {operation} failed: {type(exc).__name__}: {exc}",
+            f"RsInstrument {operation} failed with {type(exc).__name__}",
             operation=operation,
             phase=TransportPhase.SENDING,
             replay_policy=ReplayPolicy.NO_REPLAY,
             command_transmission=CommandTransmission.UNKNOWN,
             response_progress=ResponseProgress.NONE,
-            synchronization=Synchronization.PROVEN,
+            synchronization=Synchronization.UNPROVEN,
             attempts=1,
         )
 

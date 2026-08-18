@@ -103,6 +103,8 @@ read_continuation_only
 
 首版建议把所有 query 的默认策略冻结为 `no_replay`。仓库内调用点必须显式分类；未迁移的外部插件调用仍可运行，但采用安全的默认行为。
 
+`safe_to_replay` 不表示任意 backend 异常都能重发。只有上一次 exchange 的结构证据同时表明 `response_progress=none`、`synchronization=proven`，且命令确认未发送或调用点已明确承担重发已发送幂等命令的风险时，才能进入下一次尝试。`partial`、`unknown`、`unproven` 或 `lost` 一律不重发。PyVISA 和 RsInstrument 高层 API 的不透明异常默认不能提供该证明。
+
 ### 公共方法形态
 
 R0 推荐保留现有方法名，并增加可选关键字：
@@ -161,10 +163,10 @@ transport 失败需要提供稳定字段，而不是只拼接错误字符串。R
 | `command_transmission` | `not_sent`、`sent`、`unknown` | 是否可能到达仪器 |
 | `response_progress` | `none`、`partial`、`complete`、`unknown` | 响应取得程度 |
 | `synchronization` | `proven`、`unproven`、`lost` | 当前协议边界可信度 |
-| `attempts` | 非负整数 | 实际命令发送尝试数；发送前拒绝时为 `0` |
+| `attempts` | 非负整数 | 实际命令发送尝试数；发送前拒绝或确认未发送时为 `0`，backend 内部不可观测的行为不得伪造为已证明的物理发送次数 |
 | `cause` | 原 backend 异常 | 保留因果链，不序列化 traceback |
 
-错误对象不保存完整命令或响应 payload。审计日志可以记录经过现有脱敏策略处理的命令摘要、策略、发送次数、响应进度、连接代次和健康状态转移。
+错误对象不保存完整命令或响应 payload。backend cause 对外只序列化类型和已批准的稳定代码，不序列化原始异常消息。审计日志可以记录经过现有脱敏策略处理的命令摘要、策略、发送次数、响应进度、连接代次和健康状态转移。
 
 ## session 状态所有权
 

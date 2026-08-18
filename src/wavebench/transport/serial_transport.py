@@ -125,11 +125,31 @@ class SerialTransport:
 
         def read_once() -> str:
             nonlocal attempts
-            attempts += 1
             payload = command.rstrip("\r\n").encode("ascii") + self.write_termination
             written = self.session.write(payload)
+            if written == 0:
+                raise TransportIOError(
+                    "serial query command was not transmitted",
+                    operation="query",
+                    phase=TransportPhase.SENDING,
+                    replay_policy=replay,
+                    command_transmission=CommandTransmission.NOT_SENT,
+                    response_progress=ResponseProgress.NONE,
+                    synchronization=Synchronization.PROVEN,
+                    attempts=0,
+                )
+            attempts += 1
             if written is not None and written != len(payload):
-                raise OSError(f"short serial write: wrote {written} of {len(payload)} bytes")
+                raise TransportIOError(
+                    "serial query command transmission was partial",
+                    operation="query",
+                    phase=TransportPhase.SENDING,
+                    replay_policy=replay,
+                    command_transmission=CommandTransmission.UNKNOWN,
+                    response_progress=ResponseProgress.NONE,
+                    synchronization=Synchronization.LOST,
+                    attempts=attempts,
+                )
             if hasattr(self.session, "flush"):
                 self.session.flush()
             if hasattr(self.session, "read_until"):
@@ -137,11 +157,26 @@ class SerialTransport:
             else:
                 raw = self.session.readline()
             if not raw:
-                raise TimeoutError(f"timed out waiting for {self.read_termination!r}")
+                raise TransportIOError(
+                    "serial query timed out before a response was observed",
+                    operation="query",
+                    phase=TransportPhase.READING,
+                    replay_policy=replay,
+                    command_transmission=CommandTransmission.SENT,
+                    response_progress=ResponseProgress.NONE,
+                    synchronization=Synchronization.UNPROVEN,
+                    attempts=attempts,
+                )
             if not raw.endswith(self.read_termination):
-                raise TimeoutError(
-                    f"serial response ended before {self.read_termination!r}; "
-                    f"received {len(raw)} bytes"
+                raise TransportIOError(
+                    "serial response ended before the configured termination",
+                    operation="query",
+                    phase=TransportPhase.READING,
+                    replay_policy=replay,
+                    command_transmission=CommandTransmission.SENT,
+                    response_progress=ResponseProgress.PARTIAL,
+                    synchronization=Synchronization.LOST,
+                    attempts=attempts,
                 )
             response_bytes = raw[: -len(self.read_termination)]
             if self.read_termination == b"\n" and response_bytes.endswith(b"\r"):
@@ -164,8 +199,33 @@ class SerialTransport:
         timeout_ms: int | None = None,
         replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
     ) -> list[float]:
-        response = self.query(command, replay=replay)
-        return [float(item) for item in response.replace(";", ",").split(",") if item.strip()]
+        if timeout_ms is not None and timeout_ms < 1:
+            raise ValueError("timeout_ms must be >= 1")
+        original_timeout = getattr(self.session, "timeout", None)
+        if timeout_ms is not None and hasattr(self.session, "timeout"):
+            self.session.timeout = timeout_ms / 1000.0
+        try:
+            response = self.query(command, replay=replay)
+            try:
+                return [
+                    float(item)
+                    for item in response.replace(";", ",").split(",")
+                    if item.strip()
+                ]
+            except ValueError as exc:
+                raise TransportIOError(
+                    "serial query_float_list response parsing failed",
+                    operation="query_float_list",
+                    phase=TransportPhase.PARSING,
+                    replay_policy=ReplayPolicy(replay),
+                    command_transmission=CommandTransmission.SENT,
+                    response_progress=ResponseProgress.COMPLETE,
+                    synchronization=Synchronization.PROVEN,
+                    attempts=1,
+                ) from exc
+        finally:
+            if timeout_ms is not None and hasattr(self.session, "timeout"):
+                self.session.timeout = original_timeout
 
     def query_bin_block(
         self,
@@ -176,7 +236,16 @@ class SerialTransport:
         replay = ReplayPolicy(replay)
         if replay is ReplayPolicy.READ_CONTINUATION_ONLY:
             self._reject_continuation("query_binary", replay)
-        raise ConnectionError("serial transport does not support binary block queries yet")
+        raise TransportIOError(
+            "serial transport does not support binary block queries",
+            operation="query_binary",
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+        )
 
     def query_opc(
         self,
@@ -196,21 +265,38 @@ class SerialTransport:
             self.read_retry_attempts + 1 if replay is ReplayPolicy.SAFE_TO_REPLAY else 1
         )
         last_exc: Exception | None = None
+        transmitted_attempts = 0
         for attempt in range(attempt_limit):
             try:
                 return read_once()
             except Exception as exc:
                 last_exc = exc
-                if attempt >= attempt_limit - 1:
+                if isinstance(exc, TransportIOError):
+                    transmitted_attempts += exc.attempts
+                if attempt >= attempt_limit - 1 or not self._can_retry(exc, replay):
                     break
                 if self.read_retry_delay_ms > 0:
                     time.sleep(self.read_retry_delay_ms / 1000.0)
                 self.logger.record(
                     "retry",
-                    f"{operation} {command} attempt {attempt + 2}/{attempt_limit}",
+                    f"operation={operation} attempt={attempt + 2}/{attempt_limit}",
                 )
         assert last_exc is not None
+        if isinstance(last_exc, TransportIOError) and last_exc.attempts != transmitted_attempts:
+            raise last_exc.with_attempts(transmitted_attempts) from last_exc
         raise last_exc
+
+    @staticmethod
+    def _can_retry(exc: Exception, replay: ReplayPolicy) -> bool:
+        return (
+            replay is ReplayPolicy.SAFE_TO_REPLAY
+            and isinstance(exc, TransportIOError)
+            and exc.replay_policy is ReplayPolicy.SAFE_TO_REPLAY
+            and exc.response_progress is ResponseProgress.NONE
+            and exc.synchronization is Synchronization.PROVEN
+            and exc.command_transmission
+            in {CommandTransmission.NOT_SENT, CommandTransmission.SENT}
+        )
 
     @staticmethod
     def _reject_continuation(operation: str, replay: ReplayPolicy) -> None:
@@ -235,7 +321,7 @@ class SerialTransport:
         exc: Exception,
     ) -> TransportIOError:
         return TransportIOError(
-            f"serial {operation} failed: {type(exc).__name__}: {exc}",
+            f"serial {operation} failed with {type(exc).__name__}",
             operation=operation,
             phase=TransportPhase.READING,
             replay_policy=replay,
@@ -248,13 +334,13 @@ class SerialTransport:
     @staticmethod
     def _write_error(operation: str, exc: Exception) -> TransportIOError:
         return TransportIOError(
-            f"serial {operation} failed: {type(exc).__name__}: {exc}",
+            f"serial {operation} failed with {type(exc).__name__}",
             operation=operation,
             phase=TransportPhase.SENDING,
             replay_policy=ReplayPolicy.NO_REPLAY,
             command_transmission=CommandTransmission.UNKNOWN,
             response_progress=ResponseProgress.NONE,
-            synchronization=Synchronization.PROVEN,
+            synchronization=Synchronization.UNPROVEN,
             attempts=1,
         )
 

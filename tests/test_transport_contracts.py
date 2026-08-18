@@ -21,7 +21,7 @@ def test_replay_policy_values_are_stable() -> None:
 
 
 def test_transport_error_serializes_stable_fields_without_payload() -> None:
-    cause = TimeoutError("backend timed out")
+    cause = TimeoutError("SECRET command and response payload")
     try:
         raise TransportIOError(
             "query failed after a partial response",
@@ -48,6 +48,7 @@ def test_transport_error_serializes_stable_fields_without_payload() -> None:
         "attempts": 1,
     }
     assert payload["cause"]["type"] == "TimeoutError"
+    assert "SECRET" not in str(payload)
     assert "command" not in payload["details"]
     assert "response" not in payload["details"]
 
