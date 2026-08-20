@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from wavebench.config import (
@@ -314,6 +315,26 @@ class TuiDmmTests(unittest.TestCase):
 
 @unittest.skipIf(tui_app._TEXTUAL_IMPORT_ERROR is not None, "Textual extra is not installed")
 class TuiDmmBusyBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_completion_is_ignored_after_shutdown_begins(self):
+        app = tui_app.WaveBenchTuiApp(
+            power_adapter=tui_app.FakePowerPanelAdapter(),
+            dmm_adapter=FakeDmmPanelAdapter(),
+            source_adapter=FakeSourcePanelAdapter(),
+            refresh_interval_s=60.0,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause(0.25)
+            await app.query_one("#dmm-panel").remove()
+            self.assertFalse(app.query("#dmm-read"))
+
+            with patch.object(app, "_running", False):
+                app.on_worker_state_changed(
+                    SimpleNamespace(
+                        worker=SimpleNamespace(group="dmm-read"),
+                        state=tui_app.WorkerState.CANCELLED,
+                    )
+                )
+
     async def test_read_refresh_disables_function_buttons(self):
         class SlowReadAdapter(FakeDmmPanelAdapter):
             def read(self, function: str | None = None):  # type: ignore[override]
