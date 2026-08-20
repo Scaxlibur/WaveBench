@@ -32,7 +32,7 @@
 | M1–M2 | `complete` | 合同、重放策略、结构化错误和 session 模型已冻结并有单元测试 |
 | M3–M4 | `complete` | PyVISA、RsInstrument、Serial、fake 和 guarded transport 已接入显式策略与健康门禁 |
 | M5–M6 | `complete` | factory、Service alias、run 调度、恢复和生命周期关闭证据已接入共享 session |
-| M7 | `complete` | 核心调用点已显式分类，capture/fetch `OperationSpec` 已审计，稳定参考文档已同步 |
+| M7 | `complete` | 核心调用点已显式分类；capture/fetch 已覆盖 query 响应头、波形字节序和完整传输窗口等恢复验证字段；稳定参考文档已同步 |
 | 插件采用 | `blocked-until-release` | SDS3000 仍保持 `wavebench>=0.8.22,<0.9`，待首个包含 R1 的核心版本发布后再升级 |
 
 ## 目标
@@ -66,7 +66,7 @@
 | `SerialTransport` | 查询使用显式策略并保持单次发送语义 | 串口响应读取不伪造 continuation 证明 |
 | `GuardedAuditedTransport` | 在每次 I/O 前执行共享 health/授权门禁并记录计数 | `uncertain`/`poisoned` 普通 I/O 发送前拒绝，close 仍可执行 |
 | Service/run session | factory 创建唯一 `InstrumentSessionState`，OpenedInstrument、driver 和 Service alias 共享 | 重建 Service 不清除锁存；close/reconnect 产生新连接代次 |
-| `OperationSpec` | 已包含 `session_purpose`、前置/后置验证字段和 `timeout_source` | capture/fetch 的受影响字段闭包与恢复/验证范围已纳入合同测试 |
+| `OperationSpec` | 已包含 `session_purpose`、前置/后置验证字段和 `timeout_source` | capture/fetch 的受影响字段与恢复验证范围已纳入合同测试；字段声明本身不代表已经取得 readback 证据 |
 
 实现前的行为差异曾使《错误处理和日志策略》与 PyVISA 代码不一致；R1 已将 `*OPC?` 和消费型读取迁移到显式 `no_replay`，并同步稳定参考文档。核心 driver 的结构化异常路径会原样保留 `TransportIOError`/`SessionHealthError`，避免包装成会掩盖发送结果的普通超时。
 
@@ -262,6 +262,27 @@ R1 为 `OperationSpec` 增加独立的 `session_purpose`，取值为 `normal`、
 - `timeout_source` 或等价字段说明普通操作、恢复和验证分别受哪个已配置 timeout 约束；
 - effect、risk 和 access policy 继续承担现有职责。
 
+### capture/fetch 传输状态字段
+
+四个 capture/fetch 操作使用厂商无关的字段 ID 表示临时传输状态：
+
+| 字段 | 通用语义 |
+| --- | --- |
+| `scope.query_response_header` | query 响应是否携带命令头，以及响应头采用的模式 |
+| `scope.waveform_format` | 波形 payload 的编码和样本格式 |
+| `scope.waveform_byte_order` | 多字节波形样本的字节序 |
+| `scope.waveform_points` | 本次传输选择的点数语义 |
+| `scope.waveform_transfer_window` | 影响所传样本集合的完整原子状态，包括后端支持的稀疏率、点数、首点和分段选择 |
+
+厂商命令名只在对应插件中映射到这些字段，不进入核心 `OperationSpec`。上述字段同时属于
+capture/fetch 的 `changed_fields` 和 `verification_fields`，但不扩大普通操作的
+`required_verified_fields`；正常前置验证仍只要求当前连接代次的 `scope.identity`。
+
+`verification_fields` 定义的是允许原连接代次恢复到 `healthy` 前必须取得的证据，不表示当前
+已经存在对应验证器，也不表示一次恢复写入已经验证成功。首版继续使用
+`restore_coverage="capture-baseline-only"`；在完成独立 readback、规范化比较和核心证据提交前，
+恢复路径不得把 `uncertain` 改回 `healthy`。组合字段必须整体比较，不能只验证其中一部分。
+
 以下操作必须在 P1 类型化状态工作前完成专项审计：
 
 ```text
@@ -318,7 +339,7 @@ R1 裁决 `wavebench.instrument.v2` 保持兼容：新参数属于核心提供�
 | M4 | 在 `GuardedAuditedTransport` 接入健康门禁和核心授权 | `uncertain` 普通 I/O 零发送，`poisoned` 只允许 close |
 | M5 | 在 factory、`OpenedInstrument` 和 Service alias 共享连接代次 | Service 重建不清除锁存，close/reconnect 产生新代次 |
 | M6 | 接入 run 调度和审计证据 | `on_failure=continue` 不允许已中毒 session 继续 I/O |
-| M7 | 审计 capture/fetch `OperationSpec`，迁移核心调用点并同步稳定文档 | 零个未分类核心调用，全量离线测试通过；当前开发分支已完成 |
+| M7 | 审计 capture/fetch `OperationSpec`，迁移核心调用点并同步稳定文档 | 零个未分类核心调用；传输状态变化与恢复后必验字段使用同一合同集合；全量离线测试通过 |
 
 M7 完成后仍不自动进行实机验证。实机验证必须在核心版本发布后单独授权，且不替代上述离线发送次数和状态机测试。
 
@@ -341,6 +362,7 @@ M7 完成后仍不自动进行实机验证。实机验证必须在核心版本�
 - factory 在具体 transport 打开后创建唯一 `InstrumentSessionState`；`OpenedInstrument`、guarded transport 和所有 Service alias 共享该对象。close 只能进入 `closed`，reconnect 创建新对象和新 `epoch_id`。
 - session 事务锁由 `InstrumentSessionState` 持有；恢复与验证授权只能由核心 transaction coordinator 在持锁的动态范围内安装。
 - `OperationSpec` 增加 `session_purpose`、`required_verified_fields`、`verification_fields` 和 `timeout_source`；默认分别为 `normal`、空集合、空集合和 `connection.timeout_ms`。`required_verified_fields` 是操作前置，`verification_fields` 是恢复后置，两者不得合并或互相推导。
+- capture/fetch 的 query 响应头、波形格式、字节序、点数和完整传输窗口同时进入 `changed_fields` 与 `verification_fields`；厂商命令名不作为核心字段 ID，组合传输状态必须整体 readback 和比较。
 - 新连接的通信初始为 `healthy`，`verified_fields` 初始为空。身份和配置基线由具体操作的前置字段声明决定，不把一次 IDN 成功扩大为全局验证。
 - `wavebench.instrument.v2` 保持不变：新参数属于核心提供的 transport 合同，现有 driver 方法和插件 factory 形态不变。
 - 核心 driver 调用点已在 M7 全部显式分类；driver 对结构化传输/健康异常保持异常优先级，并在失败后不执行未经授权的二次恢复 I/O。外部旧插件保持调用语法有效并获得 `no_replay` 默认；新插件的 wheel、descriptor 和四组合版本测试只在核心发布后更新。

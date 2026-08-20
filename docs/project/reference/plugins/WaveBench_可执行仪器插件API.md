@@ -369,6 +369,13 @@ capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader
   `on_failure = "continue"` 不能触发第二次恢复或验证写入。
 - 恢复/验证授权、字段证据记录和 session 健康回转属于核心内部合同，插件只能实现已冻结的
   有界动作，不能构造授权 token、提交任意字段闭包或开放 raw SCPI 通道。
+- capture/fetch 临时修改的厂商状态必须映射到核心字段 ID，不得把厂商命令名注册成新的公共字段。
+  query 响应头、波形字节序和传输窗口分别使用 `scope.query_response_header`、
+  `scope.waveform_byte_order` 和 `scope.waveform_transfer_window`。其中 transfer window 是完整的
+  原子选择状态，包含后端支持的稀疏率、点数、首点和分段选择，不能只核对其中一部分。
+- `verification_fields` 只定义恢复后必须取得的证据范围。恢复写入成功不等于验证成功；插件必须
+  通过独立 readback 和规范化比较提供结果，核心 coordinator 才能记录字段证据。缺少任何必验字段
+  时保持 fail closed，插件不得自行把 session 改回 `healthy`。
 - driver 不得吞掉错误后返回伪造的成功状态。
 
 核心 R1 当前已在开发分支实现但尚未发布。插件 wheel 的 `Requires-Dist`、descriptor
