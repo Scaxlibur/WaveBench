@@ -353,17 +353,34 @@ capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader
 - 状态查询不隐式修改仪器；
 - 写操作返回写后只读核对得到的状态，而不是直接回显请求参数。
 
-## 异常、日志和重试
+## 异常、日志、重试和 session 合同
 
 异常分类见[错误处理和日志策略](../WaveBench_错误处理和日志策略.md)。插件侧约定如下：
 
 - 无效调用参数或无法解释的仪器响应使用 `DataError`。
 - 仪器错误队列、写后核对失败或设备状态不满足操作条件使用 `InstrumentError`。
-- 连接和超时异常由核心 transport 保留为 `ConnectionError` 和 `OperationTimeout`；插件不应无差别包装成 `RuntimeError`。
+- 连接和超时异常由核心 transport 保留其结构化类型；插件不得把 `TransportIOError` 或 `SessionHealthError` 包装成 `OperationTimeout`、`StateDriftError` 或普通 `RuntimeError`。
 - 配置、descriptor 和 factory 创建失败由核心转换为 `ConfigError`；运行中的设备数据错误不应伪装成配置错误。
-- 所有 I/O 通过核心 transport 执行，以继承 timeout、命令日志和已配置的只读重试策略。
+- 所有 I/O 通过核心 transport 执行，并为每个 query 显式传入 `replay=ReplayPolicy.NO_REPLAY`、
+  `SAFE_TO_REPLAY` 或 `READ_CONTINUATION_ONLY`。第三方旧调用不需要改语法，但核心默认按
+  `no_replay` 处理；插件不能依赖 `read_retry_attempts` 隐式重放。
 - 不得自动重试写命令、输出切换、手动 trigger 或已经开始消费响应的数据传输。
+- `uncertain` 或 `poisoned` session 上，普通 driver 方法必须在 transport I/O 前失败；
+  `on_failure = "continue"` 不能触发第二次恢复或验证写入。
+- 恢复/验证授权、字段证据记录和 session 健康回转属于核心内部合同，插件只能实现已冻结的
+  有界动作，不能构造授权 token、提交任意字段闭包或开放 raw SCPI 通道。
+- capture/fetch 临时修改的厂商状态必须映射到核心字段 ID，不得把厂商命令名注册成新的公共字段。
+  query 响应头、波形字节序和传输窗口分别使用 `scope.query_response_header`、
+  `scope.waveform_byte_order` 和 `scope.waveform_transfer_window`。其中 transfer window 是完整的
+  原子选择状态，包含后端支持的稀疏率、点数、首点和分段选择，不能只核对其中一部分。
+- `verification_fields` 只定义恢复后必须取得的证据范围。恢复写入成功不等于验证成功；插件必须
+  通过独立 readback 和规范化比较提供结果，核心 coordinator 才能记录字段证据。缺少任何必验字段
+  时保持 fail closed，插件不得自行把 session 改回 `healthy`。
 - driver 不得吞掉错误后返回伪造的成功状态。
+
+核心 R1 当前已在开发分支实现但尚未发布。插件 wheel 的 `Requires-Dist`、descriptor
+`wavebench_min_version` 和 `api_version` 在包含 R1 的核心版本发布前不得提高；升级前还要
+补齐结构化异常优先级、恢复失败后零二次 I/O 和发送次数断言。
 
 ## 当前不会自动校验的项目
 

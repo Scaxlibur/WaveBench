@@ -1,4 +1,5 @@
 import csv
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -23,10 +24,17 @@ from wavebench.config import (
     WaveformConfig,
 )
 from wavebench.drivers.dp800 import PowerStatus
-from wavebench.errors import ConfigError
+from wavebench.errors import ConfigError, SessionHealthError, TransportIOError
 from wavebench.logging import CommandLogger
 from wavebench.services.run_plan import load_run_plan
-from wavebench.services.run_service import RunService
+from wavebench.services.run_service import RunInstrumentServices, RunService
+from wavebench.transport.contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
+)
 
 
 def make_config(
@@ -181,6 +189,231 @@ def ok_power_status() -> PowerStatus:
 
 
 class RunServiceTests(unittest.TestCase):
+    def test_session_close_failure_is_recorded_after_run_artifacts_are_written(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+""",
+                )
+            )
+
+            class CloseReportingRunService(RunService):
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    yield RunInstrumentServices(
+                        close_errors=[
+                            {
+                                "operation": "session.close.scope",
+                                "type": "RuntimeError",
+                                "error": {
+                                    "schema": "wavebench.error.v1",
+                                    "code": "unexpected_error",
+                                    "type": "RuntimeError",
+                                    "message": "close failed",
+                                    "exit_code": 1,
+                                    "operation": "session.close.scope",
+                                },
+                            }
+                        ]
+                    )
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    return None
+
+            result = CloseReportingRunService(
+                config=make_config(tmp),
+                logger=CommandLogger(),
+            ).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(run_data["status"], "failed")
+            self.assertEqual(run_data["error"]["code"], "session_close_failed")
+            self.assertEqual(
+                run_data["provenance"]["session_lifecycle"]["close_errors"][0]["operation"],
+                "session.close.scope",
+            )
+
+    def test_session_close_failure_is_recorded_before_run_exception_is_reraised(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+""",
+                )
+            )
+
+            class FailingRunService(RunService):
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    services = RunInstrumentServices()
+                    try:
+                        yield services
+                    finally:
+                        services.close_errors.append(
+                            {
+                                "operation": "session.close.scope",
+                                "type": "SessionCloseError",
+                                "error": {
+                                    "schema": "wavebench.error.v1",
+                                    "code": "session_close_failed",
+                                    "type": "SessionCloseError",
+                                    "message": "close failed",
+                                    "exit_code": 3,
+                                    "operation": "session.close.scope",
+                                },
+                            }
+                        )
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    return None
+
+                def _run_step(self, *args, **kwargs):
+                    raise RuntimeError("step execution failed")
+
+            with self.assertRaisesRegex(RuntimeError, "step execution failed"):
+                FailingRunService(
+                    config=make_config(tmp),
+                    logger=CommandLogger(),
+                ).run(plan)
+
+            [run_json_path] = (Path(tmp) / "data" / "runs").glob("*/run.json")
+            run_data = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_data["status"], "failed")
+            self.assertEqual(run_data["error"]["code"], "session_close_failed")
+            self.assertEqual(run_data["error"]["cause"]["type"], "RuntimeError")
+            self.assertEqual(
+                run_data["provenance"]["session_lifecycle"]["close_errors"][0]["operation"],
+                "session.close.scope",
+            )
+
+    def test_transport_failure_continue_is_recorded_and_latched_session_blocks_next_step(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+on_failure = "continue"
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+on_failure = "continue"
+""",
+                )
+            )
+
+            class OfflineRunService(RunService):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self.calls = 0
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    yield RunInstrumentServices()
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    return None
+
+                def _run_step(self, plan, step, **kwargs):
+                    self.calls += 1
+                    if self.calls == 1:
+                        raise TransportIOError(
+                            "offline read failed",
+                            operation="query",
+                            phase=TransportPhase.READING,
+                            replay_policy=ReplayPolicy.NO_REPLAY,
+                            command_transmission=CommandTransmission.SENT,
+                            response_progress=ResponseProgress.NONE,
+                            synchronization=Synchronization.UNPROVEN,
+                            attempts=1,
+                        )
+                    raise SessionHealthError(
+                        "ignored",
+                        health="poisoned",
+                        io_kind="query",
+                        epoch_id="offline-epoch",
+                    )
+
+            result = OfflineRunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            self.assertEqual(result.steps[0].status, "failed")
+            self.assertEqual(result.steps[1].status, "failed")
+            self.assertEqual(result.steps[0].artifact["error"]["code"], "transport_io_error")
+            self.assertEqual(result.steps[1].artifact["error"]["code"], "session_health_error")
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_data["status"], "failed")
+
+    def test_session_failure_cannot_continue_past_safety_gate(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+on_failure = "continue"
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+on_failure = "continue"
+""",
+                )
+            )
+            plan.steps[0].fields["safety_gate"] = {
+                "enabled": True,
+                "source_channels": [1],
+            }
+
+            class OfflineRunService(RunService):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self.step_calls = 0
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    yield RunInstrumentServices()
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    return None
+
+                def _run_step(self, plan, step, **kwargs):
+                    self.step_calls += 1
+                    raise TransportIOError(
+                        "offline read failed",
+                        operation="query",
+                        phase=TransportPhase.READING,
+                        replay_policy=ReplayPolicy.NO_REPLAY,
+                        command_transmission=CommandTransmission.SENT,
+                        response_progress=ResponseProgress.NONE,
+                        synchronization=Synchronization.UNPROVEN,
+                        attempts=1,
+                    )
+
+                def _apply_safety_gate(self, step, gate, *, services=None):
+                    return {"status": "failed", "errors": [{"code": "offline"}]}
+
+            service = OfflineRunService(config=make_config(tmp), logger=CommandLogger())
+            result = service.run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(service.step_calls, 1)
+            self.assertEqual(len(result.steps), 1)
+            self.assertEqual(run_data["error"]["code"], "safety_gate_failed")
+
     def test_check_rejects_missing_capability_before_opening_session(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(
@@ -1475,7 +1708,7 @@ settle_s = 0
             self.assertEqual(run_data["steps"][0]["kind"], "sweep.frequency_response")
             self.assertEqual(run_data["steps"][0]["status"], "failed")
             self.assertEqual(run_data["error"]["schema"], "wavebench.error.v1")
-            self.assertEqual(run_data["error"]["code"], "run_failed")
+            self.assertEqual(run_data["error"]["code"], "config_error")
             self.assertEqual(run_data["error"]["exit_code"], 2)
             self.assertEqual(run_data["error"]["type"], "ConfigError")
             self.assertEqual(run_data["error"]["message"], "set failed")

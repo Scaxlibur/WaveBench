@@ -6,8 +6,16 @@ import time
 from typing import Any
 
 from wavebench.config import ConnectionConfig
-from wavebench.errors import ConnectionError, InstrumentError
+from wavebench.errors import ConnectionError, SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
+
+from .contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
+)
 
 
 def _open_rsinstrument_session(
@@ -41,6 +49,8 @@ class RsInstrumentTransport:
     session: Any
     logger: CommandLogger
     select_visa: str | None = None
+    read_retry_attempts: int = 1
+    read_retry_delay_ms: int = 200
 
     @classmethod
     def open(
@@ -71,6 +81,8 @@ class RsInstrumentTransport:
             session=session,
             logger=logger,
             select_visa=select_visa,
+            read_retry_attempts=config.read_retry_attempts,
+            read_retry_delay_ms=config.read_retry_delay_ms,
         )
 
     def record_event(self, direction: str, text: str) -> None:
@@ -78,11 +90,37 @@ class RsInstrumentTransport:
 
     def write(self, command: str) -> None:
         self.logger.record("write", command)
-        self.session.write_str(command)
+        try:
+            written = self.session.write_str(command)
+            if written == 0:
+                raise self._not_sent_error("write")
+        except TransportIOError:
+            raise
+        except Exception as exc:
+            raise self._write_error("write", exc) from exc
 
-    def query(self, command: str) -> str:
+    def query(
+        self,
+        command: str,
+        *,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> str:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query", replay)
         self.logger.record("query", command)
-        response = self.session.query_str(command).strip()
+        attempts = 0
+
+        def read_once() -> str:
+            nonlocal attempts
+            attempts += 1
+            return self.session.query_str(command).strip()
+
+        try:
+            response = self._read_with_policy("query", command, replay, read_once)
+        except Exception as exc:
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query", replay, attempts, exc) from exc
         self.logger.record("response", response)
         return response
 
@@ -91,60 +129,98 @@ class RsInstrumentTransport:
         command: str,
         *,
         timeout_ms: int | None = None,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
     ) -> list[float]:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query_float_list", replay)
         self.logger.record("query", command)
         started = time.perf_counter()
-        try:
+        progress: dict[str, int | None] | None = None
+        attempts = 0
+
+        def read_once() -> list[float]:
+            nonlocal attempts, progress
+            attempts += 1
             with self._temporary_timeout(timeout_ms), self._read_progress(
                 "query_float_list"
-            ) as progress:
-                values = list(self.session.query_bin_or_ascii_float_list(command))
+            ) as current_progress:
+                progress = current_progress
+                return list(self.session.query_bin_or_ascii_float_list(command))
+
+        try:
+            values = self._read_with_policy(
+                "query_float_list",
+                command,
+                replay,
+                read_once,
+            )
         except Exception as exc:
             self._record_query_telemetry(
                 operation="query_float_list",
                 started=started,
                 status="failed",
-                progress=progress if "progress" in locals() else None,
+                progress=progress,
+                replay=replay,
             )
-            raise self._nonreplayable_query_error(
-                "query_float_list",
-                command,
-                exc,
-            ) from exc
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query_float_list", replay, attempts, exc) from exc
         self.logger.record("response", f"<float_list len={len(values)}>")
         self._record_query_telemetry(
             operation="query_float_list",
             started=started,
             status="ok",
             progress=progress,
+            replay=replay,
             items=len(values),
         )
         return values
 
-    def query_bin_block(self, command: str) -> bytes:
+    def query_bin_block(
+        self,
+        command: str,
+        *,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> bytes:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query_binary", replay)
         self.logger.record("query_binary", command)
         started = time.perf_counter()
+        progress: dict[str, int | None] | None = None
+        attempts = 0
+
+        def read_once() -> bytes:
+            nonlocal attempts, progress
+            attempts += 1
+            with self._read_progress("query_binary") as current_progress:
+                progress = current_progress
+                return bytes(self.session.query_bin_block(command))
+
         try:
-            with self._read_progress("query_binary") as progress:
-                data = bytes(self.session.query_bin_block(command))
+            data = self._read_with_policy(
+                "query_binary",
+                command,
+                replay,
+                read_once,
+            )
         except Exception as exc:
             self._record_query_telemetry(
                 operation="query_binary",
                 started=started,
                 status="failed",
-                progress=progress if "progress" in locals() else None,
+                progress=progress,
+                replay=replay,
             )
-            raise self._nonreplayable_query_error(
-                "query_binary",
-                command,
-                exc,
-            ) from exc
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query_binary", replay, attempts, exc) from exc
         self.logger.record("response", f"<bin_block len={len(data)}>")
         self._record_query_telemetry(
             operation="query_binary",
             started=started,
             status="ok",
             progress=progress,
+            replay=replay,
             bytes_count=len(data),
         )
         return data
@@ -208,6 +284,7 @@ class RsInstrumentTransport:
         started: float,
         status: str,
         progress: dict[str, int | None] | None,
+        replay: ReplayPolicy,
         bytes_count: int | None = None,
         items: int | None = None,
     ) -> None:
@@ -218,7 +295,7 @@ class RsInstrumentTransport:
             f"operation={operation}",
             f"status={status}",
             f"elapsed_ms={elapsed_s * 1000.0:.3f}",
-            "replay=disabled",
+            f"replay={replay.value}",
         ]
         if measured_bytes is not None:
             fields.append(f"bytes={measured_bytes}")
@@ -234,26 +311,135 @@ class RsInstrumentTransport:
             fields.append(f"chunks={progress['chunks']}")
         self.logger.record("telemetry", " ".join(fields))
 
-    def _nonreplayable_query_error(
+    def query_opc(
+        self,
+        *,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> str:
+        replay = ReplayPolicy(replay)
+        self._reject_continuation("query_opc", replay)
+        self.logger.record("query", "*OPC?")
+        attempts = 0
+
+        def read_once() -> str:
+            nonlocal attempts
+            attempts += 1
+            return str(self.session.query_opc()).strip()
+
+        try:
+            response = self._read_with_policy("query_opc", "*OPC?", replay, read_once)
+        except Exception as exc:
+            if isinstance(exc, TransportIOError):
+                raise
+            raise self._query_error("query_opc", replay, attempts, exc) from exc
+        self.logger.record("response", response)
+        return response
+
+    def _read_with_policy(
         self,
         operation: str,
         command: str,
-        exc: Exception,
-    ) -> InstrumentError:
-        return InstrumentError(
-            f"RsInstrument {operation} failed for command {command!r}: "
-            f"{type(exc).__name__}: {exc}. The response state may be partial; reopen the "
-            "instrument session and restart the complete acquisition before retrying."
+        replay: ReplayPolicy,
+        read_once: Any,
+    ) -> Any:
+        attempt_limit = (
+            self.read_retry_attempts + 1 if replay is ReplayPolicy.SAFE_TO_REPLAY else 1
+        )
+        last_exc: Exception | None = None
+        transmitted_attempts = 0
+        for attempt in range(attempt_limit):
+            try:
+                return read_once()
+            except Exception as exc:
+                last_exc = exc
+                if isinstance(exc, TransportIOError):
+                    transmitted_attempts += exc.attempts
+                if attempt >= attempt_limit - 1 or not self._can_retry(exc, replay):
+                    break
+                if self.read_retry_delay_ms > 0:
+                    time.sleep(self.read_retry_delay_ms / 1000.0)
+                self.logger.record(
+                    "retry",
+                    f"operation={operation} attempt={attempt + 2}/{attempt_limit}",
+                )
+        assert last_exc is not None
+        if isinstance(last_exc, TransportIOError) and last_exc.attempts != transmitted_attempts:
+            raise last_exc.with_attempts(transmitted_attempts) from last_exc
+        raise last_exc
+
+    @staticmethod
+    def _can_retry(exc: Exception, replay: ReplayPolicy) -> bool:
+        return (
+            replay is ReplayPolicy.SAFE_TO_REPLAY
+            and isinstance(exc, TransportIOError)
+            and exc.replay_policy is ReplayPolicy.SAFE_TO_REPLAY
+            and exc.response_progress is ResponseProgress.NONE
+            and exc.synchronization is Synchronization.PROVEN
+            and exc.command_transmission
+            in {CommandTransmission.NOT_SENT, CommandTransmission.SENT}
         )
 
-    def query_opc(self) -> str:
-        self.logger.record("query", "*OPC?")
-        response = str(self.session.query_opc()).strip()
-        self.logger.record("response", response)
-        return response
+    @staticmethod
+    def _reject_continuation(operation: str, replay: ReplayPolicy) -> None:
+        if replay is not ReplayPolicy.READ_CONTINUATION_ONLY:
+            return
+        raise TransportIOError(
+            f"RsInstrument does not support read continuation for {operation}",
+            operation=operation,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+        )
+
+    @staticmethod
+    def _query_error(
+        operation: str,
+        replay: ReplayPolicy,
+        attempts: int,
+        exc: Exception,
+    ) -> TransportIOError:
+        return TransportIOError(
+            f"RsInstrument {operation} failed with {type(exc).__name__}",
+            operation=operation,
+            phase=TransportPhase.READING,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.UNKNOWN,
+            response_progress=ResponseProgress.UNKNOWN,
+            synchronization=Synchronization.UNPROVEN,
+            attempts=attempts,
+        )
+
+    @staticmethod
+    def _write_error(operation: str, exc: Exception) -> TransportIOError:
+        return TransportIOError(
+            f"RsInstrument {operation} failed with {type(exc).__name__}",
+            operation=operation,
+            phase=TransportPhase.SENDING,
+            replay_policy=ReplayPolicy.NO_REPLAY,
+            command_transmission=CommandTransmission.UNKNOWN,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.UNPROVEN,
+            attempts=1,
+        )
+
+    @staticmethod
+    def _not_sent_error(operation: str) -> TransportIOError:
+        return TransportIOError(
+            f"RsInstrument {operation} command was not transmitted",
+            operation=operation,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=ReplayPolicy.NO_REPLAY,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+        )
 
     def close(self) -> None:
         try:
             self.session.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            raise SessionCloseError([("session", exc)]) from None

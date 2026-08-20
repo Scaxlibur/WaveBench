@@ -8,6 +8,7 @@ from .discovery import DEFAULT_DISCOVERY_PORTS, DiscoveryResult, discover_instru
 from .errors import ConfigError, ResourceBusyError
 from .instruments.registry import resolve_instrument_descriptor
 from .services.resource_lease import ResourceLease
+from .transport.contracts import ReplayPolicy
 from .transport.serial_transport import SerialTransport
 
 
@@ -113,7 +114,7 @@ def query_target_idn(target: DoctorTarget, timeout_ms: int) -> str | None:
         with ResourceLease(resource=target.resource or "", operation="doctor.idn"):
             try:
                 transport = SerialTransport.open(replace(target.serial_config, timeout_ms=timeout_ms))
-                return transport.query("*IDN?") or None
+                return transport.query("*IDN?", replay=ReplayPolicy.NO_REPLAY) or None
             finally:
                 if transport is not None:
                     transport.close()

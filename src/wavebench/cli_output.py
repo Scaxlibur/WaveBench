@@ -94,6 +94,16 @@ def _print_capability_explanation(result: CapabilityExplanation) -> None:
         print(f"lease_mode={spec['lease_mode']}")
         print("changed_fields=" + (",".join(spec["changed_fields"]) or "none"))
         print("restore_coverage=" + str(spec["restore_coverage"]))
+        print("session_purpose=" + str(spec["session_purpose"]))
+        print(
+            "required_verified_fields="
+            + (",".join(spec["required_verified_fields"]) or "none")
+        )
+        print(
+            "verification_fields="
+            + (",".join(spec["verification_fields"]) or "none")
+        )
+        print("timeout_source=" + str(spec["timeout_source"]))
         print("risk_flags=" + (",".join(spec["risk_flags"]) or "none"))
         print("safe_alternatives=" + (",".join(spec["safe_alternatives"]) or "none"))
 

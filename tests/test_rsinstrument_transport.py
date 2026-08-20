@@ -4,8 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from wavebench.errors import InstrumentError
+from wavebench.errors import SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
+from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.rsinstrument_transport import (
     RsInstrumentTransport,
     _open_rsinstrument_session,
@@ -137,15 +138,16 @@ def test_float_list_failure_is_nonreplayable_and_restores_timeout():
     logger = CommandLogger()
     transport = RsInstrumentTransport("TCPIP::x::INSTR", session, logger)
 
-    with pytest.raises(InstrumentError, match="reopen.*session"):
+    with pytest.raises(TransportIOError) as raised:
         transport.query_float_list("DATA?", timeout_ms=300_000)
 
+    assert raised.value.attempts == 1
     assert session.visa_timeout == 1000
     assert any(
         entry.direction == "telemetry"
         and "operation=query_float_list" in entry.text
         and "status=failed" in entry.text
-        and "replay=disabled" in entry.text
+        and "replay=no_replay" in entry.text
         for entry in logger.entries
     )
 
@@ -175,9 +177,34 @@ def test_pyvisa_float_query_restores_timeout_when_previous_timeout_is_none(fail)
     transport = PyVisaTransport("TCPIP::x::INSTR", object(), session, CommandLogger())
 
     if fail:
-        with pytest.raises(InstrumentError):
+        with pytest.raises(TransportIOError):
             transport.query_float_list("DATA?", timeout_ms=300_000)
     else:
         assert transport.query_float_list("DATA?", timeout_ms=300_000) == [1.0, 2.0]
 
     assert session.timeout is None
+
+
+def test_rsinstrument_continuation_rejects_before_send():
+    session = FakeSession()
+    transport = RsInstrumentTransport("TCPIP::x::INSTR", session, CommandLogger())
+
+    with pytest.raises(TransportIOError) as raised:
+        transport.query_bin_block(
+            "DATA?",
+            replay=ReplayPolicy.READ_CONTINUATION_ONLY,
+        )
+
+    assert raised.value.attempts == 0
+    assert raised.value.command_transmission.value == "not_sent"
+
+
+def test_rsinstrument_close_reports_backend_failure():
+    session = FakeSession()
+    session.close = lambda: (_ for _ in ()).throw(RuntimeError("private close failure"))
+    transport = RsInstrumentTransport("TCPIP::x::INSTR", session, CommandLogger())
+
+    with pytest.raises(SessionCloseError) as raised:
+        transport.close()
+
+    assert raised.value.failures == ({"component": "session", "type": "RuntimeError"},)

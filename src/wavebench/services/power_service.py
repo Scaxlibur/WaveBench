@@ -18,17 +18,20 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
+from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.services.state_guard import PowerStateGuard
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.session import InstrumentSessionState
 
 
 @dataclass
-class PowerService:
+class PowerService(SessionStateAliasMixin):
     config: WaveBenchConfig
     logger: CommandLogger
     session: PowerDriver | None = None
     descriptor: InstrumentDescriptor | None = None
     transport: InstrumentTransport | None = None
+    session_state: InstrumentSessionState | None = None
     lease: ResourceLease | None = None
     state_guard: PowerStateGuard | None = None
 
@@ -51,6 +54,7 @@ class PowerService:
 
     def _open_power(self) -> PowerDriver:
         power = self._power_config()
+        self._prepare_session_open("power")
         if self.lease is None:
             self.lease = ResourceLease(
                 resource=power.resource or "",
@@ -73,6 +77,7 @@ class PowerService:
         )
         self.descriptor = opened.descriptor
         self.transport = opened.transport
+        self.session_state = getattr(opened, "session_state", None)
         return opened.driver
 
     def audit_snapshot(self) -> dict[str, Any] | None:

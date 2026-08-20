@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping
+
+from wavebench.transport.contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
+)
 
 
 ERROR_SCHEMA = "wavebench.error.v1"
@@ -111,9 +120,197 @@ class ConnectionError(WaveBenchError):
     exit_code = 3
     code = "connection_error"
 
+
+class SessionCloseError(ConnectionError):
+    """One or more backend resources failed to close.
+
+    Close failures may contain resource strings or vendor payloads.  Keep only
+    fixed component names and exception types in the public envelope.
+    """
+
+    code = "session_close_failed"
+
+    def __init__(self, failures: list[tuple[str, BaseException]]) -> None:
+        if not failures:
+            raise ValueError("session close failures must not be empty")
+        normalized: list[dict[str, str]] = []
+        for component, exc in failures:
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", component) is None:
+                raise ValueError("invalid session close component")
+            normalized.append(
+                {
+                    "component": component,
+                    "type": _safe_cause_token(type(exc).__name__, "BackendError"),
+                }
+            )
+        super().__init__("one or more instrument session resources failed to close")
+        self.failures = tuple(normalized)
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        return super().to_envelope(
+            operation=operation,
+            details={"failed_components": [dict(item) for item in self.failures]},
+            cause=None,
+        )
+
+
 class InstrumentError(WaveBenchError):
     exit_code = 4
     code = "instrument_error"
+
+
+class TransportIOError(InstrumentError):
+    """Structured transport failure without command or response payloads."""
+
+    code = "transport_io_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str,
+        phase: TransportPhase,
+        replay_policy: ReplayPolicy,
+        command_transmission: CommandTransmission,
+        response_progress: ResponseProgress,
+        synchronization: Synchronization,
+        attempts: int,
+    ) -> None:
+        super().__init__(message)
+        phase = TransportPhase(phase)
+        replay_policy = ReplayPolicy(replay_policy)
+        command_transmission = CommandTransmission(command_transmission)
+        response_progress = ResponseProgress(response_progress)
+        synchronization = Synchronization(synchronization)
+        if attempts < 0:
+            raise ValueError("transport attempts must be >= 0")
+        if phase is TransportPhase.BEFORE_SEND and (
+            command_transmission is not CommandTransmission.NOT_SENT
+            or response_progress is not ResponseProgress.NONE
+            or synchronization is not Synchronization.PROVEN
+            or attempts != 0
+        ):
+            raise ValueError("before_send failures must prove zero command transmissions")
+        if command_transmission is CommandTransmission.NOT_SENT and attempts != 0:
+            raise ValueError("not_sent failures must have zero command transmissions")
+        if command_transmission is CommandTransmission.NOT_SENT and (
+            phase is not TransportPhase.BEFORE_SEND
+            or response_progress is not ResponseProgress.NONE
+            or synchronization is not Synchronization.PROVEN
+        ):
+            raise ValueError("not_sent failures must be proven before_send failures")
+        if phase is not TransportPhase.BEFORE_SEND and attempts == 0:
+            raise ValueError("post-send failures must report at least one attempt")
+        if response_progress in {ResponseProgress.PARTIAL, ResponseProgress.COMPLETE} and attempts == 0:
+            raise ValueError("response progress requires at least one command transmission")
+        self.operation = operation
+        self.phase = phase
+        self.replay_policy = replay_policy
+        self.command_transmission = command_transmission
+        self.response_progress = response_progress
+        self.synchronization = synchronization
+        self.attempts = attempts
+
+    def with_attempts(self, attempts: int) -> "TransportIOError":
+        return TransportIOError(
+            str(self),
+            operation=self.operation,
+            phase=self.phase,
+            replay_policy=self.replay_policy,
+            command_transmission=self.command_transmission,
+            response_progress=self.response_progress,
+            synchronization=self.synchronization,
+            attempts=attempts,
+        )
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        # Transport envelopes are deliberately limited to the RFC's stable
+        # fields.  Arbitrary caller details could contain a command, response,
+        # or resource string, so they must not cross this boundary.
+        merged = {
+            "transport_operation": self.operation,
+            "phase": self.phase.value,
+            "replay_policy": self.replay_policy.value,
+            "command_transmission": self.command_transmission.value,
+            "response_progress": self.response_progress.value,
+            "synchronization": self.synchronization.value,
+            "attempts": self.attempts,
+        }
+        return super().to_envelope(
+            operation=operation,
+            details=merged,
+            cause=(
+                _sanitized_transport_cause(self.__cause__)
+                if cause is None
+                else _sanitized_transport_cause(cause)
+            ),
+        )
+
+
+class SessionHealthError(InstrumentError):
+    """An instrument exchange was rejected by the shared session gate."""
+
+    code = "session_health_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        health: str,
+        io_kind: str,
+        epoch_id: str,
+    ) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", health):
+            raise ValueError("invalid session health code")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", io_kind):
+            raise ValueError("invalid session I/O kind")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", epoch_id):
+            raise ValueError("invalid session epoch id")
+        # Ignore caller text: this error may cross an untrusted transport
+        # boundary, so its stable message must never echo command/response data.
+        super().__init__(
+            f"transport {io_kind} is blocked because session health is {health!r}"
+        )
+        self.health = health
+        self.io_kind = io_kind
+        self.epoch_id = epoch_id
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        # Session gate errors are emitted before an exchange and may be built
+        # from a caller that has seen command/resource data.  Keep the
+        # envelope strictly structural instead of copying arbitrary details.
+        merged = {
+            "session_health": self.health,
+            "io_kind": self.io_kind,
+            "command_transmission": "not_sent",
+            "response_progress": "none",
+            "synchronization": "proven",
+            "attempts": 0,
+            "epoch_id": self.epoch_id,
+        }
+        return super().to_envelope(
+            operation=operation,
+            details=merged,
+            cause=None,
+        )
 
 
 class StateDriftError(InstrumentError):
@@ -221,3 +418,24 @@ def _cause_payload(cause: Mapping[str, Any] | BaseException | None) -> dict[str,
     if isinstance(cause, Mapping):
         return dict(cause)
     return error_envelope(cause)
+
+
+def _sanitized_transport_cause(
+    cause: Mapping[str, Any] | BaseException | None,
+) -> dict[str, Any] | None:
+    if cause is None:
+        return None
+    if isinstance(cause, Mapping):
+        payload = {"type": _safe_cause_token(cause.get("type"), "BackendError")}
+        if "code" in cause:
+            payload["code"] = _safe_cause_token(cause["code"], "backend_error")
+        return payload
+    return {"type": type(cause).__name__}
+
+
+_SAFE_CAUSE_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$")
+
+
+def _safe_cause_token(value: Any, fallback: str) -> str:
+    token = str(value) if value is not None else ""
+    return token if _SAFE_CAUSE_TOKEN.fullmatch(token) else fallback

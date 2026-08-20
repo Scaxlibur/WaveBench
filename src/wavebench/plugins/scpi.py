@@ -11,6 +11,7 @@ from wavebench.logging import CommandLogger
 from wavebench.services.resource_lease import ResourceLease
 from wavebench.transport.pyvisa_transport import PyVisaTransport
 from wavebench.transport.rsinstrument_transport import RsInstrumentTransport
+from wavebench.transport.contracts import ReplayPolicy
 
 from .api import SUPPORTED_PLUGIN_API_VERSION, InstrumentPlugin
 from .registry import PluginRegistry, plugin_doctor_records
@@ -107,7 +108,7 @@ def probe_scpi_plugin(
     with ResourceLease(resource=config.resource, operation="scpi.probe"):
         transport = factory(config, CommandLogger())
         try:
-            response = transport.query(scpi_plugin.idn_query).strip()
+            response = transport.query(scpi_plugin.idn_query, replay=ReplayPolicy.NO_REPLAY).strip()
         finally:
             transport.close()
     return ScpiProbeResult(

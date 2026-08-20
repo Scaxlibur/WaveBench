@@ -5,7 +5,12 @@ import math
 import re
 from threading import RLock
 
-from wavebench.errors import DataError, InstrumentError
+from wavebench.errors import (
+    DataError,
+    InstrumentError,
+    SessionHealthError,
+    TransportIOError,
+)
 from wavebench.instruments.dmm import (
     DMM_FUNCTION_ALIASES as DMM_FUNCTION_ALIASES,
     normalize_dmm_function as normalize_dmm_function,
@@ -20,6 +25,7 @@ from wavebench.instruments.models import (
     DmmTriggerStatus,
     DmmVoltageRangeConfiguration,
 )
+from wavebench.transport.contracts import ReplayPolicy
 
 DMM_FUNCTION_COMMANDS = {
     "dcv": ":MEASure:VOLTage:DC?",
@@ -192,11 +198,11 @@ class DM3000Dmm:
 
     def idn(self) -> str:
         with self._io_lock:
-            return self.transport.query("*IDN?")
+            return self.transport.query("*IDN?", replay=ReplayPolicy.NO_REPLAY)
 
     def function_status(self) -> str:
         with self._io_lock:
-            raw = self.transport.query(":FUNCtion?").strip().strip('"')
+            raw = self.transport.query(":FUNCtion?", replay=ReplayPolicy.NO_REPLAY).strip().strip('"')
             normalized = DMM_FUNCTION_QUERY_MAP.get(raw.upper())
             if normalized is None:
                 supported = ", ".join(sorted(DMM_FUNCTION_QUERY_MAP))
@@ -217,7 +223,7 @@ class DM3000Dmm:
             range_code = None
             auto_range = None
             if range_query is not None:
-                raw_range = self.transport.query(range_query).strip()
+                raw_range = self.transport.query(range_query, replay=ReplayPolicy.NO_REPLAY).strip()
                 try:
                     range_code = int(raw_range)
                 except ValueError as exc:
@@ -231,7 +237,7 @@ class DM3000Dmm:
             impedance = None
             if function == "dcv":
                 impedance = self.transport.query(
-                    ":MEASure:VOLTage:DC:IMPedance?"
+                    ":MEASure:VOLTage:DC:IMPedance?", replay=ReplayPolicy.NO_REPLAY
                 ).strip().upper()
                 if not impedance:
                     raise DataError("unexpected empty DM3000 DCV impedance response")
@@ -244,31 +250,31 @@ class DM3000Dmm:
 
     def trigger_status(self) -> DmmTriggerStatus:
         with self._io_lock:
-            source = self.transport.query(":TRIGger:SOURce?").strip().upper()
+            source = self.transport.query(":TRIGger:SOURce?", replay=ReplayPolicy.NO_REPLAY).strip().upper()
             if not source:
                 raise DataError("unexpected empty DM3000 trigger source response")
             auto_interval_s = _time_seconds(
-                self.transport.query(":TRIGger:AUTO:INTerval?"),
+                self.transport.query(":TRIGger:AUTO:INTerval?", replay=ReplayPolicy.NO_REPLAY),
                 "trigger auto interval",
             )
             auto_hold = _on_off(
-                self.transport.query(":TRIGger:AUTO:HOLD?"),
+                self.transport.query(":TRIGger:AUTO:HOLD?", replay=ReplayPolicy.NO_REPLAY),
                 "trigger auto hold",
             )
             auto_hold_sensitivity = _nonnegative_int(
-                self.transport.query(":TRIGger:AUTO:HOLD:SENSitivity?"),
+                self.transport.query(":TRIGger:AUTO:HOLD:SENSitivity?", replay=ReplayPolicy.NO_REPLAY),
                 "trigger auto hold sensitivity",
             )
             single_count = _nonnegative_int(
-                self.transport.query(":TRIGger:SINGle?"),
+                self.transport.query(":TRIGger:SINGle?", replay=ReplayPolicy.NO_REPLAY),
                 "trigger single count",
             )
-            external_slope = self.transport.query(":TRIGger:EXT?").strip().upper()
-            vmc_polarity = self.transport.query(":TRIGger:VMComplete:POLar?").strip().upper()
+            external_slope = self.transport.query(":TRIGger:EXT?", replay=ReplayPolicy.NO_REPLAY).strip().upper()
+            vmc_polarity = self.transport.query(":TRIGger:VMComplete:POLar?", replay=ReplayPolicy.NO_REPLAY).strip().upper()
             if not external_slope or not vmc_polarity:
                 raise DataError("unexpected empty DM3000 trigger edge or VMC polarity response")
             vmc_pulse_width_s = _time_seconds(
-                self.transport.query(":TRIGger:VMComplete:PULSewidth?"),
+                self.transport.query(":TRIGger:VMComplete:PULSewidth?", replay=ReplayPolicy.NO_REPLAY),
                 "trigger VMC pulse width",
             )
             try:
@@ -286,7 +292,7 @@ class DM3000Dmm:
                 raise DataError(f"invalid DM3000 trigger status: {exc}") from exc
 
     def _calculation_function(self) -> str:
-        raw = self.transport.query(":CALCulate:FUNCtion?").strip().strip('"').upper()
+        raw = self.transport.query(":CALCulate:FUNCtion?", replay=ReplayPolicy.NO_REPLAY).strip().strip('"').upper()
         if raw not in _CALCULATION_FUNCTIONS:
             raise DataError(f"unexpected DM3000 calculation function response: {raw!r}")
         return raw.lower()
@@ -295,15 +301,15 @@ class DM3000Dmm:
         with self._io_lock:
             function = self._calculation_function()
             statistic_count = _nonnegative_int(
-                self.transport.query(":CALCulate:STATistic:COUNt?"),
+                self.transport.query(":CALCulate:STATistic:COUNt?", replay=ReplayPolicy.NO_REPLAY),
                 "calculation statistic count",
             )
             db_reference = _finite_float(
-                self.transport.query(":CALCulate:DB:REFerence?"),
+                self.transport.query(":CALCulate:DB:REFerence?", replay=ReplayPolicy.NO_REPLAY),
                 "calculation dB reference",
             )
             dbm_reference_ohm = _finite_float(
-                self.transport.query(":CALCulate:DBM:REFerence?"),
+                self.transport.query(":CALCulate:DBM:REFerence?", replay=ReplayPolicy.NO_REPLAY),
                 "calculation dBm reference",
             )
             if dbm_reference_ohm <= 0:
@@ -327,11 +333,11 @@ class DM3000Dmm:
                     f"current function is {active}"
                 )
             value = _finite_float(
-                self.transport.query(_CALCULATION_STATISTIC_QUERIES[expected]),
+                self.transport.query(_CALCULATION_STATISTIC_QUERIES[expected], replay=ReplayPolicy.NO_REPLAY),
                 f"calculation {expected} statistic",
             )
             count = _nonnegative_int(
-                self.transport.query(":CALCulate:STATistic:COUNt?"),
+                self.transport.query(":CALCulate:STATistic:COUNt?", replay=ReplayPolicy.NO_REPLAY),
                 "calculation statistic count",
             )
             return DmmCalculationStatistics(function=expected, value=value, count=count)
@@ -339,50 +345,50 @@ class DM3000Dmm:
     def system_interface_status(self) -> DmmSystemInterfaceStatus:
         with self._io_lock:
             beeper_enabled = _zero_one(
-                self.transport.query(":SYSTem:BEEPer:STATe?"),
+                self.transport.query(":SYSTem:BEEPer:STATe?", replay=ReplayPolicy.NO_REPLAY),
                 "beeper state",
             )
             language = _enum_response(
-                self.transport.query(":SYSTem:LANGuage?"),
+                self.transport.query(":SYSTem:LANGuage?", replay=ReplayPolicy.NO_REPLAY),
                 "language",
                 {"CHINESE", "ENGLISH"},
             )
             decimal_format = _enum_response(
-                self.transport.query(":SYSTem:FORMat:DECimal?"),
+                self.transport.query(":SYSTem:FORMat:DECimal?", replay=ReplayPolicy.NO_REPLAY),
                 "decimal format",
                 {"COMMA", "DOT"},
             )
             separator_format = _enum_response(
-                self.transport.query(":SYSTem:FORMat:SEParate?"),
+                self.transport.query(":SYSTem:FORMat:SEParate?", replay=ReplayPolicy.NO_REPLAY),
                 "separator format",
                 {"ON", "NONE", "SPACE"},
             )
             display_brightness = _nonnegative_int(
-                self.transport.query(":SYSTem:DISPlay:BRIGht?"),
+                self.transport.query(":SYSTem:DISPlay:BRIGht?", replay=ReplayPolicy.NO_REPLAY),
                 "display brightness",
             )
             scan_board_installed = _installed_status(
-                self.transport.query(":SYSTem:SCANserial?"),
+                self.transport.query(":SYSTem:SCANserial?", replay=ReplayPolicy.NO_REPLAY),
                 "scan board status",
             )
             lan_interface_installed = _installed_status(
-                self.transport.query(":SYSTem:LANserial?"),
+                self.transport.query(":SYSTem:LANserial?", replay=ReplayPolicy.NO_REPLAY),
                 "LAN interface status",
             )
             dhcp_enabled = _on_off(
-                self.transport.query(":UTILity:INTerface:LAN:DHCP?"),
+                self.transport.query(":UTILity:INTerface:LAN:DHCP?", replay=ReplayPolicy.NO_REPLAY),
                 "LAN DHCP state",
             )
             gpib_address = _nonnegative_int(
-                self.transport.query(":UTILity:INTerface:GPIB:ADDRess?"),
+                self.transport.query(":UTILity:INTerface:GPIB:ADDRess?", replay=ReplayPolicy.NO_REPLAY),
                 "GPIB address",
             )
             rs232_baud = _nonnegative_int(
-                self.transport.query(":UTILity:INTerface:RS232:BAUD?"),
+                self.transport.query(":UTILity:INTerface:RS232:BAUD?", replay=ReplayPolicy.NO_REPLAY),
                 "RS-232 baud rate",
             )
             rs232_parity = _enum_response(
-                self.transport.query(":UTILity:INTerface:RS232:PARity?"),
+                self.transport.query(":UTILity:INTerface:RS232:PARity?", replay=ReplayPolicy.NO_REPLAY),
                 "RS-232 parity",
                 {"NONE8BITS", "ODD7BITS", "EVEN7BITS"},
             )
@@ -409,7 +415,7 @@ class DM3000Dmm:
             return self._configuration_writes_blocked
 
     def _range_code(self, function: str) -> int:
-        raw = self.transport.query(DMM_FUNCTION_RANGE_QUERIES[function]).strip()
+        raw = self.transport.query(DMM_FUNCTION_RANGE_QUERIES[function], replay=ReplayPolicy.NO_REPLAY).strip()
         try:
             value = int(raw)
         except ValueError as exc:
@@ -419,7 +425,7 @@ class DM3000Dmm:
         return value
 
     def _dcv_impedance(self) -> str:
-        raw = self.transport.query(":MEASure:VOLTage:DC:IMPedance?").strip().upper()
+        raw = self.transport.query(":MEASure:VOLTage:DC:IMPedance?", replay=ReplayPolicy.NO_REPLAY).strip().upper()
         if raw not in {"10M", "10G"}:
             raise DataError(f"unexpected DM3000 DCV impedance response: {raw!r}")
         return raw
@@ -464,11 +470,17 @@ class DM3000Dmm:
                 write_returned = True
                 if self._range_code(key) != range_code:
                     raise DataError("DM3000 voltage range readback mismatch")
+            except (TransportIOError, SessionHealthError):
+                # A session-gated or structured exchange failure must not
+                # trigger another write on an uncertain/poisoned connection.
+                raise
             except Exception as exc:
                 try:
                     self.transport.write(f"{command} {previous}")
                     if self._range_code(key) != previous:
                         raise DataError("DM3000 voltage range restore mismatch")
+                except (TransportIOError, SessionHealthError):
+                    raise
                 except Exception as restore_exc:
                     self._configuration_writes_blocked = True
                     raise InstrumentError(
@@ -512,11 +524,15 @@ class DM3000Dmm:
                 write_returned = True
                 if self._dcv_impedance() != target:
                     raise DataError("DM3000 DCV impedance readback mismatch")
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 try:
                     self.transport.write(f":MEASure:VOLTage:DC:IMPedance {previous}")
                     if self._dcv_impedance() != previous:
                         raise DataError("DM3000 DCV impedance restore mismatch")
+                except (TransportIOError, SessionHealthError):
+                    raise
                 except Exception as restore_exc:
                     self._configuration_writes_blocked = True
                     raise InstrumentError(
@@ -550,7 +566,7 @@ class DM3000Dmm:
             supported = ", ".join(sorted(DMM_FUNCTION_COMMANDS))
             raise DataError(f"unsupported DMM function {function!r}; supported: {supported}")
         with self._io_lock:
-            raw = self.transport.query(DMM_FUNCTION_COMMANDS[key])
+            raw = self.transport.query(DMM_FUNCTION_COMMANDS[key], replay=ReplayPolicy.NO_REPLAY)
             try:
                 value = float(raw)
             except ValueError as exc:

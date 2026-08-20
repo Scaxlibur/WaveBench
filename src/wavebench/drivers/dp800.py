@@ -6,8 +6,14 @@ import re
 from threading import RLock
 import time
 
-from wavebench.errors import DataError, InstrumentError
+from wavebench.errors import (
+    DataError,
+    InstrumentError,
+    SessionHealthError,
+    TransportIOError,
+)
 from wavebench.instruments.models import PowerMeasurement, PowerProtectionStatus, PowerStatus
+from wavebench.transport.contracts import ReplayPolicy
 
 
 DP800_MODEL_CHANNELS = {
@@ -124,7 +130,7 @@ class DP800Power:
 
     def idn(self) -> str:
         with self._io_lock:
-            response = self.transport.query("*IDN?")
+            response = self.transport.query("*IDN?", replay=ReplayPolicy.NO_REPLAY)
             self._model, self._channel_count = parse_idn_model(response)
             return response
 
@@ -186,7 +192,7 @@ class DP800Power:
         with self._io_lock:
             errors: list[str] = []
             for _ in range(limit):
-                response = self.transport.query("SYST:ERR?")
+                response = self.transport.query("SYST:ERR?", replay=ReplayPolicy.NO_REPLAY)
                 errors.append(response)
                 if response.startswith("0") or "No error" in response:
                     break
@@ -203,7 +209,7 @@ class DP800Power:
             self._validate_channel(channel)
             single_channel = self._channel_count == 1
             rating, set_voltage_v, set_current_a = parse_apply_response(
-                self.transport.query(":APPL?" if single_channel else f":APPL? CH{channel}"),
+                self.transport.query(":APPL?" if single_channel else f":APPL? CH{channel}", replay=ReplayPolicy.NO_REPLAY),
                 expected_channel=channel,
                 allow_targetless=single_channel,
             )
@@ -211,12 +217,12 @@ class DP800Power:
             return PowerStatus(
                 channel=channel,
                 output=_enum_response(
-                    self.transport.query(f":OUTP? CH{channel}"),
+                    self.transport.query(f":OUTP? CH{channel}", replay=ReplayPolicy.NO_REPLAY),
                     field="output state",
                     allowed={"OFF", "ON"},
                 ),
                 mode=_enum_response(
-                    self.transport.query(f":OUTP:MODE? CH{channel}"),
+                    self.transport.query(f":OUTP:MODE? CH{channel}", replay=ReplayPolicy.NO_REPLAY),
                     field="output mode",
                     allowed={"CC", "CV", "UR"},
                 ),
@@ -232,7 +238,7 @@ class DP800Power:
         with self._io_lock:
             self._validate_channel(channel)
             measured_voltage_v, measured_current_a, measured_power_w = parse_measure_all_response(
-                self.transport.query(f":MEAS:ALL? CH{channel}")
+                self.transport.query(f":MEAS:ALL? CH{channel}", replay=ReplayPolicy.NO_REPLAY)
             )
             return PowerMeasurement(
                 channel=channel,
@@ -247,28 +253,28 @@ class DP800Power:
             return PowerProtectionStatus(
                 channel=channel,
                 ovp_enabled=_enum_response(
-                    self.transport.query(f":OUTP:OVP? CH{channel}"),
+                    self.transport.query(f":OUTP:OVP? CH{channel}", replay=ReplayPolicy.NO_REPLAY),
                     field="OVP state",
                     allowed={"OFF", "ON"},
                 ),
                 ovp_threshold_v=parse_protection_value_response(
-                    self.transport.query(f":OUTP:OVP:VAL? CH{channel}")
+                    self.transport.query(f":OUTP:OVP:VAL? CH{channel}", replay=ReplayPolicy.NO_REPLAY)
                 ),
                 ovp_tripped=_enum_response(
-                    self.transport.query(f":OUTP:OVP:QUES? CH{channel}"),
+                    self.transport.query(f":OUTP:OVP:QUES? CH{channel}", replay=ReplayPolicy.NO_REPLAY),
                     field="OVP trip state",
                     allowed={"NO", "YES"},
                 ),
                 ocp_enabled=_enum_response(
-                    self.transport.query(f":OUTP:OCP? CH{channel}"),
+                    self.transport.query(f":OUTP:OCP? CH{channel}", replay=ReplayPolicy.NO_REPLAY),
                     field="OCP state",
                     allowed={"OFF", "ON"},
                 ),
                 ocp_threshold_a=parse_protection_value_response(
-                    self.transport.query(f":OUTP:OCP:VAL? CH{channel}")
+                    self.transport.query(f":OUTP:OCP:VAL? CH{channel}", replay=ReplayPolicy.NO_REPLAY)
                 ),
                 ocp_tripped=_enum_response(
-                    self.transport.query(f":OUTP:OCP:QUES? CH{channel}"),
+                    self.transport.query(f":OUTP:OCP:QUES? CH{channel}", replay=ReplayPolicy.NO_REPLAY),
                     field="OCP trip state",
                     allowed={"NO", "YES"},
                 ),
@@ -302,9 +308,11 @@ class DP800Power:
     ) -> None:
         try:
             self.transport.write(command)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as exc:
             raise _AmbiguousWriteError(f"DP800 write outcome is ambiguous: {command}") from exc
-        actual = parse_protection_value_response(self.transport.query(query))
+        actual = parse_protection_value_response(self.transport.query(query, replay=ReplayPolicy.NO_REPLAY))
         matches = (
             self._voltage_matches(actual, target)
             if value_kind == "voltage"
@@ -316,10 +324,12 @@ class DP800Power:
     def _write_protection_state(self, command: str, query: str, target: str) -> None:
         try:
             self.transport.write(command)
+        except (TransportIOError, SessionHealthError):
+            raise
         except Exception as exc:
             raise _AmbiguousWriteError(f"DP800 write outcome is ambiguous: {command}") from exc
         actual = _enum_response(
-            self.transport.query(query),
+            self.transport.query(query, replay=ReplayPolicy.NO_REPLAY),
             field="protection state",
             allowed={"OFF", "ON"},
         )
@@ -481,10 +491,17 @@ class DP800Power:
                 if self._check_errors_enabled(check_errors):
                     self.assert_no_errors()
                 return status
+            except (TransportIOError, SessionHealthError):
+                # A gated or structured transport failure is already the
+                # strongest evidence available; do not issue recovery I/O or
+                # replace it with a transaction summary.
+                raise
             except Exception as exc:
                 ambiguous_write = isinstance(exc, _AmbiguousWriteError)
                 try:
                     self._restore_protection(channel, previous, check_errors=check_errors)
+                except (TransportIOError, SessionHealthError):
+                    raise
                 except Exception as restore_exc:
                     self._configuration_writes_blocked = True
                     raise InstrumentError(
@@ -544,6 +561,8 @@ class DP800Power:
                 if self._check_errors_enabled(check_errors):
                     self.assert_no_errors()
                 return status
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 try:
                     self.transport.write(
@@ -563,6 +582,8 @@ class DP800Power:
                         raise DataError("DP800 APPL restore changed output state")
                     if self._check_errors_enabled(check_errors):
                         self.assert_no_errors()
+                except (TransportIOError, SessionHealthError):
+                    raise
                 except Exception as restore_exc:
                     self._configuration_writes_blocked = True
                     raise InstrumentError(
@@ -611,6 +632,8 @@ class DP800Power:
                 if self._check_errors_enabled(check_errors):
                     self.assert_no_errors()
                 return status
+            except (TransportIOError, SessionHealthError):
+                raise
             except Exception as exc:
                 try:
                     self.transport.write(f":OUTP CH{channel},OFF")
@@ -619,6 +642,8 @@ class DP800Power:
                         raise DataError("DP800 output failed to converge to OFF")
                     if self._check_errors_enabled(check_errors):
                         self.assert_no_errors()
+                except (TransportIOError, SessionHealthError):
+                    raise
                 except Exception as recovery_exc:
                     self._configuration_writes_blocked = True
                     raise InstrumentError(

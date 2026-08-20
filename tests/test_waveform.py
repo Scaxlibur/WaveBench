@@ -14,11 +14,11 @@ class FakeTransport:
     def write(self, command):
         self.writes.append(command)
 
-    def query(self, command):
+    def query(self, command, *, replay=None):
         self.queries.append(command)
         return self.responses[command]
 
-    def query_bin_block(self, command):
+    def query_bin_block(self, command, *, replay=None):
         self.queries.append(command)
         return self.responses[command]
 
@@ -97,10 +97,10 @@ class VerticalScaleTests(unittest.TestCase):
         class Transport(FakeTransport):
             def __init__(self):
                 super().__init__({"CHAN1:DATA:HEAD?": "0,1,2,1"})
-            def query_float_list(self, command):
+            def query_float_list(self, command, *, replay=None):
                 self.queries.append(command)
                 return [0.0, 1.0]
-            def query_opc(self):
+            def query_opc(self, *, replay=None):
                 self.queries.append("*OPC?")
                 return "1"
         transport = Transport()
@@ -124,11 +124,11 @@ class VerticalScaleTests(unittest.TestCase):
                     }
                 )
 
-            def query_float_list(self, command):
+            def query_float_list(self, command, *, replay=None):
                 self.queries.append(command)
                 return [0.0, 1.0]
 
-            def query_opc(self):
+            def query_opc(self, *, replay=None):
                 self.queries.append("*OPC?")
                 return "1"
 

@@ -5,14 +5,20 @@ import time
 import json
 from math import isfinite
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from wavebench.config import WaveBenchConfig
 from wavebench.data.package import new_package_dir, safe_label
 from wavebench.data.packages import load_run_package
-from wavebench.errors import ConfigError, StateDriftError, error_envelope
+from wavebench.errors import (
+    ConfigError,
+    SessionHealthError,
+    TransportIOError,
+    WaveBenchError,
+    error_envelope,
+)
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.logging import CommandLogger
@@ -100,6 +106,14 @@ class RunInstrumentServices:
     source: SourceService | None = None
     power: PowerService | None = None
     dmm: DmmService | None = None
+    # ExitStack close callbacks append lifecycle failures here without
+    # replacing a completed run with an unhandled close exception.
+    close_errors: list[dict[str, Any]] = field(default_factory=list, compare=False, repr=False)
+    close_reporters: list[Callable[[], None]] = field(
+        default_factory=list,
+        compare=False,
+        repr=False,
+    )
 
     def audit_snapshot(self) -> dict[str, Any] | None:
         """Return transport-native counters without deriving them from logs."""
@@ -467,7 +481,7 @@ class RunService:
         if execution_intent is not None:
             intent = verify_execution_intent(execution_intent, plan, self.config)
         plan_hash = intent.plan_digest
-        with self._run_instrument_services(plan) as services:
+        with self._run_instrument_lifecycle(plan) as services:
             self._run_safety_guards(plan, services=services)
             run_dir = new_package_dir(run_output_base(self.config), plan.label)
             steps_dir = run_dir / "steps"
@@ -481,6 +495,7 @@ class RunService:
             restore_state: list[RestorableSourceState] | None = None
             restore_error: dict[str, Any] | None = None
             run_failure: dict[str, Any] | None = None
+            terminal_error: dict[str, Any] | None = None
             safety_gate_step: RunStep | None = None
             safety_gate_config: dict[str, Any] | None = None
             provenance = {
@@ -504,15 +519,76 @@ class RunService:
                         "expected": state_snapshot,
                     }
 
+            def report_close_errors() -> None:
+                close_errors = services.close_errors
+                if not close_errors:
+                    return
+                refresh_provenance()
+                close_failure: dict[str, Any] = {
+                    "type": "SessionCloseError",
+                    "code": "session_close_failed",
+                    "message": "one or more instrument session close operations failed",
+                    "errors": close_errors,
+                }
+                if terminal_error is not None:
+                    close_failure["cause"] = terminal_error
+                provenance["session_lifecycle"] = {
+                    "close_errors": close_errors,
+                }
+                write_run_files(
+                    plan=plan,
+                    run_json_path=run_json_path,
+                    summary_csv_path=summary_csv_path,
+                    status="failed",
+                    records=records,
+                    error=close_failure,
+                    restore_state=restore_state,
+                    restore_error=restore_error,
+                    provenance=provenance,
+                )
+
+            services.close_reporters.append(report_close_errors)
+
             try:
                 restore_state = snapshot_source_state(
                     plan,
                     source_service_factory=lambda: self._source_service(services=services),
                 )
                 for step in plan.steps:
-                    record = self._run_step(
-                        plan, step, run_dir=run_dir, services=services, plan_hash=plan_hash
-                    )
+                    step_failure: BaseException | None = None
+                    try:
+                        record = self._run_step(
+                            plan, step, run_dir=run_dir, services=services, plan_hash=plan_hash
+                        )
+                    except _FrequencyResponseExecutionError as exc:
+                        if not isinstance(exc.cause, (TransportIOError, SessionHealthError)):
+                            raise
+                        step_failure = exc.cause
+                        record = exc.record
+                        record = replace(
+                            record,
+                            artifact={
+                                **record.artifact,
+                                "error": error_envelope(
+                                    exc.cause,
+                                    operation=f"run.step.{step.kind}",
+                                ),
+                            },
+                        )
+                    except (TransportIOError, SessionHealthError) as exc:
+                        step_failure = exc
+                        record = RunStepRecord(
+                            index=step.index,
+                            kind=step.kind,
+                            status="failed",
+                            fields=step.fields,
+                            artifact={
+                                "error": error_envelope(
+                                    exc,
+                                    operation=f"run.step.{step.kind}",
+                                )
+                            },
+                        )
                     safety_gate = self._safety_gate_for_step(plan, step)
                     gate_triggered = safety_gate["enabled"] and record.status in {
                         "failed",
@@ -523,12 +599,13 @@ class RunService:
                         try:
                             gate_result = self._apply_safety_gate(step, safety_gate, services=services)
                         except Exception as exc:  # noqa: BLE001 - retain gate failure in run artifact
+                            payload = error_envelope(
+                                exc,
+                                operation=f"safety_gate.step.{step.index}",
+                            )
                             gate_result = {
                                 "status": "failed",
-                                "error": {
-                                    "type": type(exc).__name__,
-                                    "message": str(exc),
-                                },
+                                "error": payload,
                             }
                         record = replace(
                             record,
@@ -551,7 +628,29 @@ class RunService:
                             "trigger_status": trigger_status,
                             "safety_gate": gate_result,
                         }
+                        if step_failure is not None:
+                            run_failure["step_error"] = error_envelope(
+                                step_failure,
+                                operation=f"run.step.{step.kind}",
+                            )
                         break
+                    if step_failure is not None:
+                        failure_payload = error_envelope(
+                            step_failure,
+                            operation=f"run.step.{step.kind}",
+                        )
+                        if step.fields.get("on_failure", "stop") == "stop":
+                            run_failure = {
+                                "type": "StepFailure",
+                                "code": "step_failed",
+                                "message": f"run step {step.index} ({step.kind}) failed",
+                                "step_index": step.index,
+                                "step_kind": step.kind,
+                                "policy": "stop",
+                                "error": failure_payload,
+                            }
+                            break
+                        continue
                     if record.status == "failed" and step.fields.get("on_failure", "stop") == "stop":
                         run_failure = {
                             "type": "StepFailure",
@@ -576,6 +675,7 @@ class RunService:
                     interruption_error["cause"] = dict(interruption_error)
                     interruption_error["type"] = "RestoreError"
                     interruption_error["message"] = _restore_error_message(restore_error)
+                terminal_error = interruption_error
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
@@ -606,10 +706,11 @@ class RunService:
                 )
                 refresh_provenance()
                 failure_error: dict[str, Any]
-                if isinstance(failure, StateDriftError):
+                if isinstance(failure, WaveBenchError):
                     failure_error = error_envelope(failure)
                 else:
                     failure_error = {"type": type(failure).__name__, "message": str(failure)}
+                terminal_error = failure_error
                 write_run_files(
                     plan=plan,
                     run_json_path=run_json_path,
@@ -641,12 +742,13 @@ class RunService:
                         services=services,
                     )
                 except Exception as exc:  # noqa: BLE001 - retain final OFF evidence
+                    payload = error_envelope(
+                        exc,
+                        operation=f"safety_gate.post_restore.{safety_gate_step.index}",
+                    )
                     post_restore_gate = {
                         "status": "failed",
-                        "error": {
-                            "type": type(exc).__name__,
-                            "message": str(exc),
-                        },
+                        "error": payload,
                     }
                 if run_failure is not None:
                     gate_error = run_failure.get("safety_gate")
@@ -660,6 +762,7 @@ class RunService:
                 }
                 if run_failure is not None:
                     restore_failure["cause"] = run_failure
+                terminal_error = restore_failure
                 refresh_provenance()
                 write_run_files(
                     plan=plan,
@@ -675,6 +778,7 @@ class RunService:
                 raise ConfigError("run plan source state restore failed: " + restore_error["message"])
 
             run_status = "failed" if any(record.status == "failed" for record in records) else "ok"
+            terminal_error = run_failure
             refresh_provenance()
             write_run_files(
                 plan=plan,
@@ -687,12 +791,59 @@ class RunService:
                 restore_error=None,
                 provenance=provenance,
             )
-            return RunResult(
+            result = RunResult(
                 run_dir=run_dir,
                 run_json_path=run_json_path,
                 summary_csv_path=summary_csv_path,
                 steps=records,
             )
+
+        return result
+
+    @contextmanager
+    def _run_instrument_lifecycle(
+        self,
+        plan: RunPlan,
+    ) -> Iterator[RunInstrumentServices]:
+        """Close every session, report close failures, then re-raise body failures."""
+
+        services: RunInstrumentServices | None = None
+        pending: BaseException | None = None
+        traceback = None
+        try:
+            with self._run_instrument_services(plan) as opened:
+                services = opened
+                try:
+                    yield services
+                except BaseException as exc:  # preserve interrupts through close/report
+                    pending = exc
+                    traceback = exc.__traceback__
+        except BaseException as exc:
+            if pending is None:
+                pending = exc
+                traceback = exc.__traceback__
+            else:
+                pending.add_note(
+                    f"instrument lifecycle context also failed with {type(exc).__name__}"
+                )
+
+        report_failure: BaseException | None = None
+        if services is not None:
+            for reporter in services.close_reporters:
+                try:
+                    reporter()
+                except BaseException as exc:
+                    report_failure = exc
+                    break
+        if pending is not None:
+            if report_failure is not None:
+                pending.add_note(
+                    "session close failure reporting also failed with "
+                    f"{type(report_failure).__name__}"
+                )
+            raise pending.with_traceback(traceback)
+        if report_failure is not None:
+            raise report_failure
 
     def _safety_gate_for_step(self, plan: RunPlan, step: RunStep) -> dict[str, Any]:
         local = step.fields.get("safety_gate")
@@ -800,12 +951,17 @@ class RunService:
                     }
                 )
             except Exception as exc:  # noqa: BLE001 - attempt every authorized OFF target
+                payload = error_envelope(
+                    exc,
+                    operation=f"safety_gate.source.{channel}.off",
+                )
                 errors.append(
                     {
                         "instrument": "source",
                         "channel": channel,
                         "type": type(exc).__name__,
-                        "message": str(exc),
+                        "message": payload["message"],
+                        "error": payload,
                     }
                 )
         for channel in power_channels:
@@ -823,12 +979,17 @@ class RunService:
                     }
                 )
             except Exception as exc:  # noqa: BLE001 - attempt every authorized OFF target
+                payload = error_envelope(
+                    exc,
+                    operation=f"safety_gate.power.{channel}.off",
+                )
                 errors.append(
                     {
                         "instrument": "power",
                         "channel": channel,
                         "type": type(exc).__name__,
-                        "message": str(exc),
+                        "message": payload["message"],
+                        "error": payload,
                     }
                 )
         if errors:
@@ -1958,6 +2119,47 @@ class RunService:
     def _run_instrument_services(self, plan: RunPlan) -> Iterator[RunInstrumentServices]:
         instruments = self._plan_instruments(plan)
         with ExitStack() as stack:
+            close_errors: list[dict[str, Any]] = []
+
+            def record_close_error(operation: str, exc: BaseException) -> None:
+                close_errors.append(
+                    {
+                        "operation": operation,
+                        "type": type(exc).__name__,
+                        "error": error_envelope(exc, operation=operation),
+                    }
+                )
+
+            def close_session(
+                session: object,
+                instrument: str,
+                transport: object | None,
+            ) -> None:
+                operation = f"session.close.{instrument}"
+                try:
+                    close = getattr(session, "close", None)
+                    if callable(close):
+                        close()
+                except Exception as exc:  # noqa: BLE001 - close must not skip peers
+                    record_close_error(operation, exc)
+                finally:
+                    # Guarded transports already mark the epoch closed before
+                    # backend close.  This fallback also closes the local
+                    # state when a test/plugin driver fails to delegate close.
+                    state = getattr(transport, "session_state", None)
+                    close_state = getattr(state, "close", None)
+                    if callable(close_state):
+                        try:
+                            close_state()
+                        except Exception as exc:  # noqa: BLE001
+                            record_close_error(f"{operation}.state", exc)
+
+            def release_lease(lease: ResourceLease) -> None:
+                try:
+                    lease.release()
+                except Exception as exc:  # noqa: BLE001 - retain lifecycle evidence
+                    record_close_error("session.lease.release", exc)
+
             resources = self._plan_resource_values(instruments)
             lease_manager = self.lease_manager or ResourceLeaseManager()
             leases = lease_manager.acquire_many(
@@ -1966,7 +2168,7 @@ class RunService:
             )
             for lease in leases:
                 # Borrowed leases are released after all driver sessions close.
-                stack.callback(lease.release)
+                stack.callback(release_lease, lease)
             leases_by_fingerprint = {lease.fingerprint: lease for lease in leases}
 
             def lease_for(resource: str) -> ResourceLease:
@@ -1991,13 +2193,14 @@ class RunService:
                     lease=scope_lease,
                 )
                 session = bootstrap.open_session()
-                stack.callback(session.close)
+                stack.callback(close_session, session, "scope", bootstrap.transport)
                 scope = ScopeService(
                     config=self.config,
                     logger=logger,
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=scope_lease,
                 )
             if "source" in instruments:
@@ -2013,13 +2216,14 @@ class RunService:
                     state_guard=source_guard,
                 )
                 session = bootstrap.open_session()
-                stack.callback(session.close)
+                stack.callback(close_session, session, "source", bootstrap.transport)
                 source = SourceService(
                     config=self.config,
                     logger=logger,
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=source_lease,
                     state_guard=source_guard,
                 )
@@ -2036,13 +2240,14 @@ class RunService:
                     state_guard=power_guard,
                 )
                 session = bootstrap.open_session()
-                stack.callback(session.close)
+                stack.callback(close_session, session, "power", bootstrap.transport)
                 power = PowerService(
                     config=self.config,
                     logger=logger,
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=power_lease,
                     state_guard=power_guard,
                 )
@@ -2058,17 +2263,24 @@ class RunService:
                     lease=dmm_lease,
                 )
                 session = bootstrap.open_session()
-                stack.callback(session.close)
+                stack.callback(close_session, session, "dmm", bootstrap.transport)
                 dmm = DmmService(
                     config=self.config,
                     logger=logger,
                     session=session,
                     descriptor=bootstrap.descriptor,
                     transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
                     lease=dmm_lease,
                 )
 
-            yield RunInstrumentServices(scope=scope, source=source, power=power, dmm=dmm)
+            yield RunInstrumentServices(
+                scope=scope,
+                source=source,
+                power=power,
+                dmm=dmm,
+                close_errors=close_errors,
+            )
 
     def _plan_resource_values(self, instruments: set[str]) -> list[str]:
         resources: list[str] = []
@@ -2135,6 +2347,7 @@ class RunService:
                 session=services.scope.session,
                 descriptor=services.scope.descriptor,
                 transport=services.scope.transport,
+                session_state=services.scope.session_state,
                 lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())
@@ -2167,6 +2380,7 @@ class RunService:
                 session=services.scope.session,
                 descriptor=services.scope.descriptor,
                 transport=services.scope.transport,
+                session_state=services.scope.session_state,
                 lease=services.scope.lease,
             )
         return ScopeService(config=config, logger=CommandLogger())

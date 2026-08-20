@@ -2,7 +2,9 @@ import unittest
 from unittest.mock import patch
 
 from wavebench.config import DmmConfig
+from wavebench.errors import SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
+from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.serial_transport import SerialTransport
 
 
@@ -30,6 +32,23 @@ class FakeSerialSession:
 
 
 class SerialTransportTests(unittest.TestCase):
+    def test_close_reports_backend_failure(self):
+        session = FakeSerialSession()
+
+        def fail_close():
+            raise OSError("private serial resource")
+
+        session.close = fail_close
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaises(SessionCloseError) as raised:
+            transport.close()
+
+        self.assertEqual(
+            raised.exception.failures,
+            ({"component": "session", "type": "OSError"},),
+        )
+
     def test_open_applies_configured_framing_and_disables_flow_control(self):
         session = FakeSerialSession()
         config = DmmConfig(
@@ -133,8 +152,9 @@ class SerialTransportTests(unittest.TestCase):
         session.read_until = lambda expected: b""
         transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
 
-        with self.assertRaisesRegex(Exception, "timed out waiting"):
+        with self.assertRaisesRegex(TransportIOError, "timed out") as raised:
             transport.query("*IDN?")
+        self.assertEqual(raised.exception.attempts, 1)
 
     def test_write_replaces_existing_line_ending_with_configured_termination(self):
         session = FakeSerialSession()
@@ -159,7 +179,7 @@ class SerialTransportTests(unittest.TestCase):
             read_termination=b"\n",
         )
 
-        with self.assertRaisesRegex(Exception, "response ended before"):
+        with self.assertRaisesRegex(TransportIOError, "response ended before"):
             transport.query("*IDN?")
 
     def test_write_rejects_short_serial_write(self):
@@ -167,8 +187,94 @@ class SerialTransportTests(unittest.TestCase):
         session.write = lambda payload: len(payload) - 1
         transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
 
-        with self.assertRaisesRegex(Exception, "short serial write"):
+        with self.assertRaisesRegex(TransportIOError, "serial write failed"):
             transport.write("*IDN?")
+
+    def test_zero_byte_write_is_proven_not_sent(self):
+        session = FakeSerialSession()
+        session.write = lambda payload: 0
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaisesRegex(TransportIOError, "not transmitted") as raised:
+            transport.write("*IDN?")
+        self.assertEqual(raised.exception.attempts, 0)
+        self.assertEqual(raised.exception.command_transmission.value, "not_sent")
+
+    def test_query_write_exception_keeps_unknown_attempt_evidence(self):
+        session = FakeSerialSession()
+
+        def fail_write(payload):
+            raise OSError("serial backend stopped while writing")
+
+        session.write = fail_write
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("MEAS?")
+
+        self.assertEqual(raised.exception.attempts, 1)
+        self.assertEqual(raised.exception.command_transmission.value, "unknown")
+        self.assertEqual(raised.exception.synchronization.value, "unproven")
+
+    def test_partial_binary_write_is_not_reported_as_completed(self):
+        session = FakeSerialSession()
+        session.write = lambda payload: len(payload) - 1
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaisesRegex(TransportIOError, "write_binary failed"):
+            transport.write_bytes(b"payload")
+
+    def test_query_retries_only_after_a_proven_zero_byte_transmission(self):
+        session = FakeSerialSession()
+        write_results = [0, None]
+
+        def write(payload):
+            session.writes.append(payload)
+            return write_results.pop(0)
+
+        session.write = write
+        transport = SerialTransport(
+            "/dev/ttyUSB0",
+            session,
+            CommandLogger(),
+            read_retry_attempts=1,
+            read_retry_delay_ms=0,
+        )
+
+        self.assertEqual(
+            transport.query("MEAS?", replay=ReplayPolicy.SAFE_TO_REPLAY),
+            "1.23e+00",
+        )
+        self.assertEqual(session.writes, [b"MEAS?\n", b"MEAS?\n"])
+
+    def test_safe_query_does_not_retry_after_a_sent_command_times_out(self):
+        session = FakeSerialSession()
+        session.read_until = lambda expected: b""
+        transport = SerialTransport(
+            "/dev/ttyUSB0",
+            session,
+            CommandLogger(),
+            read_retry_attempts=2,
+            read_retry_delay_ms=0,
+        )
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("MEAS?", replay=ReplayPolicy.SAFE_TO_REPLAY)
+
+        self.assertEqual(raised.exception.command_transmission.value, "sent")
+        self.assertEqual(raised.exception.response_progress.value, "none")
+        self.assertEqual(raised.exception.synchronization.value, "unproven")
+        self.assertEqual(session.writes, [b"MEAS?\n"])
+
+    def test_continuation_rejects_before_serial_write(self):
+        session = FakeSerialSession()
+        transport = SerialTransport("/dev/ttyUSB0", session, CommandLogger())
+
+        with self.assertRaises(TransportIOError) as raised:
+            transport.query("MEAS?", replay=ReplayPolicy.READ_CONTINUATION_ONLY)
+
+        self.assertEqual(raised.exception.attempts, 0)
+        self.assertEqual(session.writes, [])
 
 
 if __name__ == "__main__":

@@ -556,7 +556,14 @@ if _TEXTUAL_IMPORT_ERROR is None:
             )
 
         def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-            if self._shutting_down or not self.is_attached or not self.is_mounted:
+            # Textual stops the app before pruning Screen descendants, while
+            # terminal worker events may still be queued on the app.
+            if (
+                self._shutting_down
+                or not self.is_running
+                or not self.is_attached
+                or not self.is_mounted
+            ):
                 return
             worker = event.worker
             if event.state not in {

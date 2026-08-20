@@ -22,11 +22,13 @@ OperationEffect = Literal[
     "write",
     "acquire",
 ]
+SessionPurpose = Literal["normal", "recovery", "verification", "lifecycle"]
 LeaseMode = Literal["none", "shared", "exclusive"]
 
 _EFFECTS = frozenset({"offline", "observe", "stateful_read", "write", "acquire"})
 _LEASE_MODES = frozenset({"none", "shared", "exclusive"})
 _INSTRUMENT_KINDS = frozenset({"scope", "source", "power", "dmm", "sweep_analyzer"})
+_SESSION_PURPOSES = frozenset({"normal", "recovery", "verification", "lifecycle"})
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,10 @@ class OperationSpec:
     lease_mode: LeaseMode = "exclusive"
     changed_fields: tuple[str, ...] = ()
     restore_coverage: str = "none"
+    session_purpose: SessionPurpose = "normal"
+    required_verified_fields: tuple[str, ...] = ()
+    verification_fields: tuple[str, ...] = ()
+    timeout_source: str = "connection.timeout_ms"
     risk_flags: tuple[str, ...] = ()
     safe_alternatives: tuple[str, ...] = ()
 
@@ -54,10 +60,16 @@ class OperationSpec:
             raise ValueError(f"unsupported operation effect: {self.effect!r}")
         if self.lease_mode not in _LEASE_MODES:
             raise ValueError(f"unsupported operation lease mode: {self.lease_mode!r}")
+        if self.session_purpose not in _SESSION_PURPOSES:
+            raise ValueError(f"unsupported session purpose: {self.session_purpose!r}")
+        if not self.timeout_source or self.timeout_source.strip() != self.timeout_source:
+            raise ValueError("timeout_source must be non-empty and trimmed")
         for name, values in (
             ("required_capabilities", self.required_capabilities),
             ("optional_capabilities", self.optional_capabilities),
             ("changed_fields", self.changed_fields),
+            ("required_verified_fields", self.required_verified_fields),
+            ("verification_fields", self.verification_fields),
             ("risk_flags", self.risk_flags),
             ("safe_alternatives", self.safe_alternatives),
         ):
@@ -87,6 +99,10 @@ class OperationSpec:
             "lease_mode": self.lease_mode,
             "changed_fields": list(self.changed_fields),
             "restore_coverage": self.restore_coverage,
+            "session_purpose": self.session_purpose,
+            "required_verified_fields": list(self.required_verified_fields),
+            "verification_fields": list(self.verification_fields),
+            "timeout_source": self.timeout_source,
             "risk_flags": list(self.risk_flags),
             "safe_alternatives": list(self.safe_alternatives),
         }
@@ -130,6 +146,10 @@ def _spec(
     lease_mode: LeaseMode = "exclusive",
     changed_fields: tuple[str, ...] = (),
     restore_coverage: str = "none",
+    session_purpose: SessionPurpose = "normal",
+    required_verified_fields: tuple[str, ...] = (),
+    verification_fields: tuple[str, ...] = (),
+    timeout_source: str = "connection.timeout_ms",
     risk_flags: tuple[str, ...] = (),
     safe_alternatives: tuple[str, ...] = (),
 ) -> OperationSpec:
@@ -142,9 +162,49 @@ def _spec(
         lease_mode=lease_mode,
         changed_fields=changed_fields,
         restore_coverage=restore_coverage,
+        session_purpose=session_purpose,
+        required_verified_fields=required_verified_fields,
+        verification_fields=verification_fields,
+        timeout_source=timeout_source,
         risk_flags=risk_flags,
         safe_alternatives=safe_alternatives,
     )
+
+
+_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS = (
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    # This is one atomic transfer-selection state.  It includes any stride,
+    # point-count, first-point and segment selectors exposed as one setup.
+    "scope.waveform_transfer_window",
+)
+_SCOPE_CAPTURE_CHANGED_FIELDS = (
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    *_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS,
+    "scope.error_queue",
+    "scope.capture_identity",
+    "output.waveform_package",
+)
+_SCOPE_CAPTURE_VERIFICATION_FIELDS = (
+    "scope.identity",
+    "scope.run_state",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    *_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS,
+    "scope.capture_identity",
+)
 
 
 _BUILTIN_SPECS = (
@@ -182,19 +242,25 @@ _BUILTIN_SPECS = (
         "scope",
         required_capabilities=("scope.capture_waveform",),
         effect="acquire",
-        changed_fields=("acquisition", "waveform_package"),
-        risk_flags=("trigger", "acquisition_state"),
+        changed_fields=_SCOPE_CAPTURE_CHANGED_FIELDS,
+        restore_coverage="capture-baseline-only",
+        required_verified_fields=("scope.identity",),
+        verification_fields=_SCOPE_CAPTURE_VERIFICATION_FIELDS,
+        risk_flags=("trigger", "acquisition_state", "temporary_transfer_setup"),
     ),
     _spec(
         "scope.capture_waveforms",
         "scope",
         required_capabilities=("scope.capture_waveforms",),
         effect="acquire",
-        changed_fields=("acquisition", "waveform_package"),
-        risk_flags=("trigger", "acquisition_state"),
+        changed_fields=_SCOPE_CAPTURE_CHANGED_FIELDS,
+        restore_coverage="capture-baseline-only",
+        required_verified_fields=("scope.identity",),
+        verification_fields=_SCOPE_CAPTURE_VERIFICATION_FIELDS,
+        risk_flags=("trigger", "acquisition_state", "temporary_transfer_setup"),
     ),
-    _spec("scope.capture_multiple", "scope", required_capabilities=("scope.capture_waveforms",), effect="acquire", changed_fields=("acquisition", "waveform_package"), risk_flags=("trigger", "acquisition_state")),
-    _spec("scope.fetch_waveform", "scope", required_capabilities=("scope.fetch_waveform",), effect="acquire", changed_fields=("waveform_package",), risk_flags=("acquisition_state",)),
+    _spec("scope.capture_multiple", "scope", required_capabilities=("scope.capture_waveforms",), effect="acquire", changed_fields=_SCOPE_CAPTURE_CHANGED_FIELDS, restore_coverage="capture-baseline-only", required_verified_fields=("scope.identity",), verification_fields=_SCOPE_CAPTURE_VERIFICATION_FIELDS, risk_flags=("trigger", "acquisition_state", "temporary_transfer_setup")),
+    _spec("scope.fetch_waveform", "scope", required_capabilities=("scope.fetch_waveform",), effect="acquire", changed_fields=_SCOPE_CAPTURE_CHANGED_FIELDS, restore_coverage="capture-baseline-only", required_verified_fields=("scope.identity",), verification_fields=_SCOPE_CAPTURE_VERIFICATION_FIELDS, risk_flags=("acquisition_state", "temporary_transfer_setup")),
     _spec("scope.capture_average", "scope", required_capabilities=("scope.capture_average",), effect="acquire", changed_fields=("acquisition", "waveform_package"), risk_flags=("trigger", "acquisition_state")),
     _spec("scope.digital_status", "scope", required_capabilities=("scope.digital_status",), effect="stateful_read"),
     _spec("scope.digital_waveform", "scope", required_capabilities=("scope.digital_waveform",), effect="acquire", changed_fields=("acquisition", "waveform_package"), risk_flags=("trigger", "acquisition_state")),

@@ -1,12 +1,24 @@
 from __future__ import annotations
 
+import json
+
 from wavebench.errors import (
     ERROR_SCHEMA,
     ConfigError,
     ErrorEnvelope,
     InstrumentError,
+    SessionCloseError,
+    SessionHealthError,
+    TransportIOError,
     error_envelope,
     ensure_error_envelope,
+)
+from wavebench.transport.contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
 )
 
 
@@ -54,6 +66,89 @@ def test_error_envelope_is_json_compatible() -> None:
         error_type="CustomError",
     ).as_dict()
     assert payload["schema"] == ERROR_SCHEMA
+
+
+def test_session_health_error_is_zero_io_and_does_not_serialize_reason_or_cause() -> None:
+    error = SessionHealthError(
+        "blocked: SECRET:VALUE",
+        health="poisoned",
+        io_kind="query",
+        epoch_id="epoch-1",
+    )
+    payload = error.to_envelope(
+        operation="scope.fetch",
+        cause=RuntimeError("backend payload SECRET"),
+    ).as_dict()
+
+    assert payload["code"] == "session_health_error"
+    assert "SECRET" not in payload["message"]
+    assert payload["details"] == {
+        "session_health": "poisoned",
+        "io_kind": "query",
+        "command_transmission": "not_sent",
+        "response_progress": "none",
+        "synchronization": "proven",
+        "attempts": 0,
+        "epoch_id": "epoch-1",
+    }
+    assert "cause" not in payload
+    assert json.loads(json.dumps(payload)) == payload
+
+
+def test_session_health_error_drops_caller_details() -> None:
+    payload = error_envelope(
+        SessionHealthError(
+            "ignored",
+            health="uncertain",
+            io_kind="query",
+            epoch_id="epoch-2",
+        ),
+        details={"command": "SECRET", "resource": "/private/device"},
+    )
+
+    assert "command" not in payload["details"]
+    assert "resource" not in payload["details"]
+
+
+def test_transport_error_sanitizes_mapping_cause_tokens() -> None:
+    error = TransportIOError(
+        "query failed",
+        operation="query",
+        phase=TransportPhase.READING,
+        replay_policy=ReplayPolicy.NO_REPLAY,
+        command_transmission=CommandTransmission.SENT,
+        response_progress=ResponseProgress.UNKNOWN,
+        synchronization=Synchronization.UNPROVEN,
+        attempts=1,
+    )
+
+    payload = error_envelope(
+        error,
+        cause={"type": "SECRET command payload", "code": "bad code with spaces"},
+    )
+
+    assert payload["cause"] == {"type": "BackendError", "code": "backend_error"}
+
+
+def test_session_close_error_exposes_only_component_and_exception_type() -> None:
+    error = SessionCloseError(
+        [
+            ("session", RuntimeError("SECRET resource TCPIP::private")),
+            ("resource_manager", OSError("/private/path")),
+        ]
+    )
+
+    payload = error_envelope(error, operation="session.close.scope")
+
+    assert payload["code"] == "session_close_failed"
+    assert payload["details"] == {
+        "failed_components": [
+            {"component": "session", "type": "RuntimeError"},
+            {"component": "resource_manager", "type": "OSError"},
+        ]
+    }
+    assert "SECRET" not in json.dumps(payload)
+    assert "/private/path" not in json.dumps(payload)
 
 
 def test_legacy_error_mapping_is_augmented_without_dropping_custom_fields() -> None:

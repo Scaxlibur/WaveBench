@@ -172,7 +172,7 @@ def test_doctor_uses_serial_transport_for_serial_dmm(monkeypatch):
     events = []
 
     class FakeSerialTransport:
-        def query(self, command):
+        def query(self, command, *, replay=None):
             events.append(("query", command))
             return "Rigol Technologies,DM3058,serial,firmware"
 

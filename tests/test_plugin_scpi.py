@@ -76,7 +76,7 @@ def test_scpi_plugin_doctor_probe_appends_idn_records(tmp_path):
     write_scpi_plugin(path)
 
     class FakeTransport:
-        def query(self, command):
+        def query(self, command, *, replay=None):
             return "Example,EX1,123"
 
         def close(self):
@@ -99,7 +99,7 @@ def test_scpi_plugin_doctor_probe_reports_idn_mismatch(tmp_path):
     write_scpi_plugin(path)
 
     class FakeTransport:
-        def query(self, command):
+        def query(self, command, *, replay=None):
             return "Other,MODEL,123"
 
         def close(self):
@@ -181,7 +181,7 @@ def test_probe_scpi_plugin_queries_only_declared_idn_query(tmp_path):
     calls = []
 
     class FakeTransport:
-        def query(self, command):
+        def query(self, command, *, replay=None):
             calls.append(command)
             return "Example,EX1,123"
 
@@ -212,7 +212,7 @@ def test_probe_scpi_plugin_reports_idn_mismatch(tmp_path):
     write_scpi_plugin(path)
 
     class FakeTransport:
-        def query(self, command):
+        def query(self, command, *, replay=None):
             return "Other,MODEL,123"
 
         def close(self):
