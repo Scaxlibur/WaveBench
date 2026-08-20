@@ -171,6 +171,15 @@ def _spec(
     )
 
 
+_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS = (
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    # This is one atomic transfer-selection state.  It includes any stride,
+    # point-count, first-point and segment selectors exposed as one setup.
+    "scope.waveform_transfer_window",
+)
 _SCOPE_CAPTURE_CHANGED_FIELDS = (
     "scope.run_state",
     "scope.acquisition",
@@ -180,10 +189,7 @@ _SCOPE_CAPTURE_CHANGED_FIELDS = (
     "scope.channel_vertical",
     "scope.waveform_source",
     "scope.waveform_mode",
-    "scope.waveform_format",
-    "scope.waveform_byte_order",
-    "scope.waveform_points",
-    "scope.waveform_transfer_window",
+    *_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS,
     "scope.error_queue",
     "scope.capture_identity",
     "output.waveform_package",
@@ -196,8 +202,7 @@ _SCOPE_CAPTURE_VERIFICATION_FIELDS = (
     "scope.channel_vertical",
     "scope.waveform_source",
     "scope.waveform_mode",
-    "scope.waveform_format",
-    "scope.waveform_points",
+    *_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS,
     "scope.capture_identity",
 )
 
