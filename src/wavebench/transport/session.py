@@ -36,6 +36,7 @@ _AUTHORIZED_IO = frozenset(
         "query",
         "query_float_list",
         "query_bin_block",
+        "query_binary",
         "query_opc",
         "write",
         "write_bytes",
@@ -65,14 +66,20 @@ def _normalize_field_set(
 
 @dataclass
 class _AuthorizationRecord:
+    authorization_id: str
     epoch_id: str
     operation_id: str
     purpose: SessionPurpose
     allowed_io: frozenset[str]
     fields: frozenset[str]
     deadline: float
+    io_timeout_ms: int
     remaining_steps: int
     evidence_fields: dict[str, frozenset[str]]
+    context_id: str | None = None
+    correlation_id: str | None = None
+    phase: str | None = None
+    binary_budget: object | None = None
     successful_steps: int = 0
     successful_io: dict[str, int] = field(default_factory=dict)
     successful_fields: set[str] = field(default_factory=set)
@@ -106,6 +113,10 @@ class SessionAuthorization:
         return self._record.epoch_id
 
     @property
+    def authorization_id(self) -> str:
+        return self._record.authorization_id
+
+    @property
     def operation_id(self) -> str:
         return self._record.operation_id
 
@@ -120,6 +131,30 @@ class SessionAuthorization:
     @property
     def fields(self) -> frozenset[str]:
         return self._record.fields
+
+    @property
+    def context_id(self) -> str | None:
+        return self._record.context_id
+
+    @property
+    def correlation_id(self) -> str | None:
+        return self._record.correlation_id
+
+    @property
+    def phase(self) -> str | None:
+        return self._record.phase
+
+    @property
+    def deadline(self) -> float:
+        return self._record.deadline
+
+    @property
+    def io_timeout_ms(self) -> int:
+        return self._record.io_timeout_ms
+
+    @property
+    def binary_budget(self) -> object | None:
+        return self._record.binary_budget
 
 
 class InstrumentSessionState:
@@ -245,6 +280,24 @@ class InstrumentSessionState:
                 "reason": reason,
             }
 
+    def _invalidate_verified_fields(
+        self,
+        fields: Iterable[str],
+        *,
+        _issuer: object | None = None,
+    ) -> None:
+        """Drop stale configuration evidence without changing communication health."""
+
+        if _issuer is not self._authorization_nonce:
+            raise ValueError("verified-field invalidation is coordinator-owned")
+        normalized = _normalize_field_set(
+            fields,
+            label="invalidated fields",
+            allow_empty=True,
+        )
+        with self.transaction_lock:
+            self._verified_fields.difference_update(normalized)
+
     def _active_authorization(self) -> SessionAuthorization | None:
         return self._authorization_context.get()
 
@@ -336,10 +389,81 @@ class SessionTransactionCoordinator:
         timeout_ms: int,
         max_steps: int,
         evidence_fields: dict[str, Iterable[str]] | None = None,
+        context_id: str | None = None,
+        correlation_id: str | None = None,
+        phase: str | None = None,
+        absolute_deadline: float | None = None,
+        binary_budget: object | None = None,
     ) -> Iterator[SessionAuthorization]:
         purpose = SessionPurpose(purpose)
         if purpose not in {SessionPurpose.RECOVERY, SessionPurpose.VERIFICATION}:
             raise ValueError("only recovery or verification can receive session authorization")
+        with self._authorize(
+            operation_id=operation_id,
+            purpose=purpose,
+            allowed_io=allowed_io,
+            fields=fields,
+            timeout_ms=timeout_ms,
+            max_steps=max_steps,
+            evidence_fields=evidence_fields,
+            context_id=context_id,
+            correlation_id=correlation_id,
+            phase=phase,
+            absolute_deadline=absolute_deadline,
+            binary_budget=binary_budget,
+        ) as authorization:
+            yield authorization
+
+    @contextmanager
+    def authorize_normal(
+        self,
+        *,
+        operation_id: str,
+        allowed_io: Iterable[str],
+        fields: Iterable[str],
+        timeout_ms: int,
+        max_steps: int,
+        context_id: str,
+        correlation_id: str,
+        phase: str,
+        absolute_deadline: float,
+        binary_budget: object | None = None,
+    ) -> Iterator[SessionAuthorization]:
+        """Install the bounded normal-operation side of a core phase bridge."""
+
+        with self._authorize(
+            operation_id=operation_id,
+            purpose=SessionPurpose.NORMAL,
+            allowed_io=allowed_io,
+            fields=fields,
+            timeout_ms=timeout_ms,
+            max_steps=max_steps,
+            evidence_fields=None,
+            context_id=context_id,
+            correlation_id=correlation_id,
+            phase=phase,
+            absolute_deadline=absolute_deadline,
+            binary_budget=binary_budget,
+        ) as authorization:
+            yield authorization
+
+    @contextmanager
+    def _authorize(
+        self,
+        *,
+        operation_id: str,
+        purpose: SessionPurpose,
+        allowed_io: Iterable[str],
+        fields: Iterable[str],
+        timeout_ms: int,
+        max_steps: int,
+        evidence_fields: dict[str, Iterable[str]] | None,
+        context_id: str | None,
+        correlation_id: str | None,
+        phase: str | None,
+        absolute_deadline: float | None,
+        binary_budget: object | None,
+    ) -> Iterator[SessionAuthorization]:
         if not operation_id or _SAFE_REASON.fullmatch(operation_id) is None:
             raise ValueError("operation_id must be a short safe code")
         normalized_io = frozenset(allowed_io)
@@ -356,10 +480,29 @@ class SessionTransactionCoordinator:
             if not evidence <= normalized_fields:
                 raise ValueError("evidence fields exceed the authorized field scope")
             normalized_evidence[io_kind] = evidence
-        if timeout_ms < 1:
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 1:
             raise ValueError("authorization timeout_ms must be >= 1")
-        if max_steps < 1:
+        if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
             raise ValueError("authorization max_steps must be >= 1")
+        context_values = (context_id, correlation_id, phase)
+        if any(value is not None for value in context_values):
+            if any(
+                not isinstance(value, str) or _SAFE_REASON.fullmatch(value) is None
+                for value in context_values
+            ):
+                raise ValueError("phase authorizations require safe context/correlation/phase tokens")
+        if binary_budget is not None and purpose is not SessionPurpose.NORMAL:
+            raise ValueError("binary budgets are only valid for normal operation phases")
+        now = time.monotonic()
+        deadline = now + (timeout_ms / 1000.0)
+        if absolute_deadline is not None:
+            if isinstance(absolute_deadline, bool) or not isinstance(
+                absolute_deadline, (int, float)
+            ):
+                raise ValueError("absolute_deadline must be a monotonic timestamp")
+            deadline = float(absolute_deadline)
+        if deadline <= now:
+            raise ValueError("session authorization deadline is exhausted")
 
         # Hold the operation lock for the complete dynamic authorization range.
         with self.state.transaction_lock:
@@ -367,17 +510,25 @@ class SessionTransactionCoordinator:
                 raise ValueError("cannot authorize I/O on a poisoned session")
             if self.state.health is SessionHealth.CLOSED:
                 raise ValueError("cannot authorize I/O on a closed session")
+            if purpose is SessionPurpose.NORMAL and self.state.health is not SessionHealth.HEALTHY:
+                raise ValueError("normal operations require a healthy session")
             if self.state._active_authorization() is not None:
                 raise ValueError("nested session authorizations are not allowed")
             record = _AuthorizationRecord(
+                authorization_id=uuid4().hex,
                 epoch_id=self.state.epoch_id,
                 operation_id=operation_id,
                 purpose=purpose,
                 allowed_io=normalized_io,
                 fields=normalized_fields,
                 evidence_fields=normalized_evidence,
-                deadline=time.monotonic() + (timeout_ms / 1000.0),
+                deadline=deadline,
+                io_timeout_ms=timeout_ms,
                 remaining_steps=max_steps,
+                context_id=context_id,
+                correlation_id=correlation_id,
+                phase=phase,
+                binary_budget=binary_budget,
             )
             authorization = SessionAuthorization._issue(record, self.state._authorization_nonce)
             token: Token[SessionAuthorization | None] = self.state._authorization_context.set(
@@ -432,6 +583,14 @@ class SessionTransactionCoordinator:
             if authorization.purpose is not SessionPurpose.VERIFICATION:
                 raise ValueError("only verification authorization can record evidence")
             self.state._record_authorized_evidence(authorization, io_kind, fields)
+
+    def invalidate_verified_fields(self, fields: Iterable[str]) -> None:
+        """Invalidate fields changed by a core-authorized normal operation."""
+
+        self.state._invalidate_verified_fields(
+            fields,
+            _issuer=self.state._authorization_nonce,
+        )
 
 
 __all__ = [

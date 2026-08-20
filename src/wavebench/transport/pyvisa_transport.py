@@ -9,6 +9,8 @@ from wavebench.errors import ConnectionError, SessionCloseError, TransportIOErro
 from wavebench.logging import CommandLogger
 
 from .contracts import (
+    BinaryQueryResult,
+    BinaryResponseFraming,
     CommandTransmission,
     ReplayPolicy,
     ResponseProgress,
@@ -242,6 +244,38 @@ class PyVisaTransport:
             bytes_count=len(data),
         )
         return data
+
+    def query_binary(
+        self,
+        command: str,
+        *,
+        framing: BinaryResponseFraming,
+        max_bytes: int,
+        timeout_ms: int | None = None,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> BinaryQueryResult:
+        replay = ReplayPolicy(replay)
+        BinaryResponseFraming(framing)
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer")
+        if timeout_ms is not None and (
+            isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 1
+        ):
+            raise ValueError("timeout_ms must be a positive integer")
+        self._reject_continuation("query_binary", replay)
+        raise TransportIOError(
+            "pyvisa has not passed the R1.3 binary framing conformance gate",
+            operation="query_binary",
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            reason_code="binary_framing_unsupported",
+            consumed_bytes=0,
+            discarded_bytes=0,
+        )
 
     def _record_query_telemetry(
         self,
