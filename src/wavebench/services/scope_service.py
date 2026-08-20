@@ -184,6 +184,8 @@ class ScopeService(SessionStateAliasMixin):
     def _operation_timeout_ms(self, spec: OperationSpec) -> int:
         if spec.timeout_source == "connection.timeout_ms":
             return self.config.connection.timeout_ms
+        if spec.timeout_source == "operation.timeout_ms" and spec.operation_timeout_ms is not None:
+            return min(spec.operation_timeout_ms, self.config.connection.timeout_ms)
         raise ConfigError(
             f"unsupported timeout source {spec.timeout_source!r} for {spec.operation!r}"
         )
