@@ -103,7 +103,33 @@ def _print_capability_explanation(result: CapabilityExplanation) -> None:
             "verification_fields="
             + (",".join(spec["verification_fields"]) or "none")
         )
+        print(
+            "postcondition_fields="
+            + (",".join(spec["postcondition_fields"]) or "none")
+        )
+        print(
+            "cleanup_verification_fields="
+            + (",".join(spec["cleanup_verification_fields"]) or "none")
+        )
         print("timeout_source=" + str(spec["timeout_source"]))
+        print("operation_timeout_ms=" + str(spec["operation_timeout_ms"] or "none"))
+        print(
+            "binary_limits="
+            + "/".join(
+                str(spec[name]) if spec[name] is not None else "none"
+                for name in (
+                    "binary_response_max_bytes",
+                    "binary_operation_max_bytes",
+                    "binary_query_max_count",
+                    "binary_resynchronization_max_bytes",
+                )
+            )
+        )
+        print("error_check_minimum=" + str(spec["error_check_minimum"] or "none"))
+        print(
+            "embedded_screenshot_contract="
+            + ("present" if spec["embedded_screenshot_contract"] is not None else "none")
+        )
         print("risk_flags=" + (",".join(spec["risk_flags"]) or "none"))
         print("safe_alternatives=" + (",".join(spec["safe_alternatives"]) or "none"))
 
@@ -187,6 +213,18 @@ def _print_instrument_descriptor(descriptor: InstrumentDescriptor) -> None:
     print(f"distribution_version={descriptor.version}")
     print(f"source={descriptor.source}")
     print("permissions=" + ", ".join(descriptor.permissions))
+    extensions = descriptor.scope_extensions
+    if extensions is not None:
+        profiles = [
+            name
+            for name in (
+                "screenshot_profile",
+                "acquisition_control_profile",
+                "trace_profile",
+            )
+            if getattr(extensions, name) is not None
+        ]
+        print("scope_extensions=" + (", ".join(profiles) or "none"))
 
 
 def _print_plugin_doctor(records: list[PluginDoctorRecord]) -> None:

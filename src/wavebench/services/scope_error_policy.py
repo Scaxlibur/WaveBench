@@ -1,4 +1,4 @@
-"""Private core-owned error policy executor for the Draft scope R1.3 RFC."""
+"""Core-owned error policy executor for the scope R1.3 contract."""
 
 from __future__ import annotations
 

@@ -45,9 +45,10 @@ def _png(width: int = 2, height: int = 3) -> bytes:
     )
 
 
-def test_scope_extension_types_are_not_exported_from_stable_instrument_api() -> None:
-    assert not hasattr(public_instruments, "ScopeTraceData")
-    assert not hasattr(public_instruments, "ScopeScreenshotProfile")
+def test_scope_extension_types_are_exported_from_stable_instrument_api() -> None:
+    assert public_instruments.ScopeTraceData is ScopeTraceData
+    assert public_instruments.ScopeScreenshotProfile is ScopeScreenshotProfile
+    assert public_instruments.DriverErrorRecord is DriverErrorRecord
 
 
 def test_screenshot_profile_uses_exact_request_tuples_and_fixed_limits() -> None:

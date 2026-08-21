@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, is_dataclass
 import io
@@ -75,6 +76,14 @@ from .cli_output import (
 from .logging import CommandLogger
 from .instruments.registry import build_instrument_registry
 from .instruments.registry import resolve_instrument_descriptor
+from .instruments.scope_extensions import (
+    ErrorCheckSpec,
+    ScopeContinuousAcquisitionRequest,
+    ScopeScreenshot,
+    ScopeScreenshotRequest,
+    ScopeTraceData,
+    ScopeTraceRef,
+)
 from .mcp_http import (
     resolve_mcp_token,
     serve_mcp_http,
@@ -245,6 +254,147 @@ def _json_payload(value: object) -> object:
     if is_dataclass(value):
         return asdict(value)
     return value
+
+
+def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
+    policy = getattr(args, "error_policy", None)
+    if policy is None:
+        return None
+    try:
+        return ErrorCheckSpec(
+            policy=policy,
+            timing=args.error_timing,
+            max_records=args.error_max_records,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _scope_trace_ref(args: argparse.Namespace) -> ScopeTraceRef:
+    try:
+        return ScopeTraceRef(
+            kind=args.trace_kind,
+            index=args.trace_index,
+            name=args.trace_name,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _scope_trace_points(raw: str) -> str | int:
+    if raw == "dmax":
+        return raw
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("scope trace --points must be 'dmax' or a positive integer") from exc
+    if value < 1:
+        raise ConfigError("scope trace --points must be 'dmax' or a positive integer")
+    return value
+
+
+def _new_cli_output_path(raw: str, *, suffix: str, label: str) -> Path:
+    path = Path(raw).expanduser()
+    if path.suffix.lower() != suffix:
+        raise ConfigError(f"{label} must use the {suffix} suffix")
+    if path.exists():
+        raise ConfigError(f"{label} already exists: {path}")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with TemporaryFile(dir=path.parent):
+            pass
+    except OSError as exc:
+        raise ConfigError(f"{label} directory is not writable: {path.parent}") from exc
+    return path
+
+
+def _write_scope_artifact(path: Path, payload: dict[str, object]) -> None:
+    try:
+        with path.open("x", encoding="utf-8") as file:
+            json.dump(payload, file, indent=2, ensure_ascii=False)
+            file.write("\n")
+    except OSError as exc:
+        raise ConfigError(f"failed to write scope operation artifact: {path}") from exc
+
+
+def _scope_error_payload(exc: BaseException) -> dict[str, object]:
+    payload: dict[str, object] = error_envelope(exc)
+    diagnostics = getattr(exc, "scope_operation_diagnostics", None)
+    if isinstance(diagnostics, Mapping):
+        payload["operation_diagnostics"] = _json_payload(dict(diagnostics))
+    artifact_error = getattr(exc, "scope_failure_artifact_error", None)
+    if artifact_error == "write_failed":
+        payload["scope_artifact"] = {
+            "status": "failed",
+            "reason_code": "write_failed",
+        }
+    cleanup_error = getattr(exc, "scope_output_cleanup_error", None)
+    if cleanup_error == "remove_failed":
+        payload["scope_output"] = {
+            "status": "partial_cleanup_failed",
+            "reason_code": "remove_failed",
+        }
+    return payload
+
+
+def _write_scope_failure_artifact(path: Path, exc: WaveBenchError) -> None:
+    diagnostics = getattr(exc, "scope_operation_diagnostics", None)
+    if not isinstance(diagnostics, Mapping):
+        return
+    try:
+        _write_scope_artifact(
+            path,
+            {
+                "schema": "wavebench.scope.result.v1",
+                "status": "failed",
+                "result": None,
+                "diagnostics": _json_payload(dict(diagnostics)),
+                "observed_state": None,
+                "error": _scope_error_payload(exc),
+                "files": {"artifact": path.name},
+            },
+        )
+    except ConfigError:
+        setattr(exc, "scope_failure_artifact_error", "write_failed")
+
+
+def _attach_scope_result_diagnostics(
+    exc: WaveBenchError,
+    payload: Mapping[str, object],
+) -> None:
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, Mapping):
+        setattr(exc, "scope_operation_diagnostics", dict(diagnostics))
+
+
+def _remove_failed_scope_output(path: Path, exc: WaveBenchError) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        setattr(exc, "scope_output_cleanup_error", "remove_failed")
+
+
+def _scope_output_write_error(
+    *,
+    artifact_path: Path,
+    result_payload: Mapping[str, object],
+    message: str,
+) -> ConfigError:
+    error = ConfigError(message)
+    _attach_scope_result_diagnostics(error, result_payload)
+    _write_scope_failure_artifact(artifact_path, error)
+    return error
+
+
+def _emit_scope_extension_result(
+    payload: dict[str, object],
+    *,
+    json_mode: bool,
+) -> None:
+    if json_mode:
+        _emit_json_result(payload)
+    else:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def _emit_json_result(payload: object, *, status: str = "ok", exit_code: int = 0) -> None:
@@ -975,6 +1125,139 @@ def _main(argv: list[str] | None = None) -> int:
                 for item in service.errors():
                     print(item)
                 return 0
+            if args.command == "screenshot":
+                if args.screenshot_command == "profile":
+                    result = service.screenshot_profile()
+                    _emit_scope_extension_result(result.as_dict(), json_mode=args.json)
+                    return 0
+                output_path = _new_cli_output_path(
+                    args.output,
+                    suffix=".png",
+                    label="scope screenshot output",
+                )
+                artifact_path = _new_cli_output_path(
+                    args.artifact or f"{output_path}.json",
+                    suffix=".json",
+                    label="scope screenshot artifact",
+                )
+                if output_path.resolve() == artifact_path.resolve():
+                    raise ConfigError("scope screenshot output and artifact paths must differ")
+                request = ScopeScreenshotRequest(
+                    menu_mode=args.menu_mode,
+                    color_mode=args.color_mode,
+                )
+                try:
+                    result = service.screenshot_v2(
+                        request,
+                        error_check=_scope_error_check(args),
+                    )
+                except WaveBenchError as exc:
+                    _write_scope_failure_artifact(artifact_path, exc)
+                    raise
+                if not isinstance(result.value, ScopeScreenshot):
+                    raise ConfigError("scope screenshot Service returned an invalid result")
+                payload = result.as_dict()
+                try:
+                    with output_path.open("xb") as file:
+                        file.write(result.value.data)
+                except OSError as exc:
+                    error = _scope_output_write_error(
+                        artifact_path=artifact_path,
+                        result_payload=payload,
+                        message="failed to write scope screenshot output",
+                    )
+                    _remove_failed_scope_output(output_path, error)
+                    raise error from exc
+                payload["files"] = {
+                    "screenshot": output_path.name,
+                    "artifact": artifact_path.name,
+                }
+                try:
+                    _write_scope_artifact(artifact_path, payload)
+                except ConfigError as exc:
+                    _attach_scope_result_diagnostics(exc, payload)
+                    setattr(exc, "scope_failure_artifact_error", "write_failed")
+                    _remove_failed_scope_output(output_path, exc)
+                    raise
+                payload["files"] = {
+                    "screenshot": str(output_path),
+                    "artifact": str(artifact_path),
+                }
+                _emit_scope_extension_result(payload, json_mode=args.json)
+                return 0
+            if args.command == "acquisition":
+                error_check = _scope_error_check(args)
+                if args.acquisition_command == "status":
+                    result = service.acquisition_run_state()
+                elif args.acquisition_command == "start":
+                    result = service.start_acquisition(
+                        ScopeContinuousAcquisitionRequest(args.trigger_mode),
+                        error_check=error_check,
+                    )
+                elif args.acquisition_command == "single":
+                    result = service.acquire_single(error_check=error_check)
+                else:
+                    result = service.stop_acquisition(error_check=error_check)
+                _emit_scope_extension_result(result.as_dict(), json_mode=args.json)
+                return 0
+            if args.command == "trace":
+                source = _scope_trace_ref(args)
+                if args.trace_command == "metadata":
+                    result = service.trace_metadata(source)
+                    _emit_scope_extension_result(result.as_dict(), json_mode=args.json)
+                    return 0
+                output_path = _new_cli_output_path(
+                    args.output,
+                    suffix=".npy",
+                    label="scope trace output",
+                )
+                artifact_path = _new_cli_output_path(
+                    args.artifact or f"{output_path}.json",
+                    suffix=".json",
+                    label="scope trace artifact",
+                )
+                if output_path.resolve() == artifact_path.resolve():
+                    raise ConfigError("scope trace output and artifact paths must differ")
+                try:
+                    result = service.fetch_trace(
+                        source,
+                        points=_scope_trace_points(args.trace_points),
+                        error_check=_scope_error_check(args),
+                    )
+                except WaveBenchError as exc:
+                    _write_scope_failure_artifact(artifact_path, exc)
+                    raise
+                if not isinstance(result.value, ScopeTraceData):
+                    raise ConfigError("scope trace Service returned an invalid result")
+                payload = result.as_dict()
+                try:
+                    with output_path.open("xb") as file:
+                        np.save(file, result.value.values, allow_pickle=False)
+                except OSError as exc:
+                    error = _scope_output_write_error(
+                        artifact_path=artifact_path,
+                        result_payload=payload,
+                        message="failed to write scope trace output",
+                    )
+                    _remove_failed_scope_output(output_path, error)
+                    raise error from exc
+                payload["files"] = {
+                    "trace": output_path.name,
+                    "artifact": artifact_path.name,
+                }
+                try:
+                    _write_scope_artifact(artifact_path, payload)
+                except ConfigError as exc:
+                    _attach_scope_result_diagnostics(exc, payload)
+                    setattr(exc, "scope_failure_artifact_error", "write_failed")
+                    _remove_failed_scope_output(output_path, exc)
+                    raise
+                payload["files"] = {
+                    "trace": str(output_path),
+                    "artifact": str(artifact_path),
+                }
+                _emit_scope_extension_result(payload, json_mode=args.json)
+                return 0
             if args.command == "status":
                 channel = args.channel or service.config.scope.default_channel
                 summary = getattr(service, "status_summary", None)
@@ -1120,7 +1403,7 @@ def _main(argv: list[str] | None = None) -> int:
         parser.error("unknown command")
     except WaveBenchError as exc:
         if getattr(args, "json", False):
-            print(json.dumps(error_envelope(exc), indent=2, ensure_ascii=False))
+            print(json.dumps(_scope_error_payload(exc), indent=2, ensure_ascii=False))
         else:
             print(f"wavebench: {exc}", file=sys.stderr)
         return exc.exit_code

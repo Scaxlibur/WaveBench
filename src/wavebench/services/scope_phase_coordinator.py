@@ -1,9 +1,10 @@
-"""Private operation-context and phase bridge for the Draft scope R1.3 RFC."""
+"""Operation-context and phase bridge for the scope R1.3 contract."""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
 from math import ceil
@@ -22,6 +23,9 @@ from wavebench.transport.session import (
 )
 
 from .operation_specs import OperationSpec
+
+
+SCOPE_OPERATION_ARTIFACT_SCHEMA = "wavebench.scope.operation.v1"
 
 
 class OperationPhase(StrEnum):
@@ -270,7 +274,7 @@ class _BaselineRecord:
 
 
 class ScopeOperationContextCoordinator:
-    """One default-off operation context with sequential, non-nested phases."""
+    """One operation context with sequential, non-nested phases."""
 
     def __init__(
         self,
@@ -322,6 +326,7 @@ class ScopeOperationContextCoordinator:
         self.session_state = session_state
         self.session_health_before = session_state.health.value
         self.connection_timeout_ms = connection_timeout_ms
+        self.observed_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self._session_coordinator = SessionTransactionCoordinator(session_state)
         self._owner_nonce = object()
         self._active_phase: ScopePhaseAuthorization | None = None
@@ -669,6 +674,9 @@ class ScopeOperationContextCoordinator:
 
     def artifact(self) -> dict[str, object]:
         return {
+            "schema": SCOPE_OPERATION_ARTIFACT_SCHEMA,
+            "schema_version": 1,
+            "observed_at_utc": self.observed_at_utc,
             "operation": self.operation_id,
             "correlation_id": self.correlation_id,
             "context_id": self.context_id,
@@ -832,4 +840,5 @@ __all__ = [
     "ScopePhaseAuthorization",
     "ScopePhaseAuthorizationSpec",
     "ScopePhasePurpose",
+    "SCOPE_OPERATION_ARTIFACT_SCHEMA",
 ]

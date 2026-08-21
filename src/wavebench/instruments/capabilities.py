@@ -5,6 +5,10 @@ from collections.abc import Iterable
 from wavebench.errors import ConfigError
 
 from .api import InstrumentDescriptor
+from .scope_extension_capabilities import (
+    SCOPE_CAPABILITY_METHODS,
+    validate_scope_descriptor,
+)
 
 
 CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
@@ -85,6 +89,7 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "sweep_analyzer.marker": ("read_markers",),
     "sweep_analyzer.analysis": ("read_measurements",),
 }
+CAPABILITY_METHODS.update(SCOPE_CAPABILITY_METHODS)
 
 
 def require_capabilities(
@@ -119,3 +124,4 @@ def validate_declared_capabilities(
                 f"descriptor declares capability {capability!r}, but driver lacks callable "
                 f"method(s): {', '.join(missing_methods)}"
             )
+    validate_scope_descriptor(descriptor, driver=driver)

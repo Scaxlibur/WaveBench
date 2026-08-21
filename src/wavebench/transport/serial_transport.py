@@ -280,6 +280,8 @@ class SerialTransport:
         max_bytes: int,
         timeout_ms: int | None = None,
         replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+        _transport_trailing: bytes = b"",
+        _resynchronization_max_bytes: int = 0,
     ) -> BinaryQueryResult:
         replay = ReplayPolicy(replay)
         BinaryResponseFraming(framing)
@@ -289,6 +291,14 @@ class SerialTransport:
             isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 1
         ):
             raise ValueError("timeout_ms must be a positive integer")
+        if not isinstance(_transport_trailing, bytes):
+            raise TypeError("transport trailing must be bytes")
+        if (
+            isinstance(_resynchronization_max_bytes, bool)
+            or not isinstance(_resynchronization_max_bytes, int)
+            or _resynchronization_max_bytes < 0
+        ):
+            raise ValueError("resynchronization limit must be a non-negative integer")
         self._reject_continuation("query_binary", replay)
         raise TransportIOError(
             "serial has not passed the R1.3 binary framing conformance gate",

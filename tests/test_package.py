@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +18,7 @@ from wavebench.config import (
 from wavebench.data.package import safe_label
 from wavebench.drivers.rtm2032 import WaveformData, WaveformHeader
 from wavebench.logging import CommandLogger
+from wavebench.instruments.registry import build_instrument_registry
 from wavebench.services.scope_service import ScopeService
 
 
@@ -66,6 +68,107 @@ class ScreenshotCaptureTests(unittest.TestCase):
             self.assertEqual(result.screenshot_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             metadata = json.loads((result.package_dir / "metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["files"]["screenshot"], str(result.screenshot_path))
+
+    def test_new_screenshot_capability_rejects_legacy_embedding_before_io(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = WaveBenchConfig(
+                connection=ConnectionConfig(
+                    backend="lan",
+                    resource="TCPIP::fake::INSTR",
+                    timeout_ms=10_000,
+                    opc_timeout_ms=30_000,
+                ),
+                scope=ScopeConfig(
+                    driver="rtm2032",
+                    model_hint=None,
+                    default_channel=1,
+                    reset_before_run=False,
+                    check_errors=True,
+                ),
+                autoscale=AutoscaleConfig(wait_opc=True, check_errors=True),
+                waveform=WaveformConfig(format="real", byte_order="lsbf", points="DEF"),
+                output=OutputConfig(
+                    directory=Path(tmp),
+                    package_naming="timestamp_label",
+                    save_csv=False,
+                    save_npy=False,
+                    save_json=True,
+                    save_commands_log=False,
+                    save_screenshot=True,
+                ),
+                source_path=Path(tmp) / "wavebench.toml",
+            )
+            original = build_instrument_registry(include_entry_points=False).resolve("rtm2032")
+            descriptor = replace(
+                original,
+                capabilities=(
+                    *(capability for capability in original.capabilities if capability != "scope.screenshot"),
+                    "scope.screenshot_v2",
+                ),
+            )
+            service = ScopeService(
+                config=config,
+                logger=CommandLogger(),
+                descriptor=descriptor,
+            )
+
+            with patch.object(service, "_open_scope") as open_scope:
+                with self.assertRaisesRegex(Exception, "field-closure runtime"):
+                    service.capture_waveform(channel=1, label="blocked")
+
+            open_scope.assert_not_called()
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_legacy_embedding_remains_available_during_dual_capability_migration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = WaveBenchConfig(
+                connection=ConnectionConfig(
+                    backend="lan",
+                    resource="TCPIP::fake::INSTR",
+                    timeout_ms=10_000,
+                    opc_timeout_ms=30_000,
+                ),
+                scope=ScopeConfig(
+                    driver="rtm2032",
+                    model_hint=None,
+                    default_channel=1,
+                    reset_before_run=False,
+                    check_errors=True,
+                ),
+                autoscale=AutoscaleConfig(wait_opc=True, check_errors=True),
+                waveform=WaveformConfig(
+                    format="real",
+                    byte_order="lsbf",
+                    points="DEF",
+                ),
+                output=OutputConfig(
+                    directory=Path(tmp),
+                    package_naming="timestamp_label",
+                    save_csv=False,
+                    save_npy=False,
+                    save_json=True,
+                    save_commands_log=False,
+                    save_screenshot=True,
+                ),
+                source_path=Path(tmp) / "wavebench.toml",
+            )
+            original = build_instrument_registry(include_entry_points=False).resolve(
+                "rtm2032"
+            )
+            descriptor = replace(
+                original,
+                capabilities=(*original.capabilities, "scope.screenshot_v2"),
+            )
+            service = ScopeService(
+                config=config,
+                logger=CommandLogger(),
+                descriptor=descriptor,
+            )
+
+            self.assertEqual(
+                service._legacy_capture_screenshot_capability(),
+                "scope.screenshot",
+            )
 
 
 if __name__ == "__main__":

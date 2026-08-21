@@ -19,6 +19,7 @@ from .api import (
 )
 from .builtin import BUILTIN_INSTRUMENTS
 from .capabilities import CAPABILITY_METHODS
+from .scope_extension_capabilities import validate_scope_descriptor
 from .migrations import BUILTIN_MIGRATION_DISTRIBUTIONS
 
 ENTRY_POINT_GROUP = "wavebench.instruments"
@@ -202,6 +203,7 @@ def _validate_descriptor(
             f"instrument driver {descriptor.driver_id!r} declares unknown capabilities: "
             f"{', '.join(unknown_capabilities)}"
         )
+    validate_scope_descriptor(descriptor)
     current = _version_tuple(__version__)
     if current < _version_tuple(descriptor.wavebench_min_version) or current >= _version_tuple(
         descriptor.wavebench_max_version

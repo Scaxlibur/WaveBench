@@ -139,6 +139,7 @@ def descriptor() -> InstrumentDescriptor:
 | `distribution`、`version`、`source`、`origin` | entry point 加载后由 registry 按已安装分发覆盖 | 不得用于插件内部授权、信任或功能分支 |
 | `scope_coupling_policy` | 值由类型约定为三种策略 | scope 必须准确声明；无法证明时使用 `unknown`，核心会默认拒绝无法确认高阻的采集 |
 | `config_fields` | 当前只展示；为空时由 `option_specs` 推导 `options.<name>` | 只列出用户实际可配置的字段，不代表核心会按此字段授权 |
+| `scope_extensions` | 仅允许 scope descriptor 使用，类型必须为 `ScopeDescriptorExtensions` | 为 R1.3 capability 提供静态截图、采集控制和 trace profile；旧插件保持 `None` |
 
 ### `scope_coupling_policy`
 
@@ -236,7 +237,10 @@ factory 必须同步返回，不得返回 coroutine、context manager 或 `(driv
 
 capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader 会拒绝未知 capability，但不会单独拒绝「已知但前缀属于其他 kind」的组合；插件测试必须覆盖该项。
 
-方法签名以 [`contracts.py`](../../../../src/wavebench/instruments/contracts.py) 为准，返回对象以 [`models.py`](../../../../src/wavebench/instruments/models.py) 为准。当前 capability 到方法的映射如下。
+旧接口的方法签名以 [`contracts.py`](../../../../src/wavebench/instruments/contracts.py) 为准，返回
+对象以 [`models.py`](../../../../src/wavebench/instruments/models.py) 为准。Scope R1.3 的 Protocol
+和 model 由 [`scope_extensions.py`](../../../../src/wavebench/instruments/scope_extensions.py) 定义，
+并从 `wavebench.instruments` 导出。当前 capability 到方法的映射如下。
 
 ### Scope
 
@@ -261,8 +265,45 @@ capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader
 | `scope.fft_status` | `get_fft_status` |
 | `scope.reference_metadata` | `get_reference_waveform_metadata` |
 | `scope.cursor_readout` | `get_cursor_readout` |
+| `scope.screenshot_profile` | `get_screenshot_profile` |
+| `scope.screenshot_v2` | `get_screenshot_profile`、`capture_screenshot`、`snapshot_screenshot_state`、`restore_screenshot_state`、`verify_screenshot_state_restored` |
+| `scope.acquisition_run_state` | `get_acquisition_run_state` |
+| `scope.acquisition_control` | `get_acquisition_run_state`、`start_continuous`、`stop_acquisition`、`acquire_single`、`snapshot_acquisition_control`、`restore_acquisition_control`、`verify_acquisition_control_restored` |
+| `scope.trace_metadata` | `get_trace_metadata` |
+| `scope.fetch_trace` | `get_trace_metadata`、`fetch_trace`、`snapshot_trace_transfer_state`、`restore_trace_transfer_state`、`verify_trace_transfer_state_restored` |
+| `scope.error_drain_v1` | `drain_errors` |
 
 `scope.capture_waveforms` 的固定语义是：先配置全部目标通道，只执行一次 acquisition 和 OPC 等待，再逐通道读取。不得静默退回逐通道重复触发。回调、失败时部分结果和返回字典的签名以 `MultiChannelScopeDriver` 为准。
+
+### Scope R1.3 扩展
+
+R1.3 的 Protocol 和 model 从 `wavebench.instruments` 导出。声明任一新增 capability 时，wheel
+依赖和 descriptor 的 `wavebench_min_version` 都必须为 `0.8.23` 或更高的 `0.8.x` 版本。
+
+profile 依赖如下：
+
+| capability | 必需 descriptor profile |
+| --- | --- |
+| `scope.screenshot_profile`、`scope.screenshot_v2` | `scope_extensions.screenshot_profile` |
+| `scope.acquisition_control` | `scope_extensions.acquisition_control_profile` |
+| `scope.trace_metadata`、`scope.fetch_trace` | `scope_extensions.trace_profile` |
+
+`scope.acquisition_control` 还必须同时声明 `scope.acquisition_run_state`。缺少 profile、方法或核心
+版本门时，核心会拒绝 descriptor；只实现方法而不声明 capability，不会产生隐式能力。
+
+公共调用入口为 `ScopeService` 和以下 CLI：
+
+```text
+wavebench scope screenshot profile
+wavebench scope screenshot capture
+wavebench scope acquisition status|start|single|stop
+wavebench scope trace metadata|fetch
+```
+
+旧 `scope capture --screenshot` 继续服务声明 `scope.screenshot` 的插件。插件同时声明旧能力
+和 `scope.screenshot_v2` 时，旧命令仍走 legacy 路径；只有 v2、没有旧能力时，核心会在仪器
+I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot capture`。父 capture 字段
+闭包在后续实现前不得由插件自行模拟。
 
 ### Source
 

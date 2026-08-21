@@ -86,9 +86,10 @@ class InstrumentDescriptor:
     source: str = "builtin"
     origin: PluginOrigin = "builtin"
     scope_coupling_policy: ScopeCouplingPolicy = "unknown"
-    scope_extensions: ScopeDescriptorExtensions | None = None
     config_fields: tuple[str, ...] = ()
     resource_schemes: tuple[str, ...] = ()
+    # Append-only to preserve the positional layout accepted by instrument API v2.
+    scope_extensions: ScopeDescriptorExtensions | None = None
 
     def __post_init__(self) -> None:
         if not self.driver_id or self.driver_id.strip() != self.driver_id:

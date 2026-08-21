@@ -1,16 +1,21 @@
-"""Default-off descriptor/capability validation for the Draft scope R1.3 RFC."""
+"""Descriptor and capability validation for the scope R1.3 public contract."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
 
+from packaging.version import InvalidVersion, Version
+
 from wavebench.errors import ConfigError
 
 from .api import InstrumentDescriptor
 
 
-EXPERIMENTAL_SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+SCOPE_EXTENSIONS_MIN_CORE_VERSION = "0.8.23"
+
+
+SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "scope.screenshot_profile": ("get_screenshot_profile",),
         "scope.screenshot_v2": (
@@ -42,22 +47,43 @@ EXPERIMENTAL_SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingPr
     }
 )
 
+# Kept as an import-compatible alias for the internal implementation branch.
+EXPERIMENTAL_SCOPE_CAPABILITY_METHODS = SCOPE_CAPABILITY_METHODS
 
-def validate_experimental_scope_descriptor(
+
+def validate_scope_descriptor(
     descriptor: InstrumentDescriptor,
     *,
     driver: object | None = None,
-    enabled: bool = False,
+    _require_public_version: bool = True,
 ) -> None:
-    """Validate candidate capabilities without publishing them to the main registry."""
+    """Validate scope extension declarations before instrument I/O."""
 
-    if not enabled:
-        raise ConfigError("experimental scope extensions are disabled")
-    if descriptor.kind != "scope":
-        raise ConfigError("experimental scope capabilities require a scope descriptor")
-    declared = set(descriptor.capabilities) & set(EXPERIMENTAL_SCOPE_CAPABILITY_METHODS)
+    declared = set(descriptor.capabilities) & set(SCOPE_CAPABILITY_METHODS)
     if not declared:
         return
+    if descriptor.kind != "scope":
+        raise ConfigError("scope extension capabilities require a scope descriptor")
+    if _require_public_version:
+        try:
+            minimum = Version(descriptor.wavebench_min_version)
+            contract_minimum = Version(SCOPE_EXTENSIONS_MIN_CORE_VERSION)
+        except InvalidVersion as exc:
+            raise ConfigError("scope extension descriptor has an invalid core version") from exc
+        if minimum < contract_minimum:
+            raise ConfigError(
+                "scope extension capabilities require wavebench_min_version "
+                f">= {SCOPE_EXTENSIONS_MIN_CORE_VERSION}"
+            )
+    dependencies = {
+        "scope.acquisition_control": {"scope.acquisition_run_state"},
+    }
+    for capability, required in dependencies.items():
+        if capability in declared and not required <= declared:
+            raise ConfigError(
+                f"instrument {descriptor.driver_id!r} capability {capability!r} requires "
+                + ", ".join(sorted(required))
+            )
     extensions = descriptor.scope_extensions
     profile_requirements = {
         "scope.screenshot_profile": "screenshot_profile",
@@ -79,7 +105,7 @@ def validate_experimental_scope_descriptor(
             continue
         missing = tuple(
             method
-            for method in EXPERIMENTAL_SCOPE_CAPABILITY_METHODS[capability]
+            for method in SCOPE_CAPABILITY_METHODS[capability]
             if not callable(getattr(driver, method, None))
         )
         if missing:
@@ -89,7 +115,27 @@ def validate_experimental_scope_descriptor(
             )
 
 
+def validate_experimental_scope_descriptor(
+    descriptor: InstrumentDescriptor,
+    *,
+    driver: object | None = None,
+    enabled: bool = False,
+) -> None:
+    """Validate candidate capabilities without publishing them to the main registry."""
+
+    if not enabled:
+        raise ConfigError("experimental scope extensions are disabled")
+    validate_scope_descriptor(
+        descriptor,
+        driver=driver,
+        _require_public_version=False,
+    )
+
+
 __all__ = [
     "EXPERIMENTAL_SCOPE_CAPABILITY_METHODS",
+    "SCOPE_CAPABILITY_METHODS",
+    "SCOPE_EXTENSIONS_MIN_CORE_VERSION",
     "validate_experimental_scope_descriptor",
+    "validate_scope_descriptor",
 ]

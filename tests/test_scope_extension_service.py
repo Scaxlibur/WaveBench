@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import zlib
 
+import wavebench.services as public_services
 from wavebench.errors import DataError, InstrumentError
 from wavebench.instruments import InstrumentDescriptor
 from wavebench.instruments.scope_extensions import (
@@ -31,7 +32,10 @@ from wavebench.instruments.scope_extensions import (
     ScopeTraceTransferRestoreResult,
     ScopeTraceTransferStateSnapshot,
 )
-from wavebench.services.scope_extension_service import ExperimentalScopeExtensionService
+from wavebench.services.scope_extension_service import (
+    ExperimentalScopeExtensionService,
+    ScopeExtensionService,
+)
 from wavebench.transport.contracts import (
     BinaryQueryResult,
     BinaryResponseFraming,
@@ -98,6 +102,8 @@ class _Backend:
         max_bytes: int,
         timeout_ms: int | None = None,
         replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+        _transport_trailing: bytes = b"",
+        _resynchronization_max_bytes: int = 0,
     ) -> BinaryQueryResult:
         self.binary_queries += 1
         data = _png() if "SCREEN" in command else b"\x01\x02"
@@ -110,7 +116,8 @@ class _Backend:
             framing,
             len(data),
             header_bytes,
-            header_bytes + len(data),
+            header_bytes + len(data) + len(_transport_trailing),
+            _transport_trailing,
         )
 
     def query_opc(self, *, replay: ReplayPolicy = ReplayPolicy.NO_REPLAY) -> str:
@@ -448,6 +455,7 @@ def _service(*, error_capability: bool = False):
         option_specs=(),
         permissions=("instrument.io",),
         factory=lambda context: driver,
+        wavebench_min_version="0.8.23",
         scope_extensions=ScopeDescriptorExtensions(
             screenshot_profile=driver.screenshot_profile,
             acquisition_control_profile=driver.acquisition_profile,
@@ -480,6 +488,28 @@ def test_screenshot_success_restores_and_verifies_before_return() -> None:
         "success_restore",
         "cleanup_verification",
     ]
+
+
+def test_public_service_needs_no_experimental_enable_and_freezes_artifact_schema() -> None:
+    internal, driver, transport, _ = _service()
+    service = ScopeExtensionService(
+        driver=driver,
+        descriptor=internal.descriptor,
+        session_state=transport.session_state,
+        connection_timeout_ms=1_000,
+    )
+
+    result = service.screenshot_v2(
+        ScopeScreenshotRequest(menu_mode="exclude", color_mode="color")
+    )
+    payload = result.as_dict()
+
+    assert payload["schema"] == "wavebench.scope.result.v1"
+    assert payload["diagnostics"]["schema"] == "wavebench.scope.operation.v1"
+    assert payload["result"]["payload_bytes"] == len(result.value.data)
+    assert "data" not in payload["result"]
+    assert driver.restore_calls == 1
+    assert public_services.ScopeExtensionService is ScopeExtensionService
 
 
 def test_screenshot_main_failure_is_primary_but_cleanup_can_restore_health() -> None:

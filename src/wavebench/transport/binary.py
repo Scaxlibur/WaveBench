@@ -1,14 +1,13 @@
-"""Private binary framing and operation-budget primitives for scope RFC R1.3.
-
-These types are intentionally not exported from :mod:`wavebench.transport` yet.
-The RFC remains Draft and no existing backend or public capability uses them.
-"""
+"""Bounded binary framing and operation-budget primitives for scope RFC R1.3."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from threading import RLock
 import time
+from typing import Any
 from uuid import uuid4
 
 from wavebench.errors import TransportIOError
@@ -290,6 +289,11 @@ class BinaryQueryLedger:
                 "transport_trailing_bytes": len(self.transport_trailing),
             }
 
+    @property
+    def remaining_resynchronization_bytes(self) -> int:
+        with self._lock:
+            return max(self.resynchronization_max_bytes - self._discarded_bytes, 0)
+
     def _validate_budget(self, budget: BinaryQueryBudget) -> None:
         if not isinstance(budget, BinaryQueryBudget):
             raise TypeError("binary query budget has an invalid type")
@@ -420,7 +424,9 @@ def parse_definite_block_response(
                 Synchronization.PROVEN if boundary_proven else Synchronization.LOST
             ),
             consumed_bytes=len(raw),
-            discarded_bytes=declared if boundary_proven else 0,
+            discarded_bytes=(
+                declared + len(transport_trailing) if boundary_proven else 0
+            ),
         )
     if len(raw) < expected_total:
         raise fail(
@@ -449,9 +455,648 @@ def parse_definite_block_response(
     )
 
 
+def visa_message_boundary_supported(session: object) -> bool:
+    """Return whether a concrete VISA resource can report a message boundary.
+
+    A backend or conformance fake can provide an explicit boolean
+    ``wavebench_message_boundary`` attribute.  Real VISA resources are accepted
+    only for message-based ``INSTR`` resources; raw TCP sockets and serial
+    resources do not have a portable EOM contract.
+    """
+
+    explicit = getattr(session, "wavebench_message_boundary", None)
+    if isinstance(explicit, bool):
+        return explicit
+    resource_name = str(
+        getattr(session, "resource_name", None)
+        or getattr(session, "_resource_name", "")
+    ).upper()
+    if "::SOCKET" in resource_name or resource_name.startswith("ASRL"):
+        return False
+    resource_class = getattr(session, "resource_class", None)
+    if resource_class is None:
+        try:
+            resource_class = session.resource_info.resource_class  # type: ignore[attr-defined]
+        except Exception:
+            resource_class = None
+    if str(resource_class or "").upper() != "INSTR":
+        return False
+    return resource_name.startswith(("GPIB", "TCPIP", "USB", "VXI", "PXI"))
+
+
+def query_visa_binary_response(
+    *,
+    session: object,
+    write_query: Callable[[str], object],
+    command: str,
+    framing: BinaryResponseFraming,
+    max_bytes: int,
+    timeout_ms: int | None,
+    replay: ReplayPolicy,
+    transport_trailing: bytes = b"",
+    resynchronization_max_bytes: int = 0,
+) -> BinaryQueryResult:
+    """Execute one bounded binary query through a PyVISA-compatible resource.
+
+    The function deliberately uses the low-level VISA read status rather than
+    ``read_raw()`` so a backend cannot allocate beyond the response, the
+    authorized resynchronization allowance, and one boundary-probe byte. It
+    never retries a sent query.
+    """
+
+    framing = BinaryResponseFraming(framing)
+    replay = ReplayPolicy(replay)
+    limit = _positive_int(max_bytes, label="max_bytes")
+    resync_limit = _non_negative_int(
+        resynchronization_max_bytes,
+        label="resynchronization_max_bytes",
+    )
+    if not isinstance(command, str) or not command:
+        raise ValueError("binary query command must be a non-empty string")
+    if timeout_ms is not None:
+        _positive_int(timeout_ms, label="timeout_ms")
+    if not isinstance(transport_trailing, bytes):
+        raise TypeError("transport_trailing must be bytes")
+    if len(transport_trailing) > 16:
+        raise ValueError("transport_trailing cannot exceed 16 bytes")
+    if framing is BinaryResponseFraming.MESSAGE and transport_trailing:
+        raise ValueError("message framing cannot use transport trailing bytes")
+    if replay is ReplayPolicy.READ_CONTINUATION_ONLY:
+        raise _binary_transport_error(
+            "binary_continuation_unsupported",
+            phase=TransportPhase.BEFORE_SEND,
+            replay=replay,
+            transmission=CommandTransmission.NOT_SENT,
+            progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            consumed_bytes=0,
+        )
+    if not visa_message_boundary_supported(session):
+        raise _binary_transport_error(
+            "binary_framing_unsupported",
+            phase=TransportPhase.BEFORE_SEND,
+            replay=replay,
+            transmission=CommandTransmission.NOT_SENT,
+            progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            consumed_bytes=0,
+        )
+
+    if not callable(write_query):
+        raise _binary_transport_error(
+            "binary_framing_unsupported",
+            phase=TransportPhase.BEFORE_SEND,
+            replay=replay,
+            transmission=CommandTransmission.NOT_SENT,
+            progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            consumed_bytes=0,
+        )
+    if not _has_low_level_visa_read(session):
+        raise _binary_transport_error(
+            "binary_framing_unsupported",
+            phase=TransportPhase.BEFORE_SEND,
+            replay=replay,
+            transmission=CommandTransmission.NOT_SENT,
+            progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            consumed_bytes=0,
+        )
+
+    original_timeout: object = _MISSING
+    original_termination: object = _MISSING
+    settings_changed = False
+    transmitted = False
+    progress_state = {"consumed": 0}
+    primary: BaseException | None = None
+    result: BinaryQueryResult | None = None
+    try:
+        original_timeout = getattr(session, "timeout")
+        original_termination = getattr(session, "read_termination")
+        if timeout_ms is not None:
+            setattr(session, "timeout", timeout_ms)
+        setattr(session, "read_termination", None)
+        settings_changed = True
+    except Exception as exc:
+        _restore_visa_read_settings(
+            session,
+            original_timeout=original_timeout,
+            original_termination=original_termination,
+        )
+        raise _binary_transport_error(
+            "binary_framing_unsupported",
+            phase=TransportPhase.BEFORE_SEND,
+            replay=replay,
+            transmission=CommandTransmission.NOT_SENT,
+            progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            consumed_bytes=0,
+        ) from exc
+
+    try:
+        try:
+            written = write_query(command)
+            if written == 0:
+                raise _binary_transport_error(
+                    None,
+                    phase=TransportPhase.BEFORE_SEND,
+                    replay=replay,
+                    transmission=CommandTransmission.NOT_SENT,
+                    progress=ResponseProgress.NONE,
+                    synchronization=Synchronization.PROVEN,
+                    attempts=0,
+                    consumed_bytes=0,
+                )
+            transmitted = True
+        except TransportIOError:
+            raise
+        except Exception as exc:
+            raise _binary_transport_error(
+                "binary_timeout" if _is_timeout_error(exc) else None,
+                phase=TransportPhase.SENDING,
+                replay=replay,
+                transmission=CommandTransmission.UNKNOWN,
+                progress=ResponseProgress.NONE,
+                synchronization=Synchronization.UNPROVEN,
+                attempts=1,
+                consumed_bytes=0,
+            ) from exc
+
+        if framing is BinaryResponseFraming.DEFINITE_BLOCK:
+            result = _read_visa_definite_block(
+                session,
+                max_bytes=limit,
+                transport_trailing=transport_trailing,
+                resynchronization_max_bytes=resync_limit,
+                replay=replay,
+                progress_state=progress_state,
+            )
+        else:
+            result = _read_visa_message(
+                session,
+                max_bytes=limit,
+                resynchronization_max_bytes=resync_limit,
+                replay=replay,
+                progress_state=progress_state,
+            )
+    except BaseException as exc:
+        if isinstance(exc, TransportIOError):
+            primary = exc
+        elif transmitted:
+            primary = _binary_transport_error(
+                "binary_timeout" if _is_timeout_error(exc) else "binary_truncated",
+                phase=TransportPhase.READING,
+                replay=replay,
+                transmission=CommandTransmission.SENT,
+                progress=(
+                    ResponseProgress.PARTIAL
+                    if progress_state["consumed"]
+                    else ResponseProgress.NONE
+                ),
+                synchronization=Synchronization.UNPROVEN,
+                attempts=1,
+                consumed_bytes=progress_state["consumed"],
+            )
+            primary.__cause__ = exc
+        else:
+            primary = exc
+
+    restore_error: BaseException | None = None
+    if settings_changed:
+        try:
+            _restore_visa_read_settings(
+                session,
+                original_timeout=original_timeout,
+                original_termination=original_termination,
+            )
+        except BaseException as exc:
+            restore_error = exc
+    if restore_error is not None:
+        raise _binary_transport_error(
+            "binary_transport_trailing_error",
+            phase=TransportPhase.READING,
+            replay=replay,
+            transmission=(
+                CommandTransmission.SENT if transmitted else CommandTransmission.UNKNOWN
+            ),
+            progress=(
+                ResponseProgress.COMPLETE
+                if result is not None
+                else ResponseProgress.PARTIAL
+                if progress_state["consumed"]
+                else ResponseProgress.NONE
+            ),
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+        ) from (primary or restore_error)
+    if primary is not None:
+        raise primary
+    assert result is not None
+    return result
+
+
+_MISSING = object()
+
+
+def _restore_visa_read_settings(
+    session: object,
+    *,
+    original_timeout: object,
+    original_termination: object,
+) -> None:
+    failures: list[BaseException] = []
+    if original_termination is not _MISSING:
+        try:
+            setattr(session, "read_termination", original_termination)
+        except BaseException as exc:
+            failures.append(exc)
+    if original_timeout is not _MISSING:
+        try:
+            setattr(session, "timeout", original_timeout)
+        except BaseException as exc:
+            failures.append(exc)
+    if failures:
+        raise RuntimeError("failed to restore VISA read settings") from failures[0]
+
+
+def _has_low_level_visa_read(session: object) -> bool:
+    visalib = getattr(session, "visalib", None)
+    return (
+        visalib is not None
+        and callable(getattr(visalib, "read", None))
+        and getattr(session, "session", None) is not None
+        and hasattr(session, "timeout")
+        and hasattr(session, "read_termination")
+    )
+
+
+def _read_visa_definite_block(
+    session: object,
+    *,
+    max_bytes: int,
+    transport_trailing: bytes,
+    resynchronization_max_bytes: int,
+    replay: ReplayPolicy,
+    progress_state: dict[str, int],
+) -> BinaryQueryResult:
+    prefix, prefix_eom = _visa_read_exact(
+        session,
+        2,
+        replay=replay,
+        progress_state=progress_state,
+    )
+    if prefix_eom:
+        raise _binary_truncated_error(replay, progress_state["consumed"], proven=True)
+    if prefix[0:1] != b"#" or prefix[1:2] not in b"123456789":
+        raise _binary_transport_error(
+            "binary_framing_error",
+            phase=TransportPhase.PARSING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.PARTIAL,
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+        )
+    digits = prefix[1] - ord("0")
+    length_field, length_eom = _visa_read_exact(
+        session,
+        digits,
+        replay=replay,
+        progress_state=progress_state,
+    )
+    if any(byte < ord("0") or byte > ord("9") for byte in length_field):
+        raise _binary_transport_error(
+            "binary_framing_error",
+            phase=TransportPhase.PARSING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.PARTIAL,
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+        )
+    declared = int(length_field.decode("ascii"))
+    if declared == 0:
+        raise _binary_transport_error(
+            "binary_framing_error",
+            phase=TransportPhase.PARSING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.PARTIAL,
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+        )
+    if length_eom:
+        raise _binary_truncated_error(replay, progress_state["consumed"], proven=True)
+    header_bytes = 2 + digits
+    remaining_response = declared + len(transport_trailing)
+    if declared > max_bytes:
+        if remaining_response > resynchronization_max_bytes:
+            raise _binary_transport_error(
+                "binary_limit_exceeded",
+                phase=TransportPhase.PARSING,
+                replay=replay,
+                transmission=CommandTransmission.SENT,
+                progress=ResponseProgress.PARTIAL,
+                synchronization=Synchronization.LOST,
+                attempts=1,
+                consumed_bytes=progress_state["consumed"],
+                discarded_bytes=0,
+            )
+        discarded = _visa_read_expected_message(
+            session,
+            remaining_response,
+            replay=replay,
+            progress_state=progress_state,
+            discarded_base=remaining_response,
+        )
+        trailing = discarded[declared:]
+        if trailing != transport_trailing:
+            raise _binary_transport_error(
+                "binary_transport_trailing_error",
+                phase=TransportPhase.PARSING,
+                replay=replay,
+                transmission=CommandTransmission.SENT,
+                progress=ResponseProgress.COMPLETE,
+                synchronization=Synchronization.LOST,
+                attempts=1,
+                consumed_bytes=progress_state["consumed"],
+                discarded_bytes=remaining_response,
+            )
+        raise _binary_transport_error(
+            "binary_limit_exceeded",
+            phase=TransportPhase.PARSING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.COMPLETE,
+            synchronization=Synchronization.PROVEN,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+            discarded_bytes=remaining_response,
+        )
+
+    response = _visa_read_expected_message(
+        session,
+        remaining_response,
+        replay=replay,
+        progress_state=progress_state,
+    )
+    payload = response[:declared]
+    trailing = response[declared:]
+    if trailing != transport_trailing:
+        raise _binary_transport_error(
+            "binary_transport_trailing_error",
+            phase=TransportPhase.PARSING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.COMPLETE,
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+        )
+    return BinaryQueryResult(
+        data=payload,
+        framing=BinaryResponseFraming.DEFINITE_BLOCK,
+        declared_length=declared,
+        framing_header_bytes=header_bytes,
+        consumed_bytes=progress_state["consumed"],
+        transport_trailing_bytes=trailing,
+    )
+
+
+def _read_visa_message(
+    session: object,
+    *,
+    max_bytes: int,
+    resynchronization_max_bytes: int,
+    replay: ReplayPolicy,
+    progress_state: dict[str, int],
+) -> BinaryQueryResult:
+    # Request one byte beyond the authorized payload and resynchronization
+    # ceiling. VISA implementations commonly report MAX_CNT when EOM lands on
+    # the final requested byte; the bounded probe makes a valid response
+    # strictly shorter than the request and therefore proves its boundary.
+    capacity = max_bytes + resynchronization_max_bytes + 1
+    response, eom = _visa_read_chunk(session, capacity)
+    if len(response) > capacity:
+        raise _binary_transport_error(
+            "binary_framing_error",
+            phase=TransportPhase.READING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.PARTIAL,
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+        )
+    progress_state["consumed"] += len(response)
+    if eom:
+        if len(response) <= max_bytes:
+            return BinaryQueryResult(
+                data=response,
+                framing=BinaryResponseFraming.MESSAGE,
+                declared_length=None,
+                framing_header_bytes=0,
+                consumed_bytes=len(response),
+            )
+        raise _binary_transport_error(
+            "binary_limit_exceeded",
+            phase=TransportPhase.READING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.COMPLETE,
+            synchronization=Synchronization.PROVEN,
+            attempts=1,
+            consumed_bytes=len(response),
+            discarded_bytes=len(response) - max_bytes,
+        )
+    raise _binary_transport_error(
+        "binary_limit_exceeded" if len(response) > max_bytes else "binary_truncated",
+        phase=TransportPhase.READING,
+        replay=replay,
+        transmission=CommandTransmission.SENT,
+        progress=ResponseProgress.PARTIAL,
+        synchronization=Synchronization.LOST,
+        attempts=1,
+        consumed_bytes=progress_state["consumed"],
+        discarded_bytes=max(progress_state["consumed"] - max_bytes, 0),
+    )
+
+
+def _visa_read_expected_message(
+    session: object,
+    count: int,
+    *,
+    replay: ReplayPolicy,
+    progress_state: dict[str, int],
+    discarded_base: int = 0,
+) -> bytes:
+    """Read an exact expected tail while proving EOM with one bounded probe."""
+
+    response, eom = _visa_read_chunk(session, count + 1)
+    progress_state["consumed"] += len(response)
+    if len(response) > count:
+        raise _binary_transport_error(
+            "binary_transport_trailing_error",
+            phase=TransportPhase.PARSING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.COMPLETE,
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+            discarded_bytes=discarded_base + len(response) - count,
+        )
+    if len(response) < count:
+        raise _binary_truncated_error(
+            replay,
+            progress_state["consumed"],
+            proven=eom,
+        )
+    if not eom:
+        raise _binary_transport_error(
+            "binary_transport_trailing_error",
+            phase=TransportPhase.PARSING,
+            replay=replay,
+            transmission=CommandTransmission.SENT,
+            progress=ResponseProgress.COMPLETE,
+            synchronization=Synchronization.LOST,
+            attempts=1,
+            consumed_bytes=progress_state["consumed"],
+            discarded_bytes=discarded_base,
+        )
+    return response
+
+
+def _visa_read_exact(
+    session: object,
+    count: int,
+    *,
+    replay: ReplayPolicy,
+    progress_state: dict[str, int],
+) -> tuple[bytes, bool]:
+    if count == 0:
+        return b"", False
+    response = bytearray()
+    while len(response) < count:
+        chunk, eom = _visa_read_chunk(session, count - len(response))
+        if len(chunk) > count - len(response):
+            raise _binary_transport_error(
+                "binary_framing_error",
+                phase=TransportPhase.READING,
+                replay=replay,
+                transmission=CommandTransmission.SENT,
+                progress=ResponseProgress.PARTIAL,
+                synchronization=Synchronization.LOST,
+                attempts=1,
+                consumed_bytes=progress_state["consumed"],
+            )
+        response.extend(chunk)
+        progress_state["consumed"] += len(chunk)
+        if eom:
+            if len(response) < count:
+                raise _binary_truncated_error(
+                    replay,
+                    progress_state["consumed"],
+                    proven=True,
+                )
+            return bytes(response), True
+        if not chunk:
+            raise _binary_truncated_error(
+                replay,
+                progress_state["consumed"],
+                proven=False,
+            )
+    return bytes(response), False
+
+
+def _visa_read_chunk(session: object, count: int) -> tuple[bytes, bool]:
+    visalib = session.visalib  # type: ignore[attr-defined]
+    warning_context: Any = nullcontext()
+    try:
+        from pyvisa.constants import StatusCode
+
+        ignore_warning = getattr(session, "ignore_warning", None)
+        if callable(ignore_warning):
+            warning_context = ignore_warning(
+                StatusCode.success_device_not_present,
+                StatusCode.success_max_count_read,
+            )
+    except Exception:
+        pass
+    with warning_context:
+        chunk, status = visalib.read(session.session, count)  # type: ignore[attr-defined]
+    data = bytes(chunk)
+    status_name = str(getattr(status, "name", status)).lower()
+    max_count = "success_max_count_read" in status_name
+    return data, not max_count
+
+
+def _binary_truncated_error(
+    replay: ReplayPolicy,
+    consumed_bytes: int,
+    *,
+    proven: bool,
+) -> TransportIOError:
+    return _binary_transport_error(
+        "binary_truncated",
+        phase=TransportPhase.READING,
+        replay=replay,
+        transmission=CommandTransmission.SENT,
+        progress=ResponseProgress.PARTIAL if consumed_bytes else ResponseProgress.NONE,
+        synchronization=(Synchronization.PROVEN if proven else Synchronization.UNPROVEN),
+        attempts=1,
+        consumed_bytes=consumed_bytes,
+    )
+
+
+def _binary_transport_error(
+    reason_code: str | None,
+    *,
+    phase: TransportPhase,
+    replay: ReplayPolicy,
+    transmission: CommandTransmission,
+    progress: ResponseProgress,
+    synchronization: Synchronization,
+    attempts: int,
+    consumed_bytes: int,
+    discarded_bytes: int = 0,
+) -> TransportIOError:
+    return TransportIOError(
+        "bounded binary transport exchange failed",
+        operation="query_binary",
+        phase=phase,
+        replay_policy=replay,
+        command_transmission=transmission,
+        response_progress=progress,
+        synchronization=synchronization,
+        attempts=attempts,
+        reason_code=reason_code,
+        consumed_bytes=consumed_bytes,
+        discarded_bytes=discarded_bytes,
+    )
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    error_code = getattr(exc, "error_code", None)
+    error_name = getattr(error_code, "name", "")
+    token = f"{type(exc).__name__} {error_code!s} {error_name!s}".lower()
+    return "timeout" in token or "tmo" in token
+
+
 __all__ = [
     "BinaryQueryBudget",
     "BinaryQueryLedger",
     "BinaryQueryReservation",
     "parse_definite_block_response",
+    "query_visa_binary_response",
+    "visa_message_boundary_supported",
 ]

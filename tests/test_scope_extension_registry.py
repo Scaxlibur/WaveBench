@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import fields, replace
+
 import pytest
 
 from wavebench.errors import ConfigError
 from wavebench.instruments import InstrumentDescriptor
 from wavebench.instruments.capabilities import CAPABILITY_METHODS, validate_declared_capabilities
 from wavebench.instruments.scope_extension_capabilities import (
-    EXPERIMENTAL_SCOPE_CAPABILITY_METHODS,
+    SCOPE_CAPABILITY_METHODS,
     validate_experimental_scope_descriptor,
+    validate_scope_descriptor,
 )
 from wavebench.instruments.scope_extensions import (
     ScopeDescriptorExtensions,
@@ -18,8 +21,8 @@ from wavebench.instruments.scope_extensions import (
 from wavebench.services.operation_specs import OperationSpec, get_operation_spec
 from wavebench.services.scope_error_policy import legacy_scope_error_artifact
 from wavebench.services.scope_extension_specs import (
-    EXPERIMENTAL_EMBEDDED_SCREENSHOT_CAPTURE_SPECS,
-    EXPERIMENTAL_SCOPE_OPERATION_SPECS,
+    EMBEDDED_SCREENSHOT_CAPTURE_SPECS,
+    SCOPE_OPERATION_SPECS,
 )
 from wavebench.transport.contracts import BinaryResponseFraming
 
@@ -58,27 +61,74 @@ def _descriptor(*, capabilities: tuple[str, ...], extensions=True) -> Instrument
         option_specs=(),
         permissions=("instrument.io",),
         factory=lambda context: object(),
+        wavebench_min_version="0.8.23",
         scope_extensions=(
             ScopeDescriptorExtensions(screenshot_profile=_profile()) if extensions else None
         ),
     )
 
 
-def test_draft_capabilities_and_operations_remain_out_of_public_registries() -> None:
-    for capability in EXPERIMENTAL_SCOPE_CAPABILITY_METHODS:
-        assert capability not in CAPABILITY_METHODS
-    for operation in EXPERIMENTAL_SCOPE_OPERATION_SPECS:
-        assert get_operation_spec(operation) is None
+def test_scope_capabilities_and_operations_are_in_public_registries() -> None:
+    for capability in SCOPE_CAPABILITY_METHODS:
+        assert CAPABILITY_METHODS[capability] == SCOPE_CAPABILITY_METHODS[capability]
+    for operation, spec in SCOPE_OPERATION_SPECS.items():
+        assert get_operation_spec(operation) is spec
 
 
-def test_public_capability_validator_rejects_draft_capability_before_factory() -> None:
+def test_public_capability_validator_accepts_complete_scope_extension() -> None:
     descriptor = _descriptor(capabilities=("scope.screenshot_profile",))
     class Driver:
         def close(self) -> None:
             pass
 
-    with pytest.raises(TypeError, match="unknown capability"):
-        validate_declared_capabilities(descriptor, Driver())
+        def get_screenshot_profile(self):
+            return _profile()
+
+    validate_declared_capabilities(descriptor, Driver())
+
+
+def test_public_scope_capability_requires_new_core_floor() -> None:
+    descriptor = replace(
+        _descriptor(capabilities=("scope.screenshot_profile",)),
+        wavebench_min_version="0.8.22",
+    )
+
+    with pytest.raises(ConfigError, match="0.8.23"):
+        validate_scope_descriptor(descriptor)
+
+
+def test_scope_descriptor_extension_is_append_only_for_positional_compatibility() -> None:
+    names = [field.name for field in fields(InstrumentDescriptor)]
+
+    assert names[-3:] == ["config_fields", "resource_schemes", "scope_extensions"]
+
+
+def test_new_old_core_plugin_capability_matrix_is_fail_closed() -> None:
+    legacy_capabilities = set(CAPABILITY_METHODS) - set(SCOPE_CAPABILITY_METHODS)
+    old_plugin = {"scope.idn", "scope.fetch_waveform"}
+    new_plugin = {"scope.idn", "scope.screenshot_profile"}
+
+    assert old_plugin <= legacy_capabilities
+    assert old_plugin <= set(CAPABILITY_METHODS)
+    assert new_plugin <= set(CAPABILITY_METHODS)
+    assert new_plugin - legacy_capabilities == {"scope.screenshot_profile"}
+
+
+def test_extra_scope_methods_do_not_create_an_implicit_capability() -> None:
+    descriptor = _descriptor(capabilities=("scope.idn",))
+
+    class Driver:
+        def close(self) -> None:
+            pass
+
+        def idn(self) -> str:
+            return "EXAMPLE,EX1"
+
+        def get_screenshot_profile(self):
+            return _profile()
+
+    validate_declared_capabilities(descriptor, Driver())
+    assert "scope.screenshot_profile" not in descriptor.capabilities
 
 
 def test_private_descriptor_gate_requires_explicit_enable_profile_and_methods() -> None:
@@ -103,7 +153,7 @@ def test_private_descriptor_gate_requires_explicit_enable_profile_and_methods() 
 
 
 def test_scope_extension_operation_specs_freeze_timeout_and_binary_limits() -> None:
-    screenshot = EXPERIMENTAL_SCOPE_OPERATION_SPECS["scope.screenshot_v2"]
+    screenshot = SCOPE_OPERATION_SPECS["scope.screenshot_v2"]
     assert screenshot.timeout_source == "operation.timeout_ms"
     assert screenshot.operation_timeout_ms == 5_000
     assert (
@@ -113,7 +163,7 @@ def test_scope_extension_operation_specs_freeze_timeout_and_binary_limits() -> N
         screenshot.binary_resynchronization_max_bytes,
     ) == (262_144, 262_144, 1, 0)
 
-    trace = EXPERIMENTAL_SCOPE_OPERATION_SPECS["scope.fetch_trace"]
+    trace = SCOPE_OPERATION_SPECS["scope.fetch_trace"]
     assert trace.operation_timeout_ms == 60_000
     assert (
         trace.binary_response_max_bytes,
@@ -159,7 +209,7 @@ def test_legacy_scope_errors_is_explicitly_consumptive_without_typed_proof() -> 
 
 
 def test_embedded_screenshot_parent_specs_have_complete_static_field_closure() -> None:
-    for operation, spec in EXPERIMENTAL_EMBEDDED_SCREENSHOT_CAPTURE_SPECS.items():
+    for operation, spec in EMBEDDED_SCREENSHOT_CAPTURE_SPECS.items():
         assert get_operation_spec(operation) is not spec
         assert spec.embedded_screenshot_contract is not None
         assert {
@@ -174,3 +224,4 @@ def test_embedded_screenshot_parent_specs_have_complete_static_field_closure() -
             spec.cleanup_verification_fields
         )
         assert "scope.screenshot_v2" in spec.optional_capabilities
+        assert spec.binary_response_max_bytes == 262_144

@@ -11,6 +11,21 @@ def add_runtime_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resource", help="Override VISA resource, e.g. TCPIP::192.0.2.100::INSTR")
 
 
+def add_scope_error_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--error-policy",
+        choices=("required", "if_supported", "disabled"),
+        default=None,
+        help="Override the operation error-queue policy",
+    )
+    parser.add_argument(
+        "--error-timing",
+        choices=("before", "after", "before_and_after"),
+        default="before_and_after",
+    )
+    parser.add_argument("--error-max-records", type=int, default=16)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wavebench")
     parser.add_argument(
@@ -893,6 +908,90 @@ def build_parser() -> argparse.ArgumentParser:
         help="Confirm the cursor is already configured",
     )
     add_runtime_options(cursor_readout)
+
+    screenshot = scope_sub.add_parser(
+        "screenshot",
+        help="Query the screenshot profile or capture a typed screenshot",
+    )
+    screenshot_sub = screenshot.add_subparsers(dest="screenshot_command", required=True)
+    screenshot_profile = screenshot_sub.add_parser("profile", help="Query screenshot limits")
+    add_runtime_options(screenshot_profile)
+    screenshot_capture = screenshot_sub.add_parser(
+        "capture",
+        help="Capture a screenshot through the scope.screenshot_v2 contract",
+    )
+    screenshot_capture.add_argument("--output", required=True, help="New .png output path")
+    screenshot_capture.add_argument(
+        "--artifact",
+        default=None,
+        help="New JSON artifact path; defaults to <output>.json",
+    )
+    screenshot_capture.add_argument(
+        "--menu-mode",
+        choices=("device", "include", "exclude"),
+        default="device",
+    )
+    screenshot_capture.add_argument(
+        "--color-mode",
+        choices=("device", "color", "monochrome", "inverted"),
+        default="device",
+    )
+    add_scope_error_options(screenshot_capture)
+    add_runtime_options(screenshot_capture)
+
+    acquisition = scope_sub.add_parser(
+        "acquisition",
+        help="Inspect or control acquisition through the typed R1.3 contract",
+    )
+    acquisition_sub = acquisition.add_subparsers(dest="acquisition_command", required=True)
+    acquisition_state = acquisition_sub.add_parser("status", help="Query acquisition run state")
+    add_runtime_options(acquisition_state)
+    acquisition_start = acquisition_sub.add_parser("start", help="Start continuous acquisition")
+    acquisition_start.add_argument(
+        "--trigger-mode",
+        choices=("auto", "normal", "roll"),
+        required=True,
+    )
+    add_scope_error_options(acquisition_start)
+    add_runtime_options(acquisition_start)
+    acquisition_single = acquisition_sub.add_parser("single", help="Acquire one proven record")
+    add_scope_error_options(acquisition_single)
+    add_runtime_options(acquisition_single)
+    acquisition_stop = acquisition_sub.add_parser("stop", help="Stop acquisition")
+    add_scope_error_options(acquisition_stop)
+    add_runtime_options(acquisition_stop)
+
+    trace = scope_sub.add_parser(
+        "trace",
+        help="Query trace metadata or fetch a typed trace",
+    )
+    trace_sub = trace.add_subparsers(dest="trace_command", required=True)
+
+    def add_trace_reference(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--kind",
+            dest="trace_kind",
+            choices=("analog", "digital", "reference"),
+            required=True,
+        )
+        reference = parser.add_mutually_exclusive_group(required=True)
+        reference.add_argument("--index", dest="trace_index", type=int)
+        reference.add_argument("--name", dest="trace_name")
+
+    trace_metadata = trace_sub.add_parser("metadata", help="Query trace metadata")
+    add_trace_reference(trace_metadata)
+    add_runtime_options(trace_metadata)
+    trace_fetch = trace_sub.add_parser("fetch", help="Fetch trace samples into a new .npy file")
+    add_trace_reference(trace_fetch)
+    trace_fetch.add_argument("--points", dest="trace_points", default="dmax")
+    trace_fetch.add_argument("--output", required=True, help="New .npy output path")
+    trace_fetch.add_argument(
+        "--artifact",
+        default=None,
+        help="New JSON artifact path; defaults to <output>.json",
+    )
+    add_scope_error_options(trace_fetch)
+    add_runtime_options(trace_fetch)
 
     auto = scope_sub.add_parser("auto", help="Run explicit AUToscale and wait for *OPC?")
     add_runtime_options(auto)

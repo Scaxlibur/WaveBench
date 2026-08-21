@@ -257,19 +257,35 @@ class GuardedAuditedTransport:
                 self.counters.blocked_binary_query_calls += 1
                 raise self._binary_preflight_error("binary_budget_rejected", replay) from exc
             try:
-                result = backend_query(
-                    command,
-                    framing=framing,
-                    max_bytes=reservation.effective_max_bytes,
-                    timeout_ms=effective_timeout_ms,
-                    replay=replay,
-                )
+                backend_kwargs: dict[str, object] = {
+                    "framing": framing,
+                    "max_bytes": reservation.effective_max_bytes,
+                    "timeout_ms": effective_timeout_ms,
+                    "replay": replay,
+                }
+                if bool(
+                    getattr(self.inner, "_wavebench_binary_budget_parameters", False)
+                ):
+                    backend_kwargs.update(
+                        _transport_trailing=ledger.transport_trailing,
+                        _resynchronization_max_bytes=(
+                            ledger.remaining_resynchronization_bytes
+                        ),
+                    )
+                result = backend_query(command, **backend_kwargs)
             except Exception as exc:
                 if isinstance(exc, TransportIOError):
                     try:
                         ledger.fail(
                             reservation,
-                            consumed_payload_bytes=0,
+                            # Structured failures expose total consumed bytes,
+                            # not a trusted payload/header split.  Debit the
+                            # bounded maximum conservatively so failure cannot
+                            # increase the remaining operation allowance.
+                            consumed_payload_bytes=min(
+                                exc.consumed_bytes or 0,
+                                reservation.effective_max_bytes,
+                            ),
                             discarded_bytes=exc.discarded_bytes or 0,
                             synchronization_proven=(
                                 exc.synchronization is Synchronization.PROVEN

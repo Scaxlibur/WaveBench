@@ -1,9 +1,4 @@
-"""Experimental scope-extension contracts from the Draft R1.3 RFC.
-
-This module is deliberately not re-exported by :mod:`wavebench.instruments`.
-The models are available to core conformance tests, but the corresponding
-capabilities remain undiscoverable until the RFC acceptance gates are met.
-"""
+"""Public scope-extension contracts from the R1.3 RFC."""
 
 from __future__ import annotations
 
@@ -15,24 +10,15 @@ import zlib
 
 import numpy as np
 
+from wavebench.scope_extension_constants import (
+    SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+    SCOPE_TRACE_MAX_POINTS,
+)
 from wavebench.transport.contracts import BinaryResponseFraming
 
 from .contracts import InstrumentDriver
-
-
-SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES = 262_144
-SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES = 262_144
-SCOPE_SCREENSHOT_BINARY_QUERY_MAX_COUNT = 1
-SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES = 0
-SCOPE_TRACE_BINARY_RESPONSE_MAX_BYTES = 8_388_608
-SCOPE_TRACE_BINARY_OPERATION_MAX_BYTES = 67_108_864
-SCOPE_TRACE_BINARY_QUERY_MAX_COUNT = 256
-SCOPE_TRACE_BINARY_RESYNCHRONIZATION_MAX_BYTES = 65_536
-SCOPE_PROFILE_OPERATION_TIMEOUT_MS = 5_000
-SCOPE_SCREENSHOT_OPERATION_TIMEOUT_MS = 5_000
-SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS = 30_000
-SCOPE_TRACE_OPERATION_TIMEOUT_MS = 60_000
-SCOPE_TRACE_MAX_POINTS = 8_388_608
 
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -1373,4 +1359,8 @@ class ScopeErrorDrainDriver(InstrumentDriver, Protocol):
     def drain_errors(self, *, max_records: int) -> ErrorDrainResult: ...
 
 
-__all__ = [name for name in globals() if name.startswith("Scope") or name.startswith("Error")]
+__all__ = [
+    name
+    for name in globals()
+    if name.startswith("Scope") or name.startswith("Error") or name == "DriverErrorRecord"
+]

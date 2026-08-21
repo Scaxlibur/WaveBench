@@ -1,16 +1,17 @@
 # WaveBench scope 通用扩展接口 RFC
 
-> 状态：`Draft`（核心预审后修订，未接受）
+> 状态：`Accepted`（核心 `0.8.23` 开发线已实现公共合同）
 > 修订：`R1.3`（核心复审增补）
 > 证据仓库：WaveBench Instrument Plugins
 > 核心评审基线：WaveBench `0.8.22`，`origin/master@006c431`
-> 目标版本：未排期
-> 同步来源：WaveBench Instrument Plugins `a013891`；核心副本只调整跨仓库证据链接。
+> 目标版本：WaveBench `0.8.23`
+> 同步来源：WaveBench Instrument Plugins `a013891`；核心副本补充实施状态与跨仓库证据链接。
 
 ## 摘要与状态边界
 
-本文是供 WaveBench 核心团队预审的候选合同，不是已接受的公共 API。本文中的 `MUST`、
-`SHOULD` 和 `MAY` 只表示候选合同的规范强度，不表示当前核心已经实现。
+本文冻结 WaveBench scope 通用扩展合同。核心 `0.8.23` 开发线已经实现并注册本文定义的
+capability、operation、Service、CLI、artifact 和版本门。具体实现状态与插件采用条件见
+[核心实施说明](WaveBench_scope通用扩展接口RFC_核心实施说明.md)。
 
 本修订吸收了对 `R1.1` 和前一轮 `R1.2` 复审意见，重点暂定四类此前仍有歧义的安全规则：
 
@@ -19,34 +20,34 @@
 3. 采集运行状态的状态机、单次采集完成证据、超时和恢复事务；
 4. 类型化 trace 的首版运算/单位范围，以及三态错误检查的未知能力和继续策略。
 
-核心仓库未因本文修改，当前核心没有注册下文新增的 operation 或 capability。SDS800X HD
-插件也不因本文声明这些能力；当前已声明能力仍只有 `scope.idn`、
+核心已经注册下文新增的 operation 和 capability。插件不会因此自动获得新能力；SDS800X HD
+当前正式 descriptor 仍只声明 `scope.idn`、
 `scope.channel_coupling`、`scope.fetch_waveform`、`scope.capture_waveform`、
 `scope.capture_waveforms` 和 `scope.measurement_statistics`。
 
 本文把内容分为三类：
 
 - **现状证据**：已有核心代码、插件离线测试或受控实机观察；
-- **候选合同**：核心接受后才能实现的公共接口；
-- **待决问题**：需要核心团队冻结的选择，未解决前不得开始插件迁移。
+- **规范合同**：核心与 opt-in 插件必须共同遵守的公共接口；
+- **后续问题**：不属于 R1.3 公共范围的设计，不得由插件自行扩展。
 
 ### R1.3 本轮复审回应
 
 | 核心阻断项 | 本修订的合同处理 | 状态 |
 | --- | --- | --- |
-| 失败恢复没有 driver 边界 | acquisition/screenshot 均提供 typed snapshot、core-owned baseline、restore result 和 fresh-snapshot verify；恢复阶段、字段顺序、epoch 与异常优先级固定 | 候选合同已补齐，待核心实现 |
-| binary budget 与子授权冲突 | 选择单一 operation context；各阶段顺序授权且不嵌套，所有 binary phase 引用同一 ledger，error phase 不得创建或重置额度 | 候选合同已冻结方向，待核心确认 |
-| count modulus 不能识别回绕/复位 | 删除 modulus proof；`count_delta_with_epoch` 必须联合未变化 `counter_epoch` 和有效 `state_transition`，否则改用 identity/state proof | 首版收紧，待 fixture |
-| 旧 `scope.errors` 与 typed drain 混用 | `scope.error_drain_v1` 独占 `max_records+1`；旧 `scope.errors` 保持 `legacy_unstructured`，`terminated/query_count=null`，未来 typed direct drain 另立 operation | 兼容边界已分开，待核心确认 |
+| 失败恢复没有 driver 边界 | acquisition/screenshot 均提供 typed snapshot、core-owned baseline、restore result 和 fresh-snapshot verify；恢复阶段、字段顺序、epoch 与异常优先级固定 | 已实现并测试 |
+| binary budget 与子授权冲突 | 选择单一 operation context；各阶段顺序授权且不嵌套，所有 binary phase 引用同一 ledger，error phase 不得创建或重置额度 | 已实现并测试 |
+| count modulus 不能识别回绕/复位 | 删除 modulus proof；`count_delta_with_epoch` 必须联合未变化 `counter_epoch` 和有效 `state_transition`，否则改用 identity/state proof | 已由 fixture 固定 |
+| 旧 `scope.errors` 与 typed drain 混用 | `scope.error_drain_v1` 独占 `max_records+1`；旧 `scope.errors` 保持 `legacy_unstructured`，`terminated/query_count=null`，未来 typed direct drain 另立 operation | 已按兼容边界实现 |
 
-本表只记录合同回应，不表示核心已接受或插件已迁移。
+本表记录核心裁决。插件是否迁移仍由各插件 descriptor 和验收证据决定。
 
 核心后续复审指出的 P0/P1 项由第十二节 `R1.3 acceptance addendum` 和配套的
 [A1 索引](WaveBench_scope通用扩展接口RFC-R1.3-acceptance-addendum.md)收口：transfer recovery、
 capability-method/descriptor 映射、数值上限与 deadline 已写成候选合同；旧 capture 采用唯一
 的父 operation 字段闭包；baseline 增加 context/nonce/一次性消费；identity proof 改为静态
-profile 事实；trace 的 spectrum/math 开放项排除在首轮公共实施外。核心可以据第十二节开始
-feature-gated 内部基础设施，但在 addendum 验收前不得注册 capability 或启动插件迁移。
+profile 事实；trace 的 spectrum/math 开放项排除在首轮公共实施外。第十二节 A1 已在核心
+`0.8.23` 开发线通过离线验收，公共 capability 已注册；插件仍须完成自身 conformance 和实机验收。
 
 ## 术语与分层
 
@@ -75,8 +76,8 @@ transport 只负责可靠地交付字节和结构化 I/O 状态；PNG、波形 p
 | `E-TRACE-SDS` | SDS math 函数关闭 | SDS804X HD 受控探测 | 不能为 SDS 构造通用 math/FFT trace |
 | `E-ERROR-SDS` | 无文档化错误队列 | CN11G 手册审计和实机边界 | 不能发送猜测命令，也不能返回伪造空队列 |
 
-当前证据只支持继续保持 `Draft`。特别是 `MESSAGE`、数字/reference trace、失败恢复和
-跨 backend conformance fixture 都还没有第二个独立证据族。
+当前证据支持核心发布 R1.3 合同和插件开始 opt-in 迁移。PyVISA、RsInstrument 与 SDS800X HD
+fixture 已覆盖离线 backend、失败恢复和状态机语义；这些证据不替代具体型号的实机验收。
 
 ## 目标
 
@@ -99,7 +100,8 @@ transport 只负责可靠地交付字节和结构化 I/O 状态；PNG、波形 p
 - 不废弃现有 `scope.fetch_waveform`、`scope.capture_waveform(s)`、`scope.screenshot` 或
   `ScopeAcquisitionStatus`。
 - 不为没有文档化错误队列的仪器猜测命令。
-- 不因本文是 `Draft` 就提高任何插件的核心版本下限。
+- 未声明新 capability 的插件不提高核心版本下限；声明任一 R1.3 capability 的插件必须要求
+  WaveBench `0.8.23` 或更高的 `0.8.x` 版本。
 
 ## 插件信任边界
 
@@ -111,9 +113,8 @@ transport 只负责可靠地交付字节和结构化 I/O 状态；PNG、波形 p
 
 ## 规范用语与兼容边界
 
-候选合同中的 `MUST` 表示互操作所需的不变量，`SHOULD` 表示默认实现，`MAY` 表示可选能力。
-核心接受前，插件不得把候选 operation 放入 descriptor，也不得以 capability 名称存在为由
-绕过核心 Service 或 transport gate。
+本文中的 `MUST` 表示互操作所需的不变量，`SHOULD` 表示默认实现，`MAY` 表示可选能力。
+插件只能声明已经实现并验收的 capability，不得以方法存在为由绕过核心 Service 或 transport gate。
 
 旧核心 + 新插件、新核心 + 旧插件、旧核心 + 旧插件和新核心 + 新插件四种组合都必须在
 factory、能力发现和第一次仪器 I/O 前得到确定结果；未知 capability 不能静默降级为已支持。
@@ -126,7 +127,7 @@ factory、能力发现和第一次仪器 I/O 前得到确定结果；未知 capa
 `effect`、`lease_mode`、`changed_fields`、`restore_coverage`、`required_verified_fields`、
 `verification_fields`、`risk_flags`、`timeout_source`、capability 要求；access policy 由核心
 外部的 `access_policy(spec)` 统一判定，不是 `OperationSpec` 自身字段。
-候选 operation MUST 先使用这些字段进入中央 registry；不能只在 driver Protocol 中声明方法。
+R1.3 operation MUST 使用这些字段进入中央 registry；不能只在 driver Protocol 中声明方法。
 
 候选扩展只使用静态、可序列化的安全元数据：
 
@@ -178,16 +179,16 @@ correlation 和 session epoch 匹配；插件只能进一步收紧单次上限�
 但在 R1.3 中不把任意 Python 回调塞入公共合同。前置条件、恢复覆盖、验证字段、
 error policy 和 binary budget 必须可序列化、可审计。
 
-候选字段的 verifier 归属如下；「核心待实现」不是插件可绕过的授权：
+字段 verifier 归属如下：
 
 | 字段 | 类型 | verifier / 来源 |
 | --- | --- | --- |
 | `scope.identity` | 仪器状态 | 现有核心 identity verifier |
-| `scope.run_state`、`scope.trigger`、`scope.acquisition` | 仪器状态 | 核心 acquisition verifier，待实现 |
-| `scope.display_menu`、`scope.display_color` | 仪器状态 | 核心 screenshot restore/verification verifier，待实现 |
-| `scope.waveform_source`、`scope.waveform_mode` | 仪器状态 | 核心 waveform-source/mode verifier，待实现 |
-| `scope.query_response_header`、`scope.waveform_format`、`scope.waveform_byte_order`、`scope.waveform_points`、`scope.waveform_transfer_window` | 仪器状态 | 核心 waveform-transfer verifier，待实现 |
-| `scope.trace_configuration` | 仪器状态 | 核心 trace verifier，待实现 |
+| `scope.run_state`、`scope.trigger`、`scope.acquisition` | 仪器状态 | 核心 acquisition verifier |
+| `scope.display_menu`、`scope.display_color` | 仪器状态 | 核心 screenshot restore/verification verifier |
+| `scope.waveform_source`、`scope.waveform_mode` | 仪器状态 | 核心 waveform-source/mode verifier |
+| `scope.query_response_header`、`scope.waveform_format`、`scope.waveform_byte_order`、`scope.waveform_points`、`scope.waveform_transfer_window` | 仪器状态 | 核心 waveform-transfer verifier |
+| `scope.trace_configuration` | 仪器状态 | 不属于 R1.3 公共 fetch 范围，留给后续 RFC |
 | `scope.screenshot_profile` | descriptor/profile 事实 | 核心 profile validator，不写入 session verified fields |
 | `scope.acquisition_control_profile` | descriptor/profile 事实 | 核心静态 acquisition-control profile validator，不写入 session verified fields |
 | `scope.trace_profile` | descriptor/profile 事实 | 核心静态 trace profile validator，不写入 session verified fields |
@@ -201,7 +202,7 @@ error policy 和 binary budget 必须可序列化、可审计。
 | `CORD` 字节序 | `scope.waveform_byte_order` | 临时改变时两者都必须列出 |
 | `WFSU` 格式、宽度、点数和窗口 | `scope.waveform_format`、`scope.waveform_points`、`scope.waveform_transfer_window` | 每个实际改变的字段都必须逐项列出 |
 
-### 1.2 候选 operation 映射
+### 1.2 Operation 映射
 
 下表是 R1.3 的最小候选映射，字段完整不等于合同已经冻结。Service 和 CLI 项都是候选入口，
 当前不存在，不能在插件侧自行模拟。所有 operation 的 `session_purpose` 为 `normal`；超时后的安全停止由核心另行签发
@@ -317,15 +318,16 @@ verify 失败都会使父 capture operation 失败；已经取得的 waveform �
 不得作为成功值返回。父 operation 只执行一次 error policy，artifact 在父记录下增加
 `screenshot.status`、`screenshot.failure_reason`、`screenshot.cleanup` 和 `screenshot.verification`，
 不创建第二个 operation artifact。
-当前核心 `ScopeService` 在 capture 外单独调用 screenshot 的旧路径不满足该合同；在父 operation
-字段闭包实现前，旧路径只能保持 legacy 行为，不能声明 `scope.screenshot_v2` 或把截图错误
-降级为 capture 的部分成功。
+当前核心保留 `scope.screenshot` 的 legacy capture 行为。插件同时声明旧能力和
+`scope.screenshot_v2` 时，旧 capture 仍只调用 legacy 路径，不会嵌入 v2 截图；插件只有
+`scope.screenshot_v2` 而没有旧能力时，旧 capture 的截图请求会在仪器 I/O 前拒绝，并提示使用
+独立 `scope screenshot capture`。只有父 operation 字段闭包完整实现后，才能让旧 capture
+直接嵌入 v2 截图。
 
 ### 1.3 输入、前置条件与输出
 
-为避免只有 operation 名称而没有可执行边界，R1.3 规定以下最小 schema 和 Python Protocol；
-完整公共 wire serialization、取消、幂等性和并发字段仍待核心冻结，因此在第十二节验收前
-只能用于内部 / feature-gated 实现：
+为避免只有 operation 名称而没有可执行边界，R1.3 规定以下最小 schema 和 Python Protocol。
+核心 `0.8.23` 已冻结 Python Service、CLI JSON artifact、取消、幂等性和并发边界：
 
 | operation | 输入 | 主操作写入 / binary 前置条件 | 成功输出 |
 | --- | --- | --- | --- |
@@ -383,7 +385,7 @@ recovery/verification phase 中保持不变，便于把 cleanup 和错误检查�
 
 ### 1.5 恢复与 artifact 规则
 
-所有可能写入仪器的候选 operation MUST 在 `OperationSpec` 中声明 changed fields 和恢复覆盖。
+所有可能写入仪器的 R1.3 operation MUST 在 `OperationSpec` 中声明 changed fields 和恢复覆盖。
 需要恢复 baseline 的字段写入 `verification_fields`；有意保留的成功状态和失败 cleanup
 目标分别写入 `postcondition_fields` 和 `cleanup_verification_fields`。主异常不得被恢复异常覆盖；
 结果或失败 artifact 应记录：
@@ -1237,9 +1239,18 @@ class ScopeAcquisitionControlDriver(
     ) -> ScopeAcquisitionCompletion: ...
 ```
 
-核心必须在主操作写入前调用 `snapshot_acquisition_control()`，校验返回值后自行
-构造 `ScopeAcquisitionControlBaseline(context_id, session_epoch, baseline_nonce, snapshot,
-("scope.run_state", *failure_restore_order))`。
+核心必须在主操作写入前调用 `snapshot_acquisition_control()`，校验返回值后自行构造：
+
+```python
+ScopeAcquisitionControlBaseline(
+    context_id,
+    session_epoch,
+    baseline_nonce,
+    snapshot,
+    ("scope.run_state", *failure_restore_order),
+)
+```
+
 driver 只看到已验证的
 baseline，不能构造或修改 core-owned `session_epoch`。`start_continuous()` 和
 `acquire_single()` MUST 使用核心传入的同一 baseline，不得在内部替换为无法审计的另一份
@@ -1337,9 +1348,8 @@ count 比较使用 `proof_baseline_state` 的同一 acquisition mode 基线。�
 
 等待 deadline 来自 operation request；若调用方未给出，R1.3 使用第 1.2 节固定的
 `SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS`。调用方只能提供更早的绝对 deadline，不能延长它；
-每次轮询和 STOP I/O 继续取 connection timeout 与剩余 deadline 的较小值。当前核心没有该
-operation timeout source 时，只允许作为内部 feature-gated 基础设施实现，不得注册
-`scope.acquisition_*` capability。
+每次轮询和 STOP I/O 继续取 connection timeout 与剩余 deadline 的较小值。核心通过显式
+`operation_timeout_ms` 和绝对 monotonic deadline 实现该规则。
 
 超时或取消时：
 
@@ -1721,7 +1731,7 @@ factory 阶段固定：
   adapter 固定传 `check_errors=False`，driver MUST NOT 再查询队列。
 
 只声明旧 `scope.errors` 不能自动适配为 `scope.error_drain_v1`；`list[str]` 无法证明终止 token、
-查询次数或类型化记录。R1.3 新候选 operation 在有效策略不是 `disabled` 时只允许
+查询次数或类型化记录。R1.3 operation 在有效策略不是 `disabled` 时只允许
 `core_v1`；现有 operation 才可在版本门内继续使用 `legacy_driver`。迁移测试必须按 operation
 断言错误队列查询次数，避免 core 和 driver 双重 drain。现有公共
 `scope.errors` 本身是消耗性 `stateful_read`，其 `OperationSpec` 也必须增加
@@ -2052,7 +2062,7 @@ class ScopeScreenshotProfileDriver(InstrumentDriver, Protocol):
 required Protocol、profile 或方法不满足时，factory MUST 在零 I/O 阶段 fail-closed；未声明
 capability 的额外方法不产生隐式能力。
 
-候选 capability（尚未注册）：
+R1.3 公共 capability（核心 `0.8.23` 已注册）：
 
 ```text
 scope.screenshot_profile
@@ -2078,22 +2088,22 @@ scope.error_drain_v1
 
 | 层级 | 必测内容 | 当前状态 |
 | --- | --- | --- |
-| OperationSpec/Service | capability、access、lease、action-specific changed/restore/postcondition/cleanup、transfer 字段闭包、artifact | 核心尚无候选 operation，待实现 |
-| capability/descriptor gate | `ScopeDescriptorExtensions`、`CAPABILITY_METHODS`、required Protocol、缺 profile/method 零 I/O 拒绝 | 核心尚无候选字段，待内部实现 |
-| binary model | `#N` 精确语法、`#0` 拒绝、response/operation/query/resync budget、成功 metadata、尾部和 continuation | 需要新增 fake vectors |
-| backend | PyVISA/RsInstrument/TCP/serial 的 message 能力证明、终止设置恢复 | 只有 SDS raw PNG 一次实机观察 |
-| guarded transport | access、计数、healthy/uncertain/poisoned、固定常量、超限后失步、close/poison 默认 | 需要失败恢复测试 |
+| OperationSpec/Service | capability、access、lease、action-specific changed/restore/postcondition/cleanup、transfer 字段闭包、artifact | 已实现公共 operation、稳定 Service 和版本化 artifact |
+| capability/descriptor gate | `ScopeDescriptorExtensions`、`CAPABILITY_METHODS`、required Protocol、缺 profile/method 零 I/O 拒绝 | 已实现；新 capability 要求核心下限 `0.8.23` |
+| binary model | `#N` 精确语法、`#0` 拒绝、response/operation/query/resync budget、成功 metadata、尾部和 continuation | definite/message、超限、截断和尾部向量已覆盖；continuation 保持拒绝 |
+| backend | PyVISA/RsInstrument/TCP/serial 的 message 能力证明、终止设置恢复 | PyVISA/RsInstrument definite-block 已实现；VISA `INSTR` EOM fixture 已覆盖；SocketIO/serial 拒绝 `MESSAGE` |
+| guarded transport | access、计数、healthy/uncertain/poisoned、固定常量、超限后失步、close/poison 默认 | 已覆盖失败恢复和合同违反测试 |
 | plugin trust boundary | 公共 Protocol 不暴露 session；禁止插件依赖 `.inner` 的代码审计 | 当前不是沙箱；opaque facade 不在 R1.3 范围 |
-| screenshot | request tuple、PNG signature/IEND、媒体类型、尺寸、transport/content 尾部分层、父 capture fail-parent | 仅 SDS raw PNG 探测 |
-| acquisition | allowed phase、完成式 SINGLE、baseline/observed states、identity semantics、终态 proof、成功 postcondition、失败 recovery | SDS vendor capture 已验收，公共控制未实现 |
-| transfer/trace | typed transfer snapshot/restore/verify、context nonce、analog/digital/reference profile、字段逐项闭合 | RTM2000 有部分证据，需第二族 fixture |
-| errors | disabled 零 I/O、未知 fail-closed、`scope.error_drain_v1`、完整 drain、唯一执行者、聚合 reason | 当前仅布尔兼容路径 |
-| compatibility | 新旧核心/插件四组合、factory 拒绝、CLI/artifact | 待核心合同冻结 |
-| opt-in hardware | 至少两种 framing、两个厂商状态机、两种 trace axis | 当前证据不足 |
+| screenshot | request tuple、PNG signature/IEND、媒体类型、尺寸、transport/content 尾部分层、父 capture fail-parent | 独立 `screenshot_v2` 已实现；旧 capture 对新 capability 采用零 I/O 拒绝，旧 capability 保持兼容 |
+| acquisition | allowed phase、完成式 SINGLE、baseline/observed states、identity semantics、终态 proof、成功 postcondition、失败 recovery | 公共控制和 SDS conformance fixture 已通过 |
+| transfer/trace | typed transfer snapshot/restore/verify、context nonce、analog/digital/reference profile、字段逐项闭合 | 公共模型与 Service 已实现，SDS transfer fixture 已通过 |
+| errors | disabled 零 I/O、未知 fail-closed、`scope.error_drain_v1`、完整 drain、唯一执行者、聚合 reason | core v1 与 legacy artifact 已实现 |
+| compatibility | 新旧核心/插件四组合、factory 拒绝、CLI/artifact | capability 组合、版本门和旧插件回归已覆盖 |
+| opt-in hardware | 至少两种 framing、两个厂商状态机、两种 trace axis | 仍由每个插件单独完成，不属于核心离线验收结论 |
 
 ### 8.1 必备 fixture 与失败向量
 
-在 RFC 进入 `Proposed` 前，至少需要带有 backend、resource class、固件版本和证据文件
+插件声明新 capability 前，至少需要带有 backend、resource class、固件版本和证据文件
 链接的 fixture：
 
 - definite block：合法 `#N`、`#0`、非法长度位、截断、response/operation/query budget 超限、
@@ -2118,15 +2128,15 @@ scope.error_drain_v1
 
 ## 九、里程碑
 
-| 里程碑 | 范围 | 退出条件 |
-| --- | --- | --- |
-| M1 | Operation context、phase authorization、OperationSpec/artifact 内部骨架 | context/phase/ledger/legacy artifact 与 transfer recovery model 的 feature-gated 测试通过；不得进入 public registry |
-| M2 | binary framing 与 backend capability | definite/message fake、四维 budget、有界 resync、失步、termination 恢复测试通过 |
-| M3 | screenshot profile/v2 | definite block 和 raw message 两种 fixture 通过 |
-| M4 | acquisition run state/control | descriptor profile validator、两个厂商状态机、continuous mode、两类 SINGLE baseline、幂等 STOP、after-error cleanup 和 timeout recovery 通过 |
-| M5 | trace source/axis | analog、digital、math、reference、spectrum 的跨厂商 fixture 通过 |
-| M6 | error policy、版本门和迁移 | A1 P0/P1 gate、`scope.error_drain_v1`、三态 artifact、聚合规则、四组合兼容和 CLI/Service 入口冻结后，才可讨论 public registry |
-| M7 | opt-in 实机 | 核心离线回归通过，实机范围另行授权 |
+| 里程碑 | 范围 | 退出条件 | 状态 |
+| --- | --- | --- | --- |
+| M1 | Operation context、phase authorization、OperationSpec/artifact 内部骨架 | context/phase/ledger/legacy artifact 与 transfer recovery model 的 feature-gated 测试通过 | 已完成 |
+| M2 | binary framing 与 backend capability | definite/message fake、四维 budget、有界 resync、失步、termination 恢复测试通过 | 已完成 |
+| M3 | screenshot profile/v2 | definite block 和 raw message 两种 fixture 通过 | 已完成 |
+| M4 | acquisition run state/control | descriptor profile validator、continuous mode、SINGLE proof、幂等 STOP、after-error cleanup 和 timeout recovery 通过 | 已完成 |
+| M5 | trace source/axis | R1.3 范围内 analog、digital、reference fixture 通过 | 已完成 |
+| M6 | error policy、版本门和迁移 | A1 P0/P1、`scope.error_drain_v1`、artifact、兼容组合和 CLI/Service 冻结 | 已完成 |
+| M7 | opt-in 实机 | 核心离线回归通过，具体型号和 resource/backend 另行授权 | 按插件执行 |
 
 各里程碑应分别提交；不得把 transport、scope model、Service 和插件迁移压成一个不可回滚
 改动。
@@ -2200,18 +2210,18 @@ scope.error_drain_v1
 10. error queue 的未来 peek/clear operation 仍待独立设计；R1.3 timing 默认固定为
     `before_and_after`，未知能力不得增加 skip 分支。
 
-上述问题解决、取得跨厂商 fixture，并完成 Service/CLI/artifact 评审前，RFC 必须保持 `Draft`。
-主仓库未接受本文时，插件不得声明这些新 capability 已由核心提供。
+R1.3 公共范围已经冻结。仍待后续 RFC 的问题不得扩展当前 capability；插件只有完成对应
+fixture、版本门和实机验收后，才能在正式 descriptor 中声明新能力。
 
 ## 十二、R1.3 acceptance addendum（A1）
 
-本 addendum 是 R1.3 的验收门，不是第二套并行规范。它把核心本轮复审的实施边界冻结为
-「可开始内部基础设施、尚不可注册公共 capability」。若本节与正文存在歧义，以本节的
-acceptance gate 为准；正文仍是跨仪器模型的唯一事实源。
+本 addendum 是 R1.3 的验收门，不是第二套并行规范。核心 `0.8.23` 开发线已经完成本节规定的
+离线验收并注册公共 capability。若本节与正文存在歧义，以本节的 acceptance gate 为准；正文
+仍是跨仪器模型的唯一事实源。
 
 ### 12.1 允许先行的内部工作
 
-核心现在可以在内部或 feature-gated 分支实现以下内容：
+公共注册前，核心只允许在内部或 feature-gated 分支实现以下内容：
 
 | 内部组件 | 必须具备的约束 | 明确禁止 |
 | --- | --- | --- |
@@ -2222,8 +2232,8 @@ acceptance gate 为准；正文仍是跨仪器模型的唯一事实源。
 | legacy artifact | 旧 `scope.errors` 的 `legacy_unstructured` 记录 | 将旧 `list[str]` 升级为 typed drain 证明 |
 | fake/conformance fixture | 覆盖失败恢复、nonce 重放、phase 越界、binary 超限和 capability gate | 在实机或插件 descriptor 上开启新 capability |
 
-内部实现必须由核心私有 feature gate 保护；不得写入公共 `CAPABILITY_METHODS` 的可发现注册
-表，不得修改旧插件的 descriptor 行为，不得提高插件核心版本下限。
+该限制用于记录公共注册前的历史门禁。现在仍适用于没有通过插件自身验收的具体 driver；未声明
+新 capability 的旧插件 descriptor 和核心版本下限保持不变。
 
 ### 12.2 P0 公共接口验收门
 
@@ -2262,7 +2272,7 @@ acceptance gate 为准；正文仍是跨仪器模型的唯一事实源。
 
 ### 12.4 Addendum 退出条件
 
-A1 只有在以下证据全部具备后，才能提交 `Proposed` 或允许 capability registry/插件迁移：
+A1 按以下证据决定 capability registry 和插件迁移边界：
 
 1. 核心内部 fixture 覆盖上述 P0/P1 gate，且新旧四组合在 factory 和第一次 I/O 前行为明确；
 2. 至少两个独立仪器族或 backend fixture 证明 transfer restore、截图恢复、acquisition proof
@@ -2272,5 +2282,6 @@ A1 只有在以下证据全部具备后，才能提交 `Proposed` 或允许 capa
 4. R1.3 Draft 的待决问题中仍保留的 trace-extensions、continuation 和 reopen 设计不再被
    当前 capability 合同隐式引用。
 
-在退出条件满足前，R1.3 仍是 `Draft`；本插件仓库只维护 RFC 与 fixture 设计，不声明任何
-新增 capability 已由核心提供。
+上述退出条件已由核心 `0.8.23` 开发线的离线 fixture、两类 backend wrapper、SDS800X HD
+conformance fixture、稳定 Service/CLI/artifact 和版本门满足。具体插件仍不得把核心通过等同于
+本型号实机通过。

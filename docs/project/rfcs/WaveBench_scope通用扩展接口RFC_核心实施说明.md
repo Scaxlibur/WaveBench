@@ -1,18 +1,60 @@
 # WaveBench scope 通用扩展接口 RFC：核心实施说明
 
-> 状态：内部实现中，公共 capability 未注册
+> 状态：核心 `0.8.23` 开发线已实现并注册公共合同
 > 对应规范：[scope 通用扩展接口 RFC](WaveBench_scope通用扩展接口RFC.md)
-> 验收门：[R1.3 Acceptance Addendum A1](WaveBench_scope通用扩展接口RFC-R1.3-acceptance-addendum.md)
+> 验收记录：[R1.3 Acceptance Addendum A1](WaveBench_scope通用扩展接口RFC-R1.3-acceptance-addendum.md)
 > 实施分支：`Scaxlibur/feat/scope-generic-extensions-r1-3`
 
-本文记录核心实现对 R1.3 Draft 歧义的裁决、当前门禁和剩余验收项。它不把 RFC 状态改为
-`Accepted`，也不授权插件声明新增 capability。
+本文记录 R1.3 在核心中的实际边界。公共合同已经进入开发线，但这不表示任何现有插件自动获得
+新能力，也不构成未执行实机验收的型号覆盖声明。
 
-## 核心裁决
+## 已发布的核心合同
 
-### Baseline nonce 生命周期
+- `ScopeDescriptorExtensions`、截图、采集控制、trace、错误策略和恢复模型已从
+  `wavebench.instruments` 导出；
+- 新 capability 已进入公共 `CAPABILITY_METHODS`；
+- 新 operation 已进入公共 `OPERATION_REGISTRY`；
+- `ScopeService` 提供截图、采集控制、trace metadata 和 trace fetch 方法；
+- `ScopeExtensionService` 是可直接复用的稳定编排入口，不要求实验 enable 参数；
+- operation artifact 使用 `wavebench.scope.operation.v1`，Service 结果使用
+  `wavebench.scope.result.v1`；
+- 使用任一 R1.3 capability 的插件必须声明 `wavebench_min_version >= 0.8.23`；
+- `InstrumentDescriptor.scope_extensions` 位于 dataclass 字段末尾，旧位置参数顺序保持不变。
 
-核心采用以下一次性状态机：
+公共 operation 包括：
+
+```text
+scope.screenshot_profile
+scope.screenshot_v2
+scope.acquisition_run_state
+scope.acquisition_start
+scope.acquisition_single
+scope.acquisition_stop
+scope.trace_metadata
+scope.fetch_trace
+```
+
+`scope.error_drain_v1` 是受管 error phase capability，不提供独立 operation。
+
+## Backend 二进制传输
+
+PyVISA 和 RsInstrument backend 已实现一次发送、有限读取的 `query_binary()`：
+
+- definite block 按实际 `#N` 头读取，不从 payload 长度反推头部；
+- response、operation total、query count 和 resynchronization 使用同一 operation ledger；
+- 声明长度超限时，只在剩余 resynchronization 额度内读到边界；
+- 非法头、截断、超时、额外尾部和设置恢复失败使用结构化 `TransportIOError`；
+- read timeout 和 read termination 在成功与失败路径均恢复；恢复失败视为失步；
+- definite block 和 `MESSAGE` 都只对能够报告 EOM 的具体 VISA `INSTR` resource 开放；
+  SocketIO 和 serial 在发送前拒绝；
+- 最终读取最多增加 1 个有界探测字节，避免合法 EOM 与 VISA `MAX_CNT` 状态重合时误判；
+- RsInstrument 通过底层 VISA session 写入 binary query，避免 `write_str()` 自动插入状态查询；
+- 失步、超出同步额度或 backend 合同违反会关闭 transport，并把 session 标记为 `poisoned`；
+- 旧 `query_bin_block()` 保持原行为，不改变现有 driver 的采集入口。
+
+## Baseline 与恢复
+
+baseline nonce 使用以下一次性状态机：
 
 ```text
 fresh
@@ -22,83 +64,81 @@ fresh
   -> consumed
 ```
 
-restore 和 fresh verify 各有一个独立的一次性 slot。restore 一旦开始，即使 driver 抛出异常，
-也不能再次执行；只要 session 尚未 `poisoned`，允许执行一次诊断性 fresh verify。restore 已失败时，
-诊断性 verify 即使读回匹配，也不能使 session 回到 `healthy`。
+context、operation、session epoch、nonce 或 phase 不匹配时，在仪器 I/O 前拒绝。artifact 只记录
+nonce 摘要。restore 失败后允许一次诊断性 fresh verify，但不能据此把 session 恢复为 `healthy`。
 
-context、operation、session epoch、nonce 或 phase 任一不匹配时，在 instrument I/O 前拒绝。
-artifact 只记录 nonce 摘要，不记录原值。
-
-### Trace 恢复顺序
-
-只要 `fetch_trace` 可能修改任一 transfer field，成功和失败路径都必须执行 restore 与 fresh
-verify：
+`fetch_trace` 对以下 transfer 字段执行逐项 snapshot、restore 和 fresh verify：
 
 ```text
-preflight snapshot
-  -> main transfer
-  -> error_after（按策略）
-  -> success_restore / failure_cleanup
-  -> cleanup_verification
-  -> terminal
+scope.run_state
+scope.waveform_source
+scope.waveform_mode
+scope.query_response_header
+scope.waveform_format
+scope.waveform_byte_order
+scope.waveform_points
+scope.waveform_transfer_window
 ```
 
-`scope.query_response_header`、`scope.waveform_byte_order` 和
-`scope.waveform_transfer_window` 与其他 transfer field 使用同一逐字段验证规则。缺少任一字段的
-fresh readback 时，结果不能返回成功，session 保持 fail-closed。
+这组字段覆盖 `CHDR`、`CORD`、`WFSU` 等厂商状态映射。缺少任一 fresh readback 时，operation
+不能返回成功。
 
-### OperationSpec 机器字段
+## CLI
 
-核心为候选 operation 增加显式字段：
+公共命令为：
 
-- `operation_timeout_ms`；
-- `postcondition_fields`；
-- `cleanup_verification_fields`；
-- response、operation-total、query-count 和 resynchronization 四类 binary limit；
-- `error_check_minimum`；
-- `embedded_screenshot_contract`。
+```text
+wavebench scope screenshot profile
+wavebench scope screenshot capture
+wavebench scope acquisition status
+wavebench scope acquisition start
+wavebench scope acquisition single
+wavebench scope acquisition stop
+wavebench scope trace metadata
+wavebench scope trace fetch
+```
 
-新 scope operation 不再依赖解析 `timeout_source` 字符串取得超时数值。旧 operation 继续使用
-`connection.timeout_ms`，保持兼容。
+截图和 trace fetch 要求显式指定新文件路径，不覆盖已有文件。二进制 payload 写入 PNG 或 NPY；
+JSON artifact 只保存媒体类型、尺寸、点数、dtype、字节数、SHA-256 摘要、phase、恢复和错误检查
+证据，不复制原始 payload。
 
-嵌入截图合同分别记录仪器状态字段和 `output.screenshot` artifact 字段。候选父 capture spec
-具备完整 changed、verification 和 cleanup 字段，但尚未替换公开 capture spec。
+## 旧 capture 兼容边界
 
-## 默认关闭门禁
+声明旧 `scope.screenshot` 的插件继续使用原 capture 截图行为，既有 RTM2000 和 DS1000Z 路径
+不变。插件同时声明旧能力和 `scope.screenshot_v2` 时，旧 capture 仍只走 legacy 路径；只有
+v2、没有旧能力时，核心会在任何仪器 I/O 前拒绝嵌入请求，并要求改用独立的
+`scope screenshot capture` 命令。
 
-当前实现遵守以下限制：
+该分流避免把旧 capture 的「截图失败可保留 waveform」语义伪装成 R1.3 的 `fail_parent`。
+以后若需要在新插件中重新开放嵌入截图，必须实现父 operation 字段闭包和同一 context 的
+snapshot、capture、restore、verify；不得调用独立的子 operation。
 
-- 新模型位于实验模块，不从 `wavebench.instruments` 顶层导出；
-- 新 capability 方法表与公开 `CAPABILITY_METHODS` 分离；
-- 新 operation spec 与公开 `OPERATION_REGISTRY` 分离；
-- 实验 Service 和 operation context 构造时必须显式传入内部 enable gate；
-- PyVISA、RsInstrument 和 serial backend 在通过 framing conformance 前，对新
-  `query_binary()` 入口执行零发送拒绝；旧 `query_bin_block()` 行为不变；
-- SDS3000 和其他插件不得据此提高核心版本下限或开始 capability 迁移。
+## 插件采用条件
 
-## 当前已实现范围
+插件只有同时满足以下条件，才能声明新 capability：
 
-- 单 operation context、绝对 monotonic deadline、cleanup 时间预留和非嵌套 phase 授权；
-- response/total/query/resync binary ledger、严格 definite-block parser 和结构化字节证据；
-- screenshot、acquisition、trace transfer 的 typed snapshot、baseline、restore 和 fresh verify；
-- descriptor extension 与候选 capability-method 完整性检查；
-- screenshot、acquisition control、analog/digital/reference trace 的内部 Service 编排；
-- `scope.error_drain_v1` 的三态策略、`max_records+1` 终止证据、query 次数对账和脱敏 artifact；
-- 旧 `scope.errors` 的 `legacy_unstructured` artifact 结构；
-- main 进入后撤销 stale `verified_fields`，恢复验证通过后再重建字段证据。
+1. wheel 依赖和 descriptor 均要求 WaveBench `0.8.23` 或更高的 `0.8.x` 版本；
+2. descriptor 提供对应的 `scope_extensions` 静态 profile；
+3. capability 所需方法全部实现，且额外方法不会产生隐式能力；
+4. transfer 状态、截图状态和采集状态均有 fresh readback 证明；
+5. binary framing 与 resource/backend 的实际 EOM 能力一致；
+6. 插件自己的 conformance、包检查和实机验收分别通过。
 
-## 公共注册前仍需完成
+现有插件没有声明新 capability 时，不需要提高最低核心版本。
 
-以下项目仍受 A1 退出条件约束：
+## 当前验证与剩余工作
 
-1. 至少两个独立仪器族或 backend 的 transfer restore、截图恢复、acquisition proof 和 binary
-   framing 证据；
-2. PyVISA 或 RsInstrument 的 definite-block / message boundary conformance，以及 termination
-   恢复失败测试；
-3. 旧 capture 的运行时父 operation 字段闭包接入和 `fail_parent` artifact 验收；
-4. CLI、稳定 Service 方法、公开 artifact schema 和版本门评审；
-5. 新旧核心与插件四组合测试；
-6. RFC 中明确排除的 spectrum、math、frequency axis、continuation token 和 poisoned-session
-   reopen 设计继续保持未引用状态。
+核心离线验证覆盖 definite block、`MESSAGE` EOM、超限 resynchronization、timeout、termination
+恢复失败、nonce 重放、phase 越界、截图恢复、采集证明、trace transfer 恢复、error policy、
+CLI artifact、版本门和新旧 capability 组合。
 
-上述项目完成前，公开 registry、插件迁移和 RFC 状态均不改变。
+仍需在插件仓库完成：
+
+- SDS3000 capability 审计清单从旧核心的 19 项更新为当前 26 项，再决定具体 opt-in 范围；
+- 任何准备声明新 capability 的插件补齐 descriptor profile、driver 方法和发行版核心下限；
+- 对实际 resource/backend 执行独立硬件验收，特别是 `MESSAGE` EOM、长 payload、设置恢复和
+  失败后的下一次 query；
+- `spectrum`、`math`、frequency axis、continuation token 和 poisoned-session reopen 继续由后续
+  RFC 处理。
+
+本次核心实施没有连接真实仪器，没有改动 `wavebench.toml`，也没有安装或升级依赖。

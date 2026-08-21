@@ -1,14 +1,16 @@
-"""Default-off Service orchestration for the Draft scope R1.3 RFC."""
+"""Service orchestration for the scope R1.3 extension contract."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
+from hashlib import sha256
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, TypeVar
 
 from wavebench.errors import ConfigError, DataError, InstrumentError
 from wavebench.instruments.api import InstrumentDescriptor
 from wavebench.instruments.scope_extension_capabilities import (
+    validate_scope_descriptor,
     validate_experimental_scope_descriptor,
 )
 from wavebench.instruments.scope_extensions import (
@@ -42,7 +44,7 @@ from wavebench.instruments.scope_extensions import (
 from wavebench.services.access_policy import AccessMode, access_policy
 from wavebench.transport.session import InstrumentSessionState, SessionHealth
 
-from .operation_specs import OperationSpec
+from .operation_specs import OperationSpec, require_operation_spec
 from .scope_error_policy import ScopeErrorPolicyExecutor, resolve_error_check
 from .scope_extension_specs import EXPERIMENTAL_SCOPE_OPERATION_SPECS
 from .scope_phase_coordinator import (
@@ -58,6 +60,7 @@ _TEXT_READ_IO = {"query", "query_float_list", "query_opc"}
 _MAIN_TEXT_IO = {*_TEXT_READ_IO, "write", "write_bytes"}
 _TRACE_MAIN_IO = {*_MAIN_TEXT_IO, "query_binary"}
 _SCREENSHOT_MAIN_IO = {*_MAIN_TEXT_IO, "query_binary"}
+SCOPE_EXTENSION_RESULT_SCHEMA = "wavebench.scope.result.v1"
 
 
 def _json_safe(value: Any) -> Any:
@@ -86,6 +89,39 @@ class ScopeExtensionOperationResult:
                 "observed_state",
                 MappingProxyType(dict(self.observed_state)),
             )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": SCOPE_EXTENSION_RESULT_SCHEMA,
+            "result": _public_result_summary(self.value),
+            "diagnostics": _json_safe(self.diagnostics),
+            "observed_state": _json_safe(self.observed_state),
+        }
+
+
+def _public_result_summary(value: object) -> object:
+    if isinstance(value, ScopeScreenshot):
+        return {
+            "media_type": value.media_type,
+            "dimensions": {"width_px": value.width_px, "height_px": value.height_px},
+            "requested": _json_safe(value.requested),
+            "effective_request": _json_safe(value.effective),
+            "framing": value.framing.value,
+            "payload_bytes": len(value.data),
+            "payload_sha256": sha256(value.data).hexdigest(),
+        }
+    if isinstance(value, ScopeTraceData):
+        raw = value.values.tobytes(order="C")
+        return {
+            "metadata": _json_safe(value.metadata),
+            "integrity": {
+                "points": int(value.values.size),
+                "dtype": str(value.values.dtype),
+                "payload_bytes": len(raw),
+                "payload_sha256": sha256(raw).hexdigest(),
+            },
+        }
+    return _json_safe(value)
 
 
 @dataclass(slots=True)
@@ -1315,7 +1351,46 @@ class ExperimentalScopeExtensionService:
             pass
 
 
+class ScopeExtensionService(ExperimentalScopeExtensionService):
+    """Stable public Service for descriptors that opt into scope R1.3 capabilities."""
+
+    def __init__(
+        self,
+        *,
+        driver: object,
+        descriptor: InstrumentDescriptor,
+        session_state: InstrumentSessionState,
+        connection_timeout_ms: int,
+        access: AccessMode = "read_write",
+        instrument_error_default: ErrorCheckSpec | None = None,
+    ) -> None:
+        super().__init__(
+            driver=driver,
+            descriptor=descriptor,
+            session_state=session_state,
+            connection_timeout_ms=connection_timeout_ms,
+            access=access,
+            instrument_error_default=instrument_error_default,
+            enabled=True,
+        )
+        validate_scope_descriptor(descriptor, driver=driver)
+
+    def _require(self, operation: str) -> OperationSpec:
+        spec = require_operation_spec(operation)
+        if operation not in EXPERIMENTAL_SCOPE_OPERATION_SPECS:
+            raise ConfigError(f"operation is not a scope R1.3 extension: {operation!r}")
+        missing = sorted(set(spec.required_capabilities) - self.capabilities)
+        if missing:
+            raise ConfigError(
+                f"operation {operation!r} is missing capabilities: {', '.join(missing)}"
+            )
+        access_policy(self.access, "scope.access").require(spec, operation=operation)
+        return spec
+
+
 __all__ = [
     "ExperimentalScopeExtensionService",
+    "SCOPE_EXTENSION_RESULT_SCHEMA",
+    "ScopeExtensionService",
     "ScopeExtensionOperationResult",
 ]

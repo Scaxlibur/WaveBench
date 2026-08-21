@@ -9,6 +9,7 @@ from wavebench.config import ConnectionConfig
 from wavebench.errors import ConnectionError, SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
 
+from .binary import query_visa_binary_response
 from .contracts import (
     BinaryQueryResult,
     BinaryResponseFraming,
@@ -47,6 +48,8 @@ def _open_rsinstrument_session(
 
 @dataclass
 class RsInstrumentTransport:
+    _wavebench_binary_budget_parameters = True
+
     resource: str
     session: Any
     logger: CommandLogger
@@ -235,9 +238,11 @@ class RsInstrumentTransport:
         max_bytes: int,
         timeout_ms: int | None = None,
         replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+        _transport_trailing: bytes = b"",
+        _resynchronization_max_bytes: int = 0,
     ) -> BinaryQueryResult:
         replay = ReplayPolicy(replay)
-        BinaryResponseFraming(framing)
+        framing = BinaryResponseFraming(framing)
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
             raise ValueError("max_bytes must be a positive integer")
         if timeout_ms is not None and (
@@ -245,19 +250,48 @@ class RsInstrumentTransport:
         ):
             raise ValueError("timeout_ms must be a positive integer")
         self._reject_continuation("query_binary", replay)
-        raise TransportIOError(
-            "rsinstrument has not passed the R1.3 binary framing conformance gate",
+        get_session_handle = getattr(self.session, "get_session_handle", None)
+        try:
+            raw_session = get_session_handle() if callable(get_session_handle) else object()
+        except Exception:
+            raw_session = object()
+        self.logger.record("query_binary", command)
+        started = time.perf_counter()
+        try:
+            result = query_visa_binary_response(
+                session=raw_session,
+                # Use the underlying VISA write. RsInstrument.write_str() may
+                # run an automatic status query after the command, which would
+                # interleave text I/O before the binary response is consumed.
+                write_query=getattr(raw_session, "write", None),  # type: ignore[arg-type]
+                command=command,
+                framing=framing,
+                max_bytes=max_bytes,
+                timeout_ms=timeout_ms,
+                replay=replay,
+                transport_trailing=_transport_trailing,
+                resynchronization_max_bytes=_resynchronization_max_bytes,
+            )
+        except TransportIOError as exc:
+            self._record_query_telemetry(
+                operation="query_binary",
+                started=started,
+                status=f"failed:{exc.reason_code or 'transport_io_error'}",
+                progress=None,
+                replay=replay,
+                bytes_count=exc.consumed_bytes,
+            )
+            raise
+        self.logger.record("response", f"<binary len={len(result.data)}>")
+        self._record_query_telemetry(
             operation="query_binary",
-            phase=TransportPhase.BEFORE_SEND,
-            replay_policy=replay,
-            command_transmission=CommandTransmission.NOT_SENT,
-            response_progress=ResponseProgress.NONE,
-            synchronization=Synchronization.PROVEN,
-            attempts=0,
-            reason_code="binary_framing_unsupported",
-            consumed_bytes=0,
-            discarded_bytes=0,
+            started=started,
+            status="ok",
+            progress=None,
+            replay=replay,
+            bytes_count=result.consumed_bytes,
         )
+        return result
 
     @contextmanager
     def _temporary_timeout(self, timeout_ms: int | None):
