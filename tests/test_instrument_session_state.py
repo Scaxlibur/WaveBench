@@ -111,7 +111,14 @@ def test_authorization_rejects_string_fields_and_nested_ranges() -> None:
                 pass
 
 
-def test_verification_authorization_expires_before_completion() -> None:
+def test_verification_authorization_expires_before_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(
+        "wavebench.transport.session.time.monotonic",
+        lambda: now[0],
+    )
     state = InstrumentSessionState()
     coordinator = SessionTransactionCoordinator(state)
     with coordinator.authorize(
@@ -125,8 +132,6 @@ def test_verification_authorization_expires_before_completion() -> None:
     ) as authorization:
         state._record_authorized_success(authorization, "query")
         coordinator.record_evidence(authorization, "query", {"identity"})
-        import time
-
-        time.sleep(0.01)
+        now[0] += 0.002
         with pytest.raises(ValueError, match="expired"):
             coordinator.complete_verification(authorization)
