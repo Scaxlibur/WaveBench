@@ -130,6 +130,23 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 
 多通道 scope 如声明 `scope.capture_waveforms`，必须先配置全部通道，只执行一次 acquisition 和 OPC 等待，再逐通道读取。不得退化为每个通道独立触发。
 
+### 采用 scope R1.3 扩展
+
+准备实现截图、采集控制或 typed trace 时，先阅读
+[scope 通用扩展接口 RFC](../rfcs/WaveBench_scope通用扩展接口RFC.md)和
+[核心实施说明](../rfcs/WaveBench_scope通用扩展接口RFC_核心实施说明.md)。采用条件如下：
+
+- wheel 依赖和 descriptor 均要求 WaveBench `0.8.23` 或更高的 `0.8.x` 版本；
+- 从 `wavebench.instruments` 导入公共 Protocol、model 和 `ScopeDescriptorExtensions`；
+- descriptor 提供 capability 对应的静态 profile；
+- driver 实现 snapshot、baseline、restore 和 fresh verify，不把 session token 暴露给插件代码；
+- `CHDR`、`CORD`、`WFSU` 等临时 transfer 设置逐字段映射、恢复和核对；
+- binary framing 与具体 resource/backend 的 EOM 能力一致，不能用短读、换行或 timeout 猜测边界；
+- fake conformance、包检查和实机验收分别通过后，再修改正式 descriptor。
+
+未采用新增 capability 的旧插件不需要提高核心版本下限。旧 `scope capture --screenshot` 不承载
+新 `scope.screenshot_v2`；新插件应使用独立截图 Service 或 `wavebench scope screenshot capture`。
+
 ## 配置 options
 
 插件私有配置放在对应的 `[<kind>.options]` 表中，并为每个键定义 `OptionSpec`。适合 `OptionSpec` 的内容包括分块点数、插件专用超时和明确枚举；resource、backend、通用 timeout、安全限制和输出状态仍由核心配置管理。

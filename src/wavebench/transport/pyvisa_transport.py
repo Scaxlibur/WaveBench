@@ -8,7 +8,10 @@ from wavebench.config import ConnectionConfig
 from wavebench.errors import ConnectionError, SessionCloseError, TransportIOError
 from wavebench.logging import CommandLogger
 
+from .binary import query_visa_binary_response
 from .contracts import (
+    BinaryQueryResult,
+    BinaryResponseFraming,
     CommandTransmission,
     ReplayPolicy,
     ResponseProgress,
@@ -19,6 +22,8 @@ from .contracts import (
 
 @dataclass
 class PyVisaTransport:
+    _wavebench_binary_budget_parameters = True
+
     resource: str
     resource_manager: Any
     session: Any
@@ -242,6 +247,59 @@ class PyVisaTransport:
             bytes_count=len(data),
         )
         return data
+
+    def query_binary(
+        self,
+        command: str,
+        *,
+        framing: BinaryResponseFraming,
+        max_bytes: int,
+        timeout_ms: int | None = None,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+        _transport_trailing: bytes = b"",
+        _resynchronization_max_bytes: int = 0,
+    ) -> BinaryQueryResult:
+        replay = ReplayPolicy(replay)
+        framing = BinaryResponseFraming(framing)
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer")
+        if timeout_ms is not None and (
+            isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 1
+        ):
+            raise ValueError("timeout_ms must be a positive integer")
+        self._reject_continuation("query_binary", replay)
+        self.logger.record("query_binary", command)
+        started = time.perf_counter()
+        try:
+            result = query_visa_binary_response(
+                session=self.session,
+                write_query=getattr(self.session, "write", None),  # type: ignore[arg-type]
+                command=command,
+                framing=framing,
+                max_bytes=max_bytes,
+                timeout_ms=timeout_ms,
+                replay=replay,
+                transport_trailing=_transport_trailing,
+                resynchronization_max_bytes=_resynchronization_max_bytes,
+            )
+        except TransportIOError as exc:
+            self._record_query_telemetry(
+                operation="query_binary",
+                started=started,
+                status=f"failed:{exc.reason_code or 'transport_io_error'}",
+                replay=replay.value,
+                bytes_count=exc.consumed_bytes,
+            )
+            raise
+        self.logger.record("response", f"<binary len={len(result.data)}>")
+        self._record_query_telemetry(
+            operation="query_binary",
+            started=started,
+            status="ok",
+            replay=replay.value,
+            bytes_count=result.consumed_bytes,
+        )
+        return result
 
     def _record_query_telemetry(
         self,

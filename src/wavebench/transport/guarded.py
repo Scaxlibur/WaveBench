@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from typing import Any
 
 from wavebench.errors import AccessDeniedError, SessionHealthError, TransportIOError
@@ -10,7 +11,10 @@ from wavebench.services.access_policy import AccessMode, normalize_access_mode
 from wavebench.services.resource_lease import ResourceLease
 
 from .base import InstrumentTransport
+from .binary import BinaryQueryBudget
 from .contracts import (
+    BinaryQueryResult,
+    BinaryResponseFraming,
     CommandTransmission,
     ReplayPolicy,
     ResponseProgress,
@@ -159,10 +163,22 @@ class GuardedAuditedTransport:
             self._check_access("query_float_list")
             self.counters.query_calls += 1
             authorization = self._gate("query_float_list")
+            effective_timeout_ms = timeout_ms
+            if authorization is not None:
+                remaining_ms = int(
+                    max(authorization.deadline - time.monotonic(), 0.0) * 1000.0
+                )
+                if remaining_ms < 1:
+                    raise self._deadline_preflight_error("query_float_list", replay)
+                effective_timeout_ms = min(
+                    authorization.io_timeout_ms,
+                    remaining_ms,
+                    timeout_ms if timeout_ms is not None else authorization.io_timeout_ms,
+                )
             try:
                 result = self.inner.query_float_list(
                     command,
-                    timeout_ms=timeout_ms,
+                    timeout_ms=effective_timeout_ms,
                     replay=replay,
                 )
             except Exception as exc:
@@ -180,6 +196,10 @@ class GuardedAuditedTransport:
         with self.session_state.transaction_lock:
             self._check_access("query_bin_block")
             self.counters.binary_query_calls += 1
+            active = self.session_state._active_authorization()
+            if active is not None and active.binary_budget is not None:
+                self.counters.blocked_binary_query_calls += 1
+                raise self._binary_preflight_error("binary_legacy_entry_unsupported", replay)
             authorization = self._gate("query_bin_block")
             try:
                 result = self.inner.query_bin_block(command, replay=replay)
@@ -187,6 +207,147 @@ class GuardedAuditedTransport:
                 self._transition_after_failure(exc, authorization)
                 raise
             self._record_success(authorization, "query_bin_block")
+            return result
+
+    def query_binary(
+        self,
+        command: str,
+        *,
+        framing: BinaryResponseFraming,
+        max_bytes: int,
+        replay: ReplayPolicy = ReplayPolicy.NO_REPLAY,
+    ) -> BinaryQueryResult:
+        with self.session_state.transaction_lock:
+            replay = ReplayPolicy(replay)
+            framing = BinaryResponseFraming(framing)
+            self._check_access("query_binary")
+            self.counters.binary_query_calls += 1
+            if replay is ReplayPolicy.READ_CONTINUATION_ONLY:
+                self.counters.blocked_binary_query_calls += 1
+                raise self._binary_preflight_error("binary_continuation_unsupported", replay)
+            backend_query = getattr(self.inner, "query_binary", None)
+            if not callable(backend_query):
+                self.counters.blocked_binary_query_calls += 1
+                raise self._binary_preflight_error("binary_framing_unsupported", replay)
+            active = self.session_state._active_authorization()
+            if active is None or not isinstance(active.binary_budget, BinaryQueryBudget):
+                self.counters.blocked_binary_query_calls += 1
+                raise self._binary_preflight_error("binary_budget_missing", replay)
+            authorization = self._gate("query_binary")
+            assert authorization is active
+            remaining_ms = int(
+                max(authorization.deadline - time.monotonic(), 0.0) * 1000.0
+            )
+            if remaining_ms < 1:
+                self.counters.blocked_binary_query_calls += 1
+                raise self._deadline_preflight_error("query_binary", replay)
+            effective_timeout_ms = min(authorization.io_timeout_ms, remaining_ms)
+            budget = active.binary_budget
+            ledger = budget._ledger
+            try:
+                reservation = ledger.reserve(
+                    budget,
+                    context_id=active.context_id or "",
+                    operation_id=active.operation_id,
+                    correlation_id=active.correlation_id or "",
+                    session_epoch=active.epoch_id,
+                    max_bytes=max_bytes,
+                )
+            except (TypeError, ValueError) as exc:
+                self.counters.blocked_binary_query_calls += 1
+                raise self._binary_preflight_error("binary_budget_rejected", replay) from exc
+            try:
+                backend_kwargs: dict[str, object] = {
+                    "framing": framing,
+                    "max_bytes": reservation.effective_max_bytes,
+                    "timeout_ms": effective_timeout_ms,
+                    "replay": replay,
+                }
+                if bool(
+                    getattr(self.inner, "_wavebench_binary_budget_parameters", False)
+                ):
+                    backend_kwargs.update(
+                        _transport_trailing=ledger.transport_trailing,
+                        _resynchronization_max_bytes=(
+                            ledger.remaining_resynchronization_bytes
+                        ),
+                    )
+                result = backend_query(command, **backend_kwargs)
+            except Exception as exc:
+                if isinstance(exc, TransportIOError):
+                    try:
+                        ledger.fail(
+                            reservation,
+                            # Structured failures expose total consumed bytes,
+                            # not a trusted payload/header split.  Debit the
+                            # bounded maximum conservatively so failure cannot
+                            # increase the remaining operation allowance.
+                            consumed_payload_bytes=min(
+                                exc.consumed_bytes or 0,
+                                reservation.effective_max_bytes,
+                            ),
+                            discarded_bytes=exc.discarded_bytes or 0,
+                            synchronization_proven=(
+                                exc.synchronization is Synchronization.PROVEN
+                            ),
+                        )
+                    except (TypeError, ValueError):
+                        ledger.invalidate()
+                        if self.session_state.health in {
+                            SessionHealth.HEALTHY,
+                            SessionHealth.UNCERTAIN,
+                        }:
+                            self.session_state.degrade(
+                                SessionHealth.POISONED,
+                                reason="binary_budget_violation",
+                            )
+                else:
+                    ledger.invalidate()
+                self._transition_after_failure(exc, authorization)
+                if self.session_state.health is SessionHealth.POISONED:
+                    self._close_poisoned_backend()
+                raise
+            if not isinstance(result, BinaryQueryResult) or result.framing is not framing:
+                try:
+                    ledger.fail(
+                        reservation,
+                        synchronization_proven=False,
+                    )
+                except (TypeError, ValueError):
+                    ledger.invalidate()
+                error = TransportIOError(
+                    "binary backend violated the result contract",
+                    operation="query_binary",
+                    phase=TransportPhase.PARSING,
+                    replay_policy=replay,
+                    command_transmission=CommandTransmission.SENT,
+                    response_progress=ResponseProgress.COMPLETE,
+                    synchronization=Synchronization.LOST,
+                    attempts=1,
+                    reason_code="binary_contract_violation",
+                )
+                self._transition_after_failure(error, authorization)
+                self._close_poisoned_backend()
+                raise error
+            try:
+                ledger.commit(reservation, result)
+            except (TypeError, ValueError) as exc:
+                error = TransportIOError(
+                    "binary response exceeded the authorized contract",
+                    operation="query_binary",
+                    phase=TransportPhase.PARSING,
+                    replay_policy=replay,
+                    command_transmission=CommandTransmission.SENT,
+                    response_progress=ResponseProgress.COMPLETE,
+                    synchronization=Synchronization.LOST,
+                    attempts=1,
+                    reason_code="binary_contract_violation",
+                    consumed_bytes=result.consumed_bytes,
+                )
+                self._transition_after_failure(error, authorization)
+                self._close_poisoned_backend()
+                raise error from exc
+            self._record_success(authorization, "query_binary")
             return result
 
     def query_opc(
@@ -250,7 +411,7 @@ class GuardedAuditedTransport:
                 self.counters.blocked_binary_write_requests += 1
             raise self._denied(operation)
         if not write and self.access == "disabled":
-            if operation == "query_bin_block":
+            if operation in {"query_bin_block", "query_binary"}:
                 self.counters.blocked_binary_query_calls += 1
             else:
                 self.counters.blocked_query_calls += 1
@@ -330,6 +491,65 @@ class GuardedAuditedTransport:
             io_kind=io_kind,
             epoch_id=self.session_state.epoch_id,
         )
+
+    @staticmethod
+    def _binary_preflight_error(
+        reason_code: str,
+        replay: ReplayPolicy,
+    ) -> TransportIOError:
+        return TransportIOError(
+            "binary query was rejected before transmission",
+            operation="query_binary",
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            reason_code=reason_code,
+            consumed_bytes=0,
+            discarded_bytes=0,
+        )
+
+    @staticmethod
+    def _deadline_preflight_error(
+        operation: str,
+        replay: ReplayPolicy,
+    ) -> TransportIOError:
+        return TransportIOError(
+            "operation deadline was exhausted before transmission",
+            operation=operation,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=replay,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            reason_code="deadline_exhausted",
+            consumed_bytes=0,
+            discarded_bytes=0,
+        )
+
+    def _close_poisoned_backend(self) -> None:
+        """Close a framing-lost backend while preserving the poisoned diagnosis."""
+
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close = getattr(self.inner, "close", None)
+            if callable(close):
+                close()
+        except Exception:
+            # The triggering structured failure remains primary.  Backend close
+            # evidence is intentionally not allowed to replace it here.
+            pass
+        finally:
+            if self.release_lease_on_close and self.lease is not None:
+                try:
+                    self.lease.release()
+                except Exception:
+                    pass
 
 
 __all__ = ["AUDIT_SCHEMA", "AuditCounters", "GuardedAuditedTransport"]

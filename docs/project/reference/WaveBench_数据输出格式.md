@@ -783,3 +783,43 @@ correction_limited,slope_limited
 - 曲面矩阵只来自 CSV 已有节点。`failed` 点写为缺失值并留洞，绝不补点或域外外推；圆点才表示真实采样。`warning` 点和成功自动恢复点使用独立标记，hover 保留首次 warning、重试次数、首次与最终采集路径。
 - 单幅值或不足 2 × 2 的 response 不生成伪曲面，只保留静态 Bode 图。缺少 `report3d` extra 时报告仍能生成，并显示安装提示。
 - 移动 `report.html` 时必须同时携带同级 `report-assets/`。PDF compact 路径完全不加载 Plotly，继续作为单文件静态视觉归档。
+
+## Scope R1.3 操作产物
+
+`wavebench scope screenshot capture` 和 `wavebench scope trace fetch` 分别写入显式指定的 PNG/NPY
+文件，并写入一个 JSON artifact。默认 artifact 路径是在二进制输出路径后追加 `.json`；已有文件
+不会被覆盖。
+
+Service 结果 schema 固定为：
+
+```json
+{
+  "schema": "wavebench.scope.result.v1",
+  "result": {},
+  "diagnostics": {
+    "schema": "wavebench.scope.operation.v1",
+    "schema_version": 1
+  },
+  "observed_state": null,
+  "files": {}
+}
+```
+
+`result` 只保存可审计摘要：
+
+- screenshot 保存媒体类型、尺寸、请求与实际请求、framing、payload 字节数和 SHA-256；
+- trace 保存 typed metadata、点数、dtype、payload 字节数和 SHA-256；其中摘要对象是按 C order
+  排列的数组原始字节，不是 `.npy` 容器文件；
+- acquisition 保存类型化运行状态或完成证据。
+
+`diagnostics` 保存 correlation、context、session epoch、UTC 时间、deadline 来源、phase、binary
+budget 摘要、baseline nonce 摘要、恢复、fresh verify、error policy 和最终 session health。原始图片、
+波形数组、完整命令、resource 和 baseline nonce 不写入 JSON artifact。`files` 在持久化 artifact
+中只保存文件名；CLI 当前结果可以显示调用方提供的完整路径。
+
+PNG/NPY 写入失败或 artifact 写入失败都必须按失败处理。CLI 目前不使用覆盖选项；需要重跑时应
+选择新的输出路径或先由人工处理旧文件。Service 已产生结构化 operation diagnostics 后失败时，
+CLI 仍会在请求的 artifact 路径写入 `status = "failed"`、安全错误 envelope 和恢复证据；不会创建
+伪成功的 PNG/NPY。artifact 自身无法写入时，CLI 删除本轮刚生成的 PNG/NPY，并在错误结果中
+报告 `scope_artifact.reason_code = "write_failed"`；若部分输出无法删除，还会报告
+`scope_output.reason_code = "remove_failed"`。

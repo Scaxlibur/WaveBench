@@ -181,6 +181,9 @@ class TransportIOError(InstrumentError):
         response_progress: ResponseProgress,
         synchronization: Synchronization,
         attempts: int,
+        reason_code: str | None = None,
+        consumed_bytes: int | None = None,
+        discarded_bytes: int | None = None,
     ) -> None:
         super().__init__(message)
         phase = TransportPhase(phase)
@@ -188,8 +191,21 @@ class TransportIOError(InstrumentError):
         command_transmission = CommandTransmission(command_transmission)
         response_progress = ResponseProgress(response_progress)
         synchronization = Synchronization(synchronization)
-        if attempts < 0:
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
             raise ValueError("transport attempts must be >= 0")
+        if reason_code is not None and (
+            not isinstance(reason_code, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", reason_code) is None
+        ):
+            raise ValueError("transport reason_code must be a stable lowercase token")
+        for label, value in (
+            ("consumed_bytes", consumed_bytes),
+            ("discarded_bytes", discarded_bytes),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValueError(f"transport {label} must be a non-negative integer")
         if phase is TransportPhase.BEFORE_SEND and (
             command_transmission is not CommandTransmission.NOT_SENT
             or response_progress is not ResponseProgress.NONE
@@ -216,6 +232,9 @@ class TransportIOError(InstrumentError):
         self.response_progress = response_progress
         self.synchronization = synchronization
         self.attempts = attempts
+        self.reason_code = reason_code
+        self.consumed_bytes = consumed_bytes
+        self.discarded_bytes = discarded_bytes
 
     def with_attempts(self, attempts: int) -> "TransportIOError":
         return TransportIOError(
@@ -227,6 +246,9 @@ class TransportIOError(InstrumentError):
             response_progress=self.response_progress,
             synchronization=self.synchronization,
             attempts=attempts,
+            reason_code=self.reason_code,
+            consumed_bytes=self.consumed_bytes,
+            discarded_bytes=self.discarded_bytes,
         )
 
     def to_envelope(
@@ -248,6 +270,12 @@ class TransportIOError(InstrumentError):
             "synchronization": self.synchronization.value,
             "attempts": self.attempts,
         }
+        if self.reason_code is not None:
+            merged["reason_code"] = self.reason_code
+        if self.consumed_bytes is not None:
+            merged["consumed_bytes"] = self.consumed_bytes
+        if self.discarded_bytes is not None:
+            merged["discarded_bytes"] = self.discarded_bytes
         return super().to_envelope(
             operation=operation,
             details=merged,

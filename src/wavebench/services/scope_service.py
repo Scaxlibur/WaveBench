@@ -46,11 +46,21 @@ from wavebench.instruments.models import (
     WaveformData,
 )
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.instruments.scope_extensions import (
+    ErrorCheckSpec,
+    ScopeContinuousAcquisitionRequest,
+    ScopeScreenshotRequest,
+    ScopeTraceRef,
+)
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import OperationSpec, require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
 from wavebench.services.session_alias import SessionStateAliasMixin
+from wavebench.services.scope_extension_service import (
+    ScopeExtensionOperationResult,
+    ScopeExtensionService,
+)
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.session import (
     InstrumentSessionState,
@@ -184,6 +194,8 @@ class ScopeService(SessionStateAliasMixin):
     def _operation_timeout_ms(self, spec: OperationSpec) -> int:
         if spec.timeout_source == "connection.timeout_ms":
             return self.config.connection.timeout_ms
+        if spec.timeout_source == "operation.timeout_ms" and spec.operation_timeout_ms is not None:
+            return min(spec.operation_timeout_ms, self.config.connection.timeout_ms)
         raise ConfigError(
             f"unsupported timeout source {spec.timeout_source!r} for {spec.operation!r}"
         )
@@ -496,6 +508,141 @@ class ScopeService(SessionStateAliasMixin):
                 configured_cursor=configured_cursor,
             )
 
+    def _scope_extension_service(self, scope: object) -> ScopeExtensionService:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        if self.session_state is None:
+            raise ConfigError("scope extension operations require a shared session state")
+        default_error_check = ErrorCheckSpec(
+            "if_supported" if self.config.scope.check_errors else "disabled"
+        )
+        return ScopeExtensionService(
+            driver=scope,
+            descriptor=descriptor,
+            session_state=self.session_state,
+            connection_timeout_ms=self.config.connection.timeout_ms,
+            access=getattr(self.config.scope, "access", "read_write"),
+            instrument_error_default=default_error_check,
+        )
+
+    def screenshot_profile(
+        self,
+        *,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require("scope.screenshot_profile", "scope.screenshot_profile")
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).screenshot_profile(deadline=deadline)
+
+    def screenshot_v2(
+        self,
+        request: ScopeScreenshotRequest,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require("scope.screenshot_v2", "scope.screenshot_v2")
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).screenshot_v2(
+                request,
+                error_check=error_check,
+                deadline=deadline,
+            )
+
+    def acquisition_run_state(
+        self,
+        *,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require("scope.acquisition_run_state", "scope.acquisition_run_state")
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).acquisition_run_state(deadline=deadline)
+
+    def start_acquisition(
+        self,
+        request: ScopeContinuousAcquisitionRequest,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require(
+            "scope.acquisition_start",
+            "scope.acquisition_control",
+            "scope.acquisition_run_state",
+        )
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).start_acquisition(
+                request,
+                error_check=error_check,
+                deadline=deadline,
+            )
+
+    def acquire_single(
+        self,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require(
+            "scope.acquisition_single",
+            "scope.acquisition_control",
+            "scope.acquisition_run_state",
+        )
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).acquire_single(
+                error_check=error_check,
+                deadline=deadline,
+            )
+
+    def stop_acquisition(
+        self,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require(
+            "scope.acquisition_stop",
+            "scope.acquisition_control",
+            "scope.acquisition_run_state",
+        )
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).stop_acquisition(
+                error_check=error_check,
+                deadline=deadline,
+            )
+
+    def trace_metadata(
+        self,
+        source: ScopeTraceRef,
+        *,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require("scope.trace_metadata", "scope.trace_metadata")
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).trace_metadata(
+                source,
+                deadline=deadline,
+            )
+
+    def fetch_trace(
+        self,
+        source: ScopeTraceRef,
+        *,
+        points: str | int = "dmax",
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        self._require("scope.fetch_trace", "scope.fetch_trace")
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).fetch_trace(
+                source,
+                points=points,
+                error_check=error_check,
+                deadline=deadline,
+            )
+
     def channel_coupling(self, channel: int) -> str:
         self._require("scope.channel_coupling", "scope.channel_coupling")
         with self._scope_session() as scope:
@@ -592,6 +739,20 @@ class ScopeService(SessionStateAliasMixin):
             return None, {"type": type(exc).__name__, "message": str(exc)}
         return screenshot_path, None
 
+    def _legacy_capture_screenshot_capability(self) -> str:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        if "scope.screenshot" in descriptor.capabilities:
+            return "scope.screenshot"
+        if "scope.screenshot_v2" in descriptor.capabilities:
+            raise ConfigError(
+                "scope capture cannot embed scope.screenshot_v2 without the parent-operation "
+                "field-closure runtime; use 'wavebench scope screenshot capture'"
+            )
+        return "scope.screenshot"
+
     def _waveform_metadata(self, waveform: WaveformData) -> dict[str, Any]:
         return {
             "header": {
@@ -652,7 +813,7 @@ class ScopeService(SessionStateAliasMixin):
         if self.config.scope.check_errors:
             required.append("scope.errors")
         if self.config.output.save_screenshot:
-            required.append("scope.screenshot")
+            required.append(self._legacy_capture_screenshot_capability())
         self._require("scope.capture", *required)
         package_dir = new_package_dir(self.config.output.directory, label)
         package_dir.mkdir(parents=True, exist_ok=False)
@@ -732,7 +893,7 @@ class ScopeService(SessionStateAliasMixin):
         if self.config.scope.check_errors:
             required.append("scope.errors")
         if self.config.output.save_screenshot:
-            required.append("scope.screenshot")
+            required.append(self._legacy_capture_screenshot_capability())
         self._require("scope.capture_multiple", *required)
         package_dir = new_package_dir(self.config.output.directory, label)
         package_dir.mkdir(parents=True, exist_ok=False)

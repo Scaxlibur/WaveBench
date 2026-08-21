@@ -12,3 +12,6 @@ RFC 使用以下状态：
 ## 当前 RFC
 
 - [transport 重放与 session 健康 RFC](WaveBench_transport重放与session健康RFC.md)：定义查询重放、结构化传输错误、共享 session 健康状态、恢复授权和版本迁移。
+- [scope 通用扩展接口 RFC](WaveBench_scope通用扩展接口RFC.md)：`Accepted R1.3`，定义 operation context、binary budget、截图、采集控制、trace、错误策略及恢复验证合同。公共合同已进入核心 `0.8.23` 开发线；插件按 capability 单独 opt-in。
+- [scope 通用扩展接口 RFC：R1.3 Acceptance Addendum A1](WaveBench_scope通用扩展接口RFC-R1.3-acceptance-addendum.md)：记录公共 capability 注册采用的 P0/P1 验收门和离线完成证据。
+- [scope 通用扩展接口 RFC：核心实施说明](WaveBench_scope通用扩展接口RFC_核心实施说明.md)：记录 backend、公共 Service/CLI、artifact、版本门、旧 capture 分流和插件迁移边界。

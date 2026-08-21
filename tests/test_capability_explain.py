@@ -93,6 +93,20 @@ def test_capability_cli_can_explain_partial_scope_status_offline() -> None:
     assert "missing_optional_capabilities=scope.snapshot\n" in stdout.getvalue()
 
 
+def test_scope_extension_explain_includes_timeout_binary_and_recovery_contract() -> None:
+    result = explain_operation(
+        "scope.fetch_trace",
+        descriptor=_descriptor("scope.fetch_trace", kind="scope"),
+    )
+
+    assert result.status == "supported"
+    assert result.spec is not None
+    assert result.spec.operation_timeout_ms == 60_000
+    assert result.spec.binary_response_max_bytes == 8_388_608
+    assert "scope.waveform_byte_order" in result.spec.verification_fields
+    assert "scope.waveform_transfer_window" in result.spec.cleanup_verification_fields
+
+
 def test_capability_cli_lists_local_candidates_without_installing() -> None:
     stdout = io.StringIO()
     with redirect_stdout(stdout):

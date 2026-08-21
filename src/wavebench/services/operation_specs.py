@@ -8,11 +8,28 @@ It does not open instruments or call a Service.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import TYPE_CHECKING, Literal, Mapping
 
 from wavebench.errors import ConfigError
+from wavebench.scope_extension_constants import (
+    SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS,
+    SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
+    SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_SCREENSHOT_BINARY_QUERY_MAX_COUNT,
+    SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+    SCOPE_SCREENSHOT_OPERATION_TIMEOUT_MS,
+    SCOPE_TRACE_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_TRACE_BINARY_QUERY_MAX_COUNT,
+    SCOPE_TRACE_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_TRACE_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+    SCOPE_TRACE_OPERATION_TIMEOUT_MS,
+)
+
+if TYPE_CHECKING:
+    from wavebench.instruments.scope_extensions import ScopeEmbeddedScreenshotContract
 
 
 OperationEffect = Literal[
@@ -24,11 +41,13 @@ OperationEffect = Literal[
 ]
 SessionPurpose = Literal["normal", "recovery", "verification", "lifecycle"]
 LeaseMode = Literal["none", "shared", "exclusive"]
+ErrorCheckMinimum = Literal["required", "if_supported", "disabled"]
 
 _EFFECTS = frozenset({"offline", "observe", "stateful_read", "write", "acquire"})
 _LEASE_MODES = frozenset({"none", "shared", "exclusive"})
 _INSTRUMENT_KINDS = frozenset({"scope", "source", "power", "dmm", "sweep_analyzer"})
 _SESSION_PURPOSES = frozenset({"normal", "recovery", "verification", "lifecycle"})
+_ERROR_CHECK_MINIMUMS = frozenset({"required", "if_supported", "disabled"})
 
 
 @dataclass(frozen=True)
@@ -46,7 +65,16 @@ class OperationSpec:
     session_purpose: SessionPurpose = "normal"
     required_verified_fields: tuple[str, ...] = ()
     verification_fields: tuple[str, ...] = ()
+    postcondition_fields: tuple[str, ...] = ()
+    cleanup_verification_fields: tuple[str, ...] = ()
     timeout_source: str = "connection.timeout_ms"
+    operation_timeout_ms: int | None = None
+    binary_response_max_bytes: int | None = None
+    binary_operation_max_bytes: int | None = None
+    binary_query_max_count: int | None = None
+    binary_resynchronization_max_bytes: int | None = None
+    error_check_minimum: ErrorCheckMinimum | None = None
+    embedded_screenshot_contract: "ScopeEmbeddedScreenshotContract | None" = None
     risk_flags: tuple[str, ...] = ()
     safe_alternatives: tuple[str, ...] = ()
 
@@ -64,12 +92,29 @@ class OperationSpec:
             raise ValueError(f"unsupported session purpose: {self.session_purpose!r}")
         if not self.timeout_source or self.timeout_source.strip() != self.timeout_source:
             raise ValueError("timeout_source must be non-empty and trimmed")
+        if self.operation_timeout_ms is not None and (
+            isinstance(self.operation_timeout_ms, bool)
+            or not isinstance(self.operation_timeout_ms, int)
+            or self.operation_timeout_ms < 1
+        ):
+            raise ValueError("operation_timeout_ms must be a positive integer")
+        if self.timeout_source == "operation.timeout_ms" and self.operation_timeout_ms is None:
+            raise ValueError("operation.timeout_ms requires an explicit operation_timeout_ms")
+        if self.operation_timeout_ms is not None and self.timeout_source != "operation.timeout_ms":
+            raise ValueError("explicit operation timeout must use timeout_source='operation.timeout_ms'")
+        if (
+            self.error_check_minimum is not None
+            and self.error_check_minimum not in _ERROR_CHECK_MINIMUMS
+        ):
+            raise ValueError(f"unsupported error check minimum: {self.error_check_minimum!r}")
         for name, values in (
             ("required_capabilities", self.required_capabilities),
             ("optional_capabilities", self.optional_capabilities),
             ("changed_fields", self.changed_fields),
             ("required_verified_fields", self.required_verified_fields),
             ("verification_fields", self.verification_fields),
+            ("postcondition_fields", self.postcondition_fields),
+            ("cleanup_verification_fields", self.cleanup_verification_fields),
             ("risk_flags", self.risk_flags),
             ("safe_alternatives", self.safe_alternatives),
         ):
@@ -82,6 +127,54 @@ class OperationSpec:
             raise ValueError(
                 "required and optional capabilities overlap: " + ", ".join(sorted(overlap))
             )
+        binary_limits = (
+            self.binary_response_max_bytes,
+            self.binary_operation_max_bytes,
+            self.binary_query_max_count,
+            self.binary_resynchronization_max_bytes,
+        )
+        if any(value is not None for value in binary_limits):
+            if any(value is None for value in binary_limits):
+                raise ValueError("binary operations must define all four binary limits")
+            for label, value in (
+                ("binary_response_max_bytes", self.binary_response_max_bytes),
+                ("binary_operation_max_bytes", self.binary_operation_max_bytes),
+                ("binary_query_max_count", self.binary_query_max_count),
+            ):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    raise ValueError(f"{label} must be a positive integer")
+            if (
+                isinstance(self.binary_resynchronization_max_bytes, bool)
+                or not isinstance(self.binary_resynchronization_max_bytes, int)
+                or self.binary_resynchronization_max_bytes < 0
+            ):
+                raise ValueError(
+                    "binary_resynchronization_max_bytes must be a non-negative integer"
+                )
+            assert self.binary_response_max_bytes is not None
+            assert self.binary_operation_max_bytes is not None
+            if self.binary_operation_max_bytes < self.binary_response_max_bytes:
+                raise ValueError("binary operation limit must cover at least one response")
+        if self.embedded_screenshot_contract is not None:
+            from wavebench.instruments.scope_extensions import ScopeEmbeddedScreenshotContract
+
+            contract = self.embedded_screenshot_contract
+            if not isinstance(contract, ScopeEmbeddedScreenshotContract):
+                raise TypeError("embedded_screenshot_contract has an invalid type")
+            if self.effect != "acquire":
+                raise ValueError("embedded screenshots are only valid for acquire operations")
+            if not set(contract.changed_fields + contract.output_fields) <= set(self.changed_fields):
+                raise ValueError("operation changed_fields do not cover embedded screenshot effects")
+            if not set(contract.verification_fields) <= set(self.verification_fields):
+                raise ValueError(
+                    "operation verification_fields do not cover embedded screenshot state"
+                )
+            if not set(contract.cleanup_verification_fields) <= set(
+                self.cleanup_verification_fields
+            ):
+                raise ValueError(
+                    "operation cleanup fields do not cover embedded screenshot state"
+                )
 
     @property
     def mutates(self) -> bool:
@@ -102,7 +195,20 @@ class OperationSpec:
             "session_purpose": self.session_purpose,
             "required_verified_fields": list(self.required_verified_fields),
             "verification_fields": list(self.verification_fields),
+            "postcondition_fields": list(self.postcondition_fields),
+            "cleanup_verification_fields": list(self.cleanup_verification_fields),
             "timeout_source": self.timeout_source,
+            "operation_timeout_ms": self.operation_timeout_ms,
+            "binary_response_max_bytes": self.binary_response_max_bytes,
+            "binary_operation_max_bytes": self.binary_operation_max_bytes,
+            "binary_query_max_count": self.binary_query_max_count,
+            "binary_resynchronization_max_bytes": self.binary_resynchronization_max_bytes,
+            "error_check_minimum": self.error_check_minimum,
+            "embedded_screenshot_contract": (
+                asdict(self.embedded_screenshot_contract)
+                if self.embedded_screenshot_contract is not None
+                else None
+            ),
             "risk_flags": list(self.risk_flags),
             "safe_alternatives": list(self.safe_alternatives),
         }
@@ -149,7 +255,16 @@ def _spec(
     session_purpose: SessionPurpose = "normal",
     required_verified_fields: tuple[str, ...] = (),
     verification_fields: tuple[str, ...] = (),
+    postcondition_fields: tuple[str, ...] = (),
+    cleanup_verification_fields: tuple[str, ...] = (),
     timeout_source: str = "connection.timeout_ms",
+    operation_timeout_ms: int | None = None,
+    binary_response_max_bytes: int | None = None,
+    binary_operation_max_bytes: int | None = None,
+    binary_query_max_count: int | None = None,
+    binary_resynchronization_max_bytes: int | None = None,
+    error_check_minimum: ErrorCheckMinimum | None = None,
+    embedded_screenshot_contract: "ScopeEmbeddedScreenshotContract | None" = None,
     risk_flags: tuple[str, ...] = (),
     safe_alternatives: tuple[str, ...] = (),
 ) -> OperationSpec:
@@ -165,7 +280,16 @@ def _spec(
         session_purpose=session_purpose,
         required_verified_fields=required_verified_fields,
         verification_fields=verification_fields,
+        postcondition_fields=postcondition_fields,
+        cleanup_verification_fields=cleanup_verification_fields,
         timeout_source=timeout_source,
+        operation_timeout_ms=operation_timeout_ms,
+        binary_response_max_bytes=binary_response_max_bytes,
+        binary_operation_max_bytes=binary_operation_max_bytes,
+        binary_query_max_count=binary_query_max_count,
+        binary_resynchronization_max_bytes=binary_resynchronization_max_bytes,
+        error_check_minimum=error_check_minimum,
+        embedded_screenshot_contract=embedded_screenshot_contract,
         risk_flags=risk_flags,
         safe_alternatives=safe_alternatives,
     )
@@ -217,7 +341,13 @@ _BUILTIN_SPECS = (
     _spec("run.compare", None, effect="offline", lease_mode="none"),
     _spec("run.resume", None, effect="offline", lease_mode="none"),
     _spec("scope.idn", "scope", required_capabilities=("scope.idn",), effect="observe"),
-    _spec("scope.errors", "scope", required_capabilities=("scope.errors",), effect="stateful_read"),
+    _spec(
+        "scope.errors",
+        "scope",
+        required_capabilities=("scope.errors",),
+        effect="stateful_read",
+        changed_fields=("scope.error_queue",),
+    ),
     _spec(
         "scope.status",
         "scope",
@@ -373,7 +503,192 @@ _BUILTIN_SPECS = (
     _spec("dmm.set_dcv_impedance", "dmm", required_capabilities=("dmm.set_dcv_impedance",), effect="write", changed_fields=("dcv_impedance",), risk_flags=("state_drift",)),
 )
 
-OPERATION_REGISTRY = OperationRegistry({spec.operation: spec for spec in _BUILTIN_SPECS})
+_SCOPE_TRACE_TRANSFER_FIELDS = (
+    "scope.run_state",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+)
+
+
+def _scope_operation(
+    operation: str,
+    *,
+    required_capabilities: tuple[str, ...],
+    effect: OperationEffect,
+    timeout_ms: int,
+    changed_fields: tuple[str, ...] = (),
+    restore_coverage: str = "none",
+    verification_fields: tuple[str, ...] = (),
+    postcondition_fields: tuple[str, ...] = (),
+    cleanup_verification_fields: tuple[str, ...] = (),
+    risk_flags: tuple[str, ...] = (),
+    binary_limits: tuple[int, int, int, int] | None = None,
+    error_check_minimum: ErrorCheckMinimum | None = None,
+) -> OperationSpec:
+    binary = binary_limits or (None, None, None, None)
+    return _spec(
+        operation,
+        "scope",
+        required_capabilities=required_capabilities,
+        optional_capabilities=(
+            ("scope.error_drain_v1",) if error_check_minimum is not None else ()
+        ),
+        effect=effect,
+        lease_mode="exclusive",
+        changed_fields=changed_fields,
+        restore_coverage=restore_coverage,
+        required_verified_fields=("scope.identity",),
+        verification_fields=verification_fields,
+        postcondition_fields=postcondition_fields,
+        cleanup_verification_fields=cleanup_verification_fields,
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=timeout_ms,
+        binary_response_max_bytes=binary[0],
+        binary_operation_max_bytes=binary[1],
+        binary_query_max_count=binary[2],
+        binary_resynchronization_max_bytes=binary[3],
+        error_check_minimum=error_check_minimum,
+        risk_flags=risk_flags,
+    )
+
+
+_SCOPE_EXTENSION_SPECS = (
+    _scope_operation(
+        "scope.screenshot_profile",
+        required_capabilities=("scope.screenshot_profile",),
+        effect="stateful_read",
+        timeout_ms=SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
+        risk_flags=("profile_query",),
+    ),
+    _scope_operation(
+        "scope.screenshot_v2",
+        required_capabilities=("scope.screenshot_v2",),
+        effect="write",
+        timeout_ms=SCOPE_SCREENSHOT_OPERATION_TIMEOUT_MS,
+        changed_fields=(
+            "scope.display_menu",
+            "scope.display_color",
+            "scope.error_queue",
+            "output.screenshot",
+        ),
+        restore_coverage="screenshot-baseline-only",
+        verification_fields=("scope.display_menu", "scope.display_color"),
+        cleanup_verification_fields=("scope.display_menu", "scope.display_color"),
+        risk_flags=("front_panel_state", "binary_response", "temporary_display_setup"),
+        binary_limits=(
+            SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+            SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
+            SCOPE_SCREENSHOT_BINARY_QUERY_MAX_COUNT,
+            SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        ),
+        error_check_minimum="disabled",
+    ),
+    _scope_operation(
+        "scope.acquisition_run_state",
+        required_capabilities=("scope.acquisition_run_state",),
+        effect="stateful_read",
+        timeout_ms=SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
+        risk_flags=("state_observation",),
+    ),
+    _scope_operation(
+        "scope.acquisition_start",
+        required_capabilities=("scope.acquisition_control", "scope.acquisition_run_state"),
+        effect="write",
+        timeout_ms=SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS,
+        changed_fields=(
+            "scope.run_state",
+            "scope.trigger",
+            "scope.acquisition",
+            "scope.error_queue",
+        ),
+        restore_coverage="failure-cleanup-only",
+        verification_fields=("scope.trigger", "scope.acquisition"),
+        postcondition_fields=("scope.run_state", "scope.trigger", "scope.acquisition"),
+        cleanup_verification_fields=(
+            "scope.run_state",
+            "scope.trigger",
+            "scope.acquisition",
+        ),
+        risk_flags=("trigger", "acquisition_state", "recovery_required"),
+        error_check_minimum="disabled",
+    ),
+    _scope_operation(
+        "scope.acquisition_single",
+        required_capabilities=("scope.acquisition_control", "scope.acquisition_run_state"),
+        effect="acquire",
+        timeout_ms=SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS,
+        changed_fields=(
+            "scope.run_state",
+            "scope.trigger",
+            "scope.acquisition",
+            "scope.error_queue",
+        ),
+        restore_coverage="failure-cleanup-only",
+        verification_fields=("scope.trigger", "scope.acquisition"),
+        postcondition_fields=("scope.run_state", "scope.trigger", "scope.acquisition"),
+        cleanup_verification_fields=(
+            "scope.run_state",
+            "scope.trigger",
+            "scope.acquisition",
+        ),
+        risk_flags=("trigger", "acquisition_state", "recovery_required"),
+        error_check_minimum="disabled",
+    ),
+    _scope_operation(
+        "scope.acquisition_stop",
+        required_capabilities=("scope.acquisition_control", "scope.acquisition_run_state"),
+        effect="write",
+        timeout_ms=SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
+        changed_fields=("scope.run_state", "scope.error_queue"),
+        restore_coverage="failure-cleanup-only",
+        postcondition_fields=("scope.run_state",),
+        cleanup_verification_fields=("scope.run_state",),
+        risk_flags=("acquisition_state", "recovery_required"),
+        error_check_minimum="disabled",
+    ),
+    _scope_operation(
+        "scope.trace_metadata",
+        required_capabilities=("scope.trace_metadata",),
+        effect="stateful_read",
+        timeout_ms=SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
+        risk_flags=("analysis_state",),
+        error_check_minimum="disabled",
+    ),
+    _scope_operation(
+        "scope.fetch_trace",
+        required_capabilities=("scope.fetch_trace",),
+        effect="acquire",
+        timeout_ms=SCOPE_TRACE_OPERATION_TIMEOUT_MS,
+        changed_fields=(*_SCOPE_TRACE_TRANSFER_FIELDS, "scope.error_queue", "output.trace"),
+        restore_coverage="trace-baseline-only",
+        verification_fields=_SCOPE_TRACE_TRANSFER_FIELDS,
+        cleanup_verification_fields=_SCOPE_TRACE_TRANSFER_FIELDS,
+        risk_flags=("acquisition_state", "temporary_transfer_setup", "binary_response"),
+        binary_limits=(
+            SCOPE_TRACE_BINARY_RESPONSE_MAX_BYTES,
+            SCOPE_TRACE_BINARY_OPERATION_MAX_BYTES,
+            SCOPE_TRACE_BINARY_QUERY_MAX_COUNT,
+            SCOPE_TRACE_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        ),
+        error_check_minimum="disabled",
+    ),
+)
+
+SCOPE_OPERATION_SPECS: Mapping[str, OperationSpec] = MappingProxyType(
+    {spec.operation: spec for spec in _SCOPE_EXTENSION_SPECS}
+)
+
+OPERATION_REGISTRY = OperationRegistry(
+    {
+        **{spec.operation: spec for spec in _BUILTIN_SPECS},
+        **SCOPE_OPERATION_SPECS,
+    }
+)
 
 
 def get_operation_spec(operation: str) -> OperationSpec | None:

@@ -9,6 +9,8 @@ from wavebench.plugins.api import InstrumentPlugin, PluginKind, PluginOrigin
 from wavebench.services.access_policy import AccessMode, normalize_access_mode
 from wavebench.transport.base import InstrumentTransport
 
+from .scope_extensions import ScopeDescriptorExtensions
+
 EXECUTABLE_PLUGIN_API_VERSION = "wavebench.instrument.v2"
 ScopeCouplingPolicy = Literal["fixed-high-impedance", "switchable-termination", "unknown"]
 TransportFactory = Callable[[], InstrumentTransport]
@@ -86,6 +88,8 @@ class InstrumentDescriptor:
     scope_coupling_policy: ScopeCouplingPolicy = "unknown"
     config_fields: tuple[str, ...] = ()
     resource_schemes: tuple[str, ...] = ()
+    # Append-only to preserve the positional layout accepted by instrument API v2.
+    scope_extensions: ScopeDescriptorExtensions | None = None
 
     def __post_init__(self) -> None:
         if not self.driver_id or self.driver_id.strip() != self.driver_id:
@@ -113,6 +117,11 @@ class InstrumentDescriptor:
             raise ValueError(f"instrument {self.driver_id!r} has duplicate resource schemes")
         if not callable(self.factory):
             raise TypeError(f"instrument {self.driver_id!r} factory must be callable")
+        if self.scope_extensions is not None:
+            if self.kind != "scope":
+                raise ValueError("scope_extensions can only be declared by scope descriptors")
+            if not isinstance(self.scope_extensions, ScopeDescriptorExtensions):
+                raise TypeError("scope_extensions has an invalid type")
 
     def with_distribution(
         self,
