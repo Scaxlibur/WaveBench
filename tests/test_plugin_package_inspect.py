@@ -48,19 +48,23 @@ def _wheel(
     wheel_version: str | None = "1.0",
     entry_points: str = "[wavebench.instruments]\nexample.scope = example:descriptor\n",
     requires_python: str = ">=3.11",
-    requires_dist: str = "wavebench>=0.8,<0.9",
+    requires_dist: str | tuple[str, ...] = "wavebench>=0.8,<0.9",
     extra_members: dict[str, bytes] | None = None,
     include_record: bool = True,
 ) -> Path:
     filename_name = name.replace("-", "_")
     path = root / f"{filename_name}-{version}-{filename_tag}.whl"
     dist_info = f"{filename_name}-{version}.dist-info"
+    dependency_lines = "".join(
+        f"Requires-Dist: {dependency}\n"
+        for dependency in ((requires_dist,) if isinstance(requires_dist, str) else requires_dist)
+    )
     metadata = (
         "Metadata-Version: 2.1\n"
         f"Name: {name}\n"
         f"Version: {version}\n"
         f"Requires-Python: {requires_python}\n"
-        f"Requires-Dist: {requires_dist}\n\n"
+        f"{dependency_lines}\n"
     )
     members = {
         f"{dist_info}/METADATA": metadata.encode(),
@@ -124,6 +128,30 @@ def test_inspect_wheel_rejects_incompatible_wavebench_version(tmp_path):
 
     with pytest.raises(ConfigError, match="current WaveBench"):
         inspect_plugin_wheel(path)
+
+
+def test_source_v2_wheel_is_rejected_before_entry_point_import_on_old_core(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sentinel = tmp_path / "entry-point-imported"
+    path = _wheel(
+        tmp_path,
+        requires_dist="wavebench>=0.8.24,<0.9",
+        extra_members={
+            "wavebench_example_scope/__init__.py": (
+                "from pathlib import Path\n"
+                f"Path({str(sentinel)!r}).write_text('imported', encoding='utf-8')\n"
+                "def descriptor():\n    return None\n"
+            ).encode(),
+        },
+    )
+    monkeypatch.setattr("wavebench.plugins.package_inspect.__version__", "0.8.23")
+
+    with pytest.raises(ConfigError, match="current WaveBench"):
+        inspect_plugin_wheel(path)
+
+    assert not sentinel.exists()
 
 
 def test_inspect_wheel_rejects_filename_and_metadata_tag_mismatch(tmp_path):

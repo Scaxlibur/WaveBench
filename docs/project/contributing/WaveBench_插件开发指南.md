@@ -147,6 +147,22 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 未采用新增 capability 的旧插件不需要提高核心版本下限。旧 `scope capture --screenshot` 不承载
 新 `scope.screenshot_v2`；新插件应使用独立截图 Service 或 `wavebench scope screenshot capture`。
 
+### 采用 Source V2 snapshot 扩展
+
+准备提供完整信号源状态快照时，先阅读
+[Source V2 能力、状态与复合输出安全 RFC](../rfcs/WaveBench_source能力状态与复合输出安全RFC.md)。
+首个修订只开放 `source.snapshot_v2`，采用条件如下：
+
+- wheel 依赖和 descriptor 均要求 WaveBench `0.8.24` 或更高的 `0.8.x` 版本；
+- descriptor 追加 `source_extensions`，显式声明 topology、read feature profile 和 pure-read query contract；
+- driver 实现 `execute_source_query_plan_v2(plan)`，返回 `SourceQueryExecutionRecord`；
+- 插件负责具体协议、合法查询顺序和解析，核心负责 semantic plan、availability、runtime narrowing 和 consistency；
+- fake transport 覆盖组合响应、标量查询、activation、语义缺字段、query limit、deadline 和传输异常；
+- descriptor 导入、snapshot 和 capability 校验均不得写入仪器、触发、切换输出或消费状态。
+
+`source_extensions` 不能单独启用能力，必须同时声明 `source.snapshot_v2`。未声明该能力的旧插件
+继续走 Source V1；当前核心不会注册或接受 Source V2 写 capability。
+
 ## 配置 options
 
 插件私有配置放在对应的 `[<kind>.options]` 表中，并为每个键定义 `OptionSpec`。适合 `OptionSpec` 的内容包括分块点数、插件专用超时和明确枚举；resource、backend、通用 timeout、安全限制和输出状态仍由核心配置管理。

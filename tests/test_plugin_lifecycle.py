@@ -40,6 +40,142 @@ def _target_venv(root: Path) -> Path:
     return python
 
 
+def _source_v2_descriptor_module(
+    *,
+    driver_id: str,
+    capabilities: tuple[str, ...],
+    minimum_version: str,
+    maximum_version: str,
+) -> bytes:
+    return f'''from wavebench.instruments.api import InstrumentDescriptor
+from wavebench.instruments.source_extensions import (
+    SOURCE_CONTRACT_VERSION,
+    SourceAmplitudeUnit,
+    SourceBasicCapabilityProfile,
+    SourceConstraintApplicability,
+    SourceDescriptorExtensions,
+    SourceFacetQueryContract,
+    SourceFacetScope,
+    SourceFeature,
+    SourceFeatureCapability,
+    SourceFeatureDirection,
+    SourceFieldId,
+    SourceFrequencyMode,
+    SourceOutputCapabilityProfile,
+    SourceQueryContract,
+    SourceQueryEffect,
+    SourceSafetyProfile,
+    SourceTopologyContract,
+    SourceWaveformKind,
+    SupportState,
+)
+
+
+class Driver:
+    def close(self):
+        pass
+
+    def execute_source_query_plan_v2(self, plan):
+        raise RuntimeError("query fixture must not execute during postflight")
+
+
+def descriptor():
+    applicability = SourceConstraintApplicability()
+    features = (
+        SourceFeatureCapability(
+            feature=SourceFeature.BASIC,
+            support=SupportState.SUPPORTED,
+            directions=(SourceFeatureDirection.READ,),
+            scope=SourceFacetScope.CHANNEL,
+            channels=(1,),
+            applicability=applicability,
+            profile=SourceBasicCapabilityProfile(
+                waveform_kinds=(SourceWaveformKind.SINE,),
+                frequency_modes=(SourceFrequencyMode.FIXED,),
+                amplitude_units=(SourceAmplitudeUnit.VPP,),
+                offset_readable=True,
+                phase_readable=True,
+                square_duty_readable=False,
+            ),
+        ),
+        SourceFeatureCapability(
+            feature=SourceFeature.OUTPUT,
+            support=SupportState.SUPPORTED,
+            directions=(SourceFeatureDirection.READ,),
+            scope=SourceFacetScope.CHANNEL,
+            channels=(1,),
+            applicability=applicability,
+            profile=SourceOutputCapabilityProfile(
+                output_readable=True,
+                display_load_readable=False,
+                polarity_readable=True,
+            ),
+        ),
+    )
+    query_contract = SourceQueryContract(
+        anchor_fields=(
+            SourceFieldId.BASIC,
+            SourceFieldId.OUTPUT,
+            SourceFieldId.IDENTITY,
+        ),
+        facets=(
+            SourceFacetQueryContract(
+                feature=SourceFeature.BASIC,
+                scope=SourceFacetScope.CHANNEL,
+                fields=(SourceFieldId.BASIC,),
+                activation_any=(),
+                effect=SourceQueryEffect.PURE_READ,
+                max_queries=1,
+                required=True,
+            ),
+            SourceFacetQueryContract(
+                feature=SourceFeature.BASIC,
+                scope=SourceFacetScope.INSTRUMENT,
+                fields=(SourceFieldId.IDENTITY,),
+                activation_any=(),
+                effect=SourceQueryEffect.PURE_READ,
+                max_queries=1,
+                required=True,
+            ),
+            SourceFacetQueryContract(
+                feature=SourceFeature.OUTPUT,
+                scope=SourceFacetScope.CHANNEL,
+                fields=(SourceFieldId.OUTPUT,),
+                activation_any=(),
+                effect=SourceQueryEffect.PURE_READ,
+                max_queries=1,
+                required=True,
+            ),
+        ),
+        max_queries=3,
+        timeout_ms=1000,
+    )
+    return InstrumentDescriptor(
+        driver_id={driver_id!r},
+        kind="source",
+        display_name="Example Source V2",
+        manufacturer="Example",
+        models=("EX1",),
+        aliases=(),
+        capabilities={capabilities!r},
+        idn_patterns=("EXAMPLE,SOURCE",),
+        backends=("pyvisa",),
+        option_specs=(),
+        permissions=("instrument.io",),
+        factory=lambda context: Driver(),
+        wavebench_min_version={minimum_version!r},
+        wavebench_max_version={maximum_version!r},
+        source_extensions=SourceDescriptorExtensions(
+            contract_version=SOURCE_CONTRACT_VERSION,
+            topology=SourceTopologyContract((1,)),
+            features=features,
+            query_contract=query_contract,
+            safety_profile=SourceSafetyProfile(),
+        ),
+    )
+'''.encode()
+
+
 def _plugin_wheel(
     root: Path,
     *,
@@ -50,20 +186,35 @@ def _plugin_wheel(
     capabilities: tuple[str, ...] = ("scope.idn",),
     broken_descriptor: bool = False,
     include_entry_point: bool = True,
+    requires_dist: str | tuple[str, ...] = "wavebench>=0.8,<0.9",
+    source_v2: bool = False,
+    wavebench_min_version: str = "0.8.0",
+    wavebench_max_version: str = "0.9.0",
 ) -> Path:
     filename_name = distribution.replace("-", "_")
     dist_info = f"{filename_name}-{version}.dist-info"
     package_name = "wavebench_example_scope"
     path = root / f"{filename_name}-{version}-py3-none-any.whl"
+    dependency_lines = "".join(
+        f"Requires-Dist: {dependency}\n"
+        for dependency in ((requires_dist,) if isinstance(requires_dist, str) else requires_dist)
+    )
     metadata = (
         "Metadata-Version: 2.1\n"
         f"Name: {distribution}\n"
         f"Version: {version}\n"
         "Requires-Python: >=3.11\n"
-        "Requires-Dist: wavebench>=0.8,<0.9\n\n"
+        f"{dependency_lines}\n"
     ).encode()
     if broken_descriptor:
         package = b"def descriptor():\n    raise RuntimeError('broken descriptor')\n"
+    elif source_v2:
+        package = _source_v2_descriptor_module(
+            driver_id=driver_id,
+            capabilities=capabilities,
+            minimum_version=wavebench_min_version,
+            maximum_version=wavebench_max_version,
+        )
     else:
         package = f'''from wavebench.instruments.api import InstrumentDescriptor
 
@@ -213,6 +364,45 @@ def test_lifecycle_preserves_venv_launcher_path(tmp_path):
 
     assert environment.prefix == str(python.parents[1])
     assert Path(environment.python) == launcher
+
+
+def test_lifecycle_cross_checks_source_v2_wheel_and_descriptor_versions(tmp_path):
+    python = _target_venv(tmp_path)
+    good = _plugin_wheel(
+        tmp_path,
+        version="0.1.0",
+        driver_id="example.source-v2",
+        distribution="wavebench-example-source-v2",
+        kind="source",
+        capabilities=("source.snapshot_v2",),
+        source_v2=True,
+        wavebench_min_version="0.8.24",
+        wavebench_max_version="0.9.0",
+        requires_dist="wavebench>=0.8.24,<0.9",
+    )
+    bad_floor = _plugin_wheel(
+        tmp_path,
+        version="0.1.1",
+        driver_id="example.source-v2",
+        distribution="wavebench-example-source-v2",
+        kind="source",
+        capabilities=("source.snapshot_v2",),
+        source_v2=True,
+        wavebench_min_version="0.8.24",
+        wavebench_max_version="0.9.0",
+        requires_dist="wavebench>=0.8,<0.9",
+    )
+    lifecycle = PluginLifecycle(python_executable=python)
+
+    assert lifecycle.install(good).status == "installed"
+    assert lifecycle.info("example.source-v2").status == "healthy"
+    assert lifecycle.remove("example.source-v2").status == "removed"
+
+    with pytest.raises(ConfigError, match="explicitly include >=0.8.24,<0.9.0"):
+        lifecycle.install(bad_floor)
+
+    assert lifecycle.installed() == ()
+    assert not lifecycle.journal_path.exists()
 
 
 def test_dry_run_does_not_modify_target_venv(tmp_path):
