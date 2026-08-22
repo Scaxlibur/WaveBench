@@ -125,6 +125,12 @@ duty_consistency = 0.03
 # Source amplitude writes above this Vpp are rejected before instrument I/O.
 max_source_vpp = 5.0
 
+# Source V2 energy-increasing operations also require this explicit signed port-voltage
+# interval. Do not infer it from max_source_vpp. Existing V1 operations ignore these
+# keys; omit both keys to leave Source V2 energy operations unauthorized.
+# min_source_port_voltage_v = -5.0
+# max_source_port_voltage_v = 5.0
+
 # Power voltage/current-limit writes above these values are rejected before instrument I/O.
 # Turning power output on also checks the currently configured setpoints first.
 max_power_voltage_v = 5.0
@@ -160,6 +166,14 @@ ensure_fix_mode_on_set_frequency = true
 
 # Extra wait after setting a fixed source frequency, in milliseconds.
 settle_ms_after_set_frequency = 500
+
+# Optional actual-termination evidence for future Source V2 energy operations.
+# This is deliberately independent of the instrument display load.
+# [[source.terminations]]
+# channel = 1
+# kind = "resistive"
+# minimum_ohm = 49.5
+# maximum_ohm = 50.5
 
 
 [power]
