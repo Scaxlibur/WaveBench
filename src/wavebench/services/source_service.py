@@ -624,6 +624,11 @@ class SourceService(SessionStateAliasMixin):
             if enabled:
                 status = current
                 assert status is not None
+                if status.amplitude_unit != "VPP":
+                    raise ConfigError(
+                        "source output requires a readable VPP amplitude / "
+                        "信号源输出要求可读的 VPP 幅度"
+                    )
                 self._check_source_vpp(status.amplitude, field="source output amplitude / 信号源输出幅度")
             if self.state_guard is not None:
                 assert current is not None
@@ -726,8 +731,13 @@ class SourceService(SessionStateAliasMixin):
             self._state_guard_after_write(result)
             return result
 
-    def _check_source_vpp(self, value_vpp: float, *, field: str) -> None:
+    def _check_source_vpp(self, value_vpp: object, *, field: str) -> None:
         self._require_finite(value_vpp, field=field)
+        assert isinstance(value_vpp, (int, float)) and not isinstance(value_vpp, bool)
+        if value_vpp < 0:
+            raise ConfigError(
+                f"non-negative Vpp required / Vpp 必须为非负数: {field}"
+            )
         limit = self.config.safety_limits.max_source_vpp
         if limit is not None and value_vpp > limit:
             raise ConfigError(
@@ -736,8 +746,12 @@ class SourceService(SessionStateAliasMixin):
             )
 
     @staticmethod
-    def _require_finite(value: float, *, field: str) -> None:
-        if not isfinite(value):
+    def _require_finite(value: object, *, field: str) -> None:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
             raise ConfigError(
                 f"finite value required / 必须为有限数: {field}"
             )
