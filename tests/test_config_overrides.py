@@ -1,8 +1,11 @@
 import unittest
 import tempfile
+from math import inf, nan
 from pathlib import Path
 
 from wavebench.config import AutoscaleConfig, ConnectionConfig, DmmConfig, OutputConfig, SafetyLimitsConfig, ScopeConfig, WaveBenchConfig, WaveformConfig, load_config
+from wavebench.errors import ConfigError
+from wavebench.services.source_safety import require_source_v2_energy_safety_limits
 
 
 class ConfigOverrideTests(unittest.TestCase):
@@ -117,11 +120,17 @@ resource = "TCPIP::192.0.2.40::INSTR"
             waveform=WaveformConfig("real", "lsbf", "dmax"),
             output=OutputConfig(Path("data/raw"), "timestamp_label", True, True, True, True, False),
             source_path=Path("test.toml"),
-            safety_limits=SafetyLimitsConfig(max_source_vpp=2.5),
+            safety_limits=SafetyLimitsConfig(
+                max_source_vpp=2.5,
+                min_source_port_voltage_v=-2.0,
+                max_source_port_voltage_v=3.0,
+            ),
         )
         self.assertEqual(config.safety_limits.max_source_vpp, 2.5)
         updated = config.with_waveform_overrides(points="def")
         self.assertEqual(updated.safety_limits.max_source_vpp, 2.5)
+        self.assertEqual(updated.safety_limits.min_source_port_voltage_v, -2.0)
+        self.assertEqual(updated.safety_limits.max_source_port_voltage_v, 3.0)
 
     def test_quality_config_defaults_and_is_preserved_by_overrides(self):
         config = WaveBenchConfig(
@@ -194,11 +203,143 @@ resource = "TCPIP::127.0.0.1::INSTR"
 max_source_vpp = 2.5
 max_power_voltage_v = 5.0
 max_power_current_limit_a = 0.2
+min_source_port_voltage_v = -3.0
+max_source_port_voltage_v = 4.0
 """, encoding="utf-8")
             config = load_config(path)
             self.assertEqual(config.safety_limits.max_source_vpp, 2.5)
             self.assertEqual(config.safety_limits.max_power_voltage_v, 5.0)
             self.assertEqual(config.safety_limits.max_power_current_limit_a, 0.2)
+            self.assertEqual(config.safety_limits.min_source_port_voltage_v, -3.0)
+            self.assertEqual(config.safety_limits.max_source_port_voltage_v, 4.0)
+
+    def test_old_safety_limits_positional_layout_is_compatible(self):
+        limits = SafetyLimitsConfig(2.5, 5.0, 0.2)
+
+        self.assertEqual(limits.max_source_vpp, 2.5)
+        self.assertEqual(limits.max_power_voltage_v, 5.0)
+        self.assertEqual(limits.max_power_current_limit_a, 0.2)
+        self.assertIsNone(limits.min_source_port_voltage_v)
+        self.assertIsNone(limits.max_source_port_voltage_v)
+
+    def test_source_port_voltage_limits_must_be_configured_together(self):
+        for body in (
+            "min_source_port_voltage_v = -2.0",
+            "max_source_port_voltage_v = 2.0",
+        ):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "wavebench.toml"
+                path.write_text(
+                    "[connection]\nresource = \"TCPIP::127.0.0.1::INSTR\"\n"
+                    "[scope]\n[safety_limits]\n"
+                    f"{body}\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ConfigError, "configured together"):
+                    load_config(path)
+
+    def test_source_port_voltage_limits_require_finite_signed_interval(self):
+        for minimum, maximum, message in (
+            (2.0, -2.0, "must be <"),
+            (2.0, 2.0, "must be <"),
+            (True, 2.0, "finite number"),
+            (-2.0, True, "finite number"),
+            (nan, 2.0, "finite number"),
+            (-2.0, inf, "finite number"),
+        ):
+            with self.subTest(minimum=minimum, maximum=maximum):
+                with self.assertRaisesRegex(ConfigError, message):
+                    require_source_v2_energy_safety_limits(
+                        SafetyLimitsConfig(
+                            max_source_vpp=2.0,
+                            min_source_port_voltage_v=minimum,
+                            max_source_port_voltage_v=maximum,
+                        )
+                    )
+
+    def test_source_v2_energy_limits_fail_closed_when_an_axis_is_missing(self):
+        cases = (
+            (
+                SafetyLimitsConfig(),
+                ["max_source_port_voltage_v", "max_source_vpp", "min_source_port_voltage_v"],
+            ),
+            (
+                SafetyLimitsConfig(max_source_vpp=2.0),
+                ["max_source_port_voltage_v", "min_source_port_voltage_v"],
+            ),
+            (
+                SafetyLimitsConfig(max_source_vpp=2.0, min_source_port_voltage_v=-2.0),
+                ["max_source_port_voltage_v"],
+            ),
+        )
+        for limits, expected_missing in cases:
+            with self.subTest(limits=limits):
+                with self.assertRaisesRegex(ConfigError, "explicit safety limits") as raised:
+                    require_source_v2_energy_safety_limits(limits)
+                self.assertEqual(raised.exception.missing_fields, tuple(expected_missing))
+                self.assertEqual(
+                    raised.exception.to_envelope().as_dict()["code"],
+                    "source_safety_limits_required",
+                )
+
+    def test_source_v2_energy_limits_keep_vpp_and_absolute_limits_independent(self):
+        result = require_source_v2_energy_safety_limits(
+            SafetyLimitsConfig(
+                max_source_vpp=1.0,
+                min_source_port_voltage_v=-3.0,
+                max_source_port_voltage_v=4.0,
+            )
+        )
+        self.assertEqual(result.max_source_vpp, 1.0)
+        self.assertEqual(result.min_source_port_voltage_v, -3.0)
+        self.assertEqual(result.max_source_port_voltage_v, 4.0)
+
+    def test_load_config_rejects_invalid_source_port_voltage_values(self):
+        for minimum, maximum, message in (
+            ("true", "2.0", "finite number"),
+            ("-2.0", "true", "finite number"),
+            ("nan", "2.0", "finite number"),
+            ("-2.0", "inf", "finite number"),
+            ("2.0", "-2.0", "must be <"),
+        ):
+            with self.subTest(minimum=minimum, maximum=maximum), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "wavebench.toml"
+                path.write_text(
+                    "[connection]\nresource = \"TCPIP::127.0.0.1::INSTR\"\n"
+                    "[scope]\n[safety_limits]\n"
+                    f"min_source_port_voltage_v = {minimum}\n"
+                    f"max_source_port_voltage_v = {maximum}\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ConfigError, message):
+                    load_config(path)
+
+    def test_all_config_overrides_preserve_source_port_voltage_limits(self):
+        config = WaveBenchConfig(
+            connection=ConnectionConfig("lan", "TCPIP::127.0.0.1::INSTR", 100, 100),
+            scope=ScopeConfig("rtm2032", None, 1, False, True),
+            autoscale=AutoscaleConfig(True, True),
+            waveform=WaveformConfig("real", "lsbf", "dmax"),
+            output=OutputConfig(Path("data/raw"), "timestamp_label", True, True, True, True, False),
+            source_path=Path("test.toml"),
+            safety_limits=SafetyLimitsConfig(
+                max_source_vpp=2.0,
+                min_source_port_voltage_v=-2.5,
+                max_source_port_voltage_v=3.5,
+            ),
+        )
+        overrides = (
+            config.with_connection_timeout_ms(200),
+            config.with_resource("TCPIP::127.0.0.2::INSTR"),
+            config.with_output_overrides(save_csv=False),
+            config.with_waveform_overrides(points="def"),
+            config.with_source_resource("TCPIP::127.0.0.3::INSTR"),
+            config.with_power_resource("TCPIP::127.0.0.4::INSTR"),
+            config.with_dmm_resource("TCPIP::127.0.0.5::INSTR"),
+        )
+        for updated in overrides:
+            with self.subTest(updated=updated):
+                self.assertEqual(updated.safety_limits, config.safety_limits)
 
     def test_rejects_non_positive_safety_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
