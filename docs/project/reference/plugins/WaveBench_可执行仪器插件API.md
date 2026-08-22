@@ -140,6 +140,7 @@ def descriptor() -> InstrumentDescriptor:
 | `scope_coupling_policy` | 值由类型约定为三种策略 | scope 必须准确声明；无法证明时使用 `unknown`，核心会默认拒绝无法确认高阻的采集 |
 | `config_fields` | 当前只展示；为空时由 `option_specs` 推导 `options.<name>` | 只列出用户实际可配置的字段，不代表核心会按此字段授权 |
 | `scope_extensions` | 仅允许 scope descriptor 使用，类型必须为 `ScopeDescriptorExtensions` | 为 R1.3 capability 提供静态截图、采集控制和 trace profile；旧插件保持 `None` |
+| `source_extensions` | 仅允许 source descriptor 使用，类型必须为 `SourceDescriptorExtensions` | 为 `source.snapshot_v2` 提供 topology、只读 feature profile 和查询合同；旧插件保持 `None` |
 
 ### `scope_coupling_policy`
 
@@ -341,6 +342,33 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.output` | `set_output` |
 | `source.arbitrary_probe` | `probe_arbitrary_queries` |
 | `source.arbitrary_upload` | `upload_dg4000_dac14_block` |
+| `source.snapshot_v2` | `execute_source_query_plan_v2` |
+
+### Source V2 snapshot 扩展
+
+`source.snapshot_v2` 从核心 `0.8.24` 开始提供，仍使用 `wavebench.instrument.v2`。采用该能力的
+wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
+`source_extensions` 位于 descriptor 末尾且默认值为 `None`，因此未声明该能力的 V1 插件不需要
+修改 descriptor 或提高版本下限。
+
+插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
+query plan／execution record 和各类 typed profile。核心签发 semantic query plan，插件只负责将
+item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得
+自行判定 `UNSUPPORTED`、`NOT_APPLICABLE`、runtime profile 或 snapshot consistency。
+
+首个修订只接受 `PURE_READ`。每个受支持的 read feature 必须有同 scope 的 query contract；
+identity 必须是唯一、required 的 instrument-scope facet。声明为 `UNSUPPORTED` 或 `UNKNOWN` 的
+feature 不得进入查询计划。查询项、effect、字段覆盖、query count 和 deadline 由核心复核；不符合
+合同的执行记录不会生成 snapshot。
+
+公共调用入口为 `SourceService.snapshot_v2()` 和：
+
+```text
+wavebench source snapshot-v2
+```
+
+当前没有注册任何 Source V2 写 capability。旧 `source.*` setter、output、trigger 和 ARB 路径继续
+遵守 V1 合同；`source.snapshot_v2` 不会授权、适配或代理这些写入。
 
 ### Power、DMM 和 sweep analyzer
 
@@ -381,7 +409,7 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | kind | 常用公共返回类型 |
 | --- | --- |
 | scope | `WaveformHeader`、`WaveformData`、`ScopeSnapshot`、`ScopeAcquisitionStatus` 及各分析 model |
-| source | `SourceStatus`、`SourceChannelProfile`、各配置和 profile model |
+| source | `SourceStatus`、`SourceChannelProfile`、各配置和 profile model；Source V2 使用 `SourceQueryExecutionRecord`，最终 snapshot 由核心构造 |
 | power | `PowerStatus`、`PowerMeasurement`、`PowerProtectionStatus` |
 | dmm | `DmmReading`、`DmmMeasurementProfile`、各状态和配置 model |
 | sweep analyzer | `SweepPlan`、`SweepAnalyzerSnapshot`、`FrequencyResponseTrace`、`TraceIntegrity`、`MarkerReading`、`InstrumentMeasurementResult` |

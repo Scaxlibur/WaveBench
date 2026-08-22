@@ -109,9 +109,13 @@ from .models import (
     WaveformHeader,
 )
 from . import scope_extensions as _scope_extensions
+from . import source_extensions as _source_extensions
 
 for _scope_extension_name in _scope_extensions.__all__:
     globals()[_scope_extension_name] = getattr(_scope_extensions, _scope_extension_name)
+
+for _source_extension_name in _source_extensions.__all__:
+    globals()[_source_extension_name] = getattr(_source_extensions, _source_extension_name)
 
 __all__ = [
     "ArbitraryQueryProbeResult",
@@ -225,6 +229,8 @@ __all__ = [
     "WaveformHeader",
     "open_instrument_driver",
     *_scope_extensions.__all__,
+    *_source_extensions.__all__,
 ]
 
 del _scope_extension_name
+del _source_extension_name

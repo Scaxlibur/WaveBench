@@ -100,7 +100,12 @@ def test_public_scope_capability_requires_new_core_floor() -> None:
 def test_scope_descriptor_extension_is_append_only_for_positional_compatibility() -> None:
     names = [field.name for field in fields(InstrumentDescriptor)]
 
-    assert names[-3:] == ["config_fields", "resource_schemes", "scope_extensions"]
+    assert names[-4:] == [
+        "config_fields",
+        "resource_schemes",
+        "scope_extensions",
+        "source_extensions",
+    ]
 
 
 def test_new_old_core_plugin_capability_matrix_is_fail_closed() -> None:

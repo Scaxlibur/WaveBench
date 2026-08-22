@@ -1,0 +1,475 @@
+from __future__ import annotations
+
+from dataclasses import replace
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from wavebench import cli
+from wavebench.config import (
+    AutoscaleConfig,
+    ConnectionConfig,
+    OutputConfig,
+    ScopeConfig,
+    SourceConfig,
+    WaveBenchConfig,
+    WaveformConfig,
+)
+from wavebench.logging import CommandLogger
+from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.source_service import SourceService
+from wavebench.services.source_snapshot_v2 import SourceSnapshotContractError
+from wavebench.instruments.factory import open_instrument_driver
+from wavebench.instruments.models import SourceStatus
+from wavebench.instruments.registry import InstrumentRegistry
+from wavebench.instruments import InstrumentDescriptor
+from wavebench.instruments.source_extensions import (
+    SOURCE_OPERATION_ARTIFACT_SCHEMA,
+    SOURCE_SNAPSHOT_SCHEMA,
+    SnapshotConsistencyState,
+    SourceQueryExecutionRecord,
+    SourceCrossChannelCapabilityProfile,
+    SourceFacetScope,
+    SourceFeature,
+    SourceFeatureCapability,
+    SourceTopologyContract,
+    SupportState,
+    source_snapshot_v2_operation_artifact,
+)
+from wavebench.transport.session import InstrumentSessionState
+from wavebench.transport.session import SessionHealth
+from wavebench.errors import ConfigError, TransportIOError
+from wavebench.transport.contracts import (
+    CommandTransmission,
+    ReplayPolicy,
+    ResponseProgress,
+    Synchronization,
+    TransportPhase,
+)
+
+from tests.source_v2_fixtures import (
+    SourceV2FakeDriver,
+    source_descriptor,
+    source_extensions_with_harmonics,
+)
+from wavebench.instruments.source_extensions import SourceConstraintApplicability
+
+
+def make_config() -> WaveBenchConfig:
+    return WaveBenchConfig(
+        connection=ConnectionConfig("lan", "TCPIP::scope::INSTR", 1000, 1000),
+        scope=ScopeConfig("rtm2032", None, 1, False, True),
+        autoscale=AutoscaleConfig(True, True),
+        waveform=WaveformConfig("real", "lsbf", "DMAX"),
+        output=OutputConfig(Path("data/raw"), "timestamp_label", True, True, True, True, False),
+        source_path=Path("wavebench.toml"),
+        source=SourceConfig(
+            "example.source-v2",
+            "TCPIP::source::INSTR",
+            1,
+            True,
+            True,
+            0,
+        ),
+    )
+
+
+def make_service(
+    driver: SourceV2FakeDriver,
+    *,
+    session_health: SessionHealth = SessionHealth.HEALTHY,
+) -> SourceService:
+    return SourceService(
+        config=make_config(),
+        logger=CommandLogger(),
+        session=driver,  # type: ignore[arg-type]
+        descriptor=source_descriptor(driver=driver),
+        session_state=InstrumentSessionState(
+            epoch_id="epoch-source-v2",
+            health=session_health,
+        ),
+    )
+
+
+@pytest.mark.parametrize(("combined", "query_count"), [(True, 1), (False, 6)])
+def test_snapshot_v2_accepts_combined_and_scalar_protocol_plans(
+    combined: bool,
+    query_count: int,
+) -> None:
+    driver = SourceV2FakeDriver(combined=combined)
+    snapshot = make_service(driver).snapshot_v2(correlation_id="test-correlation")
+
+    assert snapshot.consistency.state is SnapshotConsistencyState.CONSISTENT
+    assert snapshot.query_count == query_count
+    assert snapshot.runtime_profile.identity.model == "EX1"
+    assert snapshot.channels[0].basic.value.frequency_hz.value == 1000.0
+    assert snapshot.channels[0].output.value.enabled.value is False
+    assert snapshot.correlation_id == "test-correlation"
+    assert len(driver.plans) == 1
+    assert driver.plans[0].allowed_effects[0].value == "pure_read"
+
+
+def test_snapshot_v2_runtime_identity_can_only_narrow_descriptor_features() -> None:
+    extensions = source_extensions_with_harmonics()
+    narrowed_output = replace(
+        extensions.features[-1],
+        applicability=SourceConstraintApplicability(firmware_ids=("2.0",)),
+    )
+    extensions = replace(
+        extensions,
+        features=(*extensions.features[:-1], narrowed_output),
+    )
+    driver = SourceV2FakeDriver(combined=True)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    snapshot = service.snapshot_v2()
+    assert all(
+        feature.feature.value != "output" for feature in snapshot.runtime_profile.features
+    )
+    assert snapshot.channels[0].output.availability.value == "unsupported"
+
+
+def test_snapshot_v2_preserves_declared_input_and_relation_placeholders() -> None:
+    extensions = source_extensions_with_harmonics()
+    relation = SourceFeatureCapability(
+        feature=SourceFeature.COMBINE,
+        support=SupportState.UNSUPPORTED,
+        directions=(),
+        scope=SourceFacetScope.CHANNEL_SET,
+        channels=(1, 2),
+        applicability=SourceConstraintApplicability(),
+        profile=SourceCrossChannelCapabilityProfile(
+            relation_kinds=(SourceFeature.COMBINE,),
+            supported_channel_sets=((1, 2),),
+            relation_graph_readable=False,
+            shared_power_constraint_readable=False,
+        ),
+    )
+    second_basic = replace(extensions.features[0], channels=(2,))
+    second_output = replace(extensions.features[-1], channels=(2,))
+    extensions = replace(
+        extensions,
+        topology=SourceTopologyContract((1, 2), ("counter",)),
+        features=(
+            extensions.features[0],
+            second_basic,
+            relation,
+            extensions.features[1],
+            extensions.features[-1],
+            second_output,
+        ),
+        query_contract=replace(extensions.query_contract, max_queries=11),
+    )
+    driver = SourceV2FakeDriver(combined=True)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    snapshot = service.snapshot_v2()
+
+    counter = snapshot.system.value.counters[0]
+    assert counter.input_id == "counter"
+    assert counter.enabled.availability.value == "unsupported"
+    relation_state = snapshot.cross_channel.value.relations[0]
+    assert relation_state.feature is SourceFeature.COMBINE
+    assert relation_state.enabled.availability.value == "unsupported"
+
+
+def test_snapshot_v2_reports_anchor_drift_without_authorizing_writes() -> None:
+    snapshot = make_service(SourceV2FakeDriver(combined=False, drift=True)).snapshot_v2()
+
+    assert snapshot.consistency.state is SnapshotConsistencyState.DRIFTED
+    assert snapshot.consistency.reason_code.value == "consistency_drifted"
+
+
+def test_snapshot_v2_core_derives_inactive_and_unavailable_facets() -> None:
+    extensions = source_extensions_with_harmonics()
+    inactive_driver = SourceV2FakeDriver(combined=True)
+    inactive_service = make_service(inactive_driver)
+    inactive_service.descriptor = source_descriptor(
+        driver=inactive_driver,
+        extensions=extensions,
+    )
+    inactive = inactive_service.snapshot_v2()
+    assert inactive.channels[0].harmonics.availability.value == "not_applicable"
+    assert inactive.channels[0].harmonics.reason_code.value == "inactive_by_anchor"
+
+    unavailable_driver = SourceV2FakeDriver(
+        combined=False,
+        harmonic_unavailable=True,
+    )
+    unavailable_service = make_service(unavailable_driver)
+    unavailable_service.descriptor = source_descriptor(
+        driver=unavailable_driver,
+        extensions=extensions,
+    )
+    unavailable = unavailable_service.snapshot_v2()
+    assert unavailable.channels[0].harmonics.availability.value == "unavailable"
+    assert unavailable.channels[0].harmonics.reason_code.value == "response_missing_field"
+
+
+def test_snapshot_v2_rejects_skipped_facet_when_activation_anchor_is_unknown() -> None:
+    driver = SourceV2FakeDriver(combined=True, anchor_unknown=True)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(
+        driver=driver,
+        extensions=source_extensions_with_harmonics(),
+    )
+
+    with pytest.raises(SourceSnapshotContractError, match="without proven activation"):
+        service.snapshot_v2()
+
+
+def test_snapshot_v2_rejects_query_count_overrun() -> None:
+    class BadDriver(SourceV2FakeDriver):
+        def execute_source_query_plan_v2(self, plan):
+            result = super().execute_source_query_plan_v2(plan)
+            records = list(result.items)
+            records[0] = replace(records[0], query_count=2)
+            return SourceQueryExecutionRecord(
+                contract_version=result.contract_version,
+                plan_id=result.plan_id,
+                items=tuple(records),
+                query_count=result.query_count + 1,
+                device_revision_token_before=result.device_revision_token_before,
+                device_revision_token_after=result.device_revision_token_after,
+            )
+
+    with pytest.raises(SourceSnapshotContractError, match="item contract"):
+        make_service(BadDriver(combined=True)).snapshot_v2()
+
+
+def test_snapshot_v2_rejects_invalid_execution_record_type() -> None:
+    class BadDriver(SourceV2FakeDriver):
+        def execute_source_query_plan_v2(self, plan):
+            return object()
+
+    with pytest.raises(SourceSnapshotContractError, match="invalid query execution"):
+        make_service(BadDriver(combined=True)).snapshot_v2()
+
+
+def test_snapshot_v2_rejects_unhealthy_session_before_driver_call() -> None:
+    driver = SourceV2FakeDriver(combined=True)
+    service = make_service(driver, session_health=SessionHealth.UNCERTAIN)
+
+    with pytest.raises(SourceSnapshotContractError, match="healthy"):
+        service.snapshot_v2()
+    assert driver.plans == []
+
+
+def test_new_core_keeps_a_v1_entry_point_usable_and_rejects_v2_before_driver_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LegacyDriver:
+        def __init__(self) -> None:
+            self.frequency_calls = 0
+            self.error_checks = 0
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def errors(self, limit: int = 8) -> list[str]:
+            del limit
+            return []
+
+        def assert_no_errors(self) -> None:
+            self.error_checks += 1
+
+        def set_frequency(
+            self,
+            channel: int,
+            value_hz: float,
+            *,
+            ensure_fix_mode: bool = True,
+            check_errors: bool = True,
+        ) -> SourceStatus:
+            del ensure_fix_mode, check_errors
+            self.frequency_calls += 1
+            return SourceStatus(
+                channel=channel,
+                output="OFF",
+                function="SIN",
+                frequency_hz=value_hz,
+                amplitude=1.0,
+                amplitude_unit="VPP",
+                offset_v=0.0,
+                phase_deg=0.0,
+                frequency_mode="FIX",
+                sweep_enabled="OFF",
+                apply_raw="SIN,1000,1,0",
+            )
+
+    class EntryPoint:
+        group = "wavebench.instruments"
+        dist = None
+
+        def __init__(self, descriptor: InstrumentDescriptor) -> None:
+            self.name = descriptor.driver_id
+            self._descriptor = descriptor
+            self.load_count = 0
+
+        def load(self):
+            self.load_count += 1
+            return lambda: self._descriptor
+
+    driver = LegacyDriver()
+    factory_calls = 0
+
+    def factory(context):
+        nonlocal factory_calls
+        del context
+        factory_calls += 1
+        return driver
+
+    descriptor = InstrumentDescriptor(
+        driver_id="example.legacy-source",
+        kind="source",
+        display_name="Example Legacy Source",
+        manufacturer="Example",
+        models=("EX1",),
+        aliases=(),
+        capabilities=("source.errors", "source.set_frequency"),
+        idn_patterns=("EXAMPLE",),
+        backends=("pyvisa",),
+        option_specs=(),
+        permissions=("instrument.io",),
+        factory=factory,
+    )
+    entry_point = EntryPoint(descriptor)
+    resolved = InstrumentRegistry(external_entry_points=(entry_point,)).resolve(
+        "example.legacy-source",
+        expected_kind="source",
+    )
+    monkeypatch.setattr(
+        "wavebench.instruments.factory.resolve_instrument_descriptor",
+        lambda reference, expected_kind: resolved,
+    )
+    opened = open_instrument_driver(
+        driver_reference="example.legacy-source",
+        expected_kind="source",
+        resource="TCPIP::legacy-source::INSTR",
+        configured_backend="lan",
+        timeout_ms=1000,
+        opc_timeout_ms=1000,
+        read_retry_attempts=0,
+        read_retry_delay_ms=0,
+        logger=CommandLogger(),
+    )
+    service = SourceService(
+        config=make_config(),
+        logger=CommandLogger(),
+        session=opened.driver,  # type: ignore[arg-type]
+        descriptor=opened.descriptor,
+    )
+
+    status = service.set_frequency(channel=1, value_hz=1234.0)
+    calls_before_v2 = (factory_calls, driver.frequency_calls, driver.error_checks)
+    with pytest.raises(ConfigError, match="missing capabilities: source.snapshot_v2"):
+        service.snapshot_v2()
+
+    assert status.frequency_hz == 1234.0
+    assert entry_point.load_count == 1
+    assert calls_before_v2 == (1, 1, 1)
+    assert (factory_calls, driver.frequency_calls, driver.error_checks) == calls_before_v2
+
+
+def test_snapshot_v2_rejects_session_health_change_after_query() -> None:
+    class DegradingDriver(SourceV2FakeDriver):
+        session_state = None
+
+        def execute_source_query_plan_v2(self, plan):
+            result = super().execute_source_query_plan_v2(plan)
+            self.session_state.degrade(SessionHealth.UNCERTAIN, reason="test_query_uncertain")
+            return result
+
+    driver = DegradingDriver(combined=True)
+    service = make_service(driver)
+    driver.session_state = service.session_state
+
+    with pytest.raises(SourceSnapshotContractError, match="health changed"):
+        service.snapshot_v2()
+
+
+def test_snapshot_v2_marks_asymmetric_device_revision_token_unproven() -> None:
+    class PartialTokenDriver(SourceV2FakeDriver):
+        def execute_source_query_plan_v2(self, plan):
+            result = super().execute_source_query_plan_v2(plan)
+            return replace(result, device_revision_token_after=None)
+
+    snapshot = make_service(PartialTokenDriver(combined=True)).snapshot_v2()
+    assert snapshot.consistency.state is SnapshotConsistencyState.UNPROVEN
+    assert snapshot.consistency.reason_code.value == "consistency_unproven"
+
+
+def test_snapshot_v2_does_not_flatten_transport_failures() -> None:
+    expected = TransportIOError(
+        "redacted",
+        operation="source.snapshot_v2",
+        phase=TransportPhase.BEFORE_SEND,
+        replay_policy=ReplayPolicy.NO_REPLAY,
+        command_transmission=CommandTransmission.NOT_SENT,
+        response_progress=ResponseProgress.NONE,
+        synchronization=Synchronization.PROVEN,
+        attempts=0,
+        reason_code="query_rejected",
+    )
+
+    class RaisingDriver(SourceV2FakeDriver):
+        def execute_source_query_plan_v2(self, plan):
+            raise expected
+
+    with pytest.raises(TransportIOError) as raised:
+        make_service(RaisingDriver(combined=True)).snapshot_v2()
+    assert raised.value is expected
+
+
+def test_snapshot_v2_enforces_absolute_deadline(monkeypatch) -> None:
+    ticks = iter((100.0, 103.0))
+    monkeypatch.setattr(
+        "wavebench.services.source_snapshot_v2.time.monotonic",
+        lambda: next(ticks),
+    )
+
+    with pytest.raises(SourceSnapshotContractError, match="deadline"):
+        make_service(SourceV2FakeDriver(combined=True)).snapshot_v2()
+
+
+def test_snapshot_v2_artifact_is_typed_and_excludes_protocol_records() -> None:
+    snapshot = make_service(SourceV2FakeDriver(combined=True)).snapshot_v2()
+    artifact = source_snapshot_v2_operation_artifact(snapshot)
+
+    assert artifact["schema"] == SOURCE_OPERATION_ARTIFACT_SCHEMA
+    assert artifact["snapshot"]["schema"] == SOURCE_SNAPSHOT_SCHEMA
+    assert artifact["snapshot"]["channels"][0]["basic"]["availability"] == "value"
+    assert "items" not in artifact["query"]
+    serialized = json.dumps(artifact)
+    assert "TCPIP" not in serialized
+    assert "revision-1" not in serialized
+
+
+def test_snapshot_v2_operation_spec_is_read_only_and_bounded() -> None:
+    spec = require_operation_spec("source.snapshot_v2")
+
+    assert spec.required_capabilities == ("source.snapshot_v2",)
+    assert spec.effect == "stateful_read"
+    assert spec.mutates is False
+    assert spec.lease_mode == "exclusive"
+    assert spec.operation_timeout_ms == 5000
+    assert spec.changed_fields == ()
+
+
+def test_snapshot_v2_cli_emits_operation_artifact(capsys) -> None:
+    service = make_service(SourceV2FakeDriver(combined=True))
+    with patch("wavebench.cli._load_source_service", return_value=service):
+        exit_code = cli.main(
+            ["--json", "source", "snapshot-v2", "--config", "unused.toml"]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["schema"] == "wavebench.cli.result.v1"
+    assert payload["result"]["schema"] == SOURCE_OPERATION_ARTIFACT_SCHEMA
+    assert payload["result"]["snapshot"]["schema"] == SOURCE_SNAPSHOT_SCHEMA

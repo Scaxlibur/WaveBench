@@ -656,6 +656,12 @@ def build_parser() -> argparse.ArgumentParser:
     source_status.add_argument("--channel", type=int, default=None)
     add_runtime_options(source_status)
 
+    source_snapshot_v2 = source_sub.add_parser(
+        "snapshot-v2",
+        help="Query a typed, read-only Source V2 snapshot",
+    )
+    add_runtime_options(source_snapshot_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

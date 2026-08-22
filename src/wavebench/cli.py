@@ -1058,6 +1058,17 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     _print_source_status(result)
                 return 0
+            if args.command == "snapshot-v2":
+                from wavebench.instruments.source_extensions import (
+                    source_snapshot_v2_operation_artifact,
+                )
+
+                payload = source_snapshot_v2_operation_artifact(service.snapshot_v2())
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
             if args.command == "profile":
                 _print_source_channel_profile(service.channel_profile(channel=args.channel))
                 return 0

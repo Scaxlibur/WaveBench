@@ -9,6 +9,10 @@ from .scope_extension_capabilities import (
     SCOPE_CAPABILITY_METHODS,
     validate_scope_descriptor,
 )
+from .source_extension_capabilities import (
+    SOURCE_EXTENSION_CAPABILITY_METHODS,
+    validate_source_descriptor,
+)
 
 
 CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
@@ -90,6 +94,7 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "sweep_analyzer.analysis": ("read_measurements",),
 }
 CAPABILITY_METHODS.update(SCOPE_CAPABILITY_METHODS)
+CAPABILITY_METHODS.update(SOURCE_EXTENSION_CAPABILITY_METHODS)
 
 
 def require_capabilities(
@@ -125,3 +130,4 @@ def validate_declared_capabilities(
                 f"method(s): {', '.join(missing_methods)}"
             )
     validate_scope_descriptor(descriptor, driver=driver)
+    validate_source_descriptor(descriptor, driver=driver)

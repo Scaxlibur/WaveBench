@@ -59,6 +59,11 @@ from wavebench.instruments.models import (
     SourceSweepProfile,
     SourceStatus,
 )
+from wavebench.instruments.source_extensions import (
+    SourceDescriptorExtensions,
+    SourceSnapshotV2,
+    SourceSnapshotV2Driver,
+)
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.services.source_state import RestorableSourceState
@@ -69,6 +74,13 @@ from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.services.state_guard import SourceStateGuard
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.session import InstrumentSessionState
+from wavebench.services.source_snapshot_v2 import (
+    SOURCE_SNAPSHOT_OPERATION_TIMEOUT_MS,
+    SourceSnapshotContractError,
+    build_source_snapshot,
+    build_source_snapshot_plan,
+    new_source_snapshot_context,
+)
 
 
 @dataclass
@@ -92,6 +104,7 @@ class SourceService(SessionStateAliasMixin):
             source.driver,
             expected_kind="source",
         )
+        self.descriptor = descriptor
         require_capabilities(descriptor, capabilities, operation=operation)
 
     def _source_config(self) -> SourceConfig:
@@ -182,6 +195,49 @@ class SourceService(SessionStateAliasMixin):
             if self.state_guard is not None:
                 self.state_guard.observe(status)
             return status
+
+    def snapshot_v2(self, *, correlation_id: str | None = None) -> SourceSnapshotV2:
+        self._require("source.snapshot_v2", "source.snapshot_v2")
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise SourceSnapshotContractError(
+                    "source.snapshot_v2 requires validated source_extensions"
+                )
+            session_state = self.session_state
+            if session_state is None:
+                raise SourceSnapshotContractError(
+                    "source.snapshot_v2 requires a connection-bound session state"
+                )
+            with session_state.transaction_lock:
+                if session_state.health.value != "healthy":
+                    raise SourceSnapshotContractError(
+                        "source.snapshot_v2 requires a healthy session"
+                    )
+                timeout_ms = min(
+                    SOURCE_SNAPSHOT_OPERATION_TIMEOUT_MS,
+                    extensions.query_contract.timeout_ms,
+                    self.config.connection.timeout_ms,
+                )
+                context = new_source_snapshot_context(
+                    session_epoch=session_state.epoch_id,
+                    session_health_before=session_state.health.value,
+                    descriptor_extensions=extensions,
+                    timeout_ms=timeout_ms,
+                    correlation_id=correlation_id,
+                )
+                plan = build_source_snapshot_plan(context)
+                execution = cast(
+                    SourceSnapshotV2Driver,
+                    source,
+                ).execute_source_query_plan_v2(plan)
+                return build_source_snapshot(
+                    context=context,
+                    plan=plan,
+                    execution=execution,
+                    session_health_after=session_state.health.value,
+                )
 
     def channel_profile(self, channel: int | None = None) -> SourceChannelProfile:
         source_cfg = self._source_config()
