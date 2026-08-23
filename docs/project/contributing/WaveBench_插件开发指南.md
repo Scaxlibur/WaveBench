@@ -175,6 +175,12 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 该 capability 只覆盖输出 OFF 时的内部正弦 AM：深度为 `[0, 100]`，内部频率为有限正值；不得借此支持
 disable、外部调制源、内部波形选择、FM／PM／PWM 或隐式输出 ON。
 
+内部 PM 使用独立的 `source.modulation_pm_configure_v2`，driver 必须实现
+`configure_source_pm_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`pm`、
+`internal`、`phase_deviation_deg` 和 `configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的内部正弦 PM：相位偏差为 `[0, 360]`，内部频率为有限正值；不得借此支持
+disable、外部调制源、内部波形选择、AM／FM／PWM 或隐式输出 ON。
+
 WIDTH Pulse 使用独立的 `source.pulse_configure_v2`，driver 必须实现
 `configure_source_pulse_v2(request)`。descriptor 必须声明 Pulse `READ`／`CONFIGURE`、WIDTH hold、
 delay 与 transition 可读，以及 `width_configuration_readable = true`，并能回读同一 channel 的 output state。

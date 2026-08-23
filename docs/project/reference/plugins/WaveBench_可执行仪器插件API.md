@@ -347,12 +347,13 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.output_v2` | `set_source_output_v2` |
 | `source.harmonics_configure_v2` | `configure_source_harmonics_v2` |
 | `source.modulation_configure_v2` | `configure_source_modulation_v2` |
+| `source.modulation_pm_configure_v2` | `configure_source_pm_modulation_v2` |
 | `source.pulse_configure_v2` | `configure_source_pulse_v2` |
 
 ### Source V2 扩展
 
 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2` 和 `source.pulse_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
+`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2` 和 `source.pulse_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
 `wavebench.instrument.v2`。采用任一 Source V2 capability 的
 wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
 `source_extensions` 位于 descriptor 末尾且默认值为 `None`，因此未声明该能力的 V1 插件不需要
@@ -360,7 +361,7 @@ wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更�
 
 插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
 `SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、`SourceHarmonicConfigureV2Driver`、
-`SourceModulationConfigureV2Driver`、`SourcePulseConfigureV2Driver`、query
+`SourceModulationConfigureV2Driver`、`SourcePmModulationConfigureV2Driver`、`SourcePulseConfigureV2Driver`、query
 plan／execution record 和各类 typed profile。核心签发 semantic query plan；snapshot driver 只负责将
 item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
 `NOT_APPLICABLE`、runtime profile 或 snapshot consistency。
@@ -383,15 +384,17 @@ SourceService.configure_basic_v2(request, *, correlation_id=None)
 SourceService.set_output_v2(request, *, correlation_id=None)
 SourceService.configure_harmonics_v2(request, *, correlation_id=None)
 SourceService.configure_modulation_v2(request, *, correlation_id=None)
+SourceService.configure_pm_modulation_v2(request, *, correlation_id=None)
 SourceService.configure_pulse_v2(request, *, correlation_id=None)
 wavebench source basic-configure-v2 --channel N ...
 wavebench source output-v2 --channel N on|off
 wavebench source harmonics-configure-v2 --channel N --order N --preset all|even|odd
 wavebench source modulation-configure-v2 --channel N --depth-percent PERCENT --internal-frequency-hz HZ
+wavebench source pm-modulation-configure-v2 --channel N --phase-deviation-deg DEG --internal-frequency-hz HZ
 wavebench source pulse-configure-v2 --channel N --width-s S --delay-s S --leading-transition-s S --trailing-transition-s S
 ```
 
-五个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
+六个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
 `wavebench.source.operation.v1`，不得包含 raw SCPI、完整响应、资源地址、序列号、授权 token 或 nonce。
 
 `source.harmonics_configure_v2` 只允许单通道的 `all`、`even`、`odd` 预设。descriptor 必须同时声明
@@ -404,19 +407,25 @@ Modulation `READ`／`CONFIGURE`、`am`、`internal`、`depth_percent` 与 `confi
 同一 channel 的 output state。请求中的深度必须位于 `[0, 100]`，内部频率必须为有限正值；该 operation 不提供
 disable、外部调制源、内部波形选择、FM／PM／PWM 或隐式输出 ON。
 
+`source.modulation_pm_configure_v2` 只允许单通道、输出 OFF 时的内部正弦 PM。descriptor 必须同时声明
+Modulation `READ`／`CONFIGURE`、`pm`、`internal`、`phase_deviation_deg` 与 `configuration_readable = true`，并能回读
+同一 channel 的 output state。请求中的相位偏差必须位于 `[0, 360]`，内部频率必须为有限正值；该 operation 不提供
+disable、外部调制源、内部波形选择、AM／FM／PWM 或隐式输出 ON。
+
 `source.pulse_configure_v2` 只允许单通道、输出 OFF 时的 WIDTH 脉冲形状。descriptor 必须同时声明
 Pulse `READ`／`CONFIGURE`、WIDTH hold、delay、transition 与 `width_configuration_readable = true`，并能回读
 同一 channel 的 output state。请求中的 width 不得小于 `4 ns`，delay 必须为有限非负值，两个 transition 必须为
 有限正值且各自不超过 width 的 `0.625` 倍；该 operation 不提供 DUTY hold、partial patch、trigger、输出 ON 或隐式波形切换。
 
 run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`source.output_disable_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2` 与 `source.pulse_configure_v2` 六个 Source V2 step；它们的 artifact 只在实际执行时写入
+`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2` 与 `source.pulse_configure_v2` 七个 Source V2 step；它们的 artifact 只在实际执行时写入
 `run.json.source_operations`。
 
 旧 `source.*` setter、output、trigger 和 ARB 路径继续保留。双合同插件上，四个 basic setter 与
 `set_output` 会进入相应 V2 transaction；restore、ARB upload 和 V2 output 重叠的 trigger 在仪器 I/O 前
 拒绝。双合同插件声明 `source.harmonics_configure_v2` 时，V1 `configure_harmonics` 和 basic restore
 在仪器 I/O 前拒绝；声明 `source.modulation_configure_v2` 时，V1 `configure_am_modulation` 和 basic restore
+也在仪器 I/O 前拒绝；声明 `source.modulation_pm_configure_v2` 时，V1 `configure_pm_modulation` 和 basic restore
 也在仪器 I/O 前拒绝；声明 `source.pulse_configure_v2` 时，V1 `configure_pulse` 和 basic restore 也在仪器 I/O 前拒绝。
 FM／PM／PWM 等尚无对应 V2 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
