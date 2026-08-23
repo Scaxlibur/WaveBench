@@ -147,11 +147,11 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 未采用新增 capability 的旧插件不需要提高核心版本下限。旧 `scope capture --screenshot` 不承载
 新 `scope.screenshot_v2`；新插件应使用独立截图 Service 或 `wavebench scope screenshot capture`。
 
-### 采用 Source V2 snapshot 扩展
+### 采用 Source V2 扩展
 
 准备提供完整信号源状态快照时，先阅读
 [Source V2 能力、状态与复合输出安全 RFC](../rfcs/WaveBench_source能力状态与复合输出安全RFC.md)。
-首个修订只开放 `source.snapshot_v2`，采用条件如下：
+只读 snapshot 采用条件如下：
 
 - wheel 依赖和 descriptor 均要求 WaveBench `0.8.24` 或更高的 `0.8.x` 版本；
 - descriptor 追加 `source_extensions`，显式声明 topology、read feature profile 和 pure-read query contract；
@@ -161,7 +161,16 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 - descriptor 导入、snapshot 和 capability 校验均不得写入仪器、触发、切换输出或消费状态。
 
 `source_extensions` 不能单独启用能力，必须同时声明 `source.snapshot_v2`。未声明该能力的旧插件
-继续走 Source V1；当前核心不会注册或接受 Source V2 写 capability。
+继续走 Source V1。
+
+基础写能力使用 `source.basic_configure_v2` 与 `source.output_v2`；它们的写入 contract、fresh snapshot、
+回读与失败恢复都由核心 Service 组织。Harmonic 预设配置使用独立的
+`source.harmonics_configure_v2`，driver 必须实现 `configure_source_harmonics_v2(request)`，且 descriptor 必须
+声明 Harmonic `READ`／`CONFIGURE`、可配置 order 区间、允许预设，以及 configured order、preset 与输出状态
+可读。该 capability 只覆盖 `all`、`even`、`odd` 预设，不得借此支持 USER mask、逐分量幅度／相位或隐式输出 ON。
+
+实际插件声明任一 Source V2 写 capability 前，至少完成该 capability 的 A0 离线 fixture；声明的方向、profile、
+方法与版本门必须同时通过核心校验。没有实机证据时，不得把核心合同注册描述为已完成设备写能力验收。
 
 ## 配置 options
 

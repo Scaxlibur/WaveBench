@@ -345,19 +345,21 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.snapshot_v2` | `execute_source_query_plan_v2` |
 | `source.basic_configure_v2` | `configure_source_basic_v2` |
 | `source.output_v2` | `set_source_output_v2` |
+| `source.harmonics_configure_v2` | `configure_source_harmonics_v2` |
 
 ### Source V2 扩展
 
-`source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2` 从核心 `0.8.24` 开始提供，
-仍使用 `wavebench.instrument.v2`。采用任一 Source V2 capability 的
+`source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2` 和
+`source.harmonics_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
+`wavebench.instrument.v2`。采用任一 Source V2 capability 的
 wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
 `source_extensions` 位于 descriptor 末尾且默认值为 `None`，因此未声明该能力的 V1 插件不需要
 修改 descriptor 或提高版本下限。
 
 插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
-`SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、query plan／execution record 和各类 typed
-profile。核心签发 semantic query plan；snapshot driver 只负责将 item 转成合法的厂商协议查询并返回
-类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
+`SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、`SourceHarmonicConfigureV2Driver`、query
+plan／execution record 和各类 typed profile。核心签发 semantic query plan；snapshot driver 只负责将
+item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
 `NOT_APPLICABLE`、runtime profile 或 snapshot consistency。
 
 snapshot query contract 只接受 `PURE_READ`。每个受支持的 read feature 必须有同 scope 的 query contract；
@@ -376,20 +378,29 @@ wavebench source snapshot-v2
 ```text
 SourceService.configure_basic_v2(request, *, correlation_id=None)
 SourceService.set_output_v2(request, *, correlation_id=None)
+SourceService.configure_harmonics_v2(request, *, correlation_id=None)
 wavebench source basic-configure-v2 --channel N ...
 wavebench source output-v2 --channel N on|off
+wavebench source harmonics-configure-v2 --channel N --order N --preset all|even|odd
 ```
 
-两个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
+三个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
 `wavebench.source.operation.v1`，不得包含 raw SCPI、完整响应、资源地址、序列号、授权 token 或 nonce。
-run plan 只接受 `source.basic_configure_v2`、`source.output_enable_v2` 与
-`source.output_disable_v2` 三个 Source V2 step；它们的 artifact 只在实际执行时写入
+
+`source.harmonics_configure_v2` 只允许单通道的 `all`、`even`、`odd` 预设。descriptor 必须同时声明
+Harmonic `READ`／`CONFIGURE`、允许的 order 区间和预设，以及 configured order、preset 与输出状态的可读回。
+请求中的 `order` 必须落在运行时 profile 范围内；配置前后目标输出都必须回读为 OFF。该 operation 不提供
+USER mask、逐分量幅度或相位、默认值重置，也不会隐式开启输出。
+
+run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`source.output_disable_v2` 与
+`source.harmonics_configure_v2` 四个 Source V2 step；它们的 artifact 只在实际执行时写入
 `run.json.source_operations`。
 
 旧 `source.*` setter、output、trigger 和 ARB 路径继续保留。双合同插件上，四个 basic setter 与
 `set_output` 会进入相应 V2 transaction；restore、ARB upload 和 V2 output 重叠的 trigger 在仪器 I/O 前
-拒绝；尚无对应 V2 capability 的高级配置保持 V1。插件不得把 capability 注册视为自行发起写操作的许可，
-也不得通过已有 V1 方法绕过核心路由。
+拒绝。双合同插件声明 `source.harmonics_configure_v2` 时，V1 `configure_harmonics` 和 basic restore
+在仪器 I/O 前拒绝；其余尚无对应 V2 capability 的高级配置保持 V1。插件不得把 capability 注册视为
+自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
 
 ### Power、DMM 和 sweep analyzer
 

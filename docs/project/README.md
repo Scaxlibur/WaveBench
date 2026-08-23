@@ -29,8 +29,8 @@
 
 - [RFC 索引](rfcs/README.md)
 - [Source V2 能力、状态与复合输出安全 RFC](rfcs/WaveBench_source能力状态与复合输出安全RFC.md)：
-  `Accepted R6`；核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5 与 C1，后续按 M5-A 至 C3
-  实现基础写入、高级功能、插件验收与发布审计
+  `Accepted R6`；核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2，
+  M6-A 的 Harmonic 子项已实现，Modulation、Pulse、Sweep、Burst、插件验收与发布审计仍按里程碑推进
 - [transport 重放与 session 健康 RFC](rfcs/WaveBench_transport重放与session健康RFC.md)
 
 ## contributing：开发和接入

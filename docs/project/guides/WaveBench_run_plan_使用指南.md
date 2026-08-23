@@ -361,9 +361,9 @@ state = "on"
 
 这看起来啰嗦，但它能避免现场调试时被隐藏动作吓到。
 
-### Source V2 基础写 step
+### Source V2 基础与 Harmonic 写 step
 
-声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用三个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
+声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用四个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
 
 ```toml
 [[steps]]
@@ -381,11 +381,26 @@ channel = 1
 [[steps]]
 kind = "source.output_disable_v2"
 channel = 1
+
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 1
+order = 8
+preset = "odd"
 ```
 
 `source.basic_configure_v2` 的 `channel` 必填，五个 basic 字段中至少写一个；缺失字段保持当前值。
-`source.output_enable_v2` 和 `source.output_disable_v2` 都只接受 `channel`。执行意图会分别记录三个 operation，
-实际执行时的完整 Source V2 artifact 会写入 `run.json.source_operations`。没有声明 V2 capability 的旧插件继续使用 V1 step。
+`source.output_enable_v2` 和 `source.output_disable_v2` 都只接受 `channel`。`source.harmonics_configure_v2`
+要求 `channel`、整数 `order >= 2` 与 `all`、`even`、`odd` 之一的 `preset`；核心还会在执行前检查运行时
+profile 是否支持该 order 和预设。
+
+Harmonic step 必须在目标输出已关闭时执行，完成后仍保持关闭；它不会隐式开启输出。现有
+`restore.source_state` 只恢复 basic 状态，不恢复 Harmonic 配置。双合同插件声明
+`source.harmonics_configure_v2` 后，V1 `configure_harmonics` 会在仪器 I/O 前被拒绝；未声明该能力的旧插件
+继续使用 V1 路径。
+
+执行意图会分别记录四个 operation，实际执行时的完整 Source V2 artifact 会写入
+`run.json.source_operations`。没有声明 V2 capability 的旧插件继续使用 V1 step。
 
 ## 常见 `run check` 报错
 
