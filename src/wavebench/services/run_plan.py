@@ -34,6 +34,7 @@ ALLOWED_STEP_KINDS = {
     "source.modulation_pm_configure_v2",
     "source.modulation_fm_configure_v2",
     "source.modulation_pwm_configure_v2",
+    "source.sweep_configure_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
     "power.status",
@@ -70,6 +71,14 @@ _REQUIRED_FIELDS = {
     "source.modulation_pwm_configure_v2": (
         "channel",
         "internal_frequency_hz",
+    ),
+    "source.sweep_configure_v2": (
+        "channel",
+        "start_hz",
+        "stop_hz",
+        "spacing",
+        "steps",
+        "sweep_time_s",
     ),
     "source.burst_configure_v2": (
         "channel",
@@ -168,6 +177,7 @@ _OPTIONAL_FIELDS = {
         "width_deviation_s",
         "on_failure",
     },
+    "source.sweep_configure_v2": {"on_failure"},
     "source.burst_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
@@ -203,6 +213,7 @@ _STEP_NOTES = {
     "source.modulation_pm_configure_v2": "Configure one OFF Source V2 channel with internal sine PM; it does not enable output.",
     "source.modulation_fm_configure_v2": "Configure one OFF Source V2 channel with internal sine FM; it does not enable output.",
     "source.modulation_pwm_configure_v2": "Configure one OFF Source V2 channel with internal sine PWM; it does not enable output.",
+    "source.sweep_configure_v2": "Configure one OFF Source V2 channel with an internal sweep; it does not enable or fire output.",
     "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
@@ -713,6 +724,26 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             if not 0 <= width <= 500_000:
                 raise ConfigError(f"{prefix}.width_deviation_s must be in [0, 500000]")
             fields["width_deviation_s"] = width
+    elif kind == "source.sweep_configure_v2":
+        start_hz = _finite_float(fields["start_hz"], f"{prefix}.start_hz")
+        stop_hz = _finite_float(fields["stop_hz"], f"{prefix}.stop_hz")
+        if start_hz <= 0 or stop_hz <= 0:
+            raise ConfigError(f"{prefix}.start_hz and stop_hz must be > 0")
+        if start_hz > stop_hz:
+            raise ConfigError(f"{prefix}.start_hz must not exceed stop_hz")
+        spacing = _non_empty_str(fields["spacing"], f"{prefix}.spacing").lower()
+        if spacing not in {"linear", "logarithmic", "step"}:
+            raise ConfigError(f"{prefix}.spacing must be one of linear, logarithmic, step")
+        steps = fields["steps"]
+        if isinstance(steps, bool) or not isinstance(steps, int) or not 2 <= steps <= 2_048:
+            raise ConfigError(f"{prefix}.steps must be an integer in [2, 2048]")
+        sweep_time_s = _finite_float(fields["sweep_time_s"], f"{prefix}.sweep_time_s")
+        if not 0.001 <= sweep_time_s <= 300:
+            raise ConfigError(f"{prefix}.sweep_time_s must be in [0.001, 300]")
+        fields["start_hz"] = start_hz
+        fields["stop_hz"] = stop_hz
+        fields["spacing"] = spacing
+        fields["sweep_time_s"] = sweep_time_s
     elif kind == "source.burst_configure_v2":
         cycles = fields["cycles"]
         if isinstance(cycles, bool) or not isinstance(cycles, int):

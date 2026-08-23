@@ -774,6 +774,22 @@ def build_parser() -> argparse.ArgumentParser:
     pwm_deviation.add_argument("--width-deviation-s", type=float)
     add_runtime_options(source_pwm_modulation_configure_v2)
 
+    source_sweep_configure_v2 = source_sub.add_parser(
+        "sweep-configure-v2",
+        help="Configure one OFF Source V2 channel with an internal sweep; it does not fire output",
+    )
+    source_sweep_configure_v2.add_argument("--channel", type=int, required=True)
+    source_sweep_configure_v2.add_argument("--start-hz", type=float, required=True)
+    source_sweep_configure_v2.add_argument("--stop-hz", type=float, required=True)
+    source_sweep_configure_v2.add_argument(
+        "--spacing",
+        choices=("linear", "logarithmic", "step"),
+        required=True,
+    )
+    source_sweep_configure_v2.add_argument("--steps", type=int, required=True)
+    source_sweep_configure_v2.add_argument("--sweep-time-s", type=float, required=True)
+    add_runtime_options(source_sweep_configure_v2)
+
     source_burst_configure_v2 = source_sub.add_parser(
         "burst-configure-v2",
         help="Configure one OFF Source V2 channel with an internal Triggered Burst",

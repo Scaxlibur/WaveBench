@@ -35,6 +35,8 @@ from wavebench.instruments.source_extensions import (
     SourcePmModulationConfigureRequest,
     SourcePwmModulationConfigureRequest,
     SourcePulseConfigureRequest,
+    SourceSweepConfigureRequest,
+    SourceSweepSpacing,
     SourceWaveformKind,
 )
 from wavebench.logging import CommandLogger
@@ -422,6 +424,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.modulation_fm_configure_v2")
             elif step.kind == "source.modulation_pwm_configure_v2":
                 add("source", "source.snapshot_v2", "source.modulation_pwm_configure_v2")
+            elif step.kind == "source.sweep_configure_v2":
+                add("source", "source.snapshot_v2", "source.sweep_configure_v2")
             elif step.kind == "source.burst_configure_v2":
                 add("source", "source.snapshot_v2", "source.burst_configure_v2")
             elif step.kind == "source.pulse_configure_v2":
@@ -1196,6 +1200,18 @@ class RunService:
                     internal_frequency_hz=step.fields["internal_frequency_hz"],
                     duty_deviation_percent=step.fields.get("duty_deviation_percent"),
                     width_deviation_s=step.fields.get("width_deviation_s"),
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.sweep_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_sweep_v2(
+                SourceSweepConfigureRequest(
+                    channel=step.fields["channel"],
+                    start_hz=step.fields["start_hz"],
+                    stop_hz=step.fields["stop_hz"],
+                    spacing=SourceSweepSpacing(step.fields["spacing"]),
+                    steps=step.fields["steps"],
+                    sweep_time_s=step.fields["sweep_time_s"],
                 )
             )
             artifact = {"source_operation": source_operation}

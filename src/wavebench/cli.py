@@ -368,6 +368,25 @@ def _source_pwm_modulation_configure_v2_request(args: argparse.Namespace):
         raise ConfigError(str(exc)) from exc
 
 
+def _source_sweep_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        SourceSweepConfigureRequest,
+        SourceSweepSpacing,
+    )
+
+    try:
+        return SourceSweepConfigureRequest(
+            channel=args.channel,
+            start_hz=args.start_hz,
+            stop_hz=args.stop_hz,
+            spacing=SourceSweepSpacing(args.spacing),
+            steps=args.steps,
+            sweep_time_s=args.sweep_time_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _source_burst_configure_v2_request(args: argparse.Namespace):
     from .instruments.source_extensions import SourceBurstConfigureRequest
 
@@ -1281,6 +1300,15 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "pwm-modulation-configure-v2":
                 _, payload = service.configure_pwm_modulation_v2(
                     _source_pwm_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "sweep-configure-v2":
+                _, payload = service.configure_sweep_v2(
+                    _source_sweep_configure_v2_request(args)
                 )
                 if args.json:
                     _emit_json_result(payload)

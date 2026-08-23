@@ -14,6 +14,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
     SourceEnergyEffect,
 )
 from wavebench.services.operation_specs import (
@@ -70,6 +71,11 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
             SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
             "source-v2-modulation-pwm",
             ("source_v2", "output_must_be_off", "pwm_internal_only"),
+        ),
+        (
+            SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-sweep",
+            ("source_v2", "output_must_be_off", "sweep_internal_no_fire"),
         ),
         (
             SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,

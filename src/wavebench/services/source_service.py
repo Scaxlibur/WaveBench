@@ -68,6 +68,7 @@ from wavebench.instruments.source_extensions import (
     Observed,
     OutputFacet,
     PulseFacet,
+    SweepFacet,
     PatchAction,
     PatchValue,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -81,6 +82,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
     SnapshotConsistencyState,
     SourceDescriptorExtensions,
     SourceAmplitude,
@@ -100,6 +102,7 @@ from wavebench.instruments.source_extensions import (
     SourceFieldRef,
     SourceFeature,
     SourceFeatureDirection,
+    SourceFrequencyMode,
     SourceFmModulationConfigureRequest,
     SourceFmModulationConfigureResult,
     SourceFmModulationConfigureV2Driver,
@@ -130,6 +133,11 @@ from wavebench.instruments.source_extensions import (
     SourcePwmModulationConfigureResult,
     SourcePwmModulationConfigureV2Driver,
     SourceScopeRef,
+    SourceSweepCapabilityProfile,
+    SourceSweepConfigureRequest,
+    SourceSweepConfigureResult,
+    SourceSweepConfigureV2Driver,
+    SourceSweepMarker,
     SourceSnapshotV2,
     SourceSnapshotV2Driver,
     SourceTriggerOutput,
@@ -216,6 +224,15 @@ class _SourcePwmModulationConfigureV2Transaction:
     """Core transaction result shared by the internal PWM public route."""
 
     result: SourcePwmModulationConfigureResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceSweepConfigureV2Transaction:
+    """Core transaction result shared by the internal Sweep public route."""
+
+    result: SourceSweepConfigureResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
@@ -496,6 +513,20 @@ class SourceService(SessionStateAliasMixin):
         """Configure one OFF source channel with the declared internal PWM scope."""
 
         transaction = self._configure_pwm_modulation_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_sweep_v2(
+        self,
+        request: SourceSweepConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceSweepConfigureResult, dict[str, object]]:
+        """Configure one OFF source channel with the declared internal Sweep scope."""
+
+        transaction = self._configure_sweep_v2_transaction(
             request,
             correlation_id=correlation_id,
         )
@@ -2018,6 +2049,216 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _configure_sweep_v2_transaction(
+        self,
+        request: SourceSweepConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> _SourceSweepConfigureV2Transaction:
+        """Execute one declared internal Sweep transaction while output is OFF."""
+
+        operation = "source.sweep_configure_v2"
+        if not isinstance(request, SourceSweepConfigureRequest):
+            raise ConfigError(f"{operation} requires SourceSweepConfigureRequest")
+        self._require(
+            operation,
+            "source.snapshot_v2",
+            "source.sweep_configure_v2",
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            fields = self._source_sweep_v2_fields(request.channel)
+            basic_field = next(field for field in fields if field.field is SourceFieldId.BASIC)
+            output_field = next(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            sweep_field = next(field for field in fields if field.field is SourceFieldId.SWEEP)
+            target_scope = SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel)
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(target_scope,),
+                emergency_off_outputs=(target_scope,),
+                restore_order=(),
+                non_restorable_fields=tuple(
+                    field
+                    for field in fields
+                    if field.field
+                    in {
+                        SourceFieldId.BASIC,
+                        SourceFieldId.OUTPUT,
+                        SourceFieldId.SWEEP,
+                    }
+                ),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceSweepConfigureResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_basic, preflight_sweep, preflight_output = (
+                        self._source_v2_sweep_preflight_target(
+                            preflight_snapshot,
+                            request.channel,
+                            operation=operation,
+                        )
+                    )
+                    self._validate_source_sweep_v2_preflight(
+                        request,
+                        preflight_snapshot,
+                        preflight_basic,
+                        preflight_sweep,
+                        preflight_output,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest(
+                            (
+                                request.channel,
+                                preflight_basic,
+                                preflight_sweep,
+                                preflight_output,
+                            )
+                        )
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write"},
+                    fields=(basic_field, sweep_field),
+                    max_steps=SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        result = cast(
+                            SourceSweepConfigureV2Driver,
+                            source,
+                        ).configure_source_sweep_v2(request)
+                        self._validate_source_sweep_v2_result(request, result)
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=(basic_field, output_field, sweep_field),
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            (
+                                postcondition_basic,
+                                postcondition_sweep,
+                                postcondition_output,
+                            ) = self._source_v2_sweep_target(
+                                postcondition_snapshot,
+                                request.channel,
+                                operation=operation,
+                            )
+                            assert result is not None
+                            self._validate_source_sweep_v2_postcondition(
+                                request,
+                                result,
+                                postcondition_snapshot,
+                                postcondition_basic,
+                                postcondition_sweep,
+                                postcondition_output,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=(basic_field, output_field, sweep_field),
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_output_off(
+                                context,
+                                source,
+                                request.channel,
+                                extensions,
+                                output_field,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_sweep_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceSweepConfigureV2Transaction(
+                    result=result,
+                    artifact=self._source_sweep_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
     def _configure_burst_v2_transaction(
         self,
         request: SourceBurstConfigureRequest,
@@ -2512,6 +2753,31 @@ class SourceService(SessionStateAliasMixin):
             )
         )
 
+    @staticmethod
+    def _source_sweep_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
+        target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+        fields = (
+            SourceFieldRef(SourceFieldId.BASIC, target),
+            SourceFieldRef(SourceFieldId.OUTPUT, target),
+            SourceFieldRef(SourceFieldId.SWEEP, target),
+            SourceFieldRef(
+                SourceFieldId.IDENTITY,
+                SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
     @classmethod
     def _source_output_v2_fields(
         cls,
@@ -2639,6 +2905,33 @@ class SourceService(SessionStateAliasMixin):
         return target.pulse.value, target.output.value
 
     @staticmethod
+    def _source_v2_sweep_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[BasicWaveFacet, SweepFacet, OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.basic.availability is not Availability.VALUE or not isinstance(
+            target.basic.value,
+            BasicWaveFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable basic state")
+        if target.sweep.availability is not Availability.VALUE or not isinstance(
+            target.sweep.value,
+            SweepFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable sweep state")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.basic.value, target.sweep.value, target.output.value
+
+    @staticmethod
     def _source_v2_harmonic_preflight_target(
         snapshot: SourceSnapshotV2,
         channel: int,
@@ -2725,6 +3018,33 @@ class SourceService(SessionStateAliasMixin):
         ):
             raise ConfigError(f"{operation} requires readable output state")
         return target.pulse, target.output.value
+
+    @staticmethod
+    def _source_v2_sweep_preflight_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[BasicWaveFacet, Observed[SweepFacet], OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.basic.availability is not Availability.VALUE or not isinstance(
+            target.basic.value,
+            BasicWaveFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable basic state")
+        if target.sweep.availability is Availability.VALUE and not isinstance(
+            target.sweep.value,
+            SweepFacet,
+        ):
+            raise ConfigError(f"{operation} sweep state has an invalid type")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.basic.value, target.sweep, target.output.value
 
     @staticmethod
     def _source_v2_output_target(
@@ -3434,6 +3754,187 @@ class SourceService(SessionStateAliasMixin):
             operation=operation,
         )
         if result.modulation != modulation:
+            raise ConfigError(f"{operation} result readback does not match postcondition")
+
+    @staticmethod
+    def _source_sweep_runtime_profile(
+        snapshot: SourceSnapshotV2,
+        *,
+        channel: int,
+        operation: str,
+    ) -> SourceSweepCapabilityProfile:
+        feature = next(
+            (
+                candidate
+                for candidate in snapshot.runtime_profile.features
+                if candidate.feature is SourceFeature.SWEEP
+                and candidate.scope is SourceFacetScope.CHANNEL
+                and channel in candidate.channels
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(feature.profile, SourceSweepCapabilityProfile):
+            raise ConfigError(f"{operation} is not available for the runtime target channel")
+        return feature.profile
+
+    @staticmethod
+    def _source_sweep_basic_runtime_profile(
+        snapshot: SourceSnapshotV2,
+        *,
+        channel: int,
+        operation: str,
+    ) -> SourceBasicCapabilityProfile:
+        feature = next(
+            (
+                candidate
+                for candidate in snapshot.runtime_profile.features
+                if candidate.feature is SourceFeature.BASIC
+                and candidate.scope is SourceFacetScope.CHANNEL
+                and channel in candidate.channels
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.READ in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(feature.profile, SourceBasicCapabilityProfile):
+            raise ConfigError(f"{operation} requires readable basic state at runtime")
+        return feature.profile
+
+    def _validate_source_sweep_v2_preflight(
+        self,
+        request: SourceSweepConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        sweep: Observed[SweepFacet],
+        output: OutputFacet,
+    ) -> None:
+        del basic, sweep
+        operation = "source.sweep_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} requires target output OFF")
+        profile = self._source_sweep_runtime_profile(
+            snapshot,
+            channel=request.channel,
+            operation=operation,
+        )
+        if request.spacing not in profile.spacing_modes:
+            raise ConfigError(f"{operation} spacing is not supported by the runtime profile")
+        if SourceTriggerSource.INTERNAL not in profile.trigger_sources:
+            raise ConfigError(f"{operation} internal trigger is not supported by the runtime profile")
+        if not profile.timing_readable or not profile.marker_readable:
+            raise ConfigError(f"{operation} requires sweep timing and marker readback")
+        if not profile.configuration_readable:
+            raise ConfigError(f"{operation} requires configured internal sweep readback")
+        basic_profile = self._source_sweep_basic_runtime_profile(
+            snapshot,
+            channel=request.channel,
+            operation=operation,
+        )
+        if SourceFrequencyMode.SWEEP not in basic_profile.frequency_modes:
+            raise ConfigError(f"{operation} requires sweep frequency mode at runtime")
+
+    @staticmethod
+    def _validate_source_sweep_v2_readback(
+        request: SourceSweepConfigureRequest,
+        basic: BasicWaveFacet,
+        sweep: SweepFacet,
+        *,
+        operation: str,
+    ) -> None:
+        if (
+            basic.frequency_mode.availability is not Availability.VALUE
+            or basic.frequency_mode.value is not SourceFrequencyMode.SWEEP
+        ):
+            raise ConfigError(f"{operation} postcondition does not report sweep frequency mode")
+        if sweep.enabled.availability is not Availability.VALUE or sweep.enabled.value is not True:
+            raise ConfigError(f"{operation} postcondition reports sweep disabled")
+        for label, observed, expected in (
+            ("start frequency", sweep.start_hz, request.start_hz),
+            ("stop frequency", sweep.stop_hz, request.stop_hz),
+            ("spacing", sweep.spacing, request.spacing),
+            ("steps", sweep.steps, request.steps),
+            ("sweep time", sweep.sweep_time_s, request.sweep_time_s),
+        ):
+            if observed.availability is not Availability.VALUE or observed.value != expected:
+                raise ConfigError(f"{operation} {label} readback does not match request")
+        for label, observed in (
+            ("start hold", sweep.start_hold_s),
+            ("stop hold", sweep.stop_hold_s),
+            ("return time", sweep.return_time_s),
+        ):
+            if observed.availability is not Availability.VALUE or observed.value != 0.0:
+                raise ConfigError(f"{operation} {label} readback does not match scope")
+        if sweep.trigger.availability is not Availability.VALUE or not isinstance(
+            sweep.trigger.value,
+            SourceTriggerState,
+        ):
+            raise ConfigError(f"{operation} trigger readback does not match scope")
+        trigger = sweep.trigger.value
+        if (
+            trigger.source.availability is not Availability.VALUE
+            or trigger.source.value is not SourceTriggerSource.INTERNAL
+        ):
+            raise ConfigError(f"{operation} trigger source does not match scope")
+        if (
+            trigger.slope.availability is not Availability.VALUE
+            or trigger.slope.value is not SourceTriggerSlope.POSITIVE
+        ):
+            raise ConfigError(f"{operation} trigger slope does not match scope")
+        if (
+            trigger.output.availability is not Availability.VALUE
+            or trigger.output.value is not SourceTriggerOutput.OFF
+        ):
+            raise ConfigError(f"{operation} trigger output does not match scope")
+        if sweep.marker.availability is not Availability.VALUE or not isinstance(
+            sweep.marker.value,
+            SourceSweepMarker,
+        ):
+            raise ConfigError(f"{operation} marker readback does not match scope")
+        marker = sweep.marker.value
+        if marker.enabled.availability is not Availability.VALUE or marker.enabled.value is not False:
+            raise ConfigError(f"{operation} marker state does not match scope")
+
+    def _validate_source_sweep_v2_result(
+        self,
+        request: SourceSweepConfigureRequest,
+        result: object,
+    ) -> None:
+        operation = "source.sweep_configure_v2"
+        if not isinstance(result, SourceSweepConfigureResult):
+            raise ConfigError(
+                "configure_source_sweep_v2() returned an invalid SourceSweepConfigureResult"
+            )
+        if result.channel != request.channel:
+            raise ConfigError(f"{operation} result channel does not match request")
+        if result.output_enabled:
+            raise ConfigError(f"{operation} result reports output ON")
+        self._validate_source_sweep_v2_readback(
+            request,
+            result.basic,
+            result.sweep,
+            operation=operation,
+        )
+
+    def _validate_source_sweep_v2_postcondition(
+        self,
+        request: SourceSweepConfigureRequest,
+        result: SourceSweepConfigureResult,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        sweep: SweepFacet,
+        output: OutputFacet,
+    ) -> None:
+        operation = "source.sweep_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} postcondition reports output ON")
+        self._validate_source_sweep_v2_readback(request, basic, sweep, operation=operation)
+        if result.basic != basic or result.sweep != sweep:
             raise ConfigError(f"{operation} result readback does not match postcondition")
 
     @staticmethod
@@ -4351,6 +4852,60 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_sweep_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceSweepConfigureRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceSweepConfigureResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": "source.sweep_configure_v2",
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_channel": request.channel,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {"result": source_v2_to_data(result)}
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "output_expected": "off",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_burst_v2_artifact(
         self,
         *,
@@ -4586,6 +5141,16 @@ class SourceService(SessionStateAliasMixin):
                 "source_operation_artifact",
                 self._source_pwm_modulation_v2_artifact(**kwargs),
             )
+        except Exception:
+            pass
+
+    def _attach_source_sweep_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(exc, "source_operation_artifact", self._source_sweep_v2_artifact(**kwargs))
         except Exception:
             pass
 
@@ -5026,6 +5591,10 @@ class SourceService(SessionStateAliasMixin):
         configuration: SourceSweepConfiguration,
         channel: int | None = None,
     ) -> SourceSweepProfile:
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.CONFIGURE_SWEEP,
+            "source.sweep_configure_v2",
+        )
         if not isinstance(configuration, SourceSweepConfiguration):
             raise ConfigError("source sweep configuration must be SourceSweepConfiguration")
         source_cfg = self._source_config()
@@ -5067,6 +5636,7 @@ class SourceService(SessionStateAliasMixin):
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.TRIGGER_SWEEP,
             "source.output_v2",
+            "source.sweep_configure_v2",
         )
         required = ["source.sweep_trigger"]
         if source_cfg.check_errors:
@@ -5094,6 +5664,7 @@ class SourceService(SessionStateAliasMixin):
             "source.modulation_pm_configure_v2",
             "source.modulation_fm_configure_v2",
             "source.modulation_pwm_configure_v2",
+            "source.sweep_configure_v2",
             "source.burst_configure_v2",
             "source.pulse_configure_v2",
             "source.output_v2",

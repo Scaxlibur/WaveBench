@@ -725,6 +725,24 @@ class CliTests(unittest.TestCase):
                 "1e-6",
             ]
         )
+        sweep = build_parser().parse_args(
+            [
+                "source",
+                "sweep-configure-v2",
+                "--channel",
+                "2",
+                "--start-hz",
+                "100",
+                "--stop-hz",
+                "1000",
+                "--spacing",
+                "linear",
+                "--steps",
+                "101",
+                "--sweep-time-s",
+                "1",
+            ]
+        )
         burst = build_parser().parse_args(
             [
                 "source",
@@ -777,6 +795,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(pwm.internal_frequency_hz, 25.0)
         self.assertIsNone(pwm.duty_deviation_percent)
         self.assertEqual(pwm.width_deviation_s, 1.0e-6)
+        self.assertEqual(sweep.command, "sweep-configure-v2")
+        self.assertEqual(sweep.channel, 2)
+        self.assertEqual(sweep.start_hz, 100.0)
+        self.assertEqual(sweep.stop_hz, 1000.0)
+        self.assertEqual(sweep.spacing, "linear")
+        self.assertEqual(sweep.steps, 101)
+        self.assertEqual(sweep.sweep_time_s, 1.0)
         self.assertEqual(burst.command, "burst-configure-v2")
         self.assertEqual(burst.channel, 2)
         self.assertEqual(burst.cycles, 12)

@@ -4,12 +4,12 @@
 > 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 子项已进入核心
+> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 子项已进入核心
 > `0.8.24` 开发线；R6 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2` 和
-> `source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
-> M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 仍在进行；
-> 在该里程碑范围内，Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM 与内部 PWM 子项均具备公开 Service、CLI 与 run plan 入口。
+> `source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
+> M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 已完成；
+> 在该里程碑范围内，Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 与内部 Sweep 子项均具备公开 Service、CLI 与 run plan 入口。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -2779,7 +2779,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
-| M6-A | `in-progress` | 单通道高级配置 | Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 已 `implemented-unreleased`；Sweep 为当前下一子项，均逐项独立 opt in 并复用基本写入门 |
+| M6-A | `implemented-unreleased` | 单通道高级配置 | Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 均已 `implemented-unreleased`；每项均独立 opt in 并复用基本写入门 |
 | M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
 | M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
@@ -3181,7 +3181,7 @@ capability 声明或实机验收。
 
 ### M6-A 已实现子能力：内部 Triggered Burst
 
-M6-A 的后续单通道能力按以下顺序开发：内部 FM、内部 PWM、Sweep；当前下一子项为 Sweep。每个子项各自
+M6-A 的后续单通道能力按以下顺序开发：内部 FM、内部 PWM、Sweep。每个子项各自
 拥有 capability、typed request/result、descriptor readback 条件、OFF-only 事务、V1 路由审计、CLI 与 run plan
 step；不得借已完成子项扩大其它高级功能的范围。该顺序只决定核心开发节奏，不要求插件同时声明全部能力。
 
@@ -3284,10 +3284,9 @@ capability 独立决定。
 写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写 capability 声明或实机验收。
 
-Sweep 是当前下一子项。其窄 capability、typed model 与 descriptor readback 条件已冻结；公共事务、CLI、run plan
-与 V1 route 切换仍须由该子项完成后才开放。
+Sweep 的窄 capability、typed model 与 descriptor readback 条件已冻结，并由下列公开事务完成接口收口。
 
-### M6-A 下一子能力：内部 Sweep
+### M6-A 已实现子能力：内部 Sweep
 
 `source.sweep_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内建 Sweep 配置。typed request 固定为
 `channel`、`start_hz`、`stop_hz`、`spacing`、`steps` 和 `sweep_time_s`：频率必须为有限正值且
@@ -3310,6 +3309,12 @@ postcondition 和主写入后的最多一次 V2 OFF recovery；没有额外 RMS�
 双合同插件声明 `source.sweep_configure_v2` 后，V1 `configure_sweep`、`trigger_sweep` 与 restore 必须在仪器
 I/O 前拒绝，不能把 V1 的 center/span、外部／手动 trigger、marker 或 fire 语义部分映射进本范围。V1-only 插件和
 未声明该 capability 的双合同插件继续使用既有 V1 Sweep 路径。
+
+当前核心开发线已提供 `SourceService.configure_sweep_v2()`、
+`wavebench source sweep-configure-v2 --channel N --start-hz F --stop-hz F --spacing linear|logarithmic|step --steps N --sweep-time-s S` 和
+`source.sweep_configure_v2` run plan step。三者只接受同一类型化 request，复用 fresh snapshot、目标 output OFF、单写、
+独立回读、写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
+`steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写 capability 声明或实机验收。
 
 ### R6 延后事项
 

@@ -340,6 +340,15 @@ internal_frequency_hz = 25
 duty_deviation_percent = 25
 
 [[steps]]
+kind = "source.sweep_configure_v2"
+channel = 2
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 101
+sweep_time_s = 1
+
+[[steps]]
 kind = "source.burst_configure_v2"
 channel = 2
 cycles = 12
@@ -393,7 +402,19 @@ trailing_transition_s = 1e-8
                 "duty_deviation_percent": 25.0,
             },
         )
-        burst = plan.steps[8]
+        sweep = plan.steps[8]
+        self.assertEqual(
+            sweep.fields,
+            {
+                "channel": 2,
+                "start_hz": 100.0,
+                "stop_hz": 1_000.0,
+                "spacing": "linear",
+                "steps": 101,
+                "sweep_time_s": 1.0,
+            },
+        )
+        burst = plan.steps[9]
         self.assertEqual(
             burst.fields,
             {
@@ -404,7 +425,7 @@ trailing_transition_s = 1e-8
                 "delay_s": 0.5,
             },
         )
-        pulse = plan.steps[9]
+        pulse = plan.steps[10]
         self.assertEqual(
             pulse.fields,
             {
@@ -514,6 +535,19 @@ width_deviation_s = 1e-6
         with self.assertRaisesRegex(ConfigError, "exactly one deviation branch"):
             load_run_plan(invalid_pwm_branches)
 
+        invalid_sweep_window = self._write_plan("""
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 2
+start_hz = 1000
+stop_hz = 100
+spacing = "linear"
+steps = 101
+sweep_time_s = 1
+""")
+        with self.assertRaisesRegex(ConfigError, "start_hz must not exceed"):
+            load_run_plan(invalid_sweep_window)
+
         invalid_burst_cycles = self._write_plan("""
 [[steps]]
 kind = "source.burst_configure_v2"
@@ -562,6 +596,7 @@ trailing_transition_s = 1e-8
         self.assertIn("source.modulation_pm_configure_v2", text)
         self.assertIn("source.modulation_fm_configure_v2", text)
         self.assertIn("source.modulation_pwm_configure_v2", text)
+        self.assertIn("source.sweep_configure_v2", text)
         self.assertIn("source.burst_configure_v2", text)
         self.assertIn("source.pulse_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
