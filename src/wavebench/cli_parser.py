@@ -801,6 +801,29 @@ def build_parser() -> argparse.ArgumentParser:
     source_burst_configure_v2.add_argument("--delay-s", type=float, required=True)
     add_runtime_options(source_burst_configure_v2)
 
+    for command, relation_name in (
+        ("combine-configure-v2", "Combine"),
+        ("coupling-configure-v2", "Coupling"),
+        ("tracking-configure-v2", "Tracking"),
+        ("phase-relation-configure-v2", "phase relation"),
+    ):
+        source_relation_configure_v2 = source_sub.add_parser(
+            command,
+            help=(
+                f"Enable or disable one declared Source V2 {relation_name} relation "
+                "while every affected output is OFF"
+            ),
+        )
+        source_relation_configure_v2.add_argument(
+            "--channel",
+            type=int,
+            action="append",
+            required=True,
+            help="Relation participant channel; repeat for every participant",
+        )
+        source_relation_configure_v2.add_argument("state", choices=("on", "off"))
+        add_runtime_options(source_relation_configure_v2)
+
     source_arbitrary_storage_v2 = source_sub.add_parser(
         "arbitrary-storage-v2",
         help="Write one named Source V2 ARB storage slot without selecting or enabling output",

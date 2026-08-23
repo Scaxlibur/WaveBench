@@ -40,6 +40,10 @@ EXECUTABLE_STEP_KINDS = {
     "source.pulse_configure_v2",
     "source.arbitrary_storage_v2",
     "source.arbitrary_select_v2",
+    "source.combine_configure_v2",
+    "source.coupling_configure_v2",
+    "source.tracking_configure_v2",
+    "source.phase_relation_configure_v2",
     "dmm.read",
     "sleep",
 }

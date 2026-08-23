@@ -1256,6 +1256,12 @@ def test_source_v2_cross_channel_write_models_are_closed_and_serializable() -> N
         module.SourceTrackingConfigureRequest,
         module.SourcePhaseRelationConfigureRequest,
     )
+    contracts = (
+        module.SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT,
+        module.SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT,
+        module.SOURCE_TRACKING_CONFIGURE_V2_OPERATION_CONTRACT,
+        module.SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    )
 
     for request_type in request_types:
         request = request_type(channels=(1, 2), enabled=True)
@@ -1268,6 +1274,8 @@ def test_source_v2_cross_channel_write_models_are_closed_and_serializable() -> N
             request_type(channels=(1,), enabled=True)
         with pytest.raises(ValueError, match="sorted and unique"):
             request_type(channels=(2, 1), enabled=True)
+
+    assert all(contract.recovery_max_steps == 8 for contract in contracts)
 
     assert result.relation.enabled.value is True
     with pytest.raises(ValueError, match="requires enabled=False"):

@@ -270,6 +270,56 @@ trailing_transition_s = 1e-8
     ]
 
 
+def test_execution_intent_uses_distinct_source_v2_cross_channel_operations() -> None:
+    with TemporaryDirectory() as tmp:
+        plan = load_run_plan(
+            write_plan(
+                tmp,
+                """
+[[steps]]
+kind = "source.combine_configure_v2"
+channels = [1, 2]
+enabled = true
+
+[[steps]]
+kind = "source.coupling_configure_v2"
+channels = [1, 2]
+enabled = false
+
+[[steps]]
+kind = "source.tracking_configure_v2"
+channels = [1, 2]
+enabled = true
+
+[[steps]]
+kind = "source.phase_relation_configure_v2"
+channels = [1, 2]
+enabled = false
+""",
+            )
+        )
+
+        intent = build_execution_intent(plan, make_config(tmp))
+
+    assert [item["operation"] for item in intent.operations] == [
+        "source.combine_configure_v2",
+        "source.coupling_configure_v2",
+        "source.tracking_configure_v2",
+        "source.phase_relation_configure_v2",
+    ]
+    assert [item["parameters"] for item in intent.operations] == [
+        {"channels": [1, 2], "enabled": True},
+        {"channels": [1, 2], "enabled": False},
+        {"channels": [1, 2], "enabled": True},
+        {"channels": [1, 2], "enabled": False},
+    ]
+    assert all(
+        item["risk_flags"]
+        == ["source_v2", "output_must_be_off", "cross_channel_relation"]
+        for item in intent.operations
+    )
+
+
 def test_run_rejects_intent_mismatch_before_opening_instrument_services() -> None:
     with TemporaryDirectory() as tmp:
         plan = _sleep_plan(tmp)

@@ -1468,7 +1468,7 @@ def _source_cross_channel_configure_operation_contract(
         v1_overlapping_routes=v1_overlapping_routes,
         operation_timeout_ms=5_000,
         main_max_steps=1,
-        recovery_max_steps=1,
+        recovery_max_steps=8,
         verification_max_steps=2,
     )
 

@@ -40,6 +40,10 @@ ALLOWED_STEP_KINDS = {
     "source.pulse_configure_v2",
     "source.arbitrary_storage_v2",
     "source.arbitrary_select_v2",
+    "source.combine_configure_v2",
+    "source.coupling_configure_v2",
+    "source.tracking_configure_v2",
+    "source.phase_relation_configure_v2",
     "power.status",
     "power.set",
     "power.output",
@@ -102,6 +106,10 @@ _REQUIRED_FIELDS = {
     ),
     "source.arbitrary_storage_v2": ("channel", "slot_id", "file", "write_mode"),
     "source.arbitrary_select_v2": ("channel", "slot_id", "playback_mode"),
+    "source.combine_configure_v2": ("channels", "enabled"),
+    "source.coupling_configure_v2": ("channels", "enabled"),
+    "source.tracking_configure_v2": ("channels", "enabled"),
+    "source.phase_relation_configure_v2": ("channels", "enabled"),
     "sweep.frequency_response": ("reference_channel", "response_channel"),
     "sleep": ("duration_s",),
 }
@@ -194,6 +202,10 @@ _OPTIONAL_FIELDS = {
         "sample_rate_hz",
         "on_failure",
     },
+    "source.combine_configure_v2": set(),
+    "source.coupling_configure_v2": set(),
+    "source.tracking_configure_v2": set(),
+    "source.phase_relation_configure_v2": set(),
     "power.status": {"channel", "on_failure"},
     "power.set": {"channel", "on_failure"},
     "power.output": {"channel", "on_failure"},
@@ -232,6 +244,10 @@ _STEP_NOTES = {
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "source.arbitrary_storage_v2": "Write one named Source V2 ARB storage slot without selecting or enabling it. The payload file is recorded by digest only.",
     "source.arbitrary_select_v2": "Select one named Source V2 ARB waveform while the target output is OFF; it does not enable output.",
+    "source.combine_configure_v2": "Enable or disable one declared Source V2 Combine relation while every affected output is OFF.",
+    "source.coupling_configure_v2": "Enable or disable one declared Source V2 Coupling relation while every affected output is OFF.",
+    "source.tracking_configure_v2": "Enable or disable one declared Source V2 Tracking relation while every affected output is OFF.",
+    "source.phase_relation_configure_v2": "Enable or disable one declared Source V2 phase relation while every affected output is OFF.",
     "power.status": "Read power-supply channel state without changing output.",
     "power.set": "Set DP800 voltage/current limit; does not change output state.",
     "power.output": "Turn power-supply channel output on or off; does not change voltage/current limit.",
@@ -857,6 +873,21 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
                 f"{prefix}.sample_rate_hz",
             )
         fields["playback_mode"] = playback_mode
+    elif kind in {
+        "source.combine_configure_v2",
+        "source.coupling_configure_v2",
+        "source.tracking_configure_v2",
+        "source.phase_relation_configure_v2",
+    }:
+        raw_channels = fields["channels"]
+        if not isinstance(raw_channels, list) or len(raw_channels) < 2:
+            raise ConfigError(f"{prefix}.channels must be an array of two or more channels")
+        channels = tuple(_positive_int(channel, f"{prefix}.channels") for channel in raw_channels)
+        if len(set(channels)) != len(channels) or tuple(sorted(channels)) != channels:
+            raise ConfigError(f"{prefix}.channels must be sorted and unique")
+        if not isinstance(fields["enabled"], bool):
+            raise ConfigError(f"{prefix}.enabled must be true or false")
+        fields["channels"] = channels
     elif kind == "dmm.read":
         fields["function"] = _non_empty_str(fields.get("function", "dcv"), f"{prefix}.function").lower()
         if "expect" in fields:

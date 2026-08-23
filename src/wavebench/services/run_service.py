@@ -31,16 +31,20 @@ from wavebench.instruments.source_extensions import (
     SourceBasicConfigureRequest,
     SourceBasicPatch,
     SourceBurstConfigureRequest,
+    SourceCombineConfigureRequest,
+    SourceCouplingConfigureRequest,
     SourceFmModulationConfigureRequest,
     SourceHarmonicConfigureRequest,
     SourceHarmonicPreset,
     SourceModulationConfigureRequest,
     SourceOutputRequest,
+    SourcePhaseRelationConfigureRequest,
     SourcePmModulationConfigureRequest,
     SourcePwmModulationConfigureRequest,
     SourcePulseConfigureRequest,
     SourceSweepConfigureRequest,
     SourceSweepSpacing,
+    SourceTrackingConfigureRequest,
     SourceWaveformKind,
     SourceStorageWriteMode,
 )
@@ -439,6 +443,14 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.arbitrary_storage_v2")
             elif step.kind == "source.arbitrary_select_v2":
                 add("source", "source.snapshot_v2", "source.arbitrary_select_v2")
+            elif step.kind == "source.combine_configure_v2":
+                add("source", "source.snapshot_v2", "source.combine_configure_v2")
+            elif step.kind == "source.coupling_configure_v2":
+                add("source", "source.snapshot_v2", "source.coupling_configure_v2")
+            elif step.kind == "source.tracking_configure_v2":
+                add("source", "source.snapshot_v2", "source.tracking_configure_v2")
+            elif step.kind == "source.phase_relation_configure_v2":
+                add("source", "source.snapshot_v2", "source.phase_relation_configure_v2")
             elif step.kind == "power.status":
                 add("power", "power.status")
             elif step.kind == "power.set":
@@ -1276,6 +1288,38 @@ class RunService:
                     playback_mode=SourceArbitraryPlaybackMode(step.fields["playback_mode"]),
                     playback_frequency_hz=step.fields.get("playback_frequency_hz"),
                     sample_rate_hz=step.fields.get("sample_rate_hz"),
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.combine_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_combine_v2(
+                SourceCombineConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.coupling_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_coupling_v2(
+                SourceCouplingConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.tracking_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_tracking_v2(
+                SourceTrackingConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.phase_relation_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_phase_relation_v2(
+                SourcePhaseRelationConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
                 )
             )
             artifact = {"source_operation": source_operation}

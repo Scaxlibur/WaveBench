@@ -301,6 +301,16 @@ def _source_basic_configure_v2_request(args: argparse.Namespace):
     )
 
 
+def _source_cross_channel_configure_v2_request(
+    args: argparse.Namespace,
+    request_type: type[object],
+) -> object:
+    try:
+        return request_type(channels=tuple(args.channel), enabled=args.state == "on")  # type: ignore[operator]
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _source_modulation_configure_v2_request(args: argparse.Namespace):
     from .instruments.source_extensions import SourceModulationConfigureRequest
 
@@ -1293,6 +1303,70 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "arbitrary-select-v2":
                 _, payload = service.select_arbitrary_v2(
                     _source_arbitrary_select_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "combine-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceCombineConfigureRequest,
+                )
+
+                _, payload = service.configure_combine_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourceCombineConfigureRequest,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "coupling-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceCouplingConfigureRequest,
+                )
+
+                _, payload = service.configure_coupling_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourceCouplingConfigureRequest,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "tracking-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceTrackingConfigureRequest,
+                )
+
+                _, payload = service.configure_tracking_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourceTrackingConfigureRequest,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "phase-relation-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourcePhaseRelationConfigureRequest,
+                )
+
+                _, payload = service.configure_phase_relation_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourcePhaseRelationConfigureRequest,
+                    )
                 )
                 if args.json:
                     _emit_json_result(payload)

@@ -77,6 +77,8 @@ from wavebench.instruments.source_extensions import (
     SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_CONTRACT_VERSION,
     SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -86,7 +88,9 @@ from wavebench.instruments.source_extensions import (
     SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_TRACKING_CONFIGURE_V2_OPERATION_CONTRACT,
     SnapshotConsistencyState,
     SourceDescriptorExtensions,
     SourceAmplitude,
@@ -110,6 +114,12 @@ from wavebench.instruments.source_extensions import (
     SourceBurstConfigureResult,
     SourceBurstConfigureV2Driver,
     SourceBurstMode,
+    SourceCombineConfigureRequest,
+    SourceCombineConfigureV2Driver,
+    SourceCouplingConfigureRequest,
+    SourceCouplingConfigureV2Driver,
+    SourceCrossChannelCapabilityProfile,
+    SourceCrossChannelConfigureResult,
     SourceFacetScope,
     SourceFieldId,
     SourceFieldRef,
@@ -131,6 +141,7 @@ from wavebench.instruments.source_extensions import (
     SourceModulationParameter,
     SourceModulationParameterKind,
     SourceModulationSource,
+    SourceOperationContract,
     SourceOutputRequest,
     SourceOutputResult,
     SourceOutputV2Driver,
@@ -139,6 +150,8 @@ from wavebench.instruments.source_extensions import (
     SourcePulseConfigureResult,
     SourcePulseConfigureV2Driver,
     SourcePulseHoldBasis,
+    SourcePhaseRelationConfigureRequest,
+    SourcePhaseRelationConfigureV2Driver,
     SourcePmModulationConfigureRequest,
     SourcePmModulationConfigureResult,
     SourcePmModulationConfigureV2Driver,
@@ -158,6 +171,11 @@ from wavebench.instruments.source_extensions import (
     SourceTriggerSlope,
     SourceTriggerSource,
     SourceTriggerState,
+    SourceRelationGraph,
+    SourceRelationOutputState,
+    SourceRelationState,
+    SourceTrackingConfigureRequest,
+    SourceTrackingConfigureV2Driver,
     SourceV1WriteRouteId,
     SourceWaveformKind,
     SupportState,
@@ -294,6 +312,28 @@ class _SourceArbitrarySelectV2Transaction:
     result: SourceArbitrarySelectResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceCrossChannelConfigureV2Transaction:
+    """Core transaction result shared by the four M6-C relation routes."""
+
+    result: SourceCrossChannelConfigureResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceCrossChannelClosure:
+    """The graph-derived, precomputed OFF and readback range for one relation write."""
+
+    feature: SourceFeature
+    relation_field: SourceFieldId
+    relation: SourceRelationState
+    relation_graph: SourceRelationGraph
+    affected_channels: tuple[int, ...]
+    fields: tuple[SourceFieldRef, ...]
+    output_fields: tuple[SourceFieldRef, ...]
 
 
 @dataclass
@@ -632,6 +672,78 @@ class SourceService(SessionStateAliasMixin):
 
         transaction = self._select_arbitrary_v2_transaction(
             request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_combine_v2(
+        self,
+        request: SourceCombineConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceCrossChannelConfigureResult, dict[str, object]]:
+        """Enable or disable one declared Combine relation while affected outputs are OFF."""
+
+        transaction = self._configure_cross_channel_v2_transaction(
+            request,
+            operation="source.combine_configure_v2",
+            feature=SourceFeature.COMBINE,
+            relation_field=SourceFieldId.COMBINE,
+            operation_contract=SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_coupling_v2(
+        self,
+        request: SourceCouplingConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceCrossChannelConfigureResult, dict[str, object]]:
+        """Enable or disable one declared Coupling relation while affected outputs are OFF."""
+
+        transaction = self._configure_cross_channel_v2_transaction(
+            request,
+            operation="source.coupling_configure_v2",
+            feature=SourceFeature.COUPLING,
+            relation_field=SourceFieldId.COUPLING,
+            operation_contract=SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_tracking_v2(
+        self,
+        request: SourceTrackingConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceCrossChannelConfigureResult, dict[str, object]]:
+        """Enable or disable one declared Tracking relation while affected outputs are OFF."""
+
+        transaction = self._configure_cross_channel_v2_transaction(
+            request,
+            operation="source.tracking_configure_v2",
+            feature=SourceFeature.TRACKING,
+            relation_field=SourceFieldId.TRACKING,
+            operation_contract=SOURCE_TRACKING_CONFIGURE_V2_OPERATION_CONTRACT,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_phase_relation_v2(
+        self,
+        request: SourcePhaseRelationConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceCrossChannelConfigureResult, dict[str, object]]:
+        """Enable or disable one declared phase relation while affected outputs are OFF."""
+
+        transaction = self._configure_cross_channel_v2_transaction(
+            request,
+            operation="source.phase_relation_configure_v2",
+            feature=SourceFeature.PHASE_RELATION,
+            relation_field=SourceFieldId.PHASE_RELATION,
+            operation_contract=SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT,
             correlation_id=correlation_id,
         )
         return transaction.result, transaction.artifact
@@ -3114,6 +3226,770 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _configure_cross_channel_v2_transaction(
+        self,
+        request: object,
+        *,
+        operation: str,
+        feature: SourceFeature,
+        relation_field: SourceFieldId,
+        operation_contract: SourceOperationContract,
+        correlation_id: str | None = None,
+    ) -> _SourceCrossChannelConfigureV2Transaction:
+        """Run one graph-bounded M6-C relation mutation.
+
+        The discovery snapshot exists solely to freeze a complete affected-port
+        closure before creating the operation context.  The authorized
+        preflight repeats that discovery and rejects graph drift before MAIN.
+        It never broadens independent, unrelated ports into this transaction.
+        """
+
+        channels, enabled = self._source_cross_channel_request_parts(
+            request,
+            feature=feature,
+            operation=operation,
+        )
+        self._require(operation, "source.snapshot_v2", operation)
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+
+            discovery_snapshot = self._snapshot_v2_with_open_source(
+                source,
+                correlation_id=correlation_id,
+            )
+            discovery_closure = self._source_cross_channel_closure(
+                discovery_snapshot,
+                channels=channels,
+                feature=feature,
+                relation_field=relation_field,
+                operation=operation,
+            )
+            self._validate_source_cross_channel_preflight(
+                discovery_snapshot,
+                discovery_closure,
+                operation=operation,
+            )
+            if (
+                len(discovery_closure.output_fields)
+                > operation_contract.recovery_max_steps
+            ):
+                raise ConfigError(
+                    f"{operation} affected output range exceeds the declared recovery bound"
+                )
+            output_scopes = tuple(
+                SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+                for channel in discovery_closure.affected_channels
+            )
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=operation_contract,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=discovery_closure.fields,
+                required_off_outputs=output_scopes,
+                emergency_off_outputs=output_scopes,
+                restore_order=(),
+                non_restorable_fields=discovery_closure.fields,
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceCrossChannelConfigureResult | None = None
+            closure = discovery_closure
+            wrote_main = False
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=closure.fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_closure = self._source_cross_channel_closure(
+                        preflight_snapshot,
+                        channels=channels,
+                        feature=feature,
+                        relation_field=relation_field,
+                        operation=operation,
+                    )
+                    if preflight_closure != discovery_closure:
+                        raise ConfigError(
+                            f"{operation} relation graph changed before the transaction"
+                        )
+                    closure = preflight_closure
+                    self._validate_source_cross_channel_preflight(
+                        preflight_snapshot,
+                        closure,
+                        operation=operation,
+                    )
+                    context.bind_baseline_snapshot_digest(source_v2_digest(preflight_snapshot))
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=closure.fields,
+                    )
+
+                if closure.relation.enabled.value is enabled:
+                    result = self._source_cross_channel_result_from_snapshot(
+                        closure,
+                        enabled=enabled,
+                    )
+                else:
+                    relation_target = SourceFieldRef(
+                        relation_field,
+                        SourceScopeRef(SourceFacetScope.CHANNEL_SET, channels=channels),
+                    )
+                    main = context.make_phase_spec(
+                        SourceOperationPhase.MAIN,
+                        allowed_io={"write"},
+                        fields=(relation_target,),
+                        max_steps=operation_contract.main_max_steps,
+                    )
+                    try:
+                        with context.authorize_phase(main):
+                            main_entered = True
+                            wrote_main = True
+                            result = self._invoke_source_cross_channel_v2_driver(
+                                source,
+                                request,
+                                feature=feature,
+                                operation=operation,
+                            )
+                            self._validate_source_cross_channel_result(
+                                result,
+                                channels=channels,
+                                enabled=enabled,
+                                closure=closure,
+                                feature=feature,
+                                operation=operation,
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is None and wrote_main:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=closure.fields,
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            assert result is not None
+                            self._validate_source_cross_channel_postcondition(
+                                result,
+                                postcondition_snapshot,
+                                closure=closure,
+                                channels=channels,
+                                enabled=enabled,
+                                feature=feature,
+                                relation_field=relation_field,
+                                operation=operation,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=closure.fields,
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is None and not wrote_main:
+                    postcondition_snapshot = preflight_snapshot
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_outputs_off(
+                                context,
+                                source,
+                                closure.affected_channels,
+                                extensions,
+                                closure.output_fields,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_cross_channel_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            operation=operation,
+                            closure=closure,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            wrote_main=wrote_main,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceCrossChannelConfigureV2Transaction(
+                    result=result,
+                    artifact=self._source_cross_channel_v2_artifact(
+                        context=context,
+                        request=request,
+                        operation=operation,
+                        closure=closure,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                        wrote_main=wrote_main,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
+    @staticmethod
+    def _source_cross_channel_request_parts(
+        request: object,
+        *,
+        feature: SourceFeature,
+        operation: str,
+    ) -> tuple[tuple[int, ...], bool]:
+        request_types = {
+            SourceFeature.COMBINE: SourceCombineConfigureRequest,
+            SourceFeature.COUPLING: SourceCouplingConfigureRequest,
+            SourceFeature.TRACKING: SourceTrackingConfigureRequest,
+            SourceFeature.PHASE_RELATION: SourcePhaseRelationConfigureRequest,
+        }
+        request_type = request_types[feature]
+        if not isinstance(request, request_type):
+            raise ConfigError(f"{operation} requires {request_type.__name__}")
+        return request.channels, request.enabled
+
+    @staticmethod
+    def _source_cross_channel_relation_field(feature: SourceFeature) -> SourceFieldId:
+        relation_fields = {
+            SourceFeature.COMBINE: SourceFieldId.COMBINE,
+            SourceFeature.COUPLING: SourceFieldId.COUPLING,
+            SourceFeature.TRACKING: SourceFieldId.TRACKING,
+            SourceFeature.COPY: SourceFieldId.COPY,
+            SourceFeature.PHASE_RELATION: SourceFieldId.PHASE_RELATION,
+        }
+        try:
+            return relation_fields[feature]
+        except KeyError as exc:  # pragma: no cover - every current caller is frozen above.
+            raise ConfigError("Source feature is not a cross-channel relation") from exc
+
+    def _source_cross_channel_closure(
+        self,
+        snapshot: SourceSnapshotV2,
+        *,
+        channels: tuple[int, ...],
+        feature: SourceFeature,
+        relation_field: SourceFieldId,
+        operation: str,
+    ) -> _SourceCrossChannelClosure:
+        if snapshot.cross_channel.availability is not Availability.VALUE:
+            raise ConfigError(f"{operation} requires readable cross-channel state")
+        cross_channel = snapshot.cross_channel.value
+        relation = next(
+            (
+                item
+                for item in cross_channel.relations
+                if item.feature is feature and item.channels == channels
+            ),
+            None,
+        )
+        if relation is None or relation.enabled.availability is not Availability.VALUE:
+            raise ConfigError(f"{operation} requires readable declared relation state")
+        if cross_channel.relation_graph.availability is not Availability.VALUE or not isinstance(
+            cross_channel.relation_graph.value,
+            SourceRelationGraph,
+        ):
+            raise ConfigError(f"{operation} requires a readable relation graph")
+        graph = cross_channel.relation_graph.value
+        self._validate_source_cross_channel_runtime_profile(
+            snapshot,
+            channels=channels,
+            feature=feature,
+            operation=operation,
+        )
+
+        requested = set(channels)
+        target_edges = tuple(
+            edge
+            for edge in graph.edges
+            if edge.feature is feature
+            and set(edge.sources + edge.targets) <= requested
+            and set(edge.sources + edge.targets) & requested
+        )
+        target_participants = {
+            channel
+            for edge in target_edges
+            for channel in (*edge.sources, *edge.targets)
+        }
+        if target_participants != requested:
+            raise ConfigError(
+                f"{operation} relation graph cannot prove the declared affected channels"
+            )
+
+        affected = set(channels)
+        selected_edges: list[object] = []
+        changed = True
+        while changed:
+            changed = False
+            for edge in graph.edges:
+                participants = set(edge.sources + edge.targets)
+                if not participants & affected:
+                    continue
+                if edge not in selected_edges:
+                    selected_edges.append(edge)
+                before = len(affected)
+                affected.update(participants)
+                changed = changed or len(affected) != before
+        affected_channels = tuple(sorted(affected))
+        fields = self._source_cross_channel_fields(
+            cross_channel.relations,
+            feature=feature,
+            relation_field=relation_field,
+            channels=channels,
+            affected_channels=affected_channels,
+            edges=tuple(selected_edges),
+            operation=operation,
+        )
+        output_fields = tuple(
+            field for field in fields if field.field is SourceFieldId.OUTPUT
+        )
+        return _SourceCrossChannelClosure(
+            feature=feature,
+            relation_field=relation_field,
+            relation=relation,
+            relation_graph=graph,
+            affected_channels=affected_channels,
+            fields=fields,
+            output_fields=output_fields,
+        )
+
+    def _validate_source_cross_channel_runtime_profile(
+        self,
+        snapshot: SourceSnapshotV2,
+        *,
+        channels: tuple[int, ...],
+        feature: SourceFeature,
+        operation: str,
+    ) -> None:
+        configurable = next(
+            (
+                item
+                for item in snapshot.runtime_profile.features
+                if item.feature is feature
+                and item.scope is SourceFacetScope.CHANNEL_SET
+                and item.channels == channels
+                and item.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.READ in item.directions
+                and SourceFeatureDirection.CONFIGURE in item.directions
+                and isinstance(item.profile, SourceCrossChannelCapabilityProfile)
+            ),
+            None,
+        )
+        if configurable is None:
+            raise ConfigError(f"{operation} is not available for the runtime channel set")
+        profile = configurable.profile
+        if (
+            feature not in profile.relation_kinds
+            or channels not in profile.supported_channel_sets
+            or not profile.configuration_readable
+        ):
+            raise ConfigError(f"{operation} requires readable declared relation configuration")
+        graph = next(
+            (
+                item
+                for item in snapshot.runtime_profile.features
+                if item.feature is feature
+                and item.scope is SourceFacetScope.INSTRUMENT
+                and item.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.READ in item.directions
+                and isinstance(item.profile, SourceCrossChannelCapabilityProfile)
+                and item.profile.relation_graph_readable
+            ),
+            None,
+        )
+        if graph is None:
+            raise ConfigError(f"{operation} requires readable runtime relation graph support")
+
+    def _source_cross_channel_fields(
+        self,
+        relations: tuple[SourceRelationState, ...],
+        *,
+        feature: SourceFeature,
+        relation_field: SourceFieldId,
+        channels: tuple[int, ...],
+        affected_channels: tuple[int, ...],
+        edges: tuple[object, ...],
+        operation: str,
+    ) -> tuple[SourceFieldRef, ...]:
+        del feature
+        field_ids = {
+            SourceFieldId.IDENTITY,
+            SourceFieldId.OUTPUT,
+            SourceFieldId.RELATION_GRAPH,
+            relation_field,
+        }
+        for edge in edges:
+            if not hasattr(edge, "affected_fields") or not hasattr(
+                edge,
+                "implicit_changed_fields",
+            ):
+                raise ConfigError(f"{operation} relation graph has an invalid edge")
+            field_ids.update(edge.affected_fields)
+            field_ids.update(edge.implicit_changed_fields)
+
+        channel_fields = {
+            SourceFieldId.BASIC,
+            SourceFieldId.OUTPUT,
+            SourceFieldId.DISPLAY_LOAD,
+            SourceFieldId.HARMONICS,
+            SourceFieldId.MODULATION,
+            SourceFieldId.SWEEP,
+            SourceFieldId.BURST,
+            SourceFieldId.PULSE,
+            SourceFieldId.ARBITRARY_SELECTION,
+        }
+        relation_fields = {
+            SourceFieldId.COMBINE,
+            SourceFieldId.COUPLING,
+            SourceFieldId.TRACKING,
+            SourceFieldId.COPY,
+            SourceFieldId.PHASE_RELATION,
+        }
+        instrument_fields = {
+            SourceFieldId.IDENTITY,
+            SourceFieldId.RELATION_GRAPH,
+            SourceFieldId.REFERENCE_CLOCK,
+            SourceFieldId.SYNC,
+            SourceFieldId.CASCADE,
+            SourceFieldId.SHARED_POWER,
+        }
+        refs: set[SourceFieldRef] = set()
+        for field_id in field_ids:
+            if field_id in channel_fields:
+                refs.update(
+                    SourceFieldRef(
+                        field_id,
+                        SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel),
+                    )
+                    for channel in affected_channels
+                )
+                continue
+            if field_id in relation_fields:
+                matched = tuple(
+                    relation
+                    for relation in relations
+                    if self._source_cross_channel_relation_field(relation.feature) is field_id
+                    and set(relation.channels) & set(affected_channels)
+                )
+                if not matched:
+                    raise ConfigError(
+                        f"{operation} relation graph references an unreadable relation field"
+                    )
+                refs.update(
+                    SourceFieldRef(
+                        field_id,
+                        SourceScopeRef(
+                            SourceFacetScope.CHANNEL_SET,
+                            channels=relation.channels,
+                        ),
+                    )
+                    for relation in matched
+                )
+                continue
+            if field_id in instrument_fields:
+                refs.add(
+                    SourceFieldRef(
+                        field_id,
+                        SourceScopeRef(SourceFacetScope.INSTRUMENT),
+                    )
+                )
+                continue
+            raise ConfigError(
+                f"{operation} relation graph references a field without a safe readback scope"
+            )
+        requested_relation = SourceFieldRef(
+            relation_field,
+            SourceScopeRef(SourceFacetScope.CHANNEL_SET, channels=channels),
+        )
+        refs.add(requested_relation)
+        return tuple(
+            sorted(
+                refs,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
+    def _validate_source_cross_channel_preflight(
+        self,
+        snapshot: SourceSnapshotV2,
+        closure: _SourceCrossChannelClosure,
+        *,
+        operation: str,
+    ) -> None:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        self._validate_source_cross_channel_closure_readback(
+            snapshot,
+            closure,
+            operation=operation,
+        )
+        for channel in closure.affected_channels:
+            output = self._source_v2_output_target(
+                snapshot,
+                channel,
+                operation=operation,
+            )
+            if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+                raise ConfigError(f"{operation} requires every affected output OFF")
+
+    def _validate_source_cross_channel_closure_readback(
+        self,
+        snapshot: SourceSnapshotV2,
+        closure: _SourceCrossChannelClosure,
+        *,
+        operation: str,
+    ) -> None:
+        for field in closure.fields:
+            observed = self._source_cross_channel_snapshot_observation(
+                snapshot,
+                field,
+                operation=operation,
+            )
+            if observed.availability is not Availability.VALUE:
+                raise ConfigError(
+                    f"{operation} requires readable affected field {field.field.value}"
+                )
+
+    @staticmethod
+    def _source_cross_channel_snapshot_observation(
+        snapshot: SourceSnapshotV2,
+        field: SourceFieldRef,
+        *,
+        operation: str,
+    ) -> Observed[object]:
+        if field.field is SourceFieldId.IDENTITY:
+            return Observed.value_of(snapshot.runtime_profile.identity)
+        if field.target.scope is SourceFacetScope.CHANNEL:
+            target = next(
+                (item for item in snapshot.channels if item.channel == field.target.channel),
+                None,
+            )
+            if target is None:
+                raise ConfigError(f"{operation} affected channel is absent from snapshot")
+            channel_values = {
+                SourceFieldId.BASIC: target.basic,
+                SourceFieldId.OUTPUT: target.output,
+                SourceFieldId.HARMONICS: target.harmonics,
+                SourceFieldId.MODULATION: target.modulation,
+                SourceFieldId.SWEEP: target.sweep,
+                SourceFieldId.BURST: target.burst,
+                SourceFieldId.PULSE: target.pulse,
+                SourceFieldId.ARBITRARY_SELECTION: target.arbitrary,
+            }
+            if field.field is SourceFieldId.DISPLAY_LOAD:
+                if target.output.availability is not Availability.VALUE or not isinstance(
+                    target.output.value,
+                    OutputFacet,
+                ):
+                    return target.output
+                return target.output.value.display_load
+            try:
+                return channel_values[field.field]
+            except KeyError as exc:
+                raise ConfigError(
+                    f"{operation} affected field has no channel snapshot projection"
+                ) from exc
+        if field.target.scope is SourceFacetScope.CHANNEL_SET:
+            if snapshot.cross_channel.availability is not Availability.VALUE:
+                return snapshot.cross_channel
+            relation = next(
+                (
+                    item
+                    for item in snapshot.cross_channel.value.relations
+                    if item.channels == field.target.channels
+                    and SourceService._source_cross_channel_relation_field(item.feature)
+                    is field.field
+                ),
+                None,
+            )
+            if relation is None:
+                raise ConfigError(f"{operation} affected relation is absent from snapshot")
+            return Observed.value_of(relation)
+        if field.target.scope is not SourceFacetScope.INSTRUMENT:
+            raise ConfigError(f"{operation} affected field has an unsupported snapshot scope")
+        if field.field is SourceFieldId.RELATION_GRAPH:
+            return snapshot.cross_channel if snapshot.cross_channel.availability is not Availability.VALUE else snapshot.cross_channel.value.relation_graph
+        if field.field is SourceFieldId.SHARED_POWER:
+            return snapshot.cross_channel if snapshot.cross_channel.availability is not Availability.VALUE else snapshot.cross_channel.value.shared_power
+        if snapshot.system.availability is not Availability.VALUE:
+            return snapshot.system
+        system_values = {
+            SourceFieldId.REFERENCE_CLOCK: snapshot.system.value.reference_clock,
+            SourceFieldId.SYNC: snapshot.system.value.sync,
+            SourceFieldId.CASCADE: snapshot.system.value.cascade,
+        }
+        try:
+            return system_values[field.field]
+        except KeyError as exc:
+            raise ConfigError(
+                f"{operation} affected field has no instrument snapshot projection"
+            ) from exc
+
+    @staticmethod
+    def _source_cross_channel_result_from_snapshot(
+        closure: _SourceCrossChannelClosure,
+        *,
+        enabled: bool,
+    ) -> SourceCrossChannelConfigureResult:
+        return SourceCrossChannelConfigureResult(
+            feature=closure.feature,
+            channels=closure.relation.channels,
+            enabled=enabled,
+            relation=closure.relation,
+            outputs=tuple(
+                SourceRelationOutputState(channel=channel, enabled=False)
+                for channel in closure.affected_channels
+            ),
+        )
+
+    @staticmethod
+    def _invoke_source_cross_channel_v2_driver(
+        source: SourceDriver,
+        request: object,
+        *,
+        feature: SourceFeature,
+        operation: str,
+    ) -> object:
+        if feature is SourceFeature.COMBINE:
+            return cast(SourceCombineConfigureV2Driver, source).configure_source_combine_v2(
+                cast(SourceCombineConfigureRequest, request)
+            )
+        if feature is SourceFeature.COUPLING:
+            return cast(SourceCouplingConfigureV2Driver, source).configure_source_coupling_v2(
+                cast(SourceCouplingConfigureRequest, request)
+            )
+        if feature is SourceFeature.TRACKING:
+            return cast(SourceTrackingConfigureV2Driver, source).configure_source_tracking_v2(
+                cast(SourceTrackingConfigureRequest, request)
+            )
+        if feature is SourceFeature.PHASE_RELATION:
+            return cast(
+                SourcePhaseRelationConfigureV2Driver,
+                source,
+            ).configure_source_phase_relation_v2(
+                cast(SourcePhaseRelationConfigureRequest, request)
+            )
+        raise ConfigError(f"{operation} has an unsupported relation feature")
+
+    @staticmethod
+    def _validate_source_cross_channel_result(
+        result: object,
+        *,
+        channels: tuple[int, ...],
+        enabled: bool,
+        closure: _SourceCrossChannelClosure,
+        feature: SourceFeature,
+        operation: str,
+    ) -> None:
+        if not isinstance(result, SourceCrossChannelConfigureResult):
+            raise ConfigError(
+                f"{operation} driver returned an invalid SourceCrossChannelConfigureResult"
+            )
+        if (
+            result.feature is not feature
+            or result.channels != channels
+            or result.enabled is not enabled
+        ):
+            raise ConfigError(f"{operation} result does not match the request")
+        if tuple(item.channel for item in result.outputs) != closure.affected_channels:
+            raise ConfigError(f"{operation} result does not cover every affected output")
+
+    def _validate_source_cross_channel_postcondition(
+        self,
+        result: SourceCrossChannelConfigureResult,
+        snapshot: SourceSnapshotV2,
+        *,
+        closure: _SourceCrossChannelClosure,
+        channels: tuple[int, ...],
+        enabled: bool,
+        feature: SourceFeature,
+        relation_field: SourceFieldId,
+        operation: str,
+    ) -> None:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        postcondition_closure = self._source_cross_channel_closure(
+            snapshot,
+            channels=channels,
+            feature=feature,
+            relation_field=relation_field,
+            operation=operation,
+        )
+        if not set(postcondition_closure.affected_channels) <= set(closure.affected_channels):
+            raise ConfigError(
+                f"{operation} postcondition expands the precomputed affected output range"
+            )
+        self._validate_source_cross_channel_closure_readback(
+            snapshot,
+            postcondition_closure,
+            operation=operation,
+        )
+        if postcondition_closure.relation.enabled.value is not enabled:
+            raise ConfigError(f"{operation} relation readback does not match request")
+        for channel in closure.affected_channels:
+            output = self._source_v2_output_target(
+                snapshot,
+                channel,
+                operation=operation,
+            )
+            if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+                raise ConfigError(f"{operation} postcondition reports an affected output ON")
+        expected = self._source_cross_channel_result_from_snapshot(
+            postcondition_closure,
+            enabled=enabled,
+        )
+        if result.relation != expected.relation or result.outputs != expected.outputs:
+            raise ConfigError(f"{operation} result readback does not match postcondition")
+
     @staticmethod
     def _source_basic_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
         target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
@@ -5397,6 +6273,100 @@ class SourceService(SessionStateAliasMixin):
             "session_health": session_state.health.value,
         }
 
+    def _recover_source_v2_outputs_off(
+        self,
+        context: SourceOperationContextCoordinator,
+        source: SourceDriver,
+        channels: tuple[int, ...],
+        extensions: SourceDescriptorExtensions,
+        output_fields: tuple[SourceFieldRef, ...],
+        *,
+        operation: str,
+    ) -> dict[str, object]:
+        """Issue one bounded V2 OFF attempt for each already-frozen affected port."""
+
+        descriptor = self.descriptor
+        session_state = self.session_state
+        if session_state is None or session_state.health is SessionHealth.POISONED:
+            return {"status": "not_attempted", "reason": "session_poisoned"}
+        if descriptor is None or "source.output_v2" not in descriptor.capabilities:
+            return {"status": "not_attempted", "reason": "output_capability_unavailable"}
+        if not callable(getattr(source, "set_source_output_v2", None)):
+            return {"status": "not_attempted", "reason": "output_method_unavailable"}
+        if len(channels) != len(output_fields) or len(channels) > context.operation_contract.recovery_max_steps:
+            return {"status": "not_attempted", "reason": "recovery_range_unavailable"}
+        try:
+            safe_state = context.make_phase_spec(
+                SourceOperationPhase.FAILURE_SAFE_STATE,
+                allowed_io={"write"},
+                fields=output_fields,
+                max_steps=len(channels),
+            )
+            with context.authorize_phase(safe_state):
+                for channel in channels:
+                    result = cast(SourceOutputV2Driver, source).set_source_output_v2(
+                        SourceOutputRequest(channel=channel, enabled=False)
+                    )
+                    if (
+                        not isinstance(result, SourceOutputResult)
+                        or result.channel != channel
+                        or result.enabled
+                    ):
+                        raise ConfigError(f"{operation} recovery OFF is not proven")
+        except BaseException:
+            return {
+                "status": "off_failed",
+                "channels": list(channels),
+                "session_health": session_state.health.value,
+            }
+        if session_state.health is SessionHealth.POISONED:
+            return {
+                "status": "off_sent_unverified",
+                "channels": list(channels),
+                "reason": "session_poisoned",
+            }
+        try:
+            verification = context.make_phase_spec(
+                SourceOperationPhase.CLEANUP_VERIFICATION,
+                allowed_io={"query"},
+                fields=output_fields,
+                max_steps=extensions.query_contract.max_queries,
+            )
+            with context.authorize_phase(verification) as authorization:
+                snapshot = self._snapshot_v2_with_open_source(
+                    source,
+                    correlation_id=context.correlation_id,
+                    allow_uncertain_session=True,
+                    deadline=authorization.deadline,
+                )
+                for channel in channels:
+                    output = self._source_v2_output_target(
+                        snapshot,
+                        channel,
+                        operation=operation,
+                    )
+                    if (
+                        output.enabled.availability is not Availability.VALUE
+                        or output.enabled.value is not False
+                    ):
+                        raise ConfigError(f"{operation} recovery OFF readback is not proven")
+                context.mark_safe_state_verified(
+                    authorization,
+                    io_kind="query",
+                    fields=output_fields,
+                )
+        except BaseException:
+            return {
+                "status": "off_sent_unverified",
+                "channels": list(channels),
+                "session_health": session_state.health.value,
+            }
+        return {
+            "status": "off_verified",
+            "channels": list(channels),
+            "session_health": session_state.health.value,
+        }
+
     def _source_basic_v2_artifact(
         self,
         *,
@@ -6002,6 +6972,68 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_cross_channel_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: object,
+        operation: str,
+        closure: _SourceCrossChannelClosure,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceCrossChannelConfigureResult | None,
+        wrote_main: bool,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": operation,
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "channels": list(closure.relation.channels),
+                "affected_channels": list(closure.affected_channels),
+                "relation_graph_digest": source_v2_digest(closure.relation_graph),
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {
+                "status": "written" if wrote_main else "already_at_target",
+                "result": source_v2_to_data(result),
+            }
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "affected_outputs_expected": "off",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_output_v2_artifact(
         self,
         *,
@@ -6190,6 +7222,20 @@ class SourceService(SessionStateAliasMixin):
         except Exception:
             pass
 
+    def _attach_source_cross_channel_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(
+                exc,
+                "source_operation_artifact",
+                self._source_cross_channel_v2_artifact(**kwargs),
+            )
+        except Exception:
+            pass
+
     def _attach_source_output_v2_diagnostics(
         self,
         exc: BaseException,
@@ -6315,6 +7361,10 @@ class SourceService(SessionStateAliasMixin):
         self,
         configuration: SourceCouplingConfiguration,
     ) -> SourceCouplingProfile:
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.CONFIGURE_COUPLING,
+            "source.coupling_configure_v2",
+        )
         if not isinstance(configuration, SourceCouplingConfiguration):
             raise ConfigError("source coupling configuration must be SourceCouplingConfiguration")
         source_cfg = self._source_config()
@@ -6683,6 +7733,10 @@ class SourceService(SessionStateAliasMixin):
             "source.sweep_configure_v2",
             "source.burst_configure_v2",
             "source.pulse_configure_v2",
+            "source.combine_configure_v2",
+            "source.coupling_configure_v2",
+            "source.tracking_configure_v2",
+            "source.phase_relation_configure_v2",
             "source.output_v2",
         )
         self.set_output(channel=state.channel, enabled=False)
