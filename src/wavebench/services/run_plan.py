@@ -30,6 +30,7 @@ ALLOWED_STEP_KINDS = {
     "source.output_enable_v2",
     "source.output_disable_v2",
     "source.harmonics_configure_v2",
+    "source.modulation_configure_v2",
     "power.status",
     "power.set",
     "power.output",
@@ -50,6 +51,7 @@ _REQUIRED_FIELDS = {
     "source.output_enable_v2": ("channel",),
     "source.output_disable_v2": ("channel",),
     "source.harmonics_configure_v2": ("channel", "order", "preset"),
+    "source.modulation_configure_v2": ("channel", "depth_percent", "internal_frequency_hz"),
     "sweep.frequency_response": ("reference_channel", "response_channel"),
     "sleep": ("duration_s",),
 }
@@ -125,6 +127,7 @@ _OPTIONAL_FIELDS = {
     "source.output_enable_v2": {"on_failure"},
     "source.output_disable_v2": {"on_failure"},
     "source.harmonics_configure_v2": {"on_failure"},
+    "source.modulation_configure_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
     "power.set": {"channel", "on_failure"},
     "power.output": {"channel", "on_failure"},
@@ -154,6 +157,7 @@ _STEP_NOTES = {
     "source.output_enable_v2": "Turn one Source V2 channel output on after a fresh V2 readback.",
     "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
     "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
+    "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
     "power.set": "Set DP800 voltage/current limit; does not change output state.",
     "power.output": "Turn power-supply channel output on or off; does not change voltage/current limit.",
@@ -590,6 +594,18 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         if preset not in {"all", "even", "odd"}:
             raise ConfigError(f"{prefix}.preset must be one of all, even, odd")
         fields["preset"] = preset
+    elif kind == "source.modulation_configure_v2":
+        depth = _finite_float(fields["depth_percent"], f"{prefix}.depth_percent")
+        if not 0 <= depth <= 100:
+            raise ConfigError(f"{prefix}.depth_percent must be in [0, 100]")
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["depth_percent"] = depth
+        fields["internal_frequency_hz"] = internal_frequency
     elif kind == "dmm.read":
         fields["function"] = _non_empty_str(fields.get("function", "dcv"), f"{prefix}.function").lower()
         if "expect" in fields:

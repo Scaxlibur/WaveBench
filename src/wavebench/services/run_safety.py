@@ -31,6 +31,7 @@ EXECUTABLE_STEP_KINDS = {
     "source.output_enable_v2",
     "source.output_disable_v2",
     "source.harmonics_configure_v2",
+    "source.modulation_configure_v2",
     "dmm.read",
     "sleep",
 }

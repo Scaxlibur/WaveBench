@@ -703,6 +703,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(source_harmonics_configure_v2)
 
+    source_modulation_configure_v2 = source_sub.add_parser(
+        "modulation-configure-v2",
+        help="Configure one OFF Source V2 channel with internal sine AM",
+    )
+    source_modulation_configure_v2.add_argument("--channel", type=int, required=True)
+    source_modulation_configure_v2.add_argument("--depth-percent", type=float, required=True)
+    source_modulation_configure_v2.add_argument("--internal-frequency-hz", type=float, required=True)
+    add_runtime_options(source_modulation_configure_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

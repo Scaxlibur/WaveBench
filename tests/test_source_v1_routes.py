@@ -58,6 +58,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
+        "source.modulation_configure_v2",
     }
     assert {item.removeprefix("run-plan.") for item in entrypoints if item.startswith("run-plan.")} == expected_v1_run_steps
     assert {
@@ -84,6 +85,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
             "source.output_enable_v2": "channel = 1\n",
             "source.output_disable_v2": "channel = 1\n",
             "source.harmonics_configure_v2": "channel = 1\norder = 8\npreset = \"odd\"\n",
+            "source.modulation_configure_v2": "channel = 1\ndepth_percent = 80\ninternal_frequency_hz = 25\n",
         }
         for kind, fields in valid_steps.items():
             plan_path = Path(tmp) / f"{kind}.toml"

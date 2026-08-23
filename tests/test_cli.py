@@ -661,6 +661,18 @@ class CliTests(unittest.TestCase):
                 "odd",
             ]
         )
+        modulation = build_parser().parse_args(
+            [
+                "source",
+                "modulation-configure-v2",
+                "--channel",
+                "2",
+                "--depth-percent",
+                "80",
+                "--internal-frequency-hz",
+                "25",
+            ]
+        )
 
         self.assertEqual(basic.command, "basic-configure-v2")
         self.assertEqual(basic.channel, 2)
@@ -674,6 +686,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(harmonics.channel, 2)
         self.assertEqual(harmonics.order, 8)
         self.assertEqual(harmonics.preset, "odd")
+        self.assertEqual(modulation.command, "modulation-configure-v2")
+        self.assertEqual(modulation.channel, 2)
+        self.assertEqual(modulation.depth_percent, 80.0)
+        self.assertEqual(modulation.internal_frequency_hz, 25.0)
 
     def test_fetch_accepts_points(self):
         args = build_parser().parse_args(["scope", "fetch", "--points", "dmax"])

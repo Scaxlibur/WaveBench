@@ -120,6 +120,12 @@ kind = "source.harmonics_configure_v2"
 channel = 1
 order = 8
 preset = "odd"
+
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 1
+depth_percent = 80
+internal_frequency_hz = 25
 """,
             )
         )
@@ -131,10 +137,21 @@ preset = "odd"
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
+        "source.modulation_configure_v2",
     ]
     assert intent.operations[0]["parameters"]["frequency_hz"] == 2000.0
     assert intent.operations[3]["parameters"] == {"channel": 1, "order": 8, "preset": "odd"}
     assert intent.operations[3]["risk_flags"] == ["source_v2", "output_must_be_off"]
+    assert intent.operations[4]["parameters"] == {
+        "channel": 1,
+        "depth_percent": 80.0,
+        "internal_frequency_hz": 25.0,
+    }
+    assert intent.operations[4]["risk_flags"] == [
+        "source_v2",
+        "output_must_be_off",
+        "am_internal_only",
+    ]
 
 
 def test_run_rejects_intent_mismatch_before_opening_instrument_services() -> None:

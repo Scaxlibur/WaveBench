@@ -489,6 +489,10 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
         "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
         "operation": "source.harmonics_configure_v2",
     }
+    modulation_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.modulation_configure_v2",
+    }
 
     class _Service:
         def configure_basic_v2(self, request):
@@ -506,6 +510,12 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             assert request.order == 8
             assert request.preset is SourceHarmonicPreset.ODD
             return object(), harmonic_artifact
+
+        def configure_modulation_v2(self, request):
+            assert request.channel == 1
+            assert request.depth_percent == 80.0
+            assert request.internal_frequency_hz == 25.0
+            return object(), modulation_artifact
 
     with patch("wavebench.cli._load_source_service", return_value=_Service()):
         basic_code = cli.main(
@@ -551,6 +561,22 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             ]
         )
         harmonic_payload = json.loads(capsys.readouterr().out)
+        modulation_code = cli.main(
+            [
+                "--json",
+                "source",
+                "modulation-configure-v2",
+                "--channel",
+                "1",
+                "--depth-percent",
+                "80",
+                "--internal-frequency-hz",
+                "25",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        modulation_payload = json.loads(capsys.readouterr().out)
 
     assert basic_code == 0
     assert basic_payload["result"] == basic_artifact
@@ -558,6 +584,8 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
     assert output_payload["result"] == output_artifact
     assert harmonic_code == 0
     assert harmonic_payload["result"] == harmonic_artifact
+    assert modulation_code == 0
+    assert modulation_payload["result"] == modulation_artifact
 
 
 def test_source_v2_write_cli_keeps_failure_operation_artifact(capsys) -> None:
@@ -592,3 +620,31 @@ def test_source_v2_write_cli_keeps_failure_operation_artifact(capsys) -> None:
     assert exit_code == 2
     assert payload["schema"] == "wavebench.error.v1"
     assert payload["source_operation_artifact"] == artifact
+
+
+def test_source_v2_modulation_cli_rejects_invalid_request_before_driver_call(capsys) -> None:
+    class _Service:
+        def configure_modulation_v2(self, request):
+            raise AssertionError(request)
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "modulation-configure-v2",
+                "--channel",
+                "1",
+                "--depth-percent",
+                "100.1",
+                "--internal-frequency-hz",
+                "25",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert payload["schema"] == "wavebench.error.v1"
+    assert "depth_percent" in payload["message"]

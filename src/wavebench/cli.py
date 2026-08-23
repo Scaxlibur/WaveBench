@@ -300,6 +300,19 @@ def _source_basic_configure_v2_request(args: argparse.Namespace):
     )
 
 
+def _source_modulation_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourceModulationConfigureRequest
+
+    try:
+        return SourceModulationConfigureRequest(
+            channel=args.channel,
+            depth_percent=args.depth_percent,
+            internal_frequency_hz=args.internal_frequency_hz,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
     policy = getattr(args, "error_policy", None)
     if policy is None:
@@ -1153,6 +1166,15 @@ def _main(argv: list[str] | None = None) -> int:
                         order=args.order,
                         preset=SourceHarmonicPreset(args.preset),
                     )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "modulation-configure-v2":
+                _, payload = service.configure_modulation_v2(
+                    _source_modulation_configure_v2_request(args)
                 )
                 if args.json:
                     _emit_json_result(payload)

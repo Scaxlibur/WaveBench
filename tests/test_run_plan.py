@@ -314,6 +314,12 @@ kind = "source.harmonics_configure_v2"
 channel = 2
 order = 8
 preset = "ODD"
+
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 2
+depth_percent = 80
+internal_frequency_hz = 25
 """))
 
         basic = plan.steps[0]
@@ -325,6 +331,11 @@ preset = "ODD"
         self.assertEqual(basic.fields["square_duty_cycle_percent"], 100.0)
         harmonic = plan.steps[3]
         self.assertEqual(harmonic.fields, {"channel": 2, "order": 8, "preset": "odd"})
+        modulation = plan.steps[4]
+        self.assertEqual(
+            modulation.fields,
+            {"channel": 2, "depth_percent": 80.0, "internal_frequency_hz": 25.0},
+        )
 
         empty_patch = self._write_plan("""
 [[steps]]
@@ -373,6 +384,26 @@ preset = "user"
         with self.assertRaisesRegex(ConfigError, "preset must be one of"):
             load_run_plan(unsupported_preset)
 
+        excessive_depth = self._write_plan("""
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 2
+depth_percent = 100.1
+internal_frequency_hz = 25
+""")
+        with self.assertRaisesRegex(ConfigError, "depth_percent must be in"):
+            load_run_plan(excessive_depth)
+
+        zero_internal_frequency = self._write_plan("""
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 2
+depth_percent = 80
+internal_frequency_hz = 0
+""")
+        with self.assertRaisesRegex(ConfigError, "internal_frequency_hz must be > 0"):
+            load_run_plan(zero_internal_frequency)
+
 
     def test_format_run_plan_schema_lists_expect_and_power_output(self):
         text = format_run_plan_schema()
@@ -381,6 +412,7 @@ preset = "user"
         self.assertIn("source.basic_configure_v2", text)
         self.assertIn("source.output_enable_v2", text)
         self.assertIn("source.harmonics_configure_v2", text)
+        self.assertIn("source.modulation_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)
