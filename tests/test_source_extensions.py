@@ -580,6 +580,38 @@ def test_source_v2_write_capabilities_require_matching_directions_and_readback()
         )
 
 
+def test_source_output_v2_descriptor_keeps_off_available_without_final_vpp_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    output_only_extensions = replace(
+        extensions,
+        features=(
+            replace(
+                basic,
+                profile=replace(
+                    basic.profile,
+                    amplitude_units=(module.SourceAmplitudeUnit.VRMS,),
+                    offset_readable=False,
+                ),
+            ),
+            replace(
+                output,
+                directions=(
+                    SourceFeatureDirection.DISABLE,
+                    SourceFeatureDirection.ENABLE,
+                    SourceFeatureDirection.READ,
+                ),
+            ),
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=output_only_extensions),
+        capabilities=("source.snapshot_v2", "source.output_v2"),
+    )
+
+    validate_source_descriptor(descriptor)
+
+
 def test_source_v2_rejects_invalid_feature_scope_and_query_field_ownership() -> None:
     extensions = source_extensions()
     basic = extensions.features[0]

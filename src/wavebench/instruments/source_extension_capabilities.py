@@ -318,10 +318,6 @@ def _validate_write_contract(
             raise ConfigError(
                 "source.output_v2 requires readable output state on every channel"
             )
-        if not enabled <= basic_readable:
-            raise ConfigError(
-                "source.output_v2 requires readable final VPP and Offset on every channel"
-            )
 
 
 def _channels_with_direction(
