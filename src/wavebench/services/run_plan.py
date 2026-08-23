@@ -26,6 +26,9 @@ ALLOWED_STEP_KINDS = {
     "source.set_vpp",
     "source.set_duty",
     "source.output",
+    "source.basic_configure_v2",
+    "source.output_enable_v2",
+    "source.output_disable_v2",
     "power.status",
     "power.set",
     "power.output",
@@ -42,6 +45,9 @@ _REQUIRED_FIELDS = {
     "source.set_vpp": ("value_vpp",),
     "source.set_duty": ("duty_percent",),
     "source.output": ("state",),
+    "source.basic_configure_v2": ("channel",),
+    "source.output_enable_v2": ("channel",),
+    "source.output_disable_v2": ("channel",),
     "sweep.frequency_response": ("reference_channel", "response_channel"),
     "sleep": ("duration_s",),
 }
@@ -106,6 +112,16 @@ _OPTIONAL_FIELDS = {
     "source.set_vpp": {"channel", "on_failure"},
     "source.set_duty": {"channel", "on_failure"},
     "source.output": {"channel", "on_failure"},
+    "source.basic_configure_v2": {
+        "waveform_kind",
+        "frequency_hz",
+        "amplitude_vpp",
+        "offset_v",
+        "square_duty_cycle_percent",
+        "on_failure",
+    },
+    "source.output_enable_v2": {"on_failure"},
+    "source.output_disable_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
     "power.set": {"channel", "on_failure"},
     "power.output": {"channel", "on_failure"},
@@ -131,6 +147,9 @@ _STEP_NOTES = {
     "source.set_vpp": "Set source amplitude in Vpp.",
     "source.set_duty": "Set square-wave duty cycle in percent; valid range is 0 < duty_percent < 100.",
     "source.output": "Turn source channel output on or off.",
+    "source.basic_configure_v2": "Configure one Source V2 channel while its output is OFF. At least one basic field is required.",
+    "source.output_enable_v2": "Turn one Source V2 channel output on after a fresh V2 readback.",
+    "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
     "power.status": "Read power-supply channel state without changing output.",
     "power.set": "Set DP800 voltage/current limit; does not change output state.",
     "power.output": "Turn power-supply channel output on or off; does not change voltage/current limit.",
@@ -521,6 +540,42 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         fields["value_vpp"] = _positive_float(fields["value_vpp"], f"{prefix}.value_vpp")
     elif kind == "source.set_duty":
         fields["duty_percent"] = _duty_percent(fields["duty_percent"], f"{prefix}.duty_percent")
+    elif kind == "source.basic_configure_v2":
+        patch_fields = {
+            "waveform_kind",
+            "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "square_duty_cycle_percent",
+        }
+        if not patch_fields & fields.keys():
+            raise ConfigError(f"{prefix} source.basic_configure_v2 requires at least one basic field")
+        if "waveform_kind" in fields:
+            waveform_kind = _non_empty_str(
+                fields["waveform_kind"],
+                f"{prefix}.waveform_kind",
+            ).lower()
+            if waveform_kind not in {"sine", "square", "ramp", "pulse", "noise", "dc"}:
+                raise ConfigError(
+                    f"{prefix}.waveform_kind must be one of sine, square, ramp, pulse, noise, dc"
+                )
+            fields["waveform_kind"] = waveform_kind
+        for field in ("frequency_hz", "amplitude_vpp"):
+            if field in fields:
+                value = _finite_float(fields[field], f"{prefix}.{field}")
+                if value < 0:
+                    raise ConfigError(f"{prefix}.{field} must be >= 0")
+                fields[field] = value
+        if "offset_v" in fields:
+            fields["offset_v"] = _finite_float(fields["offset_v"], f"{prefix}.offset_v")
+        if "square_duty_cycle_percent" in fields:
+            duty = _finite_float(
+                fields["square_duty_cycle_percent"],
+                f"{prefix}.square_duty_cycle_percent",
+            )
+            if not 0 <= duty <= 100:
+                raise ConfigError(f"{prefix}.square_duty_cycle_percent must be in [0, 100]")
+            fields["square_duty_cycle_percent"] = duty
     elif kind == "dmm.read":
         fields["function"] = _non_empty_str(fields.get("function", "dcv"), f"{prefix}.function").lower()
         if "expect" in fields:

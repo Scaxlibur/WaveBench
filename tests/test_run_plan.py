@@ -290,11 +290,58 @@ duration_s = 0.5
         self.assertEqual(plan.steps[2].fields["duty_percent"], 25.0)
         self.assertEqual(plan.steps[3].fields["duration_s"], 0.5)
 
+    def test_source_v2_steps_validate_explicit_channels_and_closed_basic_patch(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 2
+waveform_kind = "SQUARE"
+frequency_hz = 1000
+amplitude_vpp = 0
+offset_v = -0.2
+square_duty_cycle_percent = 100
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 2
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 2
+"""))
+
+        basic = plan.steps[0]
+        self.assertEqual(basic.fields["channel"], 2)
+        self.assertEqual(basic.fields["waveform_kind"], "square")
+        self.assertEqual(basic.fields["frequency_hz"], 1000.0)
+        self.assertEqual(basic.fields["amplitude_vpp"], 0.0)
+        self.assertEqual(basic.fields["offset_v"], -0.2)
+        self.assertEqual(basic.fields["square_duty_cycle_percent"], 100.0)
+
+        empty_patch = self._write_plan("""
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 2
+""")
+        with self.assertRaisesRegex(ConfigError, "requires at least one basic field"):
+            load_run_plan(empty_patch)
+
+        arbitrary = self._write_plan("""
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 2
+waveform_kind = "arbitrary"
+""")
+        with self.assertRaisesRegex(ConfigError, "waveform_kind must be one of"):
+            load_run_plan(arbitrary)
+
 
     def test_format_run_plan_schema_lists_expect_and_power_output(self):
         text = format_run_plan_schema()
         self.assertIn("power.output", text)
         self.assertIn("source.arb_load", text)
+        self.assertIn("source.basic_configure_v2", text)
+        self.assertIn("source.output_enable_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)

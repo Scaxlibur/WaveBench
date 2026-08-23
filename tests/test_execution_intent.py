@@ -96,6 +96,38 @@ amplitude_vpp = 1
             verify_execution_intent(expected, plan, config)
 
 
+def test_execution_intent_uses_distinct_source_v2_output_operations() -> None:
+    with TemporaryDirectory() as tmp:
+        plan = load_run_plan(
+            write_plan(
+                tmp,
+                """
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+frequency_hz = 2000
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 1
+""",
+            )
+        )
+
+        intent = build_execution_intent(plan, make_config(tmp))
+
+    assert [item["operation"] for item in intent.operations] == [
+        "source.basic_configure_v2",
+        "source.output_enable_v2",
+        "source.output_disable_v2",
+    ]
+    assert intent.operations[0]["parameters"]["frequency_hz"] == 2000.0
+
+
 def test_run_rejects_intent_mismatch_before_opening_instrument_services() -> None:
     with TemporaryDirectory() as tmp:
         plan = _sleep_plan(tmp)
