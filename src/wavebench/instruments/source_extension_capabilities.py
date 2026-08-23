@@ -25,6 +25,7 @@ from .source_extensions import (
     SourceFacetScope,
     SourceFeature,
     SourceFeatureDirection,
+    SourceFrequencyMode,
     SourceHarmonicCapabilityProfile,
     SourceModulationCapabilityProfile,
     SourceModulationKind,
@@ -34,6 +35,7 @@ from .source_extensions import (
     SourcePulseCapabilityProfile,
     SourcePulseHoldBasis,
     SourceQueryEffect,
+    SourceSweepCapabilityProfile,
     SourceTriggerSource,
     SupportState,
 )
@@ -50,6 +52,7 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
         "source.burst_configure_v2": ("configure_source_burst_v2",),
         "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
+        "source.sweep_configure_v2": ("configure_source_sweep_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
 )
@@ -64,6 +67,7 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.burst_configure_v2",
         "source.modulation_fm_configure_v2",
         "source.modulation_pwm_configure_v2",
+        "source.sweep_configure_v2",
         "source.output_v2",
     }
 )
@@ -470,6 +474,27 @@ def _validate_write_contract(
                 "source.burst_configure_v2 requires readable output state on every channel"
             )
 
+    if "source.sweep_configure_v2" in capabilities:
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.SWEEP,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.sweep_configure_v2 requires sweep feature CONFIGURE directions"
+            )
+        readable = _channels_with_sweep_configuration_readback(extensions)
+        if not configurable <= readable:
+            raise ConfigError(
+                "source.sweep_configure_v2 requires readable internal sweep configuration "
+                "and sweep frequency mode on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.sweep_configure_v2 requires readable output state on every channel"
+            )
+
     if "source.output_v2" in capabilities:
         enabled = _channels_with_direction(
             extensions,
@@ -694,6 +719,42 @@ def _channels_with_burst_triggered_internal_configuration_readback(
     )
 
 
+def _channels_with_sweep_configuration_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    sweep_channels = frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.SWEEP
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceSweepCapabilityProfile)
+            and bool(feature.profile.spacing_modes)
+            and SourceTriggerSource.INTERNAL in feature.profile.trigger_sources
+            and feature.profile.timing_readable
+            and feature.profile.marker_readable
+            and feature.profile.configuration_readable
+        )
+        for channel in feature.channels
+    )
+    basic_sweep_channels = frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.BASIC
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceBasicCapabilityProfile)
+            and SourceFrequencyMode.SWEEP in feature.profile.frequency_modes
+        )
+        for channel in feature.channels
+    )
+    return sweep_channels & basic_sweep_channels
+
+
 def _validate_declared_write_directions(
     extensions: SourceDescriptorExtensions,
     capabilities: frozenset[str],
@@ -718,6 +779,9 @@ def _validate_declared_write_directions(
         ),
         (SourceFeature.BURST, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.burst_configure_v2"}
+        ),
+        (SourceFeature.SWEEP, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.sweep_configure_v2"}
         ),
         (SourceFeature.OUTPUT, SourceFeatureDirection.ENABLE): frozenset(
             {"source.output_v2"}

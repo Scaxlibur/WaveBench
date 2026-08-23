@@ -544,12 +544,14 @@ class SourceSweepCapabilityProfile:
     trigger_sources: tuple[SourceTriggerSource, ...]
     timing_readable: bool
     marker_readable: bool
+    configuration_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.spacing_modes, SourceSweepSpacing, "sweep spacing_modes")
         _require_enum_tuple(self.trigger_sources, SourceTriggerSource, "sweep trigger_sources")
         _require_bool(self.timing_readable, "sweep timing_readable")
         _require_bool(self.marker_readable, "sweep marker_readable")
+        _require_bool(self.configuration_readable, "sweep configuration_readable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1143,6 +1145,42 @@ SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
         SourceV1WriteRouteId.CONFIGURE_BURST,
         SourceV1WriteRouteId.RESTORE,
         SourceV1WriteRouteId.TRIGGER_BURST,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.sweep_configure_v2",
+    capability="source.sweep_configure_v2",
+    feature=SourceFeature.SWEEP,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.SWEEP,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.SWEEP,
+    ),
+    postcondition_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.SWEEP,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_SWEEP,
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.TRIGGER_SWEEP,
     ),
     operation_timeout_ms=5_000,
     main_max_steps=1,
@@ -2467,6 +2505,43 @@ class SourceBurstConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceSweepConfigureRequest:
+    channel: int
+    start_hz: float
+    stop_hz: float
+    spacing: SourceSweepSpacing
+    steps: int
+    sweep_time_s: float
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source sweep configure channel", minimum=1)
+        for label, value in (
+            ("start_hz", self.start_hz),
+            ("stop_hz", self.stop_hz),
+        ):
+            _require_finite(value, f"source sweep configure {label}", minimum=0.0)
+            if value <= 0:
+                raise ValueError(f"source sweep configure {label} must be > 0")
+        if self.start_hz > self.stop_hz:
+            raise ValueError("source sweep configure start_hz must not exceed stop_hz")
+        if self.spacing not in {
+            SourceSweepSpacing.LINEAR,
+            SourceSweepSpacing.LOGARITHMIC,
+            SourceSweepSpacing.STEP,
+        }:
+            raise ValueError("source sweep configure spacing has an invalid type or value")
+        _require_int(self.steps, "source sweep configure steps", minimum=2)
+        if self.steps > 2_048:
+            raise ValueError("source sweep configure steps must be <= 2048")
+        _require_finite(
+            self.sweep_time_s,
+            "source sweep configure sweep_time_s",
+            minimum=0.001,
+            maximum=300.0,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceFmModulationConfigureRequest:
     channel: int
     frequency_deviation_hz: float
@@ -3171,6 +3246,93 @@ class SweepFacet:
                 _require_finite(value.value, f"sweep {name} value", minimum=0.0)
         if self.steps.availability is Availability.VALUE:
             _require_int(self.steps.value, "sweep steps value", minimum=2)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSweepConfigureResult:
+    channel: int
+    basic: BasicWaveFacet
+    sweep: SweepFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source sweep configure result channel", minimum=1)
+        if not isinstance(self.basic, BasicWaveFacet):
+            raise ValueError("source sweep configure result basic has an invalid type")
+        if not isinstance(self.sweep, SweepFacet):
+            raise ValueError("source sweep configure result sweep has an invalid type")
+        _require_bool(self.output_enabled, "source sweep configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source sweep configure result requires output_enabled=False")
+        if (
+            self.basic.frequency_mode.availability is not Availability.VALUE
+            or self.basic.frequency_mode.value is not SourceFrequencyMode.SWEEP
+        ):
+            raise ValueError("source sweep configure result requires sweep frequency mode")
+        if (
+            self.sweep.enabled.availability is not Availability.VALUE
+            or self.sweep.enabled.value is not True
+        ):
+            raise ValueError("source sweep configure result requires enabled sweep readback")
+        values: dict[str, object] = {}
+        for label, observed in (
+            ("start_hz", self.sweep.start_hz),
+            ("stop_hz", self.sweep.stop_hz),
+            ("spacing", self.sweep.spacing),
+            ("steps", self.sweep.steps),
+            ("sweep_time_s", self.sweep.sweep_time_s),
+        ):
+            if observed.availability is not Availability.VALUE:
+                raise ValueError(f"source sweep configure result requires {label} readback")
+            values[label] = observed.value
+        SourceSweepConfigureRequest(
+            channel=self.channel,
+            start_hz=values["start_hz"],  # type: ignore[arg-type]
+            stop_hz=values["stop_hz"],  # type: ignore[arg-type]
+            spacing=values["spacing"],  # type: ignore[arg-type]
+            steps=values["steps"],  # type: ignore[arg-type]
+            sweep_time_s=values["sweep_time_s"],  # type: ignore[arg-type]
+        )
+        for label, observed in (
+            ("start_hold_s", self.sweep.start_hold_s),
+            ("stop_hold_s", self.sweep.stop_hold_s),
+            ("return_time_s", self.sweep.return_time_s),
+        ):
+            if observed.availability is not Availability.VALUE or observed.value != 0.0:
+                raise ValueError(
+                    f"source sweep configure result requires {label}=0 readback"
+                )
+        if self.sweep.trigger.availability is not Availability.VALUE or not isinstance(
+            self.sweep.trigger.value,
+            SourceTriggerState,
+        ):
+            raise ValueError("source sweep configure result requires trigger readback")
+        trigger = self.sweep.trigger.value
+        if (
+            trigger.source.availability is not Availability.VALUE
+            or trigger.source.value is not SourceTriggerSource.INTERNAL
+        ):
+            raise ValueError("source sweep configure result requires internal trigger readback")
+        if (
+            trigger.slope.availability is not Availability.VALUE
+            or trigger.slope.value is not SourceTriggerSlope.POSITIVE
+        ):
+            raise ValueError(
+                "source sweep configure result requires positive trigger slope readback"
+            )
+        if (
+            trigger.output.availability is not Availability.VALUE
+            or trigger.output.value is not SourceTriggerOutput.OFF
+        ):
+            raise ValueError("source sweep configure result requires trigger output OFF readback")
+        if self.sweep.marker.availability is not Availability.VALUE or not isinstance(
+            self.sweep.marker.value,
+            SourceSweepMarker,
+        ):
+            raise ValueError("source sweep configure result requires marker readback")
+        marker = self.sweep.marker.value
+        if marker.enabled.availability is not Availability.VALUE or marker.enabled.value is not False:
+            raise ValueError("source sweep configure result requires marker OFF readback")
 
 
 @dataclass(frozen=True, slots=True)
@@ -4048,6 +4210,14 @@ class SourcePwmModulationConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceSweepConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_sweep_v2(
+        self,
+        request: SourceSweepConfigureRequest,
+    ) -> SourceSweepConfigureResult: ...
+
+
+@runtime_checkable
 class SourcePulseConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_pulse_v2(
         self,
@@ -4334,4 +4504,8 @@ __all__ = [
     "SourcePwmModulationConfigureResult",
     "SourcePwmModulationConfigureV2Driver",
     "SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceSweepConfigureRequest",
+    "SourceSweepConfigureResult",
+    "SourceSweepConfigureV2Driver",
+    "SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT",
 ]

@@ -530,6 +530,15 @@ SourcePwmModulationConfigureV2Driver
 SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+M6-A／内部 Sweep 在上述清单末尾追加以下精确条目：
+
+```text
+SourceSweepConfigureRequest
+SourceSweepConfigureResult
+SourceSweepConfigureV2Driver
+SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -583,7 +592,7 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 不得由插件自行拼接字符串。
 
 R6／M6-A 将 `source.modulation_pm_configure_v2`、`source.burst_configure_v2` 与
-`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2` 明确加入已授权的窄 capability。
+`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2` 明确加入已授权的窄 capability。
 现有 `source.modulation_configure_v2` 保持内部 AM 的首版语义，不因 PM 子项扩张；分离 capability 使 PM-only
 插件不会改变 V1 AM route，也使 AM-only 插件无需提供 PM 入口。Burst capability 也不授权 arm、fire 或任何
 输出开启路径。
@@ -3275,7 +3284,32 @@ capability 独立决定。
 写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写 capability 声明或实机验收。
 
-Sweep 仍是当前下一子项和保留 ID；它不因本 PWM 子项自动注册或改变其 V1 route。
+Sweep 是当前下一子项。其窄 capability、typed model 与 descriptor readback 条件已冻结；公共事务、CLI、run plan
+与 V1 route 切换仍须由该子项完成后才开放。
+
+### M6-A 下一子能力：内部 Sweep
+
+`source.sweep_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内建 Sweep 配置。typed request 固定为
+`channel`、`start_hz`、`stop_hz`、`spacing`、`steps` 和 `sweep_time_s`：频率必须为有限正值且
+`start_hz <= stop_hz`；`spacing` 只能是 `linear`、`logarithmic` 或 `step`；steps 位于 `[2, 2048]`，
+sweep time 位于 `[0.001, 300]` 秒。这些值域沿用既有 Source V1 的配置合同，不作为新的电气安全预算。
+
+配置完成后 Sweep 必为 enabled，三个 hold／return 时间均为零；trigger 固定为 internal、positive、trigger output OFF，
+marker 固定为 disabled。Basic 的 `frequency_mode` 必须独立回读为 `sweep`，因此该 operation 的字段闭包包含同一
+channel 的 Basic／Sweep／Output 和仪器 Identity。它不提供 center/span、partial patch、hold／return 自定义、marker、
+外部／手动／BUS trigger、arm、fire、trigger output、隐式输出 ON 或从 Sweep 回到固定频率。
+
+descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、internal trigger、timing／marker 与完整配置
+readback；同一 channel 的 Basic `READ` 必须声明 `sweep` frequency mode，Output `READ` 与 output state readback
+也为必需。核心在运行时按 request 检查所选 spacing，不要求每个设备支持全部三种 spacing。
+
+该 operation 使用 `POTENTIAL_WHILE_OFF`，复用 fresh consistent snapshot、目标 output OFF、单次 driver 写、独立
+postcondition 和主写入后的最多一次 V2 OFF recovery；没有额外 RMS、端接、热、共享功率或 trigger 接线门。本子项只
+授权配置，不构成任何 fire 或输出 ON 授权。
+
+双合同插件声明 `source.sweep_configure_v2` 后，V1 `configure_sweep`、`trigger_sweep` 与 restore 必须在仪器
+I/O 前拒绝，不能把 V1 的 center/span、外部／手动 trigger、marker 或 fire 语义部分映射进本范围。V1-only 插件和
+未声明该 capability 的双合同插件继续使用既有 V1 Sweep 路径。
 
 ### R6 延后事项
 

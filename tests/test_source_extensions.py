@@ -94,7 +94,12 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
     assert module.__all__[fm_start : fm_start + len(fm_exports)] == fm_exports
     match = re.search(r"M6-A／内部 PWM 调制在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
     assert match is not None
-    assert module.__all__[fm_start + len(fm_exports) :] == match.group(1).splitlines()
+    pwm_exports = match.group(1).splitlines()
+    pwm_start = fm_start + len(fm_exports)
+    assert module.__all__[pwm_start : pwm_start + len(pwm_exports)] == pwm_exports
+    match = re.search(r"M6-A／内部 Sweep 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
+    assert match is not None
+    assert module.__all__[pwm_start + len(pwm_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -162,6 +167,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "trigger_sources",
             "timing_readable",
             "marker_readable",
+            "configuration_readable",
         ),
         "SourceBurstCapabilityProfile": (
             "modes",
@@ -307,6 +313,15 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "width_deviation_s",
         ),
         "SourcePwmModulationConfigureResult": ("channel", "modulation", "output_enabled"),
+        "SourceSweepConfigureRequest": (
+            "channel",
+            "start_hz",
+            "stop_hz",
+            "spacing",
+            "steps",
+            "sweep_time_s",
+        ),
+        "SourceSweepConfigureResult": ("channel", "basic", "sweep", "output_enabled"),
         "SourcePulseConfigureRequest": (
             "channel",
             "width_s",
@@ -485,6 +500,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.burst_configure_v2": ("configure_source_burst_v2",),
         "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
+        "source.sweep_configure_v2": ("configure_source_sweep_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
@@ -912,6 +928,114 @@ def test_source_v2_pwm_modulation_write_models_are_closed_and_serializable() -> 
         module.SourcePwmModulationConfigureResult(
             1,
             replace(duty_modulation, kind=Observed.value_of(module.SourceModulationKind.PM)),
+            False,
+        )
+
+
+def test_source_v2_sweep_write_models_are_closed_and_serializable() -> None:
+    basic = replace(
+        basic_facet(),
+        frequency_mode=Observed.value_of(module.SourceFrequencyMode.SWEEP),
+    )
+    sweep = module.SweepFacet(
+        enabled=Observed.value_of(True),
+        start_hz=Observed.value_of(100.0),
+        stop_hz=Observed.value_of(1_000.0),
+        spacing=Observed.value_of(module.SourceSweepSpacing.LINEAR),
+        steps=Observed.value_of(101),
+        sweep_time_s=Observed.value_of(1.0),
+        start_hold_s=Observed.value_of(0.0),
+        stop_hold_s=Observed.value_of(0.0),
+        return_time_s=Observed.value_of(0.0),
+        trigger=Observed.value_of(
+            module.SourceTriggerState(
+                source=Observed.value_of(module.SourceTriggerSource.INTERNAL),
+                slope=Observed.value_of(module.SourceTriggerSlope.POSITIVE),
+                output=Observed.value_of(module.SourceTriggerOutput.OFF),
+            )
+        ),
+        marker=Observed.value_of(
+            module.SourceSweepMarker(
+                enabled=Observed.value_of(False),
+                frequency_hz=Observed.missing(
+                    Availability.NOT_APPLICABLE,
+                    SourceReasonCode.INACTIVE_BY_ANCHOR,
+                ),
+            )
+        ),
+    )
+    request = module.SourceSweepConfigureRequest(
+        channel=1,
+        start_hz=100.0,
+        stop_hz=1_000.0,
+        spacing=module.SourceSweepSpacing.LINEAR,
+        steps=101,
+        sweep_time_s=1.0,
+    )
+    result = module.SourceSweepConfigureResult(1, basic, sweep, False)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceSweepConfigureRequest",
+        "channel": 1,
+        "start_hz": 100.0,
+        "stop_hz": 1_000.0,
+        "spacing": "linear",
+        "steps": 101,
+        "sweep_time_s": 1.0,
+    }
+    assert result.sweep.spacing.value is module.SourceSweepSpacing.LINEAR
+    with pytest.raises(ValueError, match="start_hz must be > 0"):
+        module.SourceSweepConfigureRequest(
+            1,
+            0.0,
+            1_000.0,
+            module.SourceSweepSpacing.LINEAR,
+            101,
+            1.0,
+        )
+    with pytest.raises(ValueError, match="must not exceed"):
+        module.SourceSweepConfigureRequest(
+            1,
+            1_000.0,
+            100.0,
+            module.SourceSweepSpacing.LINEAR,
+            101,
+            1.0,
+        )
+    with pytest.raises(ValueError, match="<= 2048"):
+        module.SourceSweepConfigureRequest(
+            1,
+            100.0,
+            1_000.0,
+            module.SourceSweepSpacing.LINEAR,
+            2_049,
+            1.0,
+        )
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceSweepConfigureResult(1, basic, sweep, True)
+    with pytest.raises(ValueError, match="sweep frequency mode"):
+        module.SourceSweepConfigureResult(
+            1,
+            replace(
+                basic,
+                frequency_mode=Observed.value_of(module.SourceFrequencyMode.FIXED),
+            ),
+            sweep,
+            False,
+        )
+    with pytest.raises(ValueError, match="marker OFF"):
+        module.SourceSweepConfigureResult(
+            1,
+            basic,
+            replace(
+                sweep,
+                marker=Observed.value_of(
+                    module.SourceSweepMarker(
+                        enabled=Observed.value_of(True),
+                        frequency_hz=Observed.value_of(500.0),
+                    )
+                ),
+            ),
             False,
         )
 
@@ -1853,6 +1977,155 @@ def test_source_v2_burst_write_requires_triggered_internal_direction_and_readbac
             descriptor,
             type(
                 "MissingBurstWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                },
+            )(),
+        )
+
+
+def test_source_v2_sweep_write_requires_internal_direction_and_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    basic = replace(
+        basic,
+        profile=replace(
+            basic.profile,
+            frequency_modes=(
+                module.SourceFrequencyMode.FIXED,
+                module.SourceFrequencyMode.SWEEP,
+            ),
+        ),
+    )
+    sweep = module.SourceFeatureCapability(
+        feature=module.SourceFeature.SWEEP,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourceSweepCapabilityProfile(
+            spacing_modes=(
+                module.SourceSweepSpacing.LINEAR,
+                module.SourceSweepSpacing.LOGARITHMIC,
+                module.SourceSweepSpacing.STEP,
+            ),
+            trigger_sources=(module.SourceTriggerSource.INTERNAL,),
+            timing_readable=True,
+            marker_readable=True,
+            configuration_readable=True,
+        ),
+    )
+    sweep_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.SWEEP,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.SWEEP,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(basic, output, sweep),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                extensions.query_contract.facets[2],
+                sweep_query,
+            ),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=("source.snapshot_v2", "source.sweep_configure_v2"),
+    )
+
+    class SweepWriteDriver(SourceV2FakeDriver):
+        def configure_source_sweep_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, SweepWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="CONFIGURE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        output,
+                        replace(sweep, directions=(module.SourceFeatureDirection.READ,)),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable internal sweep configuration"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        output,
+                        replace(
+                            sweep,
+                            profile=replace(
+                                sweep.profile,
+                                configuration_readable=False,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="sweep frequency mode"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        replace(
+                            basic,
+                            profile=replace(
+                                basic.profile,
+                                frequency_modes=(module.SourceFrequencyMode.FIXED,),
+                            ),
+                        ),
+                        output,
+                        sweep,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable output state"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(output, profile=replace(output.profile, output_readable=False)),
+                        sweep,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="configure_source_sweep_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingSweepWriteDriver",
                 (),
                 {
                     "close": lambda self: None,
