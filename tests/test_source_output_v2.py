@@ -259,21 +259,37 @@ def _service(
 def test_output_v2_enables_and_disables_one_port_with_independent_readback() -> None:
     service, driver = _service()
 
-    enabled = service._set_output_v2_transaction(SourceOutputRequest(channel=1, enabled=True))
-    disabled = service._set_output_v2_transaction(SourceOutputRequest(channel=1, enabled=False))
+    enabled, enable_artifact = service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+    disabled, disable_artifact = service.set_output_v2(SourceOutputRequest(channel=1, enabled=False))
 
-    assert enabled.result.enabled is True
-    assert enabled.artifact["operation"] == "source.output_enable_v2"
-    assert enabled.artifact["final_state"]["output_expected"] == "on"
-    assert disabled.result.enabled is False
-    assert disabled.artifact["operation"] == "source.output_disable_v2"
-    assert disabled.artifact["final_state"]["output_expected"] == "off"
+    assert enabled.enabled is True
+    assert enable_artifact["operation"] == "source.output_enable_v2"
+    assert enable_artifact["final_state"]["output_expected"] == "on"
+    assert disabled.enabled is False
+    assert disable_artifact["operation"] == "source.output_disable_v2"
+    assert disable_artifact["final_state"]["output_expected"] == "off"
     assert driver.output_requests == [
         SourceOutputRequest(channel=1, enabled=True),
         SourceOutputRequest(channel=1, enabled=False),
     ]
     assert driver.transport.counters.write_completed == 2
-    assert "fake-source-output-v2" not in repr(enabled.artifact)
+    assert "fake-source-output-v2" not in repr(enable_artifact)
+
+
+def test_v1_output_route_maps_to_v2_without_using_the_v1_driver_method() -> None:
+    service, driver = _service()
+    assert service.descriptor is not None
+    service.descriptor = replace(
+        service.descriptor,
+        capabilities=("source.snapshot_v2", "source.output_v2", "source.output"),
+    )
+
+    status = service.set_output(channel=1, enabled=True)
+
+    assert status.channel == 1
+    assert status.output == "ON"
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=True)]
+    assert driver.v1_output_calls == 0
 
 
 def test_output_v2_allows_second_independent_port_to_turn_on() -> None:

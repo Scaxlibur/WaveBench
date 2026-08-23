@@ -64,6 +64,7 @@ from wavebench.instruments.source_extensions import (
     BasicWaveFacet,
     OutputFacet,
     PatchAction,
+    PatchValue,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_CONTRACT_VERSION,
     SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
@@ -76,6 +77,7 @@ from wavebench.instruments.source_extensions import (
     SourceBasicConfigureRequest,
     SourceBasicConfigureResult,
     SourceBasicConfigureV2Driver,
+    SourceBasicPatch,
     SourceFacetScope,
     SourceFieldId,
     SourceFieldRef,
@@ -87,6 +89,8 @@ from wavebench.instruments.source_extensions import (
     SourceScopeRef,
     SourceSnapshotV2,
     SourceSnapshotV2Driver,
+    SourceV1WriteRouteId,
+    SourceWaveformKind,
     SupportState,
     source_v2_digest,
     source_v2_to_data,
@@ -117,18 +121,20 @@ from wavebench.transport.session import SessionHealth
 
 @dataclass(frozen=True, slots=True)
 class _SourceBasicConfigureV2Transaction:
-    """Internal M5-B result; public Source V2 write entry points come later."""
+    """Core transaction result shared by public and V1-adapter routes."""
 
     result: SourceBasicConfigureResult
     artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
 
 
 @dataclass(frozen=True, slots=True)
 class _SourceOutputV2Transaction:
-    """Internal M5-C result; public Source V2 write entry points come later."""
+    """Core transaction result shared by public and V1-adapter routes."""
 
     result: SourceOutputResult
     artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
 
 
 @dataclass
@@ -154,6 +160,36 @@ class SourceService(SessionStateAliasMixin):
         )
         self.descriptor = descriptor
         require_capabilities(descriptor, capabilities, operation=operation)
+
+    def _declared_source_capabilities(self) -> tuple[str, ...]:
+        """Return the descriptor declaration without opening an instrument session."""
+
+        source = self._source_config()
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            source.driver,
+            expected_kind="source",
+        )
+        self.descriptor = descriptor
+        return descriptor.capabilities
+
+    def _declares_source_v2_capability(self, capability: str) -> bool:
+        return capability in self._declared_source_capabilities()
+
+    def _reject_v1_route_for_source_v2(
+        self,
+        route: SourceV1WriteRouteId,
+        *overlapping_capabilities: str,
+    ) -> None:
+        declared = set(self._declared_source_capabilities())
+        overlaps = tuple(
+            capability for capability in overlapping_capabilities if capability in declared
+        )
+        if overlaps:
+            joined = ", ".join(overlaps)
+            raise ConfigError(
+                f"{route.value} cannot run for a Source V2 write driver "
+                f"({joined}); use the dedicated Source V2 operation"
+            )
 
     def _source_config(self) -> SourceConfig:
         if self.config.source is None or not self.config.source.resource:
@@ -257,6 +293,34 @@ class SourceService(SessionStateAliasMixin):
                     source,
                     correlation_id=correlation_id,
                 )
+
+    def configure_basic_v2(
+        self,
+        request: SourceBasicConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceBasicConfigureResult, dict[str, object]]:
+        """Configure one OFF source channel and return its typed result and artifact."""
+
+        transaction = self._configure_basic_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def set_output_v2(
+        self,
+        request: SourceOutputRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceOutputResult, dict[str, object]]:
+        """Apply one Source V2 output transition and return its typed result and artifact."""
+
+        transaction = self._set_output_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
 
     def _snapshot_v2_with_open_source(
         self,
@@ -522,6 +586,7 @@ class SourceService(SessionStateAliasMixin):
                         postcondition_snapshot=postcondition_snapshot,
                         result=result,
                     ),
+                    snapshot=postcondition_snapshot,
                 )
             except BaseException:
                 if not context.terminal:
@@ -760,6 +825,11 @@ class SourceService(SessionStateAliasMixin):
                         postcondition_snapshot=postcondition_snapshot,
                         result=result,
                         wrote_main=wrote_main,
+                    ),
+                    snapshot=(
+                        postcondition_snapshot
+                        if postcondition_snapshot is not None
+                        else preflight_snapshot
                     ),
                 )
             except BaseException:
@@ -1394,6 +1464,105 @@ class SourceService(SessionStateAliasMixin):
         except Exception:
             pass
 
+    @staticmethod
+    def _source_v2_waveform_from_v1(function: str) -> SourceWaveformKind:
+        aliases = {
+            "SIN": SourceWaveformKind.SINE,
+            "SINE": SourceWaveformKind.SINE,
+            "SQU": SourceWaveformKind.SQUARE,
+            "SQUARE": SourceWaveformKind.SQUARE,
+            "RAMP": SourceWaveformKind.RAMP,
+            "TRI": SourceWaveformKind.RAMP,
+            "TRIANGLE": SourceWaveformKind.RAMP,
+            "PULS": SourceWaveformKind.PULSE,
+            "PULSE": SourceWaveformKind.PULSE,
+            "NOIS": SourceWaveformKind.NOISE,
+            "NOISE": SourceWaveformKind.NOISE,
+            "DC": SourceWaveformKind.DC,
+        }
+        normalized = function.strip().upper()
+        try:
+            return aliases[normalized]
+        except KeyError as exc:
+            raise ConfigError(
+                "source.set_function cannot map this waveform to source.basic_configure_v2"
+            ) from exc
+
+    @staticmethod
+    def _source_status_from_v2_snapshot(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+    ) -> SourceStatus:
+        """Flatten a V2 readback only for a legacy V1 return value."""
+
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError("Source V2 postcondition does not contain the target channel")
+
+        basic = (
+            target.basic.value
+            if target.basic.availability is Availability.VALUE
+            and isinstance(target.basic.value, BasicWaveFacet)
+            else None
+        )
+        output = (
+            target.output.value
+            if target.output.availability is Availability.VALUE
+            and isinstance(target.output.value, OutputFacet)
+            else None
+        )
+
+        def observed_value(value: object) -> object | None:
+            return (
+                getattr(value, "value", None)
+                if getattr(value, "availability", None) is Availability.VALUE
+                else None
+            )
+
+        waveform_codes = {
+            SourceWaveformKind.SINE: "SIN",
+            SourceWaveformKind.SQUARE: "SQU",
+            SourceWaveformKind.RAMP: "RAMP",
+            SourceWaveformKind.PULSE: "PULS",
+            SourceWaveformKind.NOISE: "NOIS",
+            SourceWaveformKind.DC: "DC",
+            SourceWaveformKind.ARBITRARY: "ARB",
+            SourceWaveformKind.OTHER: "OTHER",
+        }
+        waveform = None if basic is None else observed_value(basic.waveform_kind)
+        function = waveform_codes.get(waveform, "UNKNOWN")
+        frequency = None if basic is None else observed_value(basic.frequency_hz)
+        offset = None if basic is None else observed_value(basic.offset_v)
+        phase = None if basic is None else observed_value(basic.phase_deg)
+        duty = None if basic is None else observed_value(basic.square_duty_cycle_percent)
+        amplitude = None if basic is None else observed_value(basic.amplitude)
+        amplitude_value = amplitude.value if isinstance(amplitude, SourceAmplitude) else None
+        amplitude_unit = amplitude.unit.value.upper() if isinstance(amplitude, SourceAmplitude) else None
+        frequency_mode_value = None if basic is None else observed_value(basic.frequency_mode)
+        frequency_mode = {
+            "fixed": "FIX",
+            "sweep": "SWE",
+            "list": "LIST",
+        }.get(getattr(frequency_mode_value, "value", None), "UNKNOWN")
+        enabled = None if output is None else observed_value(output.enabled)
+
+        return SourceStatus(
+            channel=channel,
+            output="ON" if enabled is True else "OFF" if enabled is False else "UNKNOWN",
+            function=function,
+            frequency_hz=float(frequency) if isinstance(frequency, (int, float)) else None,
+            amplitude=float(amplitude_value) if isinstance(amplitude_value, (int, float)) else None,
+            amplitude_unit=amplitude_unit,
+            offset_v=float(offset) if isinstance(offset, (int, float)) else None,
+            phase_deg=float(phase) if isinstance(phase, (int, float)) else None,
+            frequency_mode=frequency_mode,
+            sweep_enabled=(
+                "ON" if frequency_mode == "SWE" else "OFF" if frequency_mode != "UNKNOWN" else "UNKNOWN"
+            ),
+            apply_raw=None,
+            square_duty_cycle_percent=float(duty) if isinstance(duty, (int, float)) else None,
+        )
+
     def channel_profile(self, channel: int | None = None) -> SourceChannelProfile:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
@@ -1650,6 +1819,10 @@ class SourceService(SessionStateAliasMixin):
     def trigger_burst(self, channel: int | None = None) -> None:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.TRIGGER_BURST,
+            "source.output_v2",
+        )
         required = ["source.burst_trigger"]
         if source_cfg.check_errors:
             required.append("source.errors")
@@ -1707,6 +1880,10 @@ class SourceService(SessionStateAliasMixin):
     def trigger_sweep(self, channel: int | None = None) -> None:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.TRIGGER_SWEEP,
+            "source.output_v2",
+        )
         required = ["source.sweep_trigger"]
         if source_cfg.check_errors:
             required.append("source.errors")
@@ -1725,6 +1902,11 @@ class SourceService(SessionStateAliasMixin):
         return RestorableSourceState.from_status(self.status(channel=channel))
 
     def restore_restorable_state(self, state: RestorableSourceState) -> SourceStatus:
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.RESTORE,
+            "source.basic_configure_v2",
+            "source.output_v2",
+        )
         self.set_output(channel=state.channel, enabled=False)
         self.set_function(channel=state.channel, function=state.function)
         self.set_amplitude_vpp(channel=state.channel, value_vpp=state.amplitude_vpp)
@@ -1739,6 +1921,18 @@ class SourceService(SessionStateAliasMixin):
     def set_frequency(self, channel: int | None, value_hz: float) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.basic_configure_v2"):
+            transaction = self._configure_basic_v2_transaction(
+                SourceBasicConfigureRequest(
+                    channel=channel,
+                    patch=SourceBasicPatch(
+                        frequency_hz=PatchValue(PatchAction.SET, value_hz),
+                    ),
+                )
+            )
+            status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
+            self._state_guard_after_write(status)
+            return status
         required = ["source.set_frequency"]
         if source_cfg.settle_ms_after_set_frequency:
             required.append("source.status")
@@ -1766,6 +1960,13 @@ class SourceService(SessionStateAliasMixin):
     def set_output(self, channel: int | None, enabled: bool) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.output_v2"):
+            transaction = self._set_output_v2_transaction(
+                SourceOutputRequest(channel=channel, enabled=enabled),
+            )
+            status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
+            self._state_guard_after_write(status)
+            return status
         required = ["source.output"]
         if enabled:
             required.append("source.status")
@@ -1795,6 +1996,21 @@ class SourceService(SessionStateAliasMixin):
     def set_function(self, channel: int | None, function: str) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.basic_configure_v2"):
+            transaction = self._configure_basic_v2_transaction(
+                SourceBasicConfigureRequest(
+                    channel=channel,
+                    patch=SourceBasicPatch(
+                        waveform_kind=PatchValue(
+                            PatchAction.SET,
+                            self._source_v2_waveform_from_v1(function),
+                        ),
+                    ),
+                )
+            )
+            status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
+            self._state_guard_after_write(status)
+            return status
         required = ["source.set_function"]
         if self.state_guard is not None:
             required.append("source.status")
@@ -1808,6 +2024,18 @@ class SourceService(SessionStateAliasMixin):
     def set_square_duty_cycle(self, channel: int | None, duty_percent: float) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.basic_configure_v2"):
+            transaction = self._configure_basic_v2_transaction(
+                SourceBasicConfigureRequest(
+                    channel=channel,
+                    patch=SourceBasicPatch(
+                        square_duty_cycle_percent=PatchValue(PatchAction.SET, duty_percent),
+                    ),
+                )
+            )
+            status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
+            self._state_guard_after_write(status)
+            return status
         required = ["source.set_square_duty_cycle"]
         if self.state_guard is not None:
             required.append("source.status")
@@ -1826,6 +2054,18 @@ class SourceService(SessionStateAliasMixin):
         source_cfg = self._source_config()
         self._check_source_vpp(value_vpp, field="source amplitude / 信号源幅度")
         channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.basic_configure_v2"):
+            transaction = self._configure_basic_v2_transaction(
+                SourceBasicConfigureRequest(
+                    channel=channel,
+                    patch=SourceBasicPatch(
+                        amplitude_vpp=PatchValue(PatchAction.SET, value_vpp),
+                    ),
+                )
+            )
+            status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
+            self._state_guard_after_write(status)
+            return status
         required = ["source.set_amplitude_vpp"]
         if self.state_guard is not None:
             required.append("source.status")
@@ -1855,6 +2095,11 @@ class SourceService(SessionStateAliasMixin):
         output_on: bool = False,
     ) -> SourceStatus:
         source_cfg = self._source_config()
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.UPLOAD_ARBITRARY,
+            "source.basic_configure_v2",
+            "source.output_v2",
+        )
         self._require_finite(
             playback_frequency_hz,
             field="arbitrary waveform playback frequency / 任意波播放频率",

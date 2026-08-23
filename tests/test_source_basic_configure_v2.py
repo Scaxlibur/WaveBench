@@ -40,6 +40,7 @@ from wavebench.instruments.source_extensions import (
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
+from wavebench.services.source_state import RestorableSourceState
 from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import InstrumentSessionState, SessionHealth
@@ -293,32 +294,71 @@ def _frequency_request(value_hz: float = 2_000.0) -> SourceBasicConfigureRequest
 
 
 @pytest.mark.parametrize("combined", (True, False))
-def test_basic_configure_v2_private_transaction_supports_combined_and_scalar_queries(
+def test_basic_configure_v2_public_service_supports_combined_and_scalar_queries(
     combined: bool,
 ) -> None:
     service, driver = _service(combined=combined)
     request = _frequency_request()
 
-    transaction = service._configure_basic_v2_transaction(request, correlation_id="basic-write")
+    result, artifact = service.configure_basic_v2(request, correlation_id="basic-write")
 
-    assert not hasattr(service, "configure_basic_v2")
-    assert transaction.result.basic.frequency_hz.value == 2_000.0
+    assert result.basic.frequency_hz.value == 2_000.0
     assert driver.basic_requests == [request]
     assert driver.output_requests == []
     assert driver.transport.counters.write_completed == 1
-    assert transaction.artifact["operation"] == "source.basic_configure_v2"
-    assert transaction.artifact["request"]["channel"] == 1
-    assert transaction.artifact["final_state"] == {
+    assert artifact["operation"] == "source.basic_configure_v2"
+    assert artifact["request"]["channel"] == 1
+    assert artifact["final_state"] == {
         "session_health": "healthy",
         "output_expected": "off",
     }
-    assert [item["phase"] for item in transaction.artifact["phases"]] == [
+    assert [item["phase"] for item in artifact["phases"]] == [
         "preflight",
         "main",
         "postcondition",
     ]
-    assert "fake-source-v2" not in repr(transaction.artifact)
-    assert "SOURCE:STATE?" not in repr(transaction.artifact)
+    assert "fake-source-v2" not in repr(artifact)
+    assert "SOURCE:STATE?" not in repr(artifact)
+
+
+def test_v1_frequency_route_maps_to_v2_for_a_dual_contract_driver() -> None:
+    service, driver = _service()
+    assert service.descriptor is not None
+    service.descriptor = replace(
+        service.descriptor,
+        capabilities=(
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+            "source.output_v2",
+            "source.set_frequency",
+        ),
+    )
+
+    status = service.set_frequency(channel=1, value_hz=2_000.0)
+
+    assert status.channel == 1
+    assert status.output == "OFF"
+    assert status.frequency_hz == 2_000.0
+    assert driver.basic_requests == [_frequency_request()]
+    assert driver.transport.counters.write_completed == 1
+
+
+def test_v1_restore_route_rejects_before_io_for_a_dual_contract_driver() -> None:
+    service, driver = _service()
+
+    with pytest.raises(ConfigError, match="restore_restorable_state cannot run"):
+        service.restore_restorable_state(
+            RestorableSourceState(
+                channel=1,
+                output="OFF",
+                function="SIN",
+                frequency_hz=1_000.0,
+                amplitude_vpp=1.0,
+                amplitude_unit="VPP",
+            )
+        )
+
+    assert driver.transport.counters.write_requests == 0
 
 
 def test_basic_configure_v2_rejects_target_output_on_before_write() -> None:
