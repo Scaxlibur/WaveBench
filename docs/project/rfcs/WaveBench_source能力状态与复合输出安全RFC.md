@@ -476,6 +476,15 @@ SourceHarmonicConfigureV2Driver
 SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+M6-A／内部 AM 调制在上述清单末尾追加以下精确条目：
+
+```text
+SourceModulationConfigureRequest
+SourceModulationConfigureResult
+SourceModulationConfigureV2Driver
+SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -2707,7 +2716,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
-| M6-A | `in-progress` | 单通道高级配置 | Harmonic 已 `implemented-unreleased`；Modulation、Pulse、Sweep、Burst 继续按 feature 独立 opt in，复用基本写入门 |
+| M6-A | `in-progress` | 单通道高级配置 | Harmonic 已 `implemented-unreleased`；下一项为内部 AM 调制，FM／PM／PWM、Pulse、Sweep、Burst 继续按 feature 独立 opt in，复用基本写入门 |
 | M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
 | M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
@@ -3010,6 +3019,34 @@ Modulation、Pulse、Sweep、Burst、ARB 或跨通道关系。
 写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不改变 M6-A 的整体状态，
 也不构成任何真实插件的写 capability 声明或实机验收。
+
+### M6-A 下一子能力：内部 AM 调制
+
+`source.modulation_configure_v2` 的首个实现只覆盖单通道、内部正弦 AM 配置。它的 typed request 固定为
+`channel`、`depth_percent` 与 `internal_frequency_hz`：配置完成后 AM 必为 enabled、source 必为 `internal`、
+internal waveform 必为 `sine`。`depth_percent` 必须为有限值且位于 `[0, 100]`，
+`internal_frequency_hz` 必须为有限正值。首版不提供 disable、partial patch、外部／通道调制源、内部
+波形选择、多参数组合、过调制、DSB-AM、FM、PM、PWM、ASK、FSK 或 PSK。
+
+descriptor 必须同时声明 Modulation `READ`／`CONFIGURE`、`am`、`internal`、`depth_percent`，以及
+完整已配置调制状态的独立 readback。为表达这一点，`SourceModulationCapabilityProfile` 在现有字段末尾
+追加带默认值的 `configuration_readable: bool = False`；它为真时表示 enabled、kind、source、parameters、
+internal frequency 与 internal waveform 都可在不写入的查询中回读。descriptor 还必须声明同一 channel 的
+Output `READ` 且可回读 output state。
+
+该 operation 使用 `POTENTIAL_WHILE_OFF`，静态字段闭包为同一 channel 的 Modulation／Output 和仪器
+Identity。事务沿用 fresh consistent snapshot、目标 output OFF、单次 driver 写、独立 postcondition 和主写入
+后的最多一次 V2 OFF recovery；配置本身不隐式开启输出，也不恢复调制状态。postcondition 必须确认 output
+仍为 OFF，并逐项确认 enabled、kind、source、depth、internal frequency 与 internal waveform。
+
+本子能力不要求调制包络、RMS、Noise 峰值、实际端接、共享功率或热模型；它仅授权 OFF 状态下的配置，
+不构成调制后输出 ON 的严格复合预算证明。后续 `source.output_v2` 仍按照 R6 的 fresh Vpp／Offset 基础限制
+处理输出转换。AM 载波幅度语义、过调制钳位和硬包络上界继续是后续专项问题，不能被本项自动推断。
+
+双合同插件声明 `source.modulation_configure_v2` 后，V1 `configure_am_modulation` 在仪器 I/O 前拒绝，
+而不是部分映射：V1 请求允许 disabled、最高 120% depth 及更多内部函数，不能无损映射到这个首版范围。
+V1-only 插件和未声明该 V2 capability 的双合同插件继续走 V1 AM 路径；FM、PM、PWM 的 V1 route 也继续保持
+V1，直到各自的 V2 capability 范围被单独冻结。
 
 ### R6 延后事项
 
