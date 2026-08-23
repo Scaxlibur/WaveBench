@@ -187,6 +187,13 @@ disable、外部调制源、内部波形选择、AM／FM／PWM 或隐式输出 O
 该 capability 只覆盖输出 OFF 时的内部正弦 FM：frequency deviation 与内部频率均为有限正值；不得借此支持
 disable、外部调制源、内部波形选择、AM／PM／PWM 或隐式输出 ON。
 
+内部 PWM 使用独立的 `source.modulation_pwm_configure_v2`，driver 必须实现
+`configure_source_pwm_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`pwm`、
+`internal`、`configuration_readable = true`，且 `parameter_kinds` 至少包含 `duty_deviation_percent` 或
+`width_deviation_s` 之一，并能回读同一 channel 的 output state。该 capability 只覆盖输出 OFF 时的内部正弦 PWM：
+request 包含有限正值的内部频率，以及恰好一个分支——`[0, 50]` 的 DUTY deviation 或 `[0, 500000]` 秒的 WIDTH
+deviation；不得借此支持 disable、外部调制源、内部波形选择、AM／FM／PM 或隐式输出 ON。
+
 内部 Triggered Burst 使用独立的 `source.burst_configure_v2`，driver 必须实现
 `configure_source_burst_v2(request)`。descriptor 必须声明 Burst `READ`／`CONFIGURE`、`triggered`、`internal`、
 `timing_readable = true` 和 `triggered_internal_configuration_readable = true`，并能回读同一 channel 的 output state。

@@ -407,6 +407,12 @@ frequency_deviation_hz = 12500
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 1
+internal_frequency_hz = 25
+duty_deviation_percent = 30
+
+[[steps]]
 kind = "source.burst_configure_v2"
 channel = 1
 cycles = 12
@@ -432,23 +438,26 @@ profile 是否支持该 order 和预设。`source.modulation_configure_v2` 要�
 `internal_frequency_hz`；它只配置内部正弦 PM。
 `source.modulation_fm_configure_v2` 要求 `channel`、有限正值 `frequency_deviation_hz` 与有限正值
 `internal_frequency_hz`；它只配置内部正弦 FM。
+`source.modulation_pwm_configure_v2` 要求 `channel`、有限正值 `internal_frequency_hz`，以及恰好一个显式单位分支：
+位于 `[0, 50]` 的 `duty_deviation_percent` 或位于 `[0, 500000]` 秒的 `width_deviation_s`；它只配置内部正弦 PWM。
 `source.burst_configure_v2` 要求 `channel`、位于 `[1, 500000]` 的整数 `cycles`、位于 `[0, 360]` 的
 `phase_deg`、有限正值 `internal_period_s` 与位于 `[0, 85]` 的 `delay_s`；它只配置内部 Triggered Burst，
 不会 trigger 或开启输出。
 `source.pulse_configure_v2` 要求 `channel`、不小于 `4 ns` 的 `width_s`、有限非负 `delay_s`，以及有限正值
 `leading_transition_s`／`trailing_transition_s`；两个 transition 都不能超过 width 的 `0.625` 倍，且它只配置 WIDTH 脉冲形状。
 
-Harmonic、内部 AM、内部 PM、内部 FM、内部 Triggered Burst 与 WIDTH Pulse step 都必须在目标输出已关闭时执行，完成后仍保持关闭；它们不会隐式开启输出。现有
+Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Triggered Burst 与 WIDTH Pulse step 都必须在目标输出已关闭时执行，完成后仍保持关闭；它们不会隐式开启输出。现有
 `restore.source_state` 只恢复 basic 状态，不恢复 Harmonic、调制、Burst 或 Pulse 配置。双合同插件声明
 `source.harmonics_configure_v2` 后，V1 `configure_harmonics` 会在仪器 I/O 前被拒绝；声明
 `source.modulation_configure_v2` 后，V1 `configure_am_modulation` 会在仪器 I/O 前被拒绝。未声明对应能力的
 旧插件继续使用 V1 路径。声明 `source.modulation_pm_configure_v2` 后，V1 `configure_pm_modulation` 也会在
 仪器 I/O 前被拒绝。声明 `source.modulation_fm_configure_v2` 后，V1 `configure_fm_modulation` 和 restore 也会在
+仪器 I/O 前被拒绝。声明 `source.modulation_pwm_configure_v2` 后，V1 `configure_pwm_modulation` 和 restore 也会在
 仪器 I/O 前被拒绝。声明 `source.burst_configure_v2` 后，V1 `configure_burst`、`trigger_burst` 和 restore 也会在
 仪器 I/O 前被拒绝。声明 `source.pulse_configure_v2` 后，V1 `configure_pulse` 也会在仪器 I/O 前被拒绝，
 因为 V1 route 还允许 DUTY hold。该 step 不会让 `source.output_enable_v2` 获得 Pulse 输出 ON 授权。
 
-执行意图会分别记录九个 operation，实际执行时的完整 Source V2 artifact 会写入
+执行意图会分别记录十个 operation，实际执行时的完整 Source V2 artifact 会写入
 `run.json.source_operations`。没有声明 V2 capability 的旧插件继续使用 V1 step。
 
 ## 常见 `run check` 报错
