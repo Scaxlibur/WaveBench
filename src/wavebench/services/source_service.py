@@ -215,6 +215,10 @@ class _SourceBasicConfigureV2Transaction:
     snapshot: SourceSnapshotV2
 
 
+class _SourceV2BasicLegacyFallback(ConfigError):
+    """A V1 setter has no lossless representation in the active V2 basic profile."""
+
+
 @dataclass(frozen=True, slots=True)
 class _SourceHarmonicConfigureV2Transaction:
     """Core transaction result shared by the Harmonic public route."""
@@ -4553,10 +4557,18 @@ class SourceService(SessionStateAliasMixin):
             raise ConfigError(
                 "source.basic_configure_v2 waveform_kind is not supported by the runtime profile"
             )
-        current_vpp, current_offset = self._source_v2_amplitude_offset(
-            basic,
-            operation="source.basic_configure_v2",
-        )
+        try:
+            current_vpp, current_offset = self._source_v2_amplitude_offset(
+                basic,
+                operation="source.basic_configure_v2",
+            )
+        except ConfigError as exc:
+            if request.patch.waveform_kind.action is not PatchAction.SET:
+                raise
+            raise _SourceV2BasicLegacyFallback(
+                "source.basic_configure_v2 cannot losslessly represent the current "
+                "V1 waveform state"
+            ) from exc
         patch = request.patch
         requested_vpp = (
             float(patch.amplitude_vpp.value)
@@ -7825,24 +7837,34 @@ class SourceService(SessionStateAliasMixin):
             self._state_guard_after_write(result)
             return result
 
-    def set_function(self, channel: int | None, function: str) -> SourceStatus:
-        source_cfg = self._source_config()
-        channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.basic_configure_v2"):
-            transaction = self._configure_basic_v2_transaction(
-                SourceBasicConfigureRequest(
-                    channel=channel,
-                    patch=SourceBasicPatch(
-                        waveform_kind=PatchValue(
-                            PatchAction.SET,
-                            self._source_v2_waveform_from_v1(function),
-                        ),
-                    ),
-                )
-            )
-            status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
-            self._state_guard_after_write(status)
-            return status
+    def _source_v2_basic_declares_waveform(
+        self,
+        *,
+        channel: int,
+        waveform: SourceWaveformKind,
+    ) -> bool:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.source_extensions
+        if not isinstance(extensions, SourceDescriptorExtensions):
+            return False
+        return any(
+            feature.feature is SourceFeature.BASIC
+            and feature.scope is SourceFacetScope.CHANNEL
+            and channel in feature.channels
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.CONFIGURE in feature.directions
+            and isinstance(feature.profile, SourceBasicCapabilityProfile)
+            and waveform in feature.profile.waveform_kinds
+            for feature in extensions.features
+        )
+
+    def _set_function_v1(
+        self,
+        *,
+        channel: int,
+        function: str,
+        source_cfg: SourceConfig,
+    ) -> SourceStatus:
         required = ["source.set_function"]
         if self.state_guard is not None:
             required.append("source.status")
@@ -7852,6 +7874,39 @@ class SourceService(SessionStateAliasMixin):
             result = source.set_function(channel, function, check_errors=source_cfg.check_errors)
             self._state_guard_after_write(result)
             return result
+
+    def set_function(self, channel: int | None, function: str) -> SourceStatus:
+        source_cfg = self._source_config()
+        channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.basic_configure_v2"):
+            waveform = self._source_v2_waveform_from_v1(function)
+            if self._source_v2_basic_declares_waveform(
+                channel=channel,
+                waveform=waveform,
+            ):
+                try:
+                    transaction = self._configure_basic_v2_transaction(
+                        SourceBasicConfigureRequest(
+                            channel=channel,
+                            patch=SourceBasicPatch(
+                                waveform_kind=PatchValue(
+                                    PatchAction.SET,
+                                    waveform,
+                                ),
+                            ),
+                        ),
+                    )
+                except _SourceV2BasicLegacyFallback:
+                    pass
+                else:
+                    status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
+                    self._state_guard_after_write(status)
+                    return status
+        return self._set_function_v1(
+            channel=channel,
+            function=function,
+            source_cfg=source_cfg,
+        )
 
     def set_square_duty_cycle(self, channel: int | None, duty_percent: float) -> SourceStatus:
         source_cfg = self._source_config()

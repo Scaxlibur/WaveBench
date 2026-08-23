@@ -17,6 +17,7 @@ from wavebench.config import (
 )
 from wavebench.errors import ConfigError
 from wavebench.instruments.capabilities import validate_declared_capabilities
+from wavebench.instruments.models import SourceStatus
 from wavebench.instruments.source_extension_capabilities import validate_source_descriptor
 from wavebench.instruments.source_extensions import (
     SOURCE_CONTRACT_VERSION,
@@ -273,6 +274,40 @@ class _DualContractDriver(_BasicWriteDriver):
         raise AttributeError(name)
 
 
+class _LegacyWaveformFallbackDriver(_BasicWriteDriver):
+    """V1 function support retained outside a narrower V2 basic profile."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.v1_function_requests: list[tuple[int, str, bool]] = []
+
+    def set_function(
+        self,
+        channel: int,
+        function: str,
+        *,
+        check_errors: bool,
+    ) -> SourceStatus:
+        self.v1_function_requests.append((channel, function, check_errors))
+        self.transport.write("SOURCE:LEGACY FUNCTION")
+        normalized = function.strip().upper()
+        result_function = {"NOISE": "NOIS", "DC": "DC"}[normalized]
+        return SourceStatus(
+            channel=channel,
+            output="OFF",
+            function=result_function,
+            frequency_hz=None,
+            amplitude=None,
+            amplitude_unit=None,
+            offset_v=None,
+            phase_deg=None,
+            frequency_mode="FIX",
+            sweep_enabled="OFF",
+            apply_raw="SOURCE:LEGACY FUNCTION",
+            square_duty_cycle_percent=None,
+        )
+
+
 def _config(*, limits: SafetyLimitsConfig = SafetyLimitsConfig()) -> WaveBenchConfig:
     return WaveBenchConfig(
         connection=ConnectionConfig("lan", "TCPIP::scope::INSTR", 1_000, 1_000),
@@ -339,6 +374,7 @@ def _service(
         postcondition_frequency_hz=postcondition_frequency_hz,
         raise_after_write=raise_after_write,
     )
+
     extensions = _write_extensions(include_output=include_output)
     capabilities = ["source.snapshot_v2", "source.basic_configure_v2"]
     if include_output:
@@ -352,6 +388,36 @@ def _service(
     return (
         SourceService(
             config=_config(limits=limits),
+            logger=CommandLogger(),
+            session=driver,  # type: ignore[arg-type]
+            descriptor=descriptor,
+            transport=driver.transport,
+            session_state=session_state,
+        ),
+        driver,
+    )
+
+
+def _legacy_waveform_fallback_service() -> tuple[SourceService, _LegacyWaveformFallbackDriver]:
+    session_state = InstrumentSessionState(epoch_id="source-v1-waveform-fallback")
+    driver = _LegacyWaveformFallbackDriver(
+        session_state=session_state,
+        combined=True,
+    )
+    descriptor = replace(
+        source_descriptor(driver=driver, extensions=_write_extensions(include_output=True)),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+            "source.output_v2",
+            "source.set_function",
+        ),
+    )
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, driver)
+    return (
+        SourceService(
+            config=_config(),
             logger=CommandLogger(),
             session=driver,  # type: ignore[arg-type]
             descriptor=descriptor,
@@ -503,6 +569,24 @@ def test_all_v1_basic_routes_use_the_v2_transaction_when_declared(
     patch_value = getattr(driver.basic_requests[0].patch, patch_field)
     assert patch_value.action is PatchAction.SET
     assert getattr(patch_value.value, "value", patch_value.value) == expected
+    assert driver.transport.counters.write_completed == 1
+
+
+@pytest.mark.parametrize(
+    ("function", "expected_function"),
+    (("noise", "NOIS"), ("dc", "DC")),
+)
+def test_v1_function_outside_the_v2_profile_keeps_its_legacy_route(
+    function: str,
+    expected_function: str,
+) -> None:
+    service, driver = _legacy_waveform_fallback_service()
+
+    status = service.set_function(channel=1, function=function)
+
+    assert status.function == expected_function
+    assert driver.basic_requests == []
+    assert driver.v1_function_requests == [(1, function, True)]
     assert driver.transport.counters.write_completed == 1
 
 
