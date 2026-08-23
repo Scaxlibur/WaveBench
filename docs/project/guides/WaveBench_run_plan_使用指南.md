@@ -363,7 +363,7 @@ state = "on"
 
 ### Source V2 基础、高级配置与 ARB 写 step
 
-声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用十三个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
+声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用十七个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
 
 ```toml
 [[steps]]
@@ -450,6 +450,11 @@ channel = 1
 slot_id = "slot_a"
 playback_mode = "dds"
 playback_frequency_hz = 1000
+
+[[steps]]
+kind = "source.combine_configure_v2"
+channels = [1, 2]
+enabled = true
 ```
 
 `source.basic_configure_v2` 的 `channel` 必填，五个 basic 字段中至少写一个；缺失字段保持当前值。
@@ -481,6 +486,11 @@ profile 是否支持该 order 和预设。`source.modulation_configure_v2` 要�
 正的 `playback_frequency_hz`；true-ARB 只接受正的 `sample_rate_hz`。该 step 必须在目标输出已关闭时执行，完成后仍关闭；
 它不包含 output ON。
 
+`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 和
+`source.phase_relation_configure_v2` 都要求递增且唯一的 `channels` 数组（至少两个通道）与布尔 `enabled`。核心按
+descriptor relation graph 展开实际受影响端口；只有展开后的端口必须 OFF，未连通端口可以继续 ON。它们不会开启输出、
+不会设置厂商私有关系参数，也不会为之后的 output ON 提供额外授权。
+
 Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内部 Triggered Burst 与 WIDTH Pulse step 都必须在目标输出已关闭时执行，完成后仍保持关闭；它们不会隐式开启输出。现有
 `restore.source_state` 只恢复 basic 状态，不恢复 Harmonic、调制、Burst 或 Pulse 配置。双合同插件声明
 `source.harmonics_configure_v2` 后，V1 `configure_harmonics` 会在仪器 I/O 前被拒绝；声明
@@ -493,7 +503,10 @@ Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内�
 仪器 I/O 前被拒绝。声明 `source.pulse_configure_v2` 后，V1 `configure_pulse` 也会在仪器 I/O 前被拒绝，
 因为 V1 route 还允许 DUTY hold。该 step 不会让 `source.output_enable_v2` 获得 Pulse 输出 ON 授权。
 
-执行意图会记录十三个 Source V2 operation，实际执行时的完整 Source V2 artifact 会写入
+声明 `source.coupling_configure_v2` 后，V1 `configure_coupling` 在仪器 I/O 前拒绝；声明任一跨通道 V2 capability
+后，V1 restore 也会在仪器 I/O 前拒绝，避免它在未知 relation state 下重开输出。
+
+执行意图会记录十七个 Source V2 operation，实际执行时的完整 Source V2 artifact 会写入
 `run.json.source_operations`；storage payload 只以文件名、SHA-256 与大小出现。没有声明 V2 capability 的旧插件继续使用 V1 step。
 
 ## 常见 `run check` 报错

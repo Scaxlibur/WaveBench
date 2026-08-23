@@ -2905,7 +2905,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
 | M6-A | `implemented-unreleased` | 单通道高级配置 | Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 均已 `implemented-unreleased`；每项均独立 opt in 并复用基本写入门 |
 | M6-B | `implemented-unreleased` | ARB storage 与 selection | named-slot create/CAS、payload 摘要与独立 readback、OFF-only selection、Service／CLI／run plan／intent／artifact、V1 upload 零 I/O 拒绝和 A0 fake 通过；ON 仍由 `output_v2` 管理 |
-| M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
+| M6-C | `implemented-unreleased` | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
 | C3 | 未开始 | 稳定发布审计 | 首个真实插件完成 M5 基础能力、文档和包检查完成、无未登记写 capability |
 | P0 | `implemented-unreleased` | V1 `amplitude=None` 失败关闭 | ON 对缺失、非有限、非 VPP 或负 Vpp 在 driver 写入前返回稳定 `ConfigError`；OFF 保持原有可执行语义 |
@@ -3500,6 +3500,53 @@ storage 的 `file` 可相对 plan 所在目录；execution intent 只记录文�
 双合同插件声明任一 M6-B capability 后，V1 `upload_arbitrary_waveform` 在本地 waveform 文件读取、二进制块构造、
 session 打开和仪器 I/O 前拒绝；它混合了 storage、selection、基本配置和可选 ON，不能部分映射。当前实现只包含离线
 fixture 与 A0 合同证据，不声明真实插件 capability 或实机验收。
+
+### M6-C 已实现：跨通道关系配置
+
+M6-C 将 Combine、Coupling、Tracking 和相位关系拆成四个独立 capability：
+
+```text
+source.combine_configure_v2        -> configure_source_combine_v2
+source.coupling_configure_v2       -> configure_source_coupling_v2
+source.tracking_configure_v2       -> configure_source_tracking_v2
+source.phase_relation_configure_v2 -> configure_source_phase_relation_v2
+```
+
+四类 request 都只包含递增且唯一的 `channels` 与 `enabled`。首版只打开或关闭 descriptor 已声明的关系，
+不把厂商私有的联动参数、相位角、自动复制或输出 ON 偷渡进同一写入。driver 统一返回
+`SourceCrossChannelConfigureResult`：其中的 relation readback 必须与 request 相符，且列出每个受影响端口的
+最终 OFF 状态。
+
+声明任一 capability 时，descriptor 必须在相同 channel set 声明对应 feature 的 `READ`／`CONFIGURE`，并满足
+`SourceCrossChannelCapabilityProfile.configuration_readable = true`。profile 还必须列出 relation kind 和 channel set。
+同 feature 的 instrument-scope `READ` facet 必须纯读返回 relation graph；这是 `relation_graph_readable = true` 的
+实际查询承诺，不是仅靠布尔字段自报。目标 relation channel set 中的每个端口都必须有可读 output state。
+
+核心先以只读 discovery snapshot 沿 graph 展开与目标关系连通的端口，再在授权 preflight 中重复展开并拒绝 graph
+漂移。全部展开端口必须已经 OFF，之后才进入唯一 MAIN 写入。未与该 graph 连通的端口不属于 closure，可以保持 ON；
+因此 M6-C 不引入全局「只能一个物理输出 ON」规则。写后 snapshot 必须确认目标 relation、graph 和每个预先展开端口的
+output state；若写后 graph 把范围扩张到未预先关闭的端口，operation 失败关闭。
+
+主写或写后回读失败时，核心只在预先冻结的范围内，对每个端口最多发送一次 V2 OFF。首版上限为八个受影响端口；
+更大的范围在 MAIN 前拒绝，而不是截断 recovery。未声明 `source.output_v2`、OFF 方法缺失或 session 已 poisoned 时，
+核心不回退 V1 OFF，并保留更保守的 session 状态。
+
+CLI 提供以下 additive 命令；每个参与端口重复一次 `--channel`：
+
+```text
+wavebench source combine-configure-v2 --channel 1 --channel 2 on
+wavebench source coupling-configure-v2 --channel 1 --channel 2 off
+wavebench source tracking-configure-v2 --channel 1 --channel 2 on
+wavebench source phase-relation-configure-v2 --channel 1 --channel 2 on
+```
+
+对应 run plan step 使用 `channels = [1, 2]` 与 `enabled = true|false`。执行 intent 和
+`run.json.source_operations` 记录同一 `wavebench.source.operation.v1` artifact，包括请求、预先冻结的端口、
+relation graph 摘要、阶段和可选 recovery；不记录 raw SCPI、授权 token 或私有图数据。
+
+双合同插件声明 `source.coupling_configure_v2` 后，遗留 V1 `configure_coupling` 在任何仪器 I/O 前拒绝；
+声明任一 M6-C capability 后，V1 restore 也在 I/O 前拒绝。没有声明对应 capability 的 V1-only 或双合同插件继续走
+既有 V1 route。当前只有核心 A0 离线 fixture，未声明真实插件 capability，也没有执行实机验收。
 
 ### R6 延后事项
 

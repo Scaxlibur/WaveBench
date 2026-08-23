@@ -79,6 +79,18 @@ wavebench --json source snapshot-v2 --config wavebench.toml
 关系，不接受单通道或 raw query 参数。普通模式输出缩进 JSON；`--json` 使用
 `wavebench.cli.result.v1` envelope。命令不授权任何 Source V2 写入。
 
+已声明对应写 capability 的插件还可以配置跨通道关系：
+
+```bash
+wavebench source combine-configure-v2 --channel 1 --channel 2 on --config wavebench.toml
+wavebench source coupling-configure-v2 --channel 1 --channel 2 off --config wavebench.toml
+wavebench source tracking-configure-v2 --channel 1 --channel 2 on --config wavebench.toml
+wavebench source phase-relation-configure-v2 --channel 1 --channel 2 on --config wavebench.toml
+```
+
+`--channel` 必须重复给出至少两个递增且唯一的参与端口。核心只要求 relation graph 展开后的受影响端口为 OFF；
+没有连通关系的其它端口可以继续 ON。命令不设置厂商私有联动参数，也不开启输出。
+
 `--json` 可以放在命令行任意位置。非交互命令输出 `wavebench.cli.result.v1`；错误输出
 `wavebench.error.v1`，诊断信息写入 stderr。TUI 和 HTTP MCP 不使用 one-shot JSON 包装。
 

@@ -227,6 +227,15 @@ selection 与 storage digest、允许 playback mode；true-ARB 还要求 sample 
 selection 只允许目标输出 OFF，完成后仍为 OFF，不会隐式 ON。声明任一 ARB V2 capability 后，V1
 `upload_arbitrary_waveform` 会在本地文件读取和仪器 I/O 前被拒绝，不能把混合 upload／selection／ON 的旧 route 部分映射。
 
+跨通道 Combine、Coupling、Tracking 和相位关系分别使用 `source.combine_configure_v2`、
+`source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2`。每项都使用
+独立 driver method，request 只包含递增且唯一的 channel set 与 enabled state。descriptor 必须为该 relation 的
+channel set 声明 `READ`／`CONFIGURE`，在 `SourceCrossChannelCapabilityProfile` 中列出 relation kind、支持的 channel set 和
+`configuration_readable = true`；同 feature 还必须有 instrument-scope 的纯读 relation graph facet。
+核心只要求 graph 展开后实际受影响的端口 OFF，未连通的独立端口可以继续 ON。driver result 必须回读 relation 与每个
+受影响端口的 OFF 状态；无法证明 graph、端口范围或 readback 时不得声明此 capability。声明 Coupling V2 后，V1
+`configure_coupling` 在 I/O 前拒绝；声明任一这四项 capability 后，V1 restore 也在 I/O 前拒绝。
+
 实际插件声明任一 Source V2 写 capability 前，至少完成该 capability 的 A0 离线 fixture；声明的方向、profile、
 方法与版本门必须同时通过核心校验。没有实机证据时，不得把核心合同注册描述为已完成设备写能力验收。
 

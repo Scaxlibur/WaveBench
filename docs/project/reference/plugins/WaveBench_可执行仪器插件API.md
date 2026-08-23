@@ -355,11 +355,15 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.pulse_configure_v2` | `configure_source_pulse_v2` |
 | `source.arbitrary_storage_v2` | `read_source_arbitrary_storage_v2`、`mutate_source_arbitrary_storage_v2` |
 | `source.arbitrary_select_v2` | `select_source_arbitrary_v2` |
+| `source.combine_configure_v2` | `configure_source_combine_v2` |
+| `source.coupling_configure_v2` | `configure_source_coupling_v2` |
+| `source.tracking_configure_v2` | `configure_source_tracking_v2` |
+| `source.phase_relation_configure_v2` | `configure_source_phase_relation_v2` |
 
 ### Source V2 扩展
 
 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2` 和 `source.arbitrary_select_v2` 从核心 `0.8.24` 开始提供，仍使用
+`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 和 `source.phase_relation_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
 `wavebench.instrument.v2`。采用任一 Source V2 capability 的
 wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
 `source_extensions` 位于 descriptor 末尾且默认值为 `None`，因此未声明该能力的 V1 插件不需要
@@ -367,7 +371,7 @@ wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更�
 
 插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
 `SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、`SourceHarmonicConfigureV2Driver`、
-`SourceModulationConfigureV2Driver`、`SourcePmModulationConfigureV2Driver`、`SourceFmModulationConfigureV2Driver`、`SourcePwmModulationConfigureV2Driver`、`SourceSweepConfigureV2Driver`、`SourceBurstConfigureV2Driver`、`SourcePulseConfigureV2Driver`、`SourceArbitraryStorageV2Driver`、`SourceArbitrarySelectV2Driver`、query
+`SourceModulationConfigureV2Driver`、`SourcePmModulationConfigureV2Driver`、`SourceFmModulationConfigureV2Driver`、`SourcePwmModulationConfigureV2Driver`、`SourceSweepConfigureV2Driver`、`SourceBurstConfigureV2Driver`、`SourcePulseConfigureV2Driver`、`SourceArbitraryStorageV2Driver`、`SourceArbitrarySelectV2Driver`、`SourceCombineConfigureV2Driver`、`SourceCouplingConfigureV2Driver`、`SourceTrackingConfigureV2Driver`、`SourcePhaseRelationConfigureV2Driver`、query
 plan／execution record 和各类 typed profile。核心签发 semantic query plan；snapshot driver 只负责将
 item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
 `NOT_APPLICABLE`、runtime profile 或 snapshot consistency。
@@ -470,7 +474,7 @@ selection request 使用 DDS 的 `playback_frequency_hz` 或 true-ARB 的 `sampl
 ARB V2 capability，V1 `upload_arbitrary_waveform` 会在读取本地 waveform 文件、构造块或发送仪器 I/O 前拒绝。
 
 run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`source.output_disable_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2` 与 `source.arbitrary_select_v2` 十三个 Source V2 step；它们的 artifact 只在实际执行时写入
+`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2` 十七个 Source V2 step；它们的 artifact 只在实际执行时写入
 `run.json.source_operations`。
 
 旧 `source.*` setter、output、trigger 和 ARB 路径继续保留。双合同插件上，四个 basic setter 与

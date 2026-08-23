@@ -861,6 +861,11 @@ payload bytes、本地文件路径或设备私有二进制命令。其 `final_st
 `source.arbitrary_select_v2`，记录 typed request、snapshot 摘要、mutation result、phase、可选 recovery 和
 session state；其 `final_state.output_expected` 固定为 `off`。
 
+跨通道 relation artifact 的 `operation` 为 `source.combine_configure_v2`、`source.coupling_configure_v2`、
+`source.tracking_configure_v2` 或 `source.phase_relation_configure_v2`。它记录 typed channel set／enabled request、
+preflight 的 `affected_channels`、relation graph SHA-256、mutation result、snapshot 摘要与可选逐端口 OFF recovery。
+`final_state.affected_outputs_expected` 固定为 `off`。artifact 不保存 raw relation graph、SCPI、私有联动参数或授权 token。
+
 Source V2 写 step 成功或写后失败时，`run.json.source_operations` 保存同一 schema 的完整 artifact，
 `steps[].artifact.source_operation` 保存当前 step 的同一完整 artifact。没有实际 Source V2 step 的 V1 run 不写
 `source_operations`，旧 reader 可以继续忽略该 append-only 根键。
