@@ -175,6 +175,12 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 该 capability 只覆盖输出 OFF 时的内部正弦 AM：深度为 `[0, 100]`，内部频率为有限正值；不得借此支持
 disable、外部调制源、内部波形选择、FM／PM／PWM 或隐式输出 ON。
 
+WIDTH Pulse 使用独立的 `source.pulse_configure_v2`，driver 必须实现
+`configure_source_pulse_v2(request)`。descriptor 必须声明 Pulse `READ`／`CONFIGURE`、WIDTH hold、
+delay 与 transition 可读，以及 `width_configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的完整 WIDTH 形状：width 不小于 `4 ns`，delay 为有限非负值，两个 transition
+为有限正值且各自不超过 width 的 `0.625` 倍；不得借此支持 DUTY hold、partial patch、trigger、输出 ON 或隐式波形切换。
+
 实际插件声明任一 Source V2 写 capability 前，至少完成该 capability 的 A0 离线 fixture；声明的方向、profile、
 方法与版本门必须同时通过核心校验。没有实机证据时，不得把核心合同注册描述为已完成设备写能力验收。
 
