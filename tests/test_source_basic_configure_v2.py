@@ -35,8 +35,20 @@ from wavebench.instruments.source_extensions import (
     SourceQueryItemOutcome,
     SourceRuntimeIdentity,
     SourceTypedObservation,
+    SourceV1WriteRouteId,
     PatchAction,
     PatchValue,
+)
+from wavebench.instruments import (
+    SourceAmModulationConfiguration,
+    SourceBurstConfiguration,
+    SourceCouplingConfiguration,
+    SourceFmModulationConfiguration,
+    SourceHarmonicConfiguration,
+    SourcePmModulationConfiguration,
+    SourcePulseConfiguration,
+    SourcePwmModulationConfiguration,
+    SourceSweepConfiguration,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
@@ -195,6 +207,72 @@ class _BasicWriteDriver:
         return replace(self.basic, **updates)
 
 
+class _DualContractDriver(_BasicWriteDriver):
+    """V2 basic/output fake with explicit markers for retained V1-only routes."""
+
+    _V1_ADVANCED_METHODS = frozenset(
+        {
+            "configure_coupling",
+            "configure_harmonics",
+            "configure_am_modulation",
+            "configure_fm_modulation",
+            "configure_pm_modulation",
+            "configure_pwm_modulation",
+            "configure_pulse",
+            "configure_burst",
+            "configure_sweep",
+        }
+    )
+    _V1_DIRECT_WRITE_METHODS = frozenset(
+        {
+            "set_frequency",
+            "set_function",
+            "set_amplitude_vpp",
+            "set_square_duty_cycle",
+            "trigger_burst",
+            "trigger_sweep",
+            "upload_dg4000_dac14_block",
+        }
+    )
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.legacy_calls: list[str] = []
+
+    def get_status(self, channel: int) -> object:
+        del channel
+        return type("Status", (), {"output": "OFF", "amplitude": 1.0, "amplitude_unit": "VPP"})()
+
+    def set_source_output_v2(self, request: SourceOutputRequest) -> SourceOutputResult:
+        self.transport.write("SOURCE:OUTPUT OFF")
+        self.output_requests.append(request)
+        self.output_enabled = request.enabled
+        if not request.enabled:
+            return SourceOutputResult(channel=request.channel, enabled=False)
+        return SourceOutputResult(
+            channel=request.channel,
+            enabled=True,
+            final_amplitude=self.basic.amplitude.value,
+            final_offset_v=self.basic.offset_v.value,
+        )
+
+    def __getattr__(self, name: str):
+        if name in self._V1_ADVANCED_METHODS:
+            def retained_v1_route(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                self.legacy_calls.append(name)
+                return object()
+
+            return retained_v1_route
+        if name in self._V1_DIRECT_WRITE_METHODS:
+            def forbidden_direct_route(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                raise AssertionError(f"dual-contract V1 route bypassed its Source V2 guard: {name}")
+
+            return forbidden_direct_route
+        raise AttributeError(name)
+
+
 def _config(*, limits: SafetyLimitsConfig = SafetyLimitsConfig()) -> WaveBenchConfig:
     return WaveBenchConfig(
         connection=ConnectionConfig("lan", "TCPIP::scope::INSTR", 1_000, 1_000),
@@ -274,6 +352,58 @@ def _service(
     return (
         SourceService(
             config=_config(limits=limits),
+            logger=CommandLogger(),
+            session=driver,  # type: ignore[arg-type]
+            descriptor=descriptor,
+            transport=driver.transport,
+            session_state=session_state,
+        ),
+        driver,
+    )
+
+
+_DUAL_CONTRACT_V1_CAPABILITIES = (
+    "source.status",
+    "source.set_frequency",
+    "source.set_function",
+    "source.set_amplitude_vpp",
+    "source.set_square_duty_cycle",
+    "source.output",
+    "source.coupling_configure",
+    "source.harmonic_configure",
+    "source.modulation_am_configure",
+    "source.modulation_fm_configure",
+    "source.modulation_pm_configure",
+    "source.modulation_pwm_configure",
+    "source.pulse_configure",
+    "source.burst_configure",
+    "source.burst_trigger",
+    "source.sweep_configure",
+    "source.sweep_trigger",
+    "source.arbitrary_upload",
+)
+
+
+def _dual_contract_service() -> tuple[SourceService, _DualContractDriver]:
+    session_state = InstrumentSessionState(epoch_id="source-dual-contract")
+    driver = _DualContractDriver(session_state=session_state, combined=True)
+    descriptor = replace(
+        source_descriptor(driver=driver, extensions=_write_extensions(include_output=True)),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+            "source.output_v2",
+            *_DUAL_CONTRACT_V1_CAPABILITIES,
+        ),
+    )
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, driver)
+    config = _config()
+    assert config.source is not None
+    config = replace(config, source=replace(config.source, check_errors=False))
+    return (
+        SourceService(
+            config=config,
             logger=CommandLogger(),
             session=driver,  # type: ignore[arg-type]
             descriptor=descriptor,
@@ -415,6 +545,152 @@ def test_overlapping_v1_routes_reject_before_io_for_a_dual_contract_driver(opera
             service.trigger_sweep(channel=1)
 
     assert driver.transport.counters.write_requests == 0
+
+
+def test_dual_contract_driver_classifies_every_v1_write_route() -> None:
+    service, driver = _dual_contract_service()
+
+    service.set_frequency(channel=1, value_hz=2_000.0)
+    service.set_function(channel=1, function="SIN")
+    service.set_amplitude_vpp(channel=1, value_vpp=1.5)
+    service.set_square_duty_cycle(channel=1, duty_percent=25.0)
+
+    mapped_routes = {
+        SourceV1WriteRouteId.SET_FREQUENCY,
+        SourceV1WriteRouteId.SET_FUNCTION,
+        SourceV1WriteRouteId.SET_AMPLITUDE_VPP,
+        SourceV1WriteRouteId.SET_SQUARE_DUTY_CYCLE,
+        SourceV1WriteRouteId.SET_OUTPUT,
+    }
+    assert len(driver.basic_requests) == 4
+
+    service.configure_coupling(
+        SourceCouplingConfiguration(1, True, 1_000.0, True, 90.0, False, 2.0)
+    )
+    service.configure_harmonics(
+        1,
+        SourceHarmonicConfiguration(order=8, preset="ODD"),
+        check_errors=False,
+    )
+    service.configure_am_modulation(
+        SourceAmModulationConfiguration(True, 80.0, 25.0, "SINE"),
+        channel=1,
+    )
+    service.configure_fm_modulation(
+        SourceFmModulationConfiguration(True, 250.0, 25.0, "SINE"),
+        channel=1,
+    )
+    service.configure_pm_modulation(
+        SourcePmModulationConfiguration(True, 90.0, 25.0, "SINE"),
+        channel=1,
+    )
+    service.configure_pwm_modulation(
+        SourcePwmModulationConfiguration(True, "WIDTH", 0.001, 25.0, "SINE"),
+        channel=1,
+    )
+    service.configure_pulse(
+        SourcePulseConfiguration(
+            hold="WIDTH",
+            width_s=1.0e-6,
+            delay_s=0.0,
+            leading_transition_s=8.0e-9,
+            trailing_transition_s=8.0e-9,
+        ),
+        channel=1,
+    )
+    service.configure_burst(
+        SourceBurstConfiguration(
+            enabled=False,
+            mode="TRIGGERED",
+            cycles=10,
+            phase_deg=0.0,
+            internal_period_s=0.01,
+            delay_s=0.0,
+            gate_polarity="NORMAL",
+            trigger_source="MANUAL",
+            trigger_slope="POSITIVE",
+            trigger_out="OFF",
+        ),
+        channel=1,
+    )
+    service.configure_sweep(
+        SourceSweepConfiguration(
+            enabled=True,
+            start_hz=100.0,
+            stop_hz=1_000.0,
+            spacing="LINEAR",
+            steps=101,
+            sweep_time_s=1.0,
+            start_hold_s=0.0,
+            stop_hold_s=0.0,
+            return_time_s=0.0,
+            trigger_source="MANUAL",
+            trigger_slope="POSITIVE",
+            trigger_out="OFF",
+            marker_enabled=False,
+            marker_frequency_hz=550.0,
+        ),
+        channel=1,
+    )
+    service.set_output(channel=1, enabled=True)
+    assert driver.output_requests[-1] == SourceOutputRequest(channel=1, enabled=True)
+    assert driver.v1_output_calls == 0
+
+    disjoint_routes = {
+        SourceV1WriteRouteId.CONFIGURE_COUPLING,
+        SourceV1WriteRouteId.CONFIGURE_HARMONICS,
+        SourceV1WriteRouteId.CONFIGURE_AM,
+        SourceV1WriteRouteId.CONFIGURE_FM,
+        SourceV1WriteRouteId.CONFIGURE_PM,
+        SourceV1WriteRouteId.CONFIGURE_PWM,
+        SourceV1WriteRouteId.CONFIGURE_PULSE,
+        SourceV1WriteRouteId.CONFIGURE_BURST,
+        SourceV1WriteRouteId.CONFIGURE_SWEEP,
+    }
+    assert driver.legacy_calls == [
+        "configure_coupling",
+        "configure_harmonics",
+        "configure_am_modulation",
+        "configure_fm_modulation",
+        "configure_pm_modulation",
+        "configure_pwm_modulation",
+        "configure_pulse",
+        "configure_burst",
+        "configure_sweep",
+    ]
+
+    writes_before_rejections = driver.transport.counters.write_requests
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.trigger_burst(channel=1)
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.trigger_sweep(channel=1)
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.upload_arbitrary_waveform(
+            channel=1,
+            file_path="unused.npy",
+            playback_frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+        )
+    with pytest.raises(ConfigError, match="restore_restorable_state cannot run"):
+        service.restore_restorable_state(
+            RestorableSourceState(
+                channel=1,
+                output="OFF",
+                function="SIN",
+                frequency_hz=1_000.0,
+                amplitude_vpp=1.0,
+                amplitude_unit="VPP",
+            )
+        )
+
+    rejected_routes = {
+        SourceV1WriteRouteId.TRIGGER_BURST,
+        SourceV1WriteRouteId.TRIGGER_SWEEP,
+        SourceV1WriteRouteId.UPLOAD_ARBITRARY,
+        SourceV1WriteRouteId.RESTORE,
+    }
+    assert driver.transport.counters.write_requests == writes_before_rejections
+    assert mapped_routes | disjoint_routes | rejected_routes == set(SourceV1WriteRouteId)
 
 
 def test_basic_configure_v2_rejects_target_output_on_before_write() -> None:
