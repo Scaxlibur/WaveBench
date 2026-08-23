@@ -4,9 +4,9 @@
 > 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5、C1、M5-A 与 M5-B 已进入核心 `0.8.24` 开发线；R6 已接受。
+> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B 与 M5-C 已进入核心 `0.8.24` 开发线；R6 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2`；M5-A 只冻结
-> 公共合同与 descriptor 校验，M5-B 只提供内部基础配置事务，尚未开放 Source V2 写入口。
+> 公共合同与 descriptor 校验，M5-B／M5-C 只提供内部写事务，尚未开放 Source V2 写入口。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -2691,7 +2691,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | R6 | `Accepted` | 基础写入方向 | 冻结基本安全、核心接口、V1 兼容和下列实施顺序 |
 | M5-A | `implemented-unreleased` | 公共类型与静态验证 | `basic_configure_v2`／`output_v2` 的 request、result、Protocol、descriptor validation 和 A0 构造测试通过；不开放写入口 |
 | M5-B | `implemented-unreleased` | 基础配置事务 | 输出 OFF 的 basic configure、单写、回读、失败恢复和 operation artifact 通过；不改变 V1 setter |
-| M5-C | 未开始 | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
+| M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | 未开始 | 公共入口与双合同路由 | Service／CLI 后，新增 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | 未开始 | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过 |
 | M6-A | 未开始 | 单通道高级配置 | Harmonic、Modulation、Pulse、Sweep、Burst 按 feature 独立 opt in，复用基本写入门 |
@@ -2829,8 +2829,9 @@ M5-A 只增加闭合的单通道 model，不提供自由 mapping 或通用 patch
 
 声明任一 M5-A 写 capability 的 descriptor 必须同时声明 `source.snapshot_v2`。基础配置要求同一
 channel 的 Basic 支持 `READ` 与 `CONFIGURE`，并能回读最终 Vpp、Offset 和输出状态；输出 capability
-要求同一 channel 的 Output 支持 `READ`、`ENABLE` 与 `DISABLE`，并能回读输出状态、最终 Vpp 和
-Offset。方向、profile、channel 或 required method 不匹配时，在 factory 及仪器 I/O 前失败。
+要求同一 channel 的 Output 支持 `READ`、`ENABLE` 与 `DISABLE`，并能回读输出状态。启用动作在运行时
+另行要求同一 channel 可返回最终 Vpp 与 Offset；关闭动作不以它们为条件。方向、profile、channel 或
+required method 不匹配时，在 factory 及仪器 I/O 前失败。
 
 M5-A 不增加 `SourceService` 写方法、CLI 写命令或 run plan step；现有 V1 setter、CLI、run plan、TUI
 和 artifact 保持原样。capability 注册只让核心识别插件合同，不构成可调用写入口。
@@ -2865,6 +2866,31 @@ write、OFF readback 或同步失败也保持更保守的 session 状态。
 typed request/result、preflight／postcondition snapshot 摘要、phase 摘要、最终 session 状态和脱敏
 evidence ref。它不包含 raw SCPI、资源地址、完整响应、授权 token 或 baseline nonce。M5-B 尚不将
 这些 artifact 写入 `run.json`；该连接由 M5-D 负责。
+
+### M5-C 单端口输出事务
+
+M5-C 只实现 `SourceService` 内部的 `_set_output_v2_transaction()`；它仍不是公开 Python API，也不新增
+CLI、TUI 或 run plan 写入口。请求为 `SourceOutputRequest(channel, enabled)`，核心根据 `enabled` 选择
+`source.output_enable_v2` 或 `source.output_disable_v2` 的独立 operation contract。
+
+启用时，核心读取目标 channel 的 fresh、consistent snapshot，确认 runtime profile 支持 `OUTPUT/ENABLE`，
+并以最终 Vpp、Offset 检查 `max_source_vpp` 和已完整配置的绝对端口电压区间。它不要求端接证据、
+`CompositeOutputBudget`、RMS、Noise crest factor、ARB 过冲、共享功率或热模型。没有已报告为 enabled 的
+跨通道关系涉及目标端口时，其他独立端口可以保持 ON；已报告的活动关系由 M6-C 处理，不在单端口
+enable 路径中猜测其副作用。
+
+关闭时，核心只要求该 target 的输出状态可读及 runtime profile 支持 `OUTPUT/DISABLE`。它不以最终
+Vpp、Offset、端接、预算或绝对端口电压为前提。目标已经处于请求状态时，事务只保留 fresh readback，
+不发送多余写入。
+
+需要转换状态时，MAIN 至多调用一次 `set_source_output_v2(request)`，随后通过独立 snapshot 回读目标
+状态。启用还要求最终 Vpp／Offset 与 driver result 一致；关闭只要求回读为 OFF。启用的 result 或
+postcondition 失败时，核心最多发送一次 recovery OFF，并在 OFF 回读后保留 `uncertain` session。关闭
+的 result 未知时不得重试同一 OFF；连接转为更保守状态。两个路径都不回退到 V1 `set_output`。
+
+M5-C artifact 与 M5-B 使用相同 schema，记录 enable／disable 意图、是否实际写入、typed result、
+snapshot 摘要、phase 摘要、recovery 结果和脱敏 evidence ref。该 artifact 仍只在内部事务中存在，
+M5-D 才将其连接到公开入口与 `run.json`。
 
 ### R6 延后事项
 
