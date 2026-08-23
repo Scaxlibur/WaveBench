@@ -4,9 +4,10 @@
 > 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C 与 M5-D 已进入核心 `0.8.24` 开发线；R6 已接受。
+> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D 与 C2 已进入核心 `0.8.24` 开发线；R6 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2`；M5-A 只冻结
-> 公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，M5-D 已开放受限的 Source V2 写入口。
+> 公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，M5-D 已开放受限的 Source V2 写入口，
+> C2 已补齐候选发布的核心兼容与离线发布物门。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -2693,7 +2694,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-B | `implemented-unreleased` | 基础配置事务 | 输出 OFF 的 basic configure、单写、回读、失败恢复和 operation artifact 通过；不改变 V1 setter |
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
-| C2 | 未开始 | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过 |
+| C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
 | M6-A | 未开始 | 单通道高级配置 | Harmonic、Modulation、Pulse、Sweep、Burst 按 feature 独立 opt in，复用基本写入门 |
 | M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
 | M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
@@ -2946,6 +2947,30 @@ operation artifact 同时保存到 step 的 `artifact.source_operation` 和非�
 
 V1-only 插件继续使用原 V1 route。双合同 V1 setter 的返回值仅为兼容显示而从 V2 postcondition
 flatten 为 `SourceStatus`；该 adapter 不参与 V2 preflight、预算、恢复或 capability 决策。
+
+### C2 核心兼容与候选发布门
+
+C2 只证明核心发布物和兼容边界可由离线测试持续复核，不构成推送、打 tag、上传包或发布真实插件
+写 capability 的授权。候选 release gate 包含以下证据：
+
+- 核心 wheel 与 sdist 均在临时隔离 venv 中以 `--no-index --no-deps` 安装。测试只桥接已安装的运行时
+  依赖，不桥接核心源码；导入位置必须来自被测 artifact，并完成 `--help`、`run schema`、模板列表和
+  本地 lock status 的离线冒烟。
+- 合成 V1 Source wheel 的 entry point 不导入任何 Source V2 symbol。在新核心中仍可 resolve、factory 和
+  执行 `set_frequency`；同一 descriptor 请求 `snapshot_v2` 时必须在 capability gate 拒绝，未打开 session
+  时 factory 调用数为零，已有 V1 driver 时 transport 调用数仍为零。
+- 合成 Source V2 wheel 同时声明 `source.snapshot_v2`、`source.basic_configure_v2` 和
+  `source.output_v2`，并以相同的 PEP 440 区间通过受管 lifecycle 的 metadata、descriptor 和 Protocol
+  postflight。旧核心模拟继续在 metadata gate、entry point import 前拒绝超出版本范围的新 wheel。
+- 双合同 fake 同时声明全部现有 V1 写 capability 与两个 V2 写 capability。四个 basic setter 和
+  `set_output` 只调用 V2 driver；九个当前不相交的高级 configure 路由保持 V1；restore、ARB upload 和
+  两个 trigger 在任何 driver 写入前拒绝。该分类集合必须覆盖冻结的 18 条 V1 route。
+- V1 `run.json` 使用按 LF／CRLF 分别冻结的字节摘要。省略 `source_operations`、传入 `None` 或空列表均
+  命中同一平台基线；真实 V1 run 不写该根键。run package reader 与 HTML report 可读取包含非空
+  `source_operations` 的 additive 包，并忽略其未识别 payload。
+
+常规完整离线测试继续是该门的一部分。C2 状态为 `implemented-unreleased`：它允许维护者形成候选包，
+但不会替代 M7 的真实协议／设备验证，也不会替代 C3 的稳定发布审计。
 
 ### R6 延后事项
 
