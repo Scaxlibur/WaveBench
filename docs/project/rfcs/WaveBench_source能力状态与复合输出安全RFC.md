@@ -2695,7 +2695,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
-| M6-A | 未开始 | 单通道高级配置 | Harmonic、Modulation、Pulse、Sweep、Burst 按 feature 独立 opt in，复用基本写入门 |
+| M6-A | `in-progress` | 单通道高级配置 | 先实现 Harmonic；Modulation、Pulse、Sweep、Burst 继续按 feature 独立 opt in，复用基本写入门 |
 | M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
 | M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
@@ -2971,6 +2971,25 @@ C2 只证明核心发布物和兼容边界可由离线测试持续复核，不�
 
 常规完整离线测试继续是该门的一部分。C2 状态为 `implemented-unreleased`：它允许维护者形成候选包，
 但不会替代 M7 的真实协议／设备验证，也不会替代 C3 的稳定发布审计。
+
+### M6-A 首个子能力：Harmonic
+
+M6-A 不使用一个泛化写 capability 覆盖全部高级功能。首个子能力是
+`source.harmonics_configure_v2`，只覆盖单通道的低阶 Harmonic 预设配置；它不同时授权
+Modulation、Pulse、Sweep、Burst、ARB 或跨通道关系。
+
+第一版 request 固定为目标 channel、order 和 `even`／`odd`／`all` 三种预设。它不提供 USER mask、
+逐分量幅度、逐分量相位或设备默认值重置。descriptor 必须显式声明 Harmonic 的 `CONFIGURE` direction、
+可配置 order 区间、允许预设，以及可独立回读 order 和预设；只读 Harmonic descriptor 不因本项获得写能力。
+
+事务复用 M5 的单次写、fresh snapshot、独立 postcondition、失败后一次 V2 OFF 和 operation artifact。
+目标 channel 必须处于 OFF；Harmonic 预设写入不隐式开启输出。之后是否 ON 仍只由
+`source.output_v2` 决定，并沿用 M5-C 的最终 Vpp／Offset 基础限制，不在本子能力中引入新的 RMS、
+统计 Noise、共享功率或逐分量人工预算门。
+
+双合同插件的 V1 `configure_harmonics` 映射到该 V2 事务；V1-only 插件以及未声明
+`source.harmonics_configure_v2` 的双合同插件继续走原 V1 路径。M6-A 的后续子能力必须重新审计自己
+相关的 V1 route，不能因 Harmonic 已实现而扩大本 capability 的范围。
 
 ### R6 延后事项
 
