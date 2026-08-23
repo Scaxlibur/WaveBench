@@ -6,6 +6,7 @@ from wavebench.errors import ConfigError
 from wavebench.instruments.source_extensions import (
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
@@ -58,6 +59,11 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
             SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
             "source-v2-modulation-pm",
             ("source_v2", "output_must_be_off", "pm_internal_only"),
+        ),
+        (
+            SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-modulation-fm",
+            ("source_v2", "output_must_be_off", "fm_internal_only"),
         ),
         (
             SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -113,6 +119,9 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
     assert SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
     assert SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (

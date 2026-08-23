@@ -36,6 +36,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.harmonics_configure_v2",
         "source.modulation_configure_v2",
         "source.modulation_pm_configure_v2",
+        "source.modulation_fm_configure_v2",
         "source.burst_configure_v2",
         "source.pulse_configure_v2",
     }
@@ -63,6 +64,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.harmonics_configure_v2",
         "source.modulation_configure_v2",
         "source.modulation_pm_configure_v2",
+        "source.modulation_fm_configure_v2",
         "source.burst_configure_v2",
         "source.pulse_configure_v2",
     }
@@ -79,6 +81,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.harmonics_configure_v2",
         "source.modulation_configure_v2",
         "source.modulation_pm_configure_v2",
+        "source.modulation_fm_configure_v2",
         "source.burst_configure_v2",
         "source.pulse_configure_v2",
     }
@@ -96,6 +99,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
             "source.harmonics_configure_v2": "channel = 1\norder = 8\npreset = \"odd\"\n",
             "source.modulation_configure_v2": "channel = 1\ndepth_percent = 80\ninternal_frequency_hz = 25\n",
             "source.modulation_pm_configure_v2": "channel = 1\nphase_deviation_deg = 90\ninternal_frequency_hz = 25\n",
+            "source.modulation_fm_configure_v2": "channel = 1\nfrequency_deviation_hz = 12500\ninternal_frequency_hz = 25\n",
             "source.burst_configure_v2": "channel = 1\ncycles = 12\nphase_deg = 30\ninternal_period_s = 0.25\ndelay_s = 0.5\n",
             "source.pulse_configure_v2": "channel = 1\nwidth_s = 1e-6\ndelay_s = 0\nleading_transition_s = 1e-8\ntrailing_transition_s = 1e-8\n",
         }

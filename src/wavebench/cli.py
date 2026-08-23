@@ -341,6 +341,19 @@ def _source_pm_modulation_configure_v2_request(args: argparse.Namespace):
         raise ConfigError(str(exc)) from exc
 
 
+def _source_fm_modulation_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourceFmModulationConfigureRequest
+
+    try:
+        return SourceFmModulationConfigureRequest(
+            channel=args.channel,
+            frequency_deviation_hz=args.frequency_deviation_hz,
+            internal_frequency_hz=args.internal_frequency_hz,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _source_burst_configure_v2_request(args: argparse.Namespace):
     from .instruments.source_extensions import SourceBurstConfigureRequest
 
@@ -1236,6 +1249,15 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "pm-modulation-configure-v2":
                 _, payload = service.configure_pm_modulation_v2(
                     _source_pm_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "fm-modulation-configure-v2":
+                _, payload = service.configure_fm_modulation_v2(
+                    _source_fm_modulation_configure_v2_request(args)
                 )
                 if args.json:
                     _emit_json_result(payload)

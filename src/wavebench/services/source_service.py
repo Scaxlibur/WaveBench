@@ -73,6 +73,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_CONTRACT_VERSION,
+    SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
@@ -98,6 +99,9 @@ from wavebench.instruments.source_extensions import (
     SourceFieldRef,
     SourceFeature,
     SourceFeatureDirection,
+    SourceFmModulationConfigureRequest,
+    SourceFmModulationConfigureResult,
+    SourceFmModulationConfigureV2Driver,
     SourceHarmonicCapabilityProfile,
     SourceHarmonicConfigureRequest,
     SourceHarmonicConfigureResult,
@@ -190,6 +194,15 @@ class _SourcePmModulationConfigureV2Transaction:
     """Core transaction result shared by the internal PM public route."""
 
     result: SourcePmModulationConfigureResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceFmModulationConfigureV2Transaction:
+    """Core transaction result shared by the internal FM public route."""
+
+    result: SourceFmModulationConfigureResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
@@ -442,6 +455,20 @@ class SourceService(SessionStateAliasMixin):
         """Configure one OFF source channel with the declared internal PM scope."""
 
         transaction = self._configure_pm_modulation_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_fm_modulation_v2(
+        self,
+        request: SourceFmModulationConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceFmModulationConfigureResult, dict[str, object]]:
+        """Configure one OFF source channel with the declared internal FM scope."""
+
+        transaction = self._configure_fm_modulation_v2_transaction(
             request,
             correlation_id=correlation_id,
         )
@@ -1565,6 +1592,199 @@ class SourceService(SessionStateAliasMixin):
                 return _SourcePmModulationConfigureV2Transaction(
                     result=result,
                     artifact=self._source_pm_modulation_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
+    def _configure_fm_modulation_v2_transaction(
+        self,
+        request: SourceFmModulationConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> _SourceFmModulationConfigureV2Transaction:
+        """Execute one declared internal FM transaction while output is OFF."""
+
+        operation = "source.modulation_fm_configure_v2"
+        if not isinstance(request, SourceFmModulationConfigureRequest):
+            raise ConfigError(f"{operation} requires SourceFmModulationConfigureRequest")
+        self._require(
+            operation,
+            "source.snapshot_v2",
+            "source.modulation_fm_configure_v2",
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            fields = self._source_modulation_v2_fields(request.channel)
+            modulation_field = next(
+                field for field in fields if field.field is SourceFieldId.MODULATION
+            )
+            output_field = next(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            target_scope = SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel)
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(target_scope,),
+                emergency_off_outputs=(target_scope,),
+                restore_order=(),
+                non_restorable_fields=(modulation_field, output_field),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceFmModulationConfigureResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_modulation, preflight_output = (
+                        self._source_v2_modulation_preflight_target(
+                            preflight_snapshot,
+                            request.channel,
+                            operation=operation,
+                        )
+                    )
+                    self._validate_source_fm_modulation_v2_preflight(
+                        request,
+                        preflight_snapshot,
+                        preflight_modulation,
+                        preflight_output,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest(
+                            (request.channel, preflight_modulation, preflight_output)
+                        )
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write"},
+                    fields=(modulation_field,),
+                    max_steps=SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        result = cast(
+                            SourceFmModulationConfigureV2Driver,
+                            source,
+                        ).configure_source_fm_modulation_v2(request)
+                        self._validate_source_fm_modulation_v2_result(request, result)
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=(modulation_field, output_field),
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            postcondition_modulation, postcondition_output = (
+                                self._source_v2_modulation_target(
+                                    postcondition_snapshot,
+                                    request.channel,
+                                    operation=operation,
+                                )
+                            )
+                            assert result is not None
+                            self._validate_source_fm_modulation_v2_postcondition(
+                                request,
+                                result,
+                                postcondition_snapshot,
+                                postcondition_modulation,
+                                postcondition_output,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=(modulation_field, output_field),
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_output_off(
+                                context,
+                                source,
+                                request.channel,
+                                extensions,
+                                output_field,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_fm_modulation_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceFmModulationConfigureV2Transaction(
+                    result=result,
+                    artifact=self._source_fm_modulation_v2_artifact(
                         context=context,
                         request=request,
                         preflight_snapshot=preflight_snapshot,
@@ -2735,6 +2955,139 @@ class SourceService(SessionStateAliasMixin):
             raise ConfigError(f"{operation} result readback does not match postcondition")
 
     @staticmethod
+    def _source_fm_modulation_runtime_profile(
+        snapshot: SourceSnapshotV2,
+        *,
+        channel: int,
+        operation: str,
+    ) -> SourceModulationCapabilityProfile:
+        feature = next(
+            (
+                candidate
+                for candidate in snapshot.runtime_profile.features
+                if candidate.feature is SourceFeature.MODULATION
+                and candidate.scope is SourceFacetScope.CHANNEL
+                and channel in candidate.channels
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(feature.profile, SourceModulationCapabilityProfile):
+            raise ConfigError(f"{operation} is not available for the runtime target channel")
+        return feature.profile
+
+    def _validate_source_fm_modulation_v2_preflight(
+        self,
+        request: SourceFmModulationConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        modulation: Observed[ModulationFacet],
+        output: OutputFacet,
+    ) -> None:
+        del modulation
+        operation = "source.modulation_fm_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} requires target output OFF")
+        profile = self._source_fm_modulation_runtime_profile(
+            snapshot,
+            channel=request.channel,
+            operation=operation,
+        )
+        if SourceModulationKind.FM not in profile.kinds:
+            raise ConfigError(f"{operation} internal FM is not supported by the runtime profile")
+        if SourceModulationSource.INTERNAL not in profile.sources:
+            raise ConfigError(f"{operation} internal source is not supported by the runtime profile")
+        if SourceModulationParameterKind.FREQUENCY_DEVIATION_HZ not in profile.parameter_kinds:
+            raise ConfigError(
+                f"{operation} FM frequency deviation is not supported by the runtime profile"
+            )
+        if not profile.configuration_readable:
+            raise ConfigError(f"{operation} requires configured modulation readback")
+
+    @staticmethod
+    def _validate_source_fm_modulation_v2_readback(
+        request: SourceFmModulationConfigureRequest,
+        modulation: ModulationFacet,
+        *,
+        operation: str,
+    ) -> None:
+        if modulation.enabled.availability is not Availability.VALUE or modulation.enabled.value is not True:
+            raise ConfigError(f"{operation} postcondition reports modulation disabled")
+        if (
+            modulation.kind.availability is not Availability.VALUE
+            or modulation.kind.value is not SourceModulationKind.FM
+        ):
+            raise ConfigError(f"{operation} postcondition does not report FM")
+        if (
+            modulation.source.availability is not Availability.VALUE
+            or modulation.source.value is not SourceModulationSource.INTERNAL
+        ):
+            raise ConfigError(f"{operation} postcondition does not report internal modulation")
+        expected_parameter = SourceModulationParameter(
+            SourceModulationParameterKind.FREQUENCY_DEVIATION_HZ,
+            request.frequency_deviation_hz,
+        )
+        if (
+            modulation.parameters.availability is not Availability.VALUE
+            or modulation.parameters.value != (expected_parameter,)
+        ):
+            raise ConfigError(f"{operation} frequency deviation readback does not match request")
+        if (
+            modulation.internal_frequency_hz.availability is not Availability.VALUE
+            or modulation.internal_frequency_hz.value != request.internal_frequency_hz
+        ):
+            raise ConfigError(f"{operation} internal frequency readback does not match request")
+        if (
+            modulation.internal_waveform_kind.availability is not Availability.VALUE
+            or modulation.internal_waveform_kind.value is not SourceWaveformKind.SINE
+        ):
+            raise ConfigError(f"{operation} internal waveform readback does not match scope")
+
+    def _validate_source_fm_modulation_v2_result(
+        self,
+        request: SourceFmModulationConfigureRequest,
+        result: object,
+    ) -> None:
+        operation = "source.modulation_fm_configure_v2"
+        if not isinstance(result, SourceFmModulationConfigureResult):
+            raise ConfigError(
+                "configure_source_fm_modulation_v2() returned an invalid "
+                "SourceFmModulationConfigureResult"
+            )
+        if result.channel != request.channel:
+            raise ConfigError(f"{operation} result channel does not match request")
+        if result.output_enabled:
+            raise ConfigError(f"{operation} result reports output ON")
+        self._validate_source_fm_modulation_v2_readback(
+            request,
+            result.modulation,
+            operation=operation,
+        )
+
+    def _validate_source_fm_modulation_v2_postcondition(
+        self,
+        request: SourceFmModulationConfigureRequest,
+        result: SourceFmModulationConfigureResult,
+        snapshot: SourceSnapshotV2,
+        modulation: ModulationFacet,
+        output: OutputFacet,
+    ) -> None:
+        operation = "source.modulation_fm_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} postcondition reports output ON")
+        self._validate_source_fm_modulation_v2_readback(
+            request,
+            modulation,
+            operation=operation,
+        )
+        if result.modulation != modulation:
+            raise ConfigError(f"{operation} result readback does not match postcondition")
+
+    @staticmethod
     def _source_burst_runtime_profile(
         snapshot: SourceSnapshotV2,
         *,
@@ -3541,6 +3894,60 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_fm_modulation_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceFmModulationConfigureRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceFmModulationConfigureResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": "source.modulation_fm_configure_v2",
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_channel": request.channel,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {"result": source_v2_to_data(result)}
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "output_expected": "off",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_burst_v2_artifact(
         self,
         *,
@@ -3747,6 +4154,20 @@ class SourceService(SessionStateAliasMixin):
                 exc,
                 "source_operation_artifact",
                 self._source_pm_modulation_v2_artifact(**kwargs),
+            )
+        except Exception:
+            pass
+
+    def _attach_source_fm_modulation_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(
+                exc,
+                "source_operation_artifact",
+                self._source_fm_modulation_v2_artifact(**kwargs),
             )
         except Exception:
             pass
@@ -3983,6 +4404,10 @@ class SourceService(SessionStateAliasMixin):
         configuration: SourceFmModulationConfiguration,
         channel: int | None = None,
     ) -> SourceFmModulationProfile:
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.CONFIGURE_FM,
+            "source.modulation_fm_configure_v2",
+        )
         if not isinstance(configuration, SourceFmModulationConfiguration):
             raise ConfigError(
                 "source FM modulation configuration must be SourceFmModulationConfiguration"
@@ -4246,6 +4671,7 @@ class SourceService(SessionStateAliasMixin):
             "source.harmonics_configure_v2",
             "source.modulation_configure_v2",
             "source.modulation_pm_configure_v2",
+            "source.modulation_fm_configure_v2",
             "source.burst_configure_v2",
             "source.pulse_configure_v2",
             "source.output_v2",

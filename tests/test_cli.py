@@ -701,6 +701,18 @@ class CliTests(unittest.TestCase):
                 "25",
             ]
         )
+        fm = build_parser().parse_args(
+            [
+                "source",
+                "fm-modulation-configure-v2",
+                "--channel",
+                "2",
+                "--frequency-deviation-hz",
+                "12500",
+                "--internal-frequency-hz",
+                "25",
+            ]
+        )
         burst = build_parser().parse_args(
             [
                 "source",
@@ -744,6 +756,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(pm.channel, 2)
         self.assertEqual(pm.phase_deviation_deg, 90.0)
         self.assertEqual(pm.internal_frequency_hz, 25.0)
+        self.assertEqual(fm.command, "fm-modulation-configure-v2")
+        self.assertEqual(fm.channel, 2)
+        self.assertEqual(fm.frequency_deviation_hz, 12_500.0)
+        self.assertEqual(fm.internal_frequency_hz, 25.0)
         self.assertEqual(burst.command, "burst-configure-v2")
         self.assertEqual(burst.channel, 2)
         self.assertEqual(burst.cycles, 12)

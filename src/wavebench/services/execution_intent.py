@@ -35,6 +35,7 @@ _STEP_OPERATIONS = {
     "source.harmonics_configure_v2": "source.harmonics_configure_v2",
     "source.modulation_configure_v2": "source.modulation_configure_v2",
     "source.modulation_pm_configure_v2": "source.modulation_pm_configure_v2",
+    "source.modulation_fm_configure_v2": "source.modulation_fm_configure_v2",
     "source.burst_configure_v2": "source.burst_configure_v2",
     "source.pulse_configure_v2": "source.pulse_configure_v2",
     "power.status": "power.status",

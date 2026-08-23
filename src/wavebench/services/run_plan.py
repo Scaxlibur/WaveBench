@@ -32,6 +32,7 @@ ALLOWED_STEP_KINDS = {
     "source.harmonics_configure_v2",
     "source.modulation_configure_v2",
     "source.modulation_pm_configure_v2",
+    "source.modulation_fm_configure_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
     "power.status",
@@ -58,6 +59,11 @@ _REQUIRED_FIELDS = {
     "source.modulation_pm_configure_v2": (
         "channel",
         "phase_deviation_deg",
+        "internal_frequency_hz",
+    ),
+    "source.modulation_fm_configure_v2": (
+        "channel",
+        "frequency_deviation_hz",
         "internal_frequency_hz",
     ),
     "source.burst_configure_v2": (
@@ -151,6 +157,7 @@ _OPTIONAL_FIELDS = {
     "source.harmonics_configure_v2": {"on_failure"},
     "source.modulation_configure_v2": {"on_failure"},
     "source.modulation_pm_configure_v2": {"on_failure"},
+    "source.modulation_fm_configure_v2": {"on_failure"},
     "source.burst_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
@@ -184,6 +191,7 @@ _STEP_NOTES = {
     "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
     "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
     "source.modulation_pm_configure_v2": "Configure one OFF Source V2 channel with internal sine PM; it does not enable output.",
+    "source.modulation_fm_configure_v2": "Configure one OFF Source V2 channel with internal sine FM; it does not enable output.",
     "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
@@ -648,6 +656,21 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         if internal_frequency <= 0:
             raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
         fields["phase_deviation_deg"] = phase_deviation
+        fields["internal_frequency_hz"] = internal_frequency
+    elif kind == "source.modulation_fm_configure_v2":
+        frequency_deviation = _finite_float(
+            fields["frequency_deviation_hz"],
+            f"{prefix}.frequency_deviation_hz",
+        )
+        if frequency_deviation <= 0:
+            raise ConfigError(f"{prefix}.frequency_deviation_hz must be > 0")
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["frequency_deviation_hz"] = frequency_deviation
         fields["internal_frequency_hz"] = internal_frequency
     elif kind == "source.burst_configure_v2":
         cycles = fields["cycles"]

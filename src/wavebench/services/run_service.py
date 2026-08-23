@@ -27,6 +27,7 @@ from wavebench.instruments.source_extensions import (
     SourceBasicConfigureRequest,
     SourceBasicPatch,
     SourceBurstConfigureRequest,
+    SourceFmModulationConfigureRequest,
     SourceHarmonicConfigureRequest,
     SourceHarmonicPreset,
     SourceModulationConfigureRequest,
@@ -416,6 +417,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.modulation_configure_v2")
             elif step.kind == "source.modulation_pm_configure_v2":
                 add("source", "source.snapshot_v2", "source.modulation_pm_configure_v2")
+            elif step.kind == "source.modulation_fm_configure_v2":
+                add("source", "source.snapshot_v2", "source.modulation_fm_configure_v2")
             elif step.kind == "source.burst_configure_v2":
                 add("source", "source.snapshot_v2", "source.burst_configure_v2")
             elif step.kind == "source.pulse_configure_v2":
@@ -1170,6 +1173,15 @@ class RunService:
                 SourcePmModulationConfigureRequest(
                     channel=step.fields["channel"],
                     phase_deviation_deg=step.fields["phase_deviation_deg"],
+                    internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.modulation_fm_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_fm_modulation_v2(
+                SourceFmModulationConfigureRequest(
+                    channel=step.fields["channel"],
+                    frequency_deviation_hz=step.fields["frequency_deviation_hz"],
                     internal_frequency_hz=step.fields["internal_frequency_hz"],
                 )
             )
