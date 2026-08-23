@@ -2912,8 +2912,8 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M6-A | `implemented-unreleased` | 单通道高级配置 | Harmonic 配置／关闭、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 均已 `implemented-unreleased`；每项均独立 opt in 并复用基本写入门 |
 | M6-B | `implemented-unreleased` | ARB storage 与 selection | named-slot create/CAS、payload 摘要与独立 readback、OFF-only selection、Service／CLI／run plan／intent／artifact、V1 upload 零 I/O 拒绝和 A0 fake 通过；ON 仍由 `output_v2` 管理 |
 | M6-C | `implemented-unreleased` | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
-| M7 | `in-progress (A0、A1、有限 A2)` | 插件逐项 opt in | SDG2000X 已完成 basic/output/Harmonic 关闭的 A0 离线适配；精确 `SDG2122X`／`2.01.01.39R7T2` 已完成双通道只读 A1，以及 Basic、独立 ON/OFF、Harmonic 关闭的有限 A2 正常路径。A3 示波器环回未完成，不声明实机故障恢复；第二种协议形态作为兼容验证，不阻塞首次发布 |
-| C3 | 待 M7 A3 与最终发布物 | 稳定发布审计 | 已完成 SDG2000X 的离线审计和精确目标 A1／有限 A2 记录；首个真实插件仍须完成 A3、文档、稳定核心／最终包检查、conformance manifest 和无未登记写 capability 签核 |
+| M7 | `in-progress (A0、A1、有限 A2、Basic A3)` | 插件逐项 opt in | SDG2000X 已完成 basic/output/Harmonic 关闭的 A0 离线适配；精确 `SDG2122X`／`2.01.01.39R7T2` 已完成双通道只读 A1，以及 Basic、独立 ON/OFF、Harmonic 关闭的有限 A2 正常路径。确认高阻 CH1→CH1、CH2→CH2 接线后，Basic 在两路 Sine／Square／Ramp／Pulse 的 2 kHz／2 Vpp 工作点完成 A3；不声明其它范围、实机同时 ON 或实机故障恢复。第二种协议形态作为兼容验证，不阻塞首次发布 |
+| C3 | 待最终发布物 | 稳定发布审计 | 已完成 SDG2000X 的离线审计和精确目标 A1／有限 A2／Basic A3 记录；首个真实插件仍须完成文档、稳定核心／最终包检查、conformance manifest 的实现与审核，以及无未登记写 capability 签核 |
 | P0 | `implemented-unreleased` | V1 `amplitude=None` 失败关闭 | ON 对缺失、非有限、非 VPP 或负 Vpp 在 driver 写入前返回稳定 `ConfigError`；OFF 保持原有可执行语义 |
 
 ## 已否决方案
