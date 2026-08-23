@@ -633,6 +633,32 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.channel, 2)
         self.assertEqual(args.value_hz, 1000.0)
 
+    def test_source_v2_basic_and_output_commands_accept_explicit_channels(self):
+        basic = build_parser().parse_args(
+            [
+                "source",
+                "basic-configure-v2",
+                "--channel",
+                "2",
+                "--waveform",
+                "square",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "1.5",
+            ]
+        )
+        output = build_parser().parse_args(["source", "output-v2", "--channel", "2", "on"])
+
+        self.assertEqual(basic.command, "basic-configure-v2")
+        self.assertEqual(basic.channel, 2)
+        self.assertEqual(basic.waveform, "square")
+        self.assertEqual(basic.frequency_hz, 1000.0)
+        self.assertEqual(basic.amplitude_vpp, 1.5)
+        self.assertEqual(output.command, "output-v2")
+        self.assertEqual(output.channel, 2)
+        self.assertEqual(output.state, "on")
+
     def test_fetch_accepts_points(self):
         args = build_parser().parse_args(["scope", "fetch", "--points", "dmax"])
         self.assertEqual(args.command, "fetch")

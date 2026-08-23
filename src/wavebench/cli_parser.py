@@ -662,6 +662,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(source_snapshot_v2)
 
+    source_basic_configure_v2 = source_sub.add_parser(
+        "basic-configure-v2",
+        help="Configure one OFF Source V2 channel with one or more basic fields",
+    )
+    source_basic_configure_v2.add_argument("--channel", type=int, required=True)
+    source_basic_configure_v2.add_argument(
+        "--waveform",
+        choices=("sine", "square", "ramp", "pulse", "noise", "dc"),
+        default=None,
+    )
+    source_basic_configure_v2.add_argument("--frequency-hz", type=float, default=None)
+    source_basic_configure_v2.add_argument("--amplitude-vpp", type=float, default=None)
+    source_basic_configure_v2.add_argument("--offset-v", type=float, default=None)
+    source_basic_configure_v2.add_argument(
+        "--square-duty-cycle-percent",
+        type=float,
+        default=None,
+    )
+    add_runtime_options(source_basic_configure_v2)
+
+    source_output_v2 = source_sub.add_parser(
+        "output-v2",
+        help="Turn one Source V2 channel output on or off",
+    )
+    source_output_v2.add_argument("--channel", type=int, required=True)
+    source_output_v2.add_argument("state", choices=("on", "off"))
+    add_runtime_options(source_output_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

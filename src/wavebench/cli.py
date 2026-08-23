@@ -256,6 +256,50 @@ def _json_payload(value: object) -> object:
     return value
 
 
+def _source_basic_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        PatchAction,
+        PatchValue,
+        SourceBasicConfigureRequest,
+        SourceBasicPatch,
+        SourceWaveformKind,
+    )
+
+    values = {
+        "waveform_kind": args.waveform,
+        "frequency_hz": args.frequency_hz,
+        "amplitude_vpp": args.amplitude_vpp,
+        "offset_v": args.offset_v,
+        "square_duty_cycle_percent": args.square_duty_cycle_percent,
+    }
+    if all(value is None for value in values.values()):
+        raise ConfigError("source basic-configure-v2 requires at least one basic field")
+
+    waveform = (
+        PatchValue(PatchAction.SET, SourceWaveformKind(args.waveform))
+        if args.waveform is not None
+        else PatchValue(PatchAction.KEEP)
+    )
+
+    def patch_value(value: object):
+        return (
+            PatchValue(PatchAction.SET, value)
+            if value is not None
+            else PatchValue(PatchAction.KEEP)
+        )
+
+    return SourceBasicConfigureRequest(
+        channel=args.channel,
+        patch=SourceBasicPatch(
+            waveform_kind=waveform,
+            frequency_hz=patch_value(args.frequency_hz),
+            amplitude_vpp=patch_value(args.amplitude_vpp),
+            offset_v=patch_value(args.offset_v),
+            square_duty_cycle_percent=patch_value(args.square_duty_cycle_percent),
+        ),
+    )
+
+
 def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
     policy = getattr(args, "error_policy", None)
     if policy is None:
@@ -334,6 +378,11 @@ def _scope_error_payload(exc: BaseException) -> dict[str, object]:
             "status": "partial_cleanup_failed",
             "reason_code": "remove_failed",
         }
+    source_operation_artifact = getattr(exc, "source_operation_artifact", None)
+    if isinstance(source_operation_artifact, Mapping):
+        payload["source_operation_artifact"] = _json_payload(
+            dict(source_operation_artifact)
+        )
     return payload
 
 
@@ -1064,6 +1113,29 @@ def _main(argv: list[str] | None = None) -> int:
                 )
 
                 payload = source_snapshot_v2_operation_artifact(service.snapshot_v2())
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "basic-configure-v2":
+                _, payload = service.configure_basic_v2(
+                    _source_basic_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "output-v2":
+                from wavebench.instruments.source_extensions import SourceOutputRequest
+
+                _, payload = service.set_output_v2(
+                    SourceOutputRequest(
+                        channel=args.channel,
+                        enabled=args.state == "on",
+                    )
+                )
                 if args.json:
                     _emit_json_result(payload)
                 else:

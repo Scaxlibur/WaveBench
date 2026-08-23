@@ -473,3 +473,93 @@ def test_snapshot_v2_cli_emits_operation_artifact(capsys) -> None:
     assert payload["schema"] == "wavebench.cli.result.v1"
     assert payload["result"]["schema"] == SOURCE_OPERATION_ARTIFACT_SCHEMA
     assert payload["result"]["snapshot"]["schema"] == SOURCE_SNAPSHOT_SCHEMA
+
+
+def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
+    basic_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.basic_configure_v2",
+    }
+    output_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.output_enable_v2",
+    }
+
+    class _Service:
+        def configure_basic_v2(self, request):
+            assert request.channel == 1
+            assert request.patch.frequency_hz.value == 2_000.0
+            return object(), basic_artifact
+
+        def set_output_v2(self, request):
+            assert request.channel == 1
+            assert request.enabled is True
+            return object(), output_artifact
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        basic_code = cli.main(
+            [
+                "--json",
+                "source",
+                "basic-configure-v2",
+                "--channel",
+                "1",
+                "--frequency-hz",
+                "2000",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        basic_payload = json.loads(capsys.readouterr().out)
+        output_code = cli.main(
+            [
+                "--json",
+                "source",
+                "output-v2",
+                "--channel",
+                "1",
+                "on",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        output_payload = json.loads(capsys.readouterr().out)
+
+    assert basic_code == 0
+    assert basic_payload["result"] == basic_artifact
+    assert output_code == 0
+    assert output_payload["result"] == output_artifact
+
+
+def test_source_v2_write_cli_keeps_failure_operation_artifact(capsys) -> None:
+    artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.output_enable_v2",
+        "recovery": {"status": "off_verified"},
+    }
+
+    class _Service:
+        def set_output_v2(self, request):
+            del request
+            error = ConfigError("write failed")
+            error.source_operation_artifact = artifact
+            raise error
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "output-v2",
+                "--channel",
+                "1",
+                "on",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert payload["schema"] == "wavebench.error.v1"
+    assert payload["source_operation_artifact"] == artifact
