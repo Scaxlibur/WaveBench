@@ -1084,6 +1084,36 @@ SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
 )
 
 
+SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.modulation_pm_configure_v2",
+    capability="source.modulation_pm_configure_v2",
+    feature=SourceFeature.MODULATION,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.MODULATION,),
+    postcondition_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_PM,
+        SourceV1WriteRouteId.RESTORE,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
 SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation="source.pulse_configure_v2",
     capability="source.pulse_configure_v2",
@@ -2281,6 +2311,31 @@ class SourceModulationConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourcePmModulationConfigureRequest:
+    channel: int
+    phase_deviation_deg: float
+    internal_frequency_hz: float
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source PM modulation configure channel", minimum=1)
+        _require_finite(
+            self.phase_deviation_deg,
+            "source PM modulation configure phase_deviation_deg",
+            minimum=0.0,
+            maximum=360.0,
+        )
+        _require_finite(
+            self.internal_frequency_hz,
+            "source PM modulation configure internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.internal_frequency_hz <= 0:
+            raise ValueError(
+                "source PM modulation configure internal_frequency_hz must be > 0"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class SourcePulseConfigureRequest:
     channel: int
     width_s: float
@@ -2561,6 +2616,79 @@ class SourceModulationConfigureResult:
             or self.modulation.internal_waveform_kind.value is not SourceWaveformKind.SINE
         ):
             raise ValueError("source modulation configure result requires internal sine readback")
+
+
+@dataclass(frozen=True, slots=True)
+class SourcePmModulationConfigureResult:
+    channel: int
+    modulation: ModulationFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source PM modulation configure result channel", minimum=1)
+        if not isinstance(self.modulation, ModulationFacet):
+            raise ValueError("source PM modulation configure result modulation has an invalid type")
+        _require_bool(self.output_enabled, "source PM modulation configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source PM modulation configure result requires output_enabled=False")
+        if (
+            self.modulation.enabled.availability is not Availability.VALUE
+            or self.modulation.enabled.value is not True
+        ):
+            raise ValueError(
+                "source PM modulation configure result requires enabled modulation readback"
+            )
+        if (
+            self.modulation.kind.availability is not Availability.VALUE
+            or self.modulation.kind.value is not SourceModulationKind.PM
+        ):
+            raise ValueError("source PM modulation configure result requires PM readback")
+        if (
+            self.modulation.source.availability is not Availability.VALUE
+            or self.modulation.source.value is not SourceModulationSource.INTERNAL
+        ):
+            raise ValueError(
+                "source PM modulation configure result requires internal source readback"
+            )
+        if self.modulation.parameters.availability is not Availability.VALUE:
+            raise ValueError(
+                "source PM modulation configure result requires phase deviation readback"
+            )
+        parameters = self.modulation.parameters.value
+        if (
+            not isinstance(parameters, tuple)
+            or len(parameters) != 1
+            or parameters[0].kind is not SourceModulationParameterKind.PHASE_DEVIATION_DEG
+        ):
+            raise ValueError(
+                "source PM modulation configure result requires one PM phase deviation readback"
+            )
+        _require_finite(
+            parameters[0].value,
+            "source PM modulation configure result phase_deviation_deg",
+            minimum=0.0,
+            maximum=360.0,
+        )
+        if self.modulation.internal_frequency_hz.availability is not Availability.VALUE:
+            raise ValueError(
+                "source PM modulation configure result requires internal frequency readback"
+            )
+        _require_finite(
+            self.modulation.internal_frequency_hz.value,
+            "source PM modulation configure result internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.modulation.internal_frequency_hz.value <= 0:
+            raise ValueError(
+                "source PM modulation configure result internal_frequency_hz must be > 0"
+            )
+        if (
+            self.modulation.internal_waveform_kind.availability is not Availability.VALUE
+            or self.modulation.internal_waveform_kind.value is not SourceWaveformKind.SINE
+        ):
+            raise ValueError(
+                "source PM modulation configure result requires internal sine readback"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3451,6 +3579,14 @@ class SourceModulationConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourcePmModulationConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_pm_modulation_v2(
+        self,
+        request: SourcePmModulationConfigureRequest,
+    ) -> SourcePmModulationConfigureResult: ...
+
+
+@runtime_checkable
 class SourcePulseConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_pulse_v2(
         self,
@@ -3721,4 +3857,8 @@ __all__ = [
     "SourcePulseConfigureResult",
     "SourcePulseConfigureV2Driver",
     "SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourcePmModulationConfigureRequest",
+    "SourcePmModulationConfigureResult",
+    "SourcePmModulationConfigureV2Driver",
+    "SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
 ]
