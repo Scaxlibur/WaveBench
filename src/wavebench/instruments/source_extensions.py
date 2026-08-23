@@ -1,8 +1,8 @@
-"""Public Source V2 snapshot contracts.
+"""Public Source V2 contracts.
 
-The first accepted revision is deliberately read-only.  It models descriptor
-capabilities, typed observations, query plans and snapshot artifacts without
-authorizing any Source write operation.
+The snapshot contract is read-only. M5-A additionally freezes typed basic
+write requests, results, driver Protocols, and static operation contracts; it
+does not provide a Source write entry point or perform instrument I/O.
 """
 
 from __future__ import annotations
@@ -380,6 +380,33 @@ class Availability(StrEnum):
 
 
 T = TypeVar("T")
+
+
+class PatchAction(StrEnum):
+    KEEP = "keep"
+    SET = "set"
+
+
+class PatchMode(StrEnum):
+    PATCH = "patch"
+    REPLACE_ALL = "replace_all"
+
+
+@dataclass(frozen=True, slots=True)
+class PatchValue(Generic[T]):
+    action: PatchAction
+    value: T | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, PatchAction):
+            raise ValueError("patch action has an invalid type")
+        if self.action is PatchAction.SET:
+            if self.value is None:
+                raise ValueError("SET patch values require a value")
+            if _contains_nonfinite(self.value):
+                raise ValueError("SET patch values cannot contain non-finite floats")
+        elif self.value is not None:
+            raise ValueError("KEEP patch values must use value=None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -936,6 +963,93 @@ class SourceOperationContract:
             ("source operation verification_max_steps", self.verification_max_steps),
         ):
             _require_int(value, label, minimum=1)
+
+
+SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.basic_configure_v2",
+    capability="source.basic_configure_v2",
+    feature=SourceFeature.BASIC,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.BASIC,),
+    postcondition_fields=(SourceFieldId.BASIC,),
+    cleanup_verification_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+    ),
+    v1_equivalent_routes=(
+        SourceV1WriteRouteId.SET_AMPLITUDE_VPP,
+        SourceV1WriteRouteId.SET_FREQUENCY,
+        SourceV1WriteRouteId.SET_FUNCTION,
+        SourceV1WriteRouteId.SET_SQUARE_DUTY_CYCLE,
+    ),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.UPLOAD_ARBITRARY,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=2,
+    verification_max_steps=2,
+)
+
+
+SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.output_enable_v2",
+    capability="source.output_v2",
+    feature=SourceFeature.OUTPUT,
+    direction=SourceFeatureDirection.ENABLE,
+    energy_effect=SourceEnergyEffect.EMIT,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.OUTPUT,),
+    postcondition_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(SourceV1WriteRouteId.SET_OUTPUT,),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.TRIGGER_BURST,
+        SourceV1WriteRouteId.TRIGGER_SWEEP,
+        SourceV1WriteRouteId.UPLOAD_ARBITRARY,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=1,
+)
+
+
+SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.output_disable_v2",
+    capability="source.output_v2",
+    feature=SourceFeature.OUTPUT,
+    direction=SourceFeatureDirection.DISABLE,
+    energy_effect=SourceEnergyEffect.DECREASE_ONLY,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(SourceFieldId.OUTPUT,),
+    changed_fields=(SourceFieldId.OUTPUT,),
+    postcondition_fields=(SourceFieldId.OUTPUT,),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(SourceV1WriteRouteId.SET_OUTPUT,),
+    v1_overlapping_routes=(SourceV1WriteRouteId.RESTORE,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=1,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1944,6 +2058,139 @@ class OutputFacet:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceBasicPatch:
+    waveform_kind: PatchValue[SourceWaveformKind] = PatchValue(PatchAction.KEEP)
+    frequency_hz: PatchValue[float] = PatchValue(PatchAction.KEEP)
+    amplitude_vpp: PatchValue[float] = PatchValue(PatchAction.KEEP)
+    offset_v: PatchValue[float] = PatchValue(PatchAction.KEEP)
+    square_duty_cycle_percent: PatchValue[float] = PatchValue(PatchAction.KEEP)
+
+    def __post_init__(self) -> None:
+        values = (
+            ("waveform_kind", self.waveform_kind),
+            ("frequency_hz", self.frequency_hz),
+            ("amplitude_vpp", self.amplitude_vpp),
+            ("offset_v", self.offset_v),
+            ("square_duty_cycle_percent", self.square_duty_cycle_percent),
+        )
+        if any(not isinstance(value, PatchValue) for _, value in values):
+            raise ValueError("source basic patch values must be PatchValue")
+        if not any(value.action is PatchAction.SET for _, value in values):
+            raise ValueError("source basic patch requires at least one SET value")
+        if self.waveform_kind.action is PatchAction.SET and not isinstance(
+            self.waveform_kind.value,
+            SourceWaveformKind,
+        ):
+            raise ValueError("source basic patch waveform_kind must be SourceWaveformKind")
+        for label, value, minimum, maximum in (
+            ("frequency_hz", self.frequency_hz, 0.0, None),
+            ("amplitude_vpp", self.amplitude_vpp, 0.0, None),
+            ("offset_v", self.offset_v, None, None),
+            ("square_duty_cycle_percent", self.square_duty_cycle_percent, 0.0, 100.0),
+        ):
+            if value.action is PatchAction.SET:
+                _require_finite(
+                    value.value,
+                    f"source basic patch {label}",
+                    minimum=minimum,
+                    maximum=maximum,
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBasicConfigureRequest:
+    channel: int
+    patch: SourceBasicPatch
+    mode: PatchMode = PatchMode.PATCH
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source basic configure channel", minimum=1)
+        if not isinstance(self.patch, SourceBasicPatch):
+            raise ValueError("source basic configure patch has an invalid type")
+        if not isinstance(self.mode, PatchMode):
+            raise ValueError("source basic configure mode has an invalid type")
+        if self.mode is not PatchMode.PATCH:
+            raise ValueError("source basic configure only supports PATCH mode")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceOutputRequest:
+    channel: int
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source output channel", minimum=1)
+        _require_bool(self.enabled, "source output enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBasicConfigureResult:
+    channel: int
+    basic: BasicWaveFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source basic configure result channel", minimum=1)
+        if not isinstance(self.basic, BasicWaveFacet):
+            raise ValueError("source basic configure result basic has an invalid type")
+        _require_bool(self.output_enabled, "source basic configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source basic configure result requires output_enabled=False")
+        if (
+            self.basic.amplitude.availability is not Availability.VALUE
+            or not isinstance(self.basic.amplitude.value, SourceAmplitude)
+            or self.basic.amplitude.value.unit is not SourceAmplitudeUnit.VPP
+        ):
+            raise ValueError(
+                "source basic configure result requires a final VPP amplitude readback"
+            )
+        _require_finite(
+            self.basic.amplitude.value.value,
+            "source basic configure result final_amplitude",
+            minimum=0.0,
+        )
+        if self.basic.offset_v.availability is not Availability.VALUE:
+            raise ValueError(
+                "source basic configure result requires a final offset readback"
+            )
+        _require_finite(
+            self.basic.offset_v.value,
+            "source basic configure result final_offset_v",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceOutputResult:
+    channel: int
+    enabled: bool
+    final_amplitude: SourceAmplitude | None = None
+    final_offset_v: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source output result channel", minimum=1)
+        _require_bool(self.enabled, "source output result enabled")
+        if self.final_amplitude is not None:
+            if not isinstance(self.final_amplitude, SourceAmplitude):
+                raise ValueError("source output result final_amplitude has an invalid type")
+            if self.final_amplitude.unit is not SourceAmplitudeUnit.VPP:
+                raise ValueError("source output result final_amplitude must use VPP")
+            _require_finite(
+                self.final_amplitude.value,
+                "source output result final_amplitude value",
+                minimum=0.0,
+            )
+        if self.final_offset_v is not None:
+            _require_finite(
+                self.final_offset_v,
+                "source output result final_offset_v",
+            )
+        if self.enabled and (self.final_amplitude is None or self.final_offset_v is None):
+            raise ValueError(
+                "enabled source output results require final_amplitude and final_offset_v"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class HarmonicFacet:
     enabled: Observed[bool]
     completeness: Observed[HarmonicCompleteness]
@@ -2838,6 +3085,22 @@ class SourceSnapshotV2Driver(InstrumentDriver, Protocol):
     ) -> SourceQueryExecutionRecord: ...
 
 
+@runtime_checkable
+class SourceBasicConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_basic_v2(
+        self,
+        request: SourceBasicConfigureRequest,
+    ) -> SourceBasicConfigureResult: ...
+
+
+@runtime_checkable
+class SourceOutputV2Driver(InstrumentDriver, Protocol):
+    def set_source_output_v2(
+        self,
+        request: SourceOutputRequest,
+    ) -> SourceOutputResult: ...
+
+
 def source_v2_to_data(value: object) -> object:
     """Convert Source V2 public values into strict JSON-compatible data."""
 
@@ -3067,4 +3330,17 @@ __all__ = [
     "source_v2_canonical_json",
     "source_v2_digest",
     "source_v2_to_data",
+    "PatchAction",
+    "PatchMode",
+    "PatchValue",
+    "SourceBasicPatch",
+    "SourceBasicConfigureRequest",
+    "SourceBasicConfigureResult",
+    "SourceBasicConfigureV2Driver",
+    "SourceOutputRequest",
+    "SourceOutputResult",
+    "SourceOutputV2Driver",
+    "SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT",
+    "SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT",
 ]

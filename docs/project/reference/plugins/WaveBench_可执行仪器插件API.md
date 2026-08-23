@@ -343,20 +343,24 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.arbitrary_probe` | `probe_arbitrary_queries` |
 | `source.arbitrary_upload` | `upload_dg4000_dac14_block` |
 | `source.snapshot_v2` | `execute_source_query_plan_v2` |
+| `source.basic_configure_v2` | `configure_source_basic_v2` |
+| `source.output_v2` | `set_source_output_v2` |
 
-### Source V2 snapshot 扩展
+### Source V2 扩展
 
-`source.snapshot_v2` 从核心 `0.8.24` 开始提供，仍使用 `wavebench.instrument.v2`。采用该能力的
+`source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2` 从核心 `0.8.24` 开始提供，
+仍使用 `wavebench.instrument.v2`。采用任一 Source V2 capability 的
 wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
 `source_extensions` 位于 descriptor 末尾且默认值为 `None`，因此未声明该能力的 V1 插件不需要
 修改 descriptor 或提高版本下限。
 
 插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
-query plan／execution record 和各类 typed profile。核心签发 semantic query plan，插件只负责将
-item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得
-自行判定 `UNSUPPORTED`、`NOT_APPLICABLE`、runtime profile 或 snapshot consistency。
+`SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、query plan／execution record 和各类 typed
+profile。核心签发 semantic query plan；snapshot driver 只负责将 item 转成合法的厂商协议查询并返回
+类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
+`NOT_APPLICABLE`、runtime profile 或 snapshot consistency。
 
-首个修订只接受 `PURE_READ`。每个受支持的 read feature 必须有同 scope 的 query contract；
+snapshot query contract 只接受 `PURE_READ`。每个受支持的 read feature 必须有同 scope 的 query contract；
 identity 必须是唯一、required 的 instrument-scope facet。声明为 `UNSUPPORTED` 或 `UNKNOWN` 的
 feature 不得进入查询计划。查询项、effect、字段覆盖、query count 和 deadline 由核心复核；不符合
 合同的执行记录不会生成 snapshot。
@@ -367,8 +371,10 @@ feature 不得进入查询计划。查询项、effect、字段覆盖、query cou
 wavebench source snapshot-v2
 ```
 
-当前没有注册任何 Source V2 写 capability。旧 `source.*` setter、output、trigger 和 ARB 路径继续
-遵守 V1 合同；`source.snapshot_v2` 不会授权、适配或代理这些写入。
+旧 `source.*` setter、output、trigger 和 ARB 路径继续遵守 V1 合同；M5-A 已注册两个 V2 写
+capability 以验证 descriptor 和 driver Protocol，但尚未提供
+`SourceService`、CLI 或 run plan 写入口。插件不得将 capability 注册视为自行发起写操作的许可，也
+不得通过现有 V1 路径绕过后续核心入口。
 
 ### Power、DMM 和 sweep analyzer
 

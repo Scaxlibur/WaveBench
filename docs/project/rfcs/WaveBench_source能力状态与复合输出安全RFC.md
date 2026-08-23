@@ -4,8 +4,9 @@
 > 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5 与 C1 已进入核心 `0.8.24` 开发线；R6 已接受，
-> M5-A 起的基础写入实现尚未开始。当前只注册 `source.snapshot_v2`，未注册写 capability。
+> 实施状态：P0、M1–M4、M4.5、C1 与 M5-A 已进入核心 `0.8.24` 开发线；R6 已接受。
+> 当前注册 `source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2`；M5-A 只冻结
+> 公共合同与 descriptor 校验，尚未开放 Source V2 写入口。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -443,6 +444,24 @@ source_v2_to_data
 
 `source_snapshot_timestamp_utc()`、operation artifact builder、coordinator 和错误类为核心内部符号，
 不在 `__all__` 中。
+
+R6／M5-A 在上述 R5 清单末尾追加以下精确条目：
+
+```text
+PatchAction
+PatchMode
+PatchValue
+SourceBasicPatch
+SourceBasicConfigureRequest
+SourceBasicConfigureResult
+SourceBasicConfigureV2Driver
+SourceOutputRequest
+SourceOutputResult
+SourceOutputV2Driver
+SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT
+SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT
+SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT
+```
 
 ### capability 与 Protocol
 
@@ -2670,7 +2689,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M4.5 | `implemented-unreleased` | V1 路由审计与 artifact 兼容防线 | 18 条 V1 写路由及其间接入口冻结；V2 写 operation/run plan 为零；空 `source_operations` 不改变 V1 `run.json`，非空根键保持 additive |
 | C1 | `implemented-unreleased` | 受管插件版本门与兼容矩阵 | metadata import-before gate、wheel/descriptor PEP 440 交叉校验、合成 V1 entry point 的 V1 成功/V2 零 I/O 拒绝，以及生命周期回滚 fixture 通过 |
 | R6 | `Accepted` | 基础写入方向 | 冻结基本安全、核心接口、V1 兼容和下列实施顺序 |
-| M5-A | 未开始 | 公共类型与静态验证 | `basic_configure_v2`／`output_v2` 的 request、result、Protocol、descriptor validation 和 A0 构造测试通过；不开放写入口 |
+| M5-A | `implemented-unreleased` | 公共类型与静态验证 | `basic_configure_v2`／`output_v2` 的 request、result、Protocol、descriptor validation 和 A0 构造测试通过；不开放写入口 |
 | M5-B | 未开始 | 基础配置事务 | 输出 OFF 的 basic configure、单写、回读、失败恢复和 operation artifact 通过；不改变 V1 setter |
 | M5-C | 未开始 | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | 未开始 | 公共入口与双合同路由 | Service／CLI 后，新增 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
@@ -2786,6 +2805,34 @@ Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使�
   重叠的 V1 route 映射到 V2，无法无损映射时在仪器 I/O 前拒绝；不相交的 V1 route 保持原行为。
 - M5-D 在同一开发线内先完成 Service／CLI，再增加 V2 run plan step、intent 和 artifact；中间不发布
   稳定写接口。
+
+### M5-A 公开合同
+
+M5-A 只增加闭合的单通道 model，不提供自由 mapping 或通用 patch capability。`PatchValue` 只有
+`KEEP` 与 `SET` 两种 action；`SET` 必须带有限值，`KEEP` 必须不带值。`SourceBasicPatch` 仅含
+`waveform_kind`、`frequency_hz`、`amplitude_vpp`、`offset_v` 和 `square_duty_cycle_percent`，并且至少
+有一个字段为 `SET`。`SourceBasicConfigureRequest` 只接受 `PatchMode.PATCH`，不接受 replace-all。
+
+`SourceBasicConfigureResult` 返回同一 channel 的 `BasicWaveFacet` 和 `output_enabled=False`。其中最终
+幅度必须是有限、非负的 Vpp，最终 Offset 必须为有限值。`SourceOutputRequest` 是单通道的
+`enabled: bool`；`SourceOutputResult` 在 `enabled=True` 时必须返回最终 Vpp 和 Offset，在
+`enabled=False` 时允许二者缺失，以保证 OFF 不依赖无关回读。
+
+三个静态 operation contract 分别是：
+
+| operation | capability | direction | energy effect |
+| --- | --- | --- | --- |
+| `source.basic_configure_v2` | `source.basic_configure_v2` | `CONFIGURE` | `POTENTIAL_WHILE_OFF` |
+| `source.output_enable_v2` | `source.output_v2` | `ENABLE` | `EMIT` |
+| `source.output_disable_v2` | `source.output_v2` | `DISABLE` | `DECREASE_ONLY` |
+
+声明任一 M5-A 写 capability 的 descriptor 必须同时声明 `source.snapshot_v2`。基础配置要求同一
+channel 的 Basic 支持 `READ` 与 `CONFIGURE`，并能回读最终 Vpp、Offset 和输出状态；输出 capability
+要求同一 channel 的 Output 支持 `READ`、`ENABLE` 与 `DISABLE`，并能回读输出状态、最终 Vpp 和
+Offset。方向、profile、channel 或 required method 不匹配时，在 factory 及仪器 I/O 前失败。
+
+M5-A 不增加 `SourceService` 写方法、CLI 写命令或 run plan step；现有 V1 setter、CLI、run plan、TUI
+和 artifact 保持原样。capability 注册只让核心识别插件合同，不构成可调用写入口。
 
 ### R6 延后事项
 

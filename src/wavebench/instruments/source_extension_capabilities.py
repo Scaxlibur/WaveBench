@@ -1,4 +1,4 @@
-"""Capability registration and validation for Source V2 snapshots."""
+"""Capability registration and descriptor validation for Source V2."""
 
 from __future__ import annotations
 
@@ -15,18 +15,32 @@ from wavebench.errors import ConfigError
 from .source_extensions import (
     SOURCE_CONTRACT_VERSION,
     SOURCE_SNAPSHOT_MIN_CORE_VERSION,
+    SourceAmplitudeUnit,
     SourceDescriptorExtensions,
     SourceAnchorField,
+    SourceBasicCapabilityProfile,
     SourceFieldId,
+    SourceFacetScope,
     SourceFeature,
     SourceFeatureDirection,
+    SourceOutputCapabilityProfile,
     SourceQueryEffect,
+    SupportState,
 )
 
 
 SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
+        "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.output_v2": ("set_source_output_v2",),
+    }
+)
+
+_SOURCE_WRITE_CAPABILITIES = frozenset(
+    {
+        "source.basic_configure_v2",
+        "source.output_v2",
     }
 )
 
@@ -49,20 +63,22 @@ def validate_source_descriptor(descriptor: object, driver: object | None = None)
         raise ConfigError("source_extensions has an invalid type")
     if extensions.contract_version != SOURCE_CONTRACT_VERSION:
         raise ConfigError("source_extensions uses an unsupported contract version")
-    if declared != ("source.snapshot_v2",):
+    if "source.snapshot_v2" not in declared:
         raise ConfigError(
-            "source_extensions require the source.snapshot_v2 capability and no other "
-            "Source V2 capability is registered in this core revision"
+            "source_extensions require the source.snapshot_v2 capability"
         )
     _validate_source_version_range(descriptor)
     _validate_read_contract(extensions)
+    _validate_write_contract(extensions, frozenset(declared) & _SOURCE_WRITE_CAPABILITIES)
     if driver is not None:
-        method = getattr(driver, "execute_source_query_plan_v2", None)
-        if not callable(method):
-            raise TypeError(
-                "descriptor declares capability 'source.snapshot_v2', but driver lacks "
-                "callable method execute_source_query_plan_v2"
-            )
+        for capability in declared:
+            for method_name in SOURCE_EXTENSION_CAPABILITY_METHODS[capability]:
+                method = getattr(driver, method_name, None)
+                if not callable(method):
+                    raise TypeError(
+                        f"descriptor declares capability {capability!r}, but driver lacks "
+                        f"callable method {method_name}"
+                    )
 
 
 def validate_source_plugin_dependencies(
@@ -80,7 +96,7 @@ def validate_source_plugin_dependencies(
     """
 
     capabilities = tuple(getattr(descriptor, "capabilities", ()))
-    if "source.snapshot_v2" not in capabilities:
+    if not set(capabilities) & set(SOURCE_EXTENSION_CAPABILITY_METHODS):
         return
     _validate_source_version_range(descriptor)
 
@@ -156,10 +172,6 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
         ):
             raise ConfigError(
                 f"supported Source V2 feature {feature.feature.value!r} must declare read"
-            )
-        if any(direction is not SourceFeatureDirection.READ for direction in feature.directions):
-            raise ConfigError(
-                "the accepted Source V2 snapshot revision only allows read directions"
             )
         if feature.support.value == "supported" and not any(
             facet.feature is feature.feature and facet.scope is feature.scope
@@ -255,6 +267,132 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
                     raise ConfigError(
                         "Source V2 activation predicates must reference declared anchor fields"
                     )
+
+
+def _validate_write_contract(
+    extensions: SourceDescriptorExtensions,
+    capabilities: frozenset[str],
+) -> None:
+    _validate_declared_write_directions(extensions, capabilities)
+    if not capabilities:
+        return
+
+    basic_readable = _channels_with_basic_final_vpp(extensions)
+    output_readable = _channels_with_output_readback(extensions)
+
+    if "source.basic_configure_v2" in capabilities:
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.BASIC,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.basic_configure_v2 requires basic feature CONFIGURE directions"
+            )
+        if not configurable <= basic_readable:
+            raise ConfigError(
+                "source.basic_configure_v2 requires readable final VPP and Offset on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.basic_configure_v2 requires readable output state on every channel"
+            )
+
+    if "source.output_v2" in capabilities:
+        enabled = _channels_with_direction(
+            extensions,
+            SourceFeature.OUTPUT,
+            SourceFeatureDirection.ENABLE,
+        )
+        disabled = _channels_with_direction(
+            extensions,
+            SourceFeature.OUTPUT,
+            SourceFeatureDirection.DISABLE,
+        )
+        if not enabled or enabled != disabled:
+            raise ConfigError(
+                "source.output_v2 requires matching output ENABLE and DISABLE directions"
+            )
+        if not enabled <= output_readable:
+            raise ConfigError(
+                "source.output_v2 requires readable output state on every channel"
+            )
+        if not enabled <= basic_readable:
+            raise ConfigError(
+                "source.output_v2 requires readable final VPP and Offset on every channel"
+            )
+
+
+def _channels_with_direction(
+    extensions: SourceDescriptorExtensions,
+    feature_kind: SourceFeature,
+    direction: SourceFeatureDirection,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is feature_kind
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and direction in feature.directions
+        )
+        for channel in feature.channels
+    )
+
+
+def _channels_with_basic_final_vpp(extensions: SourceDescriptorExtensions) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.BASIC
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceBasicCapabilityProfile)
+            and feature.profile.offset_readable
+            and SourceAmplitudeUnit.VPP in feature.profile.amplitude_units
+        )
+        for channel in feature.channels
+    )
+
+
+def _channels_with_output_readback(extensions: SourceDescriptorExtensions) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.OUTPUT
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceOutputCapabilityProfile)
+            and feature.profile.output_readable
+        )
+        for channel in feature.channels
+    )
+
+
+def _validate_declared_write_directions(
+    extensions: SourceDescriptorExtensions,
+    capabilities: frozenset[str],
+) -> None:
+    capability_by_direction = {
+        (SourceFeature.BASIC, SourceFeatureDirection.CONFIGURE): "source.basic_configure_v2",
+        (SourceFeature.OUTPUT, SourceFeatureDirection.ENABLE): "source.output_v2",
+        (SourceFeature.OUTPUT, SourceFeatureDirection.DISABLE): "source.output_v2",
+    }
+    for feature in extensions.features:
+        for direction in feature.directions:
+            if direction is SourceFeatureDirection.READ:
+                continue
+            required_capability = capability_by_direction.get((feature.feature, direction))
+            if required_capability is None or required_capability not in capabilities:
+                raise ConfigError(
+                    "Source V2 write directions require their matching declared capability"
+                )
 
 
 __all__ = [

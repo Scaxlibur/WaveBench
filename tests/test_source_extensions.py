@@ -23,6 +23,7 @@ from wavebench.logging import CommandLogger
 from wavebench.instruments.source_extensions import (
     Availability,
     Observed,
+    SourceFeatureDirection,
     SourceFacetScope,
     SourceFieldId,
     SourceReasonCode,
@@ -32,6 +33,7 @@ from wavebench.instruments.source_extensions import (
 
 from tests.source_v2_fixtures import (
     SourceV2FakeDriver,
+    basic_facet,
     source_descriptor,
     source_extensions,
 )
@@ -49,7 +51,11 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
     ).read_text(encoding="utf-8")
     match = re.search(r"R5 的精确清单为：\n\n```text\n(.*?)\n```", rfc, re.S)
     assert match is not None
-    assert match.group(1).splitlines() == module.__all__
+    r5_exports = match.group(1).splitlines()
+    assert module.__all__[: len(r5_exports)] == r5_exports
+    match = re.search(r"R6／M5-A 在上述 R5 清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
+    assert match is not None
+    assert module.__all__[len(r5_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -203,6 +209,23 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "main_max_steps",
             "recovery_max_steps",
             "verification_max_steps",
+        ),
+        "PatchValue": ("action", "value"),
+        "SourceBasicPatch": (
+            "waveform_kind",
+            "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "square_duty_cycle_percent",
+        ),
+        "SourceBasicConfigureRequest": ("channel", "patch", "mode"),
+        "SourceBasicConfigureResult": ("channel", "basic", "output_enabled"),
+        "SourceOutputRequest": ("channel", "enabled"),
+        "SourceOutputResult": (
+            "channel",
+            "enabled",
+            "final_amplitude",
+            "final_offset_v",
         ),
         "SourceAffectedClosure": (
             "operation",
@@ -362,15 +385,192 @@ def test_source_descriptor_append_only_and_replace_compatible() -> None:
 
 def test_source_snapshot_capability_is_additive_and_validated() -> None:
     descriptor = source_descriptor(driver=SourceV2FakeDriver(combined=True))
-    assert CAPABILITY_METHODS["source.snapshot_v2"] == ("execute_source_query_plan_v2",)
-    assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == {
-        "source.snapshot_v2": ("execute_source_query_plan_v2",)
+    expected = {
+        "source.snapshot_v2": ("execute_source_query_plan_v2",),
+        "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.output_v2": ("set_source_output_v2",),
     }
+    assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
+    assert {key: CAPABILITY_METHODS[key] for key in expected} == expected
     validate_source_descriptor(descriptor)
     validate_declared_capabilities(descriptor, SourceV2FakeDriver(combined=True))
 
     with pytest.raises(TypeError, match="execute_source_query_plan_v2"):
         validate_declared_capabilities(descriptor, type("Driver", (), {"close": lambda self: None})())
+
+
+def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
+    keep = module.PatchValue(module.PatchAction.KEEP)
+    set_frequency = module.PatchValue(module.PatchAction.SET, 1_000.0)
+    patch = module.SourceBasicPatch(frequency_hz=set_frequency)
+    request = module.SourceBasicConfigureRequest(channel=1, patch=patch)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceBasicConfigureRequest",
+        "channel": 1,
+        "patch": {
+            "type": "SourceBasicPatch",
+            "waveform_kind": {"type": "PatchValue", "action": "keep", "value": None},
+            "frequency_hz": {"type": "PatchValue", "action": "set", "value": 1_000.0},
+            "amplitude_vpp": {"type": "PatchValue", "action": "keep", "value": None},
+            "offset_v": {"type": "PatchValue", "action": "keep", "value": None},
+            "square_duty_cycle_percent": {
+                "type": "PatchValue",
+                "action": "keep",
+                "value": None,
+            },
+        },
+        "mode": "patch",
+    }
+    assert keep.action is module.PatchAction.KEEP
+    assert module.SourceBasicConfigureResult(1, basic_facet(), False).output_enabled is False
+    assert module.SourceOutputResult(1, False) == module.SourceOutputResult(1, False)
+
+    with pytest.raises(ValueError, match="SET patch values"):
+        module.PatchValue(module.PatchAction.SET)
+    with pytest.raises(ValueError, match="KEEP patch values"):
+        module.PatchValue(module.PatchAction.KEEP, 1.0)
+    with pytest.raises(ValueError, match="at least one SET"):
+        module.SourceBasicPatch()
+    with pytest.raises(ValueError, match="must be >= 0.0"):
+        module.SourceBasicPatch(amplitude_vpp=module.PatchValue(module.PatchAction.SET, -0.1))
+    with pytest.raises(ValueError, match="only supports PATCH"):
+        module.SourceBasicConfigureRequest(
+            channel=1,
+            patch=patch,
+            mode=module.PatchMode.REPLACE_ALL,
+        )
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceBasicConfigureResult(1, basic_facet(), True)
+    with pytest.raises(ValueError, match="final VPP amplitude"):
+        module.SourceBasicConfigureResult(
+            1,
+            replace(
+                basic_facet(),
+                amplitude=Observed.value_of(
+                    module.SourceAmplitude(1.0, module.SourceAmplitudeUnit.VRMS)
+                ),
+            ),
+            False,
+        )
+    with pytest.raises(ValueError, match="final offset"):
+        module.SourceBasicConfigureResult(
+            1,
+            replace(
+                basic_facet(),
+                offset_v=Observed.missing(
+                    Availability.NOT_QUERIED,
+                    SourceReasonCode.NOT_REQUESTED,
+                ),
+            ),
+            False,
+        )
+    with pytest.raises(ValueError, match="require final_amplitude"):
+        module.SourceOutputResult(1, True)
+    with pytest.raises(ValueError, match="must be >= 0.0"):
+        module.SourceOutputResult(
+            1,
+            False,
+            module.SourceAmplitude(-0.1, module.SourceAmplitudeUnit.VPP),
+        )
+
+
+def test_source_v2_write_capabilities_require_matching_directions_and_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    write_extensions = replace(
+        extensions,
+        features=(
+            replace(
+                basic,
+                directions=(
+                    SourceFeatureDirection.CONFIGURE,
+                    SourceFeatureDirection.READ,
+                ),
+            ),
+            replace(
+                output,
+                directions=(
+                    SourceFeatureDirection.DISABLE,
+                    SourceFeatureDirection.ENABLE,
+                    SourceFeatureDirection.READ,
+                ),
+            ),
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=write_extensions),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+            "source.output_v2",
+        ),
+    )
+
+    class WriteDriver(SourceV2FakeDriver):
+        def configure_source_basic_v2(self, request):
+            raise AssertionError(request)
+
+        def set_source_output_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, WriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="matching declared capability"):
+        validate_source_descriptor(source_descriptor(extensions=write_extensions))
+    with pytest.raises(ConfigError, match="require the source.snapshot_v2"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                capabilities=("source.basic_configure_v2",),
+            )
+        )
+    with pytest.raises(ConfigError, match="CONFIGURE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    write_extensions,
+                    features=(
+                        basic,
+                        write_extensions.features[1],
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="matching output ENABLE and DISABLE"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    write_extensions,
+                    features=(
+                        write_extensions.features[0],
+                        replace(
+                            write_extensions.features[1],
+                            directions=(
+                                SourceFeatureDirection.ENABLE,
+                                SourceFeatureDirection.READ,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="configure_source_basic_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingBasicWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                    "set_source_output_v2": lambda self, request: None,
+                },
+            )(),
+        )
 
 
 def test_source_v2_rejects_invalid_feature_scope_and_query_field_ownership() -> None:
@@ -471,7 +671,7 @@ def test_source_v1_capability_mapping_is_unchanged() -> None:
     actual = {
         key: value
         for key, value in CAPABILITY_METHODS.items()
-        if key.startswith("source.") and key != "source.snapshot_v2"
+        if key.startswith("source.") and not key.endswith("_v2")
     }
     assert actual == expected
 
