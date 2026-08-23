@@ -2570,6 +2570,24 @@ manifest 至少包含：
 | `coverage` / `limitations` | 已证明和明确未证明的内容 |
 | `evidence_digest` | canonical manifest 的 SHA-256 |
 
+`wheel_sha256` 使用 `wavebench.source.wheel-binding.v1` 规范摘要，不直接对最终 ZIP 字节求
+SHA-256。否则 manifest 位于 wheel 内、`RECORD` 又记录 manifest 摘要时会形成不可计算的自引用。
+规范摘要输入是以下 canonical JSON：
+
+```json
+{"members":[{"path":"...","sha256":"sha256:<hex>","size_bytes":123}],"scheme":"wavebench.source.wheel-binding.v1"}
+```
+
+`members` 按完整 POSIX 路径排序，包含 wheel 内所有非目录成员的路径、原始 payload 长度和
+SHA-256，但排除当前 `.dist-info/RECORD` 与当前
+`.dist-info/wavebench-source-conformance/` 目录。除这两类自引用成员外，不得排除代码、
+`METADATA`、`WHEEL`、entry point、许可证或随包文档。`wheel_sha256` 是上述 canonical JSON
+UTF-8 字节的 `sha256:<64 位小写十六进制>`。
+
+`evidence_digest` 对 manifest 自身的 canonical JSON 求 SHA-256，计算时只省略
+`evidence_digest` 字段；其它字段不得归一化删除。核心必须分别验证 wheel binding 与
+manifest 摘要，不能用其中一个替代另一个。
+
 manifest 在 wheel 中使用本 distribution 自己的
 `.dist-info/wavebench-source-conformance/<manifest_id>.json` 路径。descriptor 的
 `evidence_refs` 使用 `dist-info:wavebench-source-conformance/<manifest_id>.json`，不得引用开发机
