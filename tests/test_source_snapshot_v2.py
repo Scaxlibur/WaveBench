@@ -1020,3 +1020,108 @@ def test_source_v2_sweep_cli_rejects_invalid_request_before_driver_call(capsys) 
     assert exit_code == 2
     assert payload["schema"] == "wavebench.error.v1"
     assert "start_hz" in payload["message"]
+
+
+def test_source_v2_arbitrary_cli_emits_payload_free_operation_artifacts(tmp_path, capsys) -> None:
+    payload_file = tmp_path / "payload.bin"
+    payload_file.write_bytes(b"abc")
+    storage_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.arbitrary_storage_v2",
+        "request": {"payload_sha256": "sha256:" + "a" * 64},
+    }
+    selection_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.arbitrary_select_v2",
+    }
+
+    class _Service:
+        def mutate_arbitrary_storage_v2(self, request, *, payload):
+            assert request.channel == 1
+            assert request.slot_id == "slot_a"
+            assert request.write_mode.value == "create_only"
+            assert request.payload_size_bytes == 3
+            assert payload == b"abc"
+            return object(), storage_artifact
+
+        def select_arbitrary_v2(self, request):
+            assert request.channel == 1
+            assert request.slot_id == "slot_a"
+            assert request.playback_mode.value == "dds"
+            assert request.playback_frequency_hz == 1_000.0
+            assert request.sample_rate_hz is None
+            return object(), selection_artifact
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        storage_code = cli.main(
+            [
+                "--json",
+                "source",
+                "arbitrary-storage-v2",
+                "--channel",
+                "1",
+                "--slot-id",
+                "slot_a",
+                "--payload-file",
+                str(payload_file),
+                "--write-mode",
+                "create-only",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        storage_payload = json.loads(capsys.readouterr().out)
+        selection_code = cli.main(
+            [
+                "--json",
+                "source",
+                "arbitrary-select-v2",
+                "--channel",
+                "1",
+                "--slot-id",
+                "slot_a",
+                "--playback-mode",
+                "dds",
+                "--playback-frequency-hz",
+                "1000",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        selection_payload = json.loads(capsys.readouterr().out)
+
+    assert storage_code == 0
+    assert storage_payload["result"] == storage_artifact
+    assert selection_code == 0
+    assert selection_payload["result"] == selection_artifact
+    assert "abc" not in json.dumps(storage_payload, ensure_ascii=False)
+
+
+def test_source_v2_arbitrary_cli_rejects_invalid_request_before_loading_service(tmp_path, capsys) -> None:
+    payload_file = tmp_path / "payload.bin"
+    payload_file.write_bytes(b"abc")
+
+    with patch("wavebench.cli._load_source_service") as load_service:
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "arbitrary-storage-v2",
+                "--channel",
+                "1",
+                "--slot-id",
+                "slot_a",
+                "--payload-file",
+                str(payload_file),
+                "--write-mode",
+                "replace-if-digest-matches",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    error = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert error["schema"] == "wavebench.error.v1"
+    assert "expected_previous_sha256" in error["message"]
+    load_service.assert_not_called()

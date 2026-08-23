@@ -1,6 +1,7 @@
 import csv
 from contextlib import contextmanager
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -2373,6 +2374,79 @@ mode = "complex_transfer"
             self.assertTrue(all(row["gain_db"] for row in rows))
             self.assertTrue(all(row["gain_db_corrected"] for row in rows))
             self.assertTrue((result.run_dir / "frequency_response_baseline.json").exists())
+
+    def test_runs_source_v2_arbitrary_steps_without_putting_payload_in_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            payload = b"abc"
+            payload_path = Path(tmp) / "payload.bin"
+            payload_path.write_bytes(payload)
+            digest = "sha256:" + sha256(payload).hexdigest()
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot_a"
+file = "payload.bin"
+write_mode = "create_only"
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+playback_frequency_hz = 1000
+""",
+                )
+            )
+            artifacts = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_storage_v2",
+                    "request": {"payload_sha256": digest},
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_select_v2",
+                },
+            ]
+            source = Mock()
+            source.mutate_arbitrary_storage_v2.return_value = (SimpleNamespace(), artifacts[0])
+            source.select_arbitrary_v2.return_value = (SimpleNamespace(), artifacts[1])
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            storage_request = source.mutate_arbitrary_storage_v2.call_args.args[0]
+            self.assertEqual(storage_request.channel, 1)
+            self.assertEqual(storage_request.slot_id, "slot_a")
+            self.assertEqual(storage_request.payload_sha256, digest)
+            self.assertEqual(storage_request.payload_size_bytes, len(payload))
+            self.assertEqual(
+                source.mutate_arbitrary_storage_v2.call_args.kwargs["payload"],
+                payload,
+            )
+            select_request = source.select_arbitrary_v2.call_args.args[0]
+            self.assertEqual(select_request.channel, 1)
+            self.assertEqual(select_request.slot_id, "slot_a")
+            self.assertEqual(select_request.playback_mode.value, "dds")
+            self.assertEqual(select_request.playback_frequency_hz, 1_000.0)
+            self.assertEqual(run_data["source_operations"], artifacts)
+            self.assertNotIn("abc", json.dumps(run_data, ensure_ascii=False))
 
 
 if __name__ == "__main__":

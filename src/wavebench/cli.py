@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, is_dataclass
+from hashlib import sha256
 import io
 import json
 from pathlib import Path
@@ -382,6 +383,63 @@ def _source_sweep_configure_v2_request(args: argparse.Namespace):
             spacing=SourceSweepSpacing(args.spacing),
             steps=args.steps,
             sweep_time_s=args.sweep_time_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_arbitrary_storage_v2_request(
+    args: argparse.Namespace,
+) -> tuple[object, bytes]:
+    from .instruments.source_extensions import (
+        SourceArbitraryStorageRequest,
+        SourceStorageWriteMode,
+    )
+
+    payload_path = Path(args.payload_file)
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(
+            f"source.arbitrary_storage_v2 payload file is unreadable: {payload_path}"
+        ) from exc
+    write_mode = {
+        "create-only": SourceStorageWriteMode.CREATE_ONLY,
+        "replace-if-digest-matches": SourceStorageWriteMode.REPLACE_IF_DIGEST_MATCHES,
+    }[args.write_mode]
+    try:
+        return (
+            SourceArbitraryStorageRequest(
+                channel=args.channel,
+                slot_id=args.slot_id,
+                write_mode=write_mode,
+                payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                payload_size_bytes=len(payload),
+                expected_previous_sha256=args.expected_previous_sha256,
+            ),
+            payload,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_arbitrary_select_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        SourceArbitraryPlaybackMode,
+        SourceArbitrarySelectRequest,
+    )
+
+    playback_mode = {
+        "dds": SourceArbitraryPlaybackMode.DDS,
+        "true-arb": SourceArbitraryPlaybackMode.TRUE_ARB,
+    }[args.playback_mode]
+    try:
+        return SourceArbitrarySelectRequest(
+            channel=args.channel,
+            slot_id=args.slot_id,
+            playback_mode=playback_mode,
+            playback_frequency_hz=args.playback_frequency_hz,
+            sample_rate_hz=args.sample_rate_hz,
         )
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
@@ -1191,6 +1249,18 @@ def _main(argv: list[str] | None = None) -> int:
                 print("upload=ok")
                 _print_source_status(status)
                 return 0
+            if args.command == "arbitrary-storage-v2":
+                request, storage_payload = _source_arbitrary_storage_v2_request(args)
+                service = _load_source_service(args)
+                _, payload = service.mutate_arbitrary_storage_v2(
+                    request,
+                    payload=storage_payload,
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
             service = _load_source_service(args)
             if args.command == "idn":
                 print(service.idn())
@@ -1215,6 +1285,15 @@ def _main(argv: list[str] | None = None) -> int:
                 )
 
                 payload = source_snapshot_v2_operation_artifact(service.snapshot_v2())
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "arbitrary-select-v2":
+                _, payload = service.select_arbitrary_v2(
+                    _source_arbitrary_select_v2_request(args)
+                )
                 if args.json:
                     _emit_json_result(payload)
                 else:

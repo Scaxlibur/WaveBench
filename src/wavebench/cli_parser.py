@@ -801,6 +801,39 @@ def build_parser() -> argparse.ArgumentParser:
     source_burst_configure_v2.add_argument("--delay-s", type=float, required=True)
     add_runtime_options(source_burst_configure_v2)
 
+    source_arbitrary_storage_v2 = source_sub.add_parser(
+        "arbitrary-storage-v2",
+        help="Write one named Source V2 ARB storage slot without selecting or enabling output",
+    )
+    source_arbitrary_storage_v2.add_argument("--channel", type=int, required=True)
+    source_arbitrary_storage_v2.add_argument("--slot-id", required=True)
+    source_arbitrary_storage_v2.add_argument("--payload-file", required=True)
+    source_arbitrary_storage_v2.add_argument(
+        "--write-mode",
+        choices=("create-only", "replace-if-digest-matches"),
+        required=True,
+    )
+    source_arbitrary_storage_v2.add_argument("--expected-previous-sha256")
+    add_runtime_options(source_arbitrary_storage_v2)
+
+    source_arbitrary_select_v2 = source_sub.add_parser(
+        "arbitrary-select-v2",
+        help="Select one named Source V2 ARB waveform while the target output is OFF",
+    )
+    source_arbitrary_select_v2.add_argument("--channel", type=int, required=True)
+    source_arbitrary_select_v2.add_argument("--slot-id", required=True)
+    source_arbitrary_select_v2.add_argument(
+        "--playback-mode",
+        choices=("dds", "true-arb"),
+        required=True,
+    )
+    source_arbitrary_rate = source_arbitrary_select_v2.add_mutually_exclusive_group(
+        required=True
+    )
+    source_arbitrary_rate.add_argument("--playback-frequency-hz", type=float)
+    source_arbitrary_rate.add_argument("--sample-rate-hz", type=float)
+    add_runtime_options(source_arbitrary_select_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

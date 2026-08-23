@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import time
 import json
+from hashlib import sha256
 from math import isfinite
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
@@ -24,6 +25,9 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.instruments.source_extensions import (
     PatchAction,
     PatchValue,
+    SourceArbitraryPlaybackMode,
+    SourceArbitrarySelectRequest,
+    SourceArbitraryStorageRequest,
     SourceBasicConfigureRequest,
     SourceBasicPatch,
     SourceBurstConfigureRequest,
@@ -38,6 +42,7 @@ from wavebench.instruments.source_extensions import (
     SourceSweepConfigureRequest,
     SourceSweepSpacing,
     SourceWaveformKind,
+    SourceStorageWriteMode,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.power_service import PowerService
@@ -430,6 +435,10 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.burst_configure_v2")
             elif step.kind == "source.pulse_configure_v2":
                 add("source", "source.snapshot_v2", "source.pulse_configure_v2")
+            elif step.kind == "source.arbitrary_storage_v2":
+                add("source", "source.snapshot_v2", "source.arbitrary_storage_v2")
+            elif step.kind == "source.arbitrary_select_v2":
+                add("source", "source.snapshot_v2", "source.arbitrary_select_v2")
             elif step.kind == "power.status":
                 add("power", "power.status")
             elif step.kind == "power.set":
@@ -1234,6 +1243,39 @@ class RunService:
                     delay_s=step.fields["delay_s"],
                     leading_transition_s=step.fields["leading_transition_s"],
                     trailing_transition_s=step.fields["trailing_transition_s"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.arbitrary_storage_v2":
+            payload_path = Path(step.fields["file"])
+            if not payload_path.is_absolute():
+                payload_path = plan.path.parent / payload_path
+            try:
+                payload = payload_path.read_bytes()
+            except OSError as exc:
+                raise ConfigError(
+                    f"source.arbitrary_storage_v2 payload file is unreadable: {payload_path}"
+                ) from exc
+            _, source_operation = self._source_service(services=services).mutate_arbitrary_storage_v2(
+                SourceArbitraryStorageRequest(
+                    channel=step.fields["channel"],
+                    slot_id=step.fields["slot_id"],
+                    write_mode=SourceStorageWriteMode(step.fields["write_mode"]),
+                    payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                    payload_size_bytes=len(payload),
+                    expected_previous_sha256=step.fields.get("expected_previous_sha256"),
+                ),
+                payload=payload,
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.arbitrary_select_v2":
+            _, source_operation = self._source_service(services=services).select_arbitrary_v2(
+                SourceArbitrarySelectRequest(
+                    channel=step.fields["channel"],
+                    slot_id=step.fields["slot_id"],
+                    playback_mode=SourceArbitraryPlaybackMode(step.fields["playback_mode"]),
+                    playback_frequency_hz=step.fields.get("playback_frequency_hz"),
+                    sample_rate_hz=step.fields.get("sample_rate_hz"),
                 )
             )
             artifact = {"source_operation": source_operation}

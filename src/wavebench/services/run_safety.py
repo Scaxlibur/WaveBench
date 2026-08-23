@@ -38,6 +38,8 @@ EXECUTABLE_STEP_KINDS = {
     "source.sweep_configure_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
+    "source.arbitrary_storage_v2",
+    "source.arbitrary_select_v2",
     "dmm.read",
     "sleep",
 }

@@ -993,6 +993,71 @@ value = { min = 0.34, max = 0.37 }
         plan = load_run_plan(path)
         self.assertEqual(plan.steps[0].fields["expect"]["value"], {"min": 0.34, "max": 0.37})
 
+    def test_source_v2_arbitrary_storage_and_selection_steps_are_typed(self):
+        digest = "sha256:" + "a" * 64
+        plan = load_run_plan(self._write_plan(f"""
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot_a"
+file = "payload.bin"
+write_mode = "replace_if_digest_matches"
+expected_previous_sha256 = "{digest}"
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+playback_frequency_hz = 1000
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "true_arb"
+sample_rate_hz = 10000
+"""))
+
+        self.assertEqual(
+            plan.steps[0].fields,
+            {
+                "channel": 1,
+                "slot_id": "slot_a",
+                "file": "payload.bin",
+                "write_mode": "replace_if_digest_matches",
+                "expected_previous_sha256": digest,
+            },
+        )
+        self.assertEqual(plan.steps[1].fields["playback_mode"], "dds")
+        self.assertEqual(plan.steps[1].fields["playback_frequency_hz"], 1000.0)
+        self.assertEqual(plan.steps[2].fields["playback_mode"], "true_arb")
+        self.assertEqual(plan.steps[2].fields["sample_rate_hz"], 10_000.0)
+        self.assertIn("source.arbitrary_storage_v2", format_run_plan_schema())
+        self.assertIn("source.arbitrary_select_v2", STEP_SCHEMAS)
+
+        invalid_storage = self._write_plan("""
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot a"
+file = "payload.bin"
+write_mode = "create_only"
+""")
+        with self.assertRaisesRegex(ConfigError, "slot_id"):
+            load_run_plan(invalid_storage)
+
+        invalid_select = self._write_plan("""
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+sample_rate_hz = 10000
+""")
+        with self.assertRaisesRegex(ConfigError, "playback_frequency_hz is required"):
+            load_run_plan(invalid_select)
+
 
 if __name__ == "__main__":
     unittest.main()

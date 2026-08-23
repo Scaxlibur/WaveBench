@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import difflib
 from math import log10
+import re
 from typing import Any
 import tomllib
 
@@ -37,12 +38,17 @@ ALLOWED_STEP_KINDS = {
     "source.sweep_configure_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
+    "source.arbitrary_storage_v2",
+    "source.arbitrary_select_v2",
     "power.status",
     "power.set",
     "power.output",
     "dmm.read",
     "sleep",
 }
+
+_SOURCE_STORAGE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,96}$")
+_SOURCE_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 _REQUIRED_FIELDS = {
     "power.set": ("voltage_v", "current_limit_a"),
@@ -94,6 +100,8 @@ _REQUIRED_FIELDS = {
         "leading_transition_s",
         "trailing_transition_s",
     ),
+    "source.arbitrary_storage_v2": ("channel", "slot_id", "file", "write_mode"),
+    "source.arbitrary_select_v2": ("channel", "slot_id", "playback_mode"),
     "sweep.frequency_response": ("reference_channel", "response_channel"),
     "sleep": ("duration_s",),
 }
@@ -180,6 +188,12 @@ _OPTIONAL_FIELDS = {
     "source.sweep_configure_v2": {"on_failure"},
     "source.burst_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
+    "source.arbitrary_storage_v2": {"expected_previous_sha256", "on_failure"},
+    "source.arbitrary_select_v2": {
+        "playback_frequency_hz",
+        "sample_rate_hz",
+        "on_failure",
+    },
     "power.status": {"channel", "on_failure"},
     "power.set": {"channel", "on_failure"},
     "power.output": {"channel", "on_failure"},
@@ -216,6 +230,8 @@ _STEP_NOTES = {
     "source.sweep_configure_v2": "Configure one OFF Source V2 channel with an internal sweep; it does not enable or fire output.",
     "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
+    "source.arbitrary_storage_v2": "Write one named Source V2 ARB storage slot without selecting or enabling it. The payload file is recorded by digest only.",
+    "source.arbitrary_select_v2": "Select one named Source V2 ARB waveform while the target output is OFF; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
     "power.set": "Set DP800 voltage/current limit; does not change output state.",
     "power.output": "Turn power-supply channel output on or off; does not change voltage/current limit.",
@@ -781,6 +797,66 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             fields[field] = value
         fields["width_s"] = width
         fields["delay_s"] = delay
+    elif kind == "source.arbitrary_storage_v2":
+        fields["slot_id"] = _non_empty_str(fields["slot_id"], f"{prefix}.slot_id")
+        if _SOURCE_STORAGE_TOKEN.fullmatch(fields["slot_id"]) is None:
+            raise ConfigError(f"{prefix}.slot_id must be a short safe token")
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        write_mode = _non_empty_str(fields["write_mode"], f"{prefix}.write_mode").lower()
+        if write_mode not in {"create_only", "replace_if_digest_matches"}:
+            raise ConfigError(
+                f"{prefix}.write_mode must be create_only or replace_if_digest_matches"
+            )
+        expected = fields.get("expected_previous_sha256")
+        if write_mode == "create_only":
+            if expected is not None:
+                raise ConfigError(
+                    f"{prefix}.expected_previous_sha256 is only valid for replace_if_digest_matches"
+                )
+        elif not isinstance(expected, str) or not expected:
+            raise ConfigError(
+                f"{prefix}.expected_previous_sha256 is required for replace_if_digest_matches"
+            )
+        if expected is not None and _SOURCE_SHA256.fullmatch(expected) is None:
+            raise ConfigError(
+                f"{prefix}.expected_previous_sha256 must be sha256:<64 lowercase hex>"
+            )
+        fields["write_mode"] = write_mode
+    elif kind == "source.arbitrary_select_v2":
+        fields["slot_id"] = _non_empty_str(fields["slot_id"], f"{prefix}.slot_id")
+        if _SOURCE_STORAGE_TOKEN.fullmatch(fields["slot_id"]) is None:
+            raise ConfigError(f"{prefix}.slot_id must be a short safe token")
+        playback_mode = _non_empty_str(
+            fields["playback_mode"],
+            f"{prefix}.playback_mode",
+        ).lower()
+        if playback_mode not in {"dds", "true_arb"}:
+            raise ConfigError(f"{prefix}.playback_mode must be dds or true_arb")
+        has_frequency = "playback_frequency_hz" in fields
+        has_sample_rate = "sample_rate_hz" in fields
+        if has_frequency == has_sample_rate:
+            raise ConfigError(
+                f"{prefix} source.arbitrary_select_v2 requires exactly one playback rate"
+            )
+        if playback_mode == "dds":
+            if not has_frequency:
+                raise ConfigError(
+                    f"{prefix}.playback_frequency_hz is required for dds playback"
+                )
+            fields["playback_frequency_hz"] = _positive_float(
+                fields["playback_frequency_hz"],
+                f"{prefix}.playback_frequency_hz",
+            )
+        else:
+            if not has_sample_rate:
+                raise ConfigError(
+                    f"{prefix}.sample_rate_hz is required for true_arb playback"
+                )
+            fields["sample_rate_hz"] = _positive_float(
+                fields["sample_rate_hz"],
+                f"{prefix}.sample_rate_hz",
+            )
+        fields["playback_mode"] = playback_mode
     elif kind == "dmm.read":
         fields["function"] = _non_empty_str(fields.get("function", "dcv"), f"{prefix}.function").lower()
         if "expect" in fields:

@@ -40,6 +40,8 @@ _STEP_OPERATIONS = {
     "source.sweep_configure_v2": "source.sweep_configure_v2",
     "source.burst_configure_v2": "source.burst_configure_v2",
     "source.pulse_configure_v2": "source.pulse_configure_v2",
+    "source.arbitrary_storage_v2": "source.arbitrary_storage_v2",
+    "source.arbitrary_select_v2": "source.arbitrary_select_v2",
     "power.status": "power.status",
     "power.set": "power.set_voltage_current_limit",
     "power.output": "power.output",
