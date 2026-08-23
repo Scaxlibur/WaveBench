@@ -291,7 +291,7 @@ class SourceOperationContextCoordinator:
         operation_spec: OperationSpec,
         operation_contract: SourceOperationContract,
         connection_timeout_ms: int,
-        baseline_snapshot_digest: str,
+        baseline_snapshot_digest: str | None,
         fields: tuple[SourceFieldRef, ...],
         required_off_outputs: tuple[SourceScopeRef, ...],
         emergency_off_outputs: tuple[SourceScopeRef, ...],
@@ -314,8 +314,9 @@ class SourceOperationContextCoordinator:
             raise ValueError("connection_timeout_ms must be a positive integer")
         if session_state.health is not SessionHealth.HEALTHY:
             raise ValueError("new Source operations require a healthy session")
-        if not isinstance(baseline_snapshot_digest, str) or not baseline_snapshot_digest.startswith(
-            "sha256:"
+        if baseline_snapshot_digest is not None and (
+            not isinstance(baseline_snapshot_digest, str)
+            or not baseline_snapshot_digest.startswith("sha256:")
         ):
             raise ValueError("source operation baseline_snapshot_digest must be a SHA-256 digest")
 
@@ -361,10 +362,12 @@ class SourceOperationContextCoordinator:
         self._phase_history: list[dict[str, object]] = []
         self._used_phases: set[SourceOperationPhase] = set()
         self._baseline: _BaselineRecord | None = None
+        self._baseline_snapshot_bound = baseline_snapshot_digest is not None
         self._main_entered = False
         self._failure_required = False
         self._postcondition_verified = False
         self._cleanup_verified = False
+        self._safe_state_verified = False
         self._terminal = False
 
         normalized_fields = _field_refs(fields, label="source operation closure fields")
@@ -387,7 +390,17 @@ class SourceOperationContextCoordinator:
             non_restorable_fields=normalized_non_restorable,
         )
         self.closure = self._build_closure(
-            baseline_snapshot_digest=baseline_snapshot_digest,
+            baseline_snapshot_digest=(
+                baseline_snapshot_digest
+                if baseline_snapshot_digest is not None
+                else source_v2_digest(
+                    {
+                        "operation": self.operation_id,
+                        "context_id": self.context_id,
+                        "state": "preflight_pending",
+                    }
+                )
+            ),
             fields=normalized_fields,
             required_off_outputs=required_off_outputs,
             emergency_off_outputs=emergency_off_outputs,
@@ -516,6 +529,8 @@ class SourceOperationContextCoordinator:
         """Issue a one-use baseline handle while the preflight phase is active."""
 
         self._require_phase(SourceOperationPhase.PREFLIGHT)
+        if not self._baseline_snapshot_bound:
+            raise ValueError("source operation baseline snapshot is not bound")
         if self._baseline is not None:
             raise ValueError("source operation already has a baseline")
         if not self.closure.restore_order:
@@ -533,6 +548,26 @@ class SourceOperationContextCoordinator:
         )
         self._baseline = _BaselineRecord(handle=handle)
         return handle
+
+    def bind_baseline_snapshot_digest(self, baseline_snapshot_digest: str) -> None:
+        """Bind the preflight snapshot after its core-owned read has completed."""
+
+        self._require_phase(SourceOperationPhase.PREFLIGHT)
+        if self._baseline_snapshot_bound or self._baseline is not None:
+            raise ValueError("source operation baseline snapshot is already bound")
+        if not isinstance(baseline_snapshot_digest, str) or not baseline_snapshot_digest.startswith(
+            "sha256:"
+        ):
+            raise ValueError("source operation baseline_snapshot_digest must be a SHA-256 digest")
+        self.closure = self._build_closure(
+            baseline_snapshot_digest=baseline_snapshot_digest,
+            fields=self.closure.fields,
+            required_off_outputs=self.closure.required_off_outputs,
+            emergency_off_outputs=self.closure.emergency_off_outputs,
+            restore_order=self.closure.restore_order,
+            non_restorable_fields=self.closure.non_restorable_fields,
+        )
+        self._baseline_snapshot_bound = True
 
     def pass_baseline_to_main(self, handle: SourceBaselineHandle) -> None:
         self._require_phase(SourceOperationPhase.PREFLIGHT)
@@ -561,7 +596,7 @@ class SourceOperationContextCoordinator:
             raise ValueError("Source failure cleanup requires a closed main phase")
         if self._failure_required:
             raise ValueError("Source operation cleanup is already required")
-        if SourceOperationPhase.POSTCONDITION in self._used_phases:
+        if self._postcondition_verified:
             raise ValueError("Source operation cannot fail after postcondition completed")
         self._failure_required = True
         if self.session_state.health is SessionHealth.HEALTHY:
@@ -660,6 +695,29 @@ class SourceOperationContextCoordinator:
         if authorization.phase is SourceOperationPhase.CLEANUP_VERIFICATION:
             self._cleanup_verified = True
 
+    def mark_safe_state_verified(
+        self,
+        authorization: SourcePhaseAuthorization,
+        *,
+        io_kind: str,
+        fields: Iterable[SourceFieldRef],
+    ) -> None:
+        """Record a verified emergency OFF state without restoring mutation evidence."""
+
+        self._require_authorization(authorization, SourceOperationPhase.CLEANUP_VERIFICATION)
+        if not self._failure_required:
+            raise ValueError("safe-state verification requires a failed source operation")
+        verified = frozenset(_field_refs(fields, label="source verified fields"))
+        expected = frozenset(_output_fields(self.closure.emergency_off_outputs))
+        if verified != expected or verified != authorization.fields:
+            raise ValueError("safe-state verification must cover exactly emergency OFF outputs")
+        self._session_coordinator.record_evidence(
+            authorization._session_authorization,
+            io_kind,
+            _field_keys(verified),
+        )
+        self._safe_state_verified = True
+
     def complete(self) -> None:
         """Terminally close the context and poison an incomplete failure cleanup."""
 
@@ -678,7 +736,7 @@ class SourceOperationContextCoordinator:
                 and self._cleanup_verified
                 and (baseline is None or baseline.verification_succeeded is True)
             )
-            if not cleanup_ok and self.session_state.health in {
+            if not cleanup_ok and not self._safe_state_verified and self.session_state.health in {
                 SessionHealth.HEALTHY,
                 SessionHealth.UNCERTAIN,
             }:
@@ -719,6 +777,7 @@ class SourceOperationContextCoordinator:
                 "non_restorable_fields": sorted(_field_keys(self.closure.non_restorable_fields)),
             },
             "cleanup_reserve_ms": self.cleanup_reserve_ms,
+            "safe_state_verified": self._safe_state_verified,
             "phases": [dict(item) for item in self._phase_history],
             "baseline": (
                 None

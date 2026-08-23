@@ -233,6 +233,44 @@ def test_context_binds_closure_and_successfully_verifies_postcondition() -> None
     ]
 
 
+def test_context_can_bind_a_core_snapshot_digest_during_preflight() -> None:
+    transport = GuardedAuditedTransport(_TextTransport())  # type: ignore[arg-type]
+    contract = _contract()
+    context = SourceOperationContextCoordinator(
+        session_state=transport.session_state,
+        operation_spec=_spec(contract),
+        operation_contract=contract,
+        connection_timeout_ms=1_000,
+        baseline_snapshot_digest=None,
+        fields=FIELDS,
+        required_off_outputs=(SourceScopeRef(SourceFacetScope.CHANNEL, channel=1),),
+        emergency_off_outputs=(SourceScopeRef(SourceFacetScope.CHANNEL, channel=1),),
+        restore_order=(BASIC,),
+        non_restorable_fields=(OUTPUT,),
+        correlation_id="source-context-bind-test",
+    )
+    placeholder = context.closure.baseline_snapshot_digest
+    bound = "sha256:" + "2" * 64
+    phase = context.make_phase_spec(
+        SourceOperationPhase.PREFLIGHT,
+        allowed_io={"query"},
+        fields=FIELDS,
+        max_steps=2,
+    )
+    with context.authorize_phase(phase) as authorization:
+        with pytest.raises(ValueError, match="not bound"):
+            context.create_baseline()
+        context.bind_baseline_snapshot_digest(bound)
+        baseline = context.create_baseline()
+        context.pass_baseline_to_main(baseline)
+        transport.query("SNAPSHOT?")
+        context.complete_phase_verification(authorization, io_kind="query", fields=FIELDS)
+
+    assert placeholder != bound
+    assert context.closure.baseline_snapshot_digest == bound
+    context.complete()
+
+
 def test_failure_path_orders_safe_off_restore_and_cleanup_verification() -> None:
     transport, context = _context()
     baseline = _preflight(transport, context)
