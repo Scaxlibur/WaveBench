@@ -523,6 +523,7 @@ class SourceModulationCapabilityProfile:
     sources: tuple[SourceModulationSource, ...]
     parameter_kinds: tuple[SourceModulationParameterKind, ...]
     inactive_readable: bool
+    configuration_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.kinds, SourceModulationKind, "modulation kinds")
@@ -533,6 +534,7 @@ class SourceModulationCapabilityProfile:
             "modulation parameter_kinds",
         )
         _require_bool(self.inactive_readable, "modulation inactive_readable")
+        _require_bool(self.configuration_readable, "modulation configuration_readable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1038,6 +1040,36 @@ SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     v1_equivalent_routes=(),
     v1_overlapping_routes=(
         SourceV1WriteRouteId.CONFIGURE_HARMONICS,
+        SourceV1WriteRouteId.RESTORE,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.modulation_configure_v2",
+    capability="source.modulation_configure_v2",
+    feature=SourceFeature.MODULATION,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.MODULATION,),
+    postcondition_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_AM,
         SourceV1WriteRouteId.RESTORE,
     ),
     operation_timeout_ms=5_000,
@@ -2191,6 +2223,29 @@ class SourceHarmonicConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceModulationConfigureRequest:
+    channel: int
+    depth_percent: float
+    internal_frequency_hz: float
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source modulation configure channel", minimum=1)
+        _require_finite(
+            self.depth_percent,
+            "source modulation configure depth_percent",
+            minimum=0.0,
+            maximum=100.0,
+        )
+        _require_finite(
+            self.internal_frequency_hz,
+            "source modulation configure internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.internal_frequency_hz <= 0:
+            raise ValueError("source modulation configure internal_frequency_hz must be > 0")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceBasicConfigureResult:
     channel: int
     basic: BasicWaveFacet
@@ -2373,6 +2428,67 @@ class ModulationFacet:
                 "modulation internal_frequency_hz",
                 minimum=0.0,
             )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceModulationConfigureResult:
+    channel: int
+    modulation: ModulationFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source modulation configure result channel", minimum=1)
+        if not isinstance(self.modulation, ModulationFacet):
+            raise ValueError("source modulation configure result modulation has an invalid type")
+        _require_bool(self.output_enabled, "source modulation configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source modulation configure result requires output_enabled=False")
+        if (
+            self.modulation.enabled.availability is not Availability.VALUE
+            or self.modulation.enabled.value is not True
+        ):
+            raise ValueError("source modulation configure result requires enabled modulation readback")
+        if (
+            self.modulation.kind.availability is not Availability.VALUE
+            or self.modulation.kind.value is not SourceModulationKind.AM
+        ):
+            raise ValueError("source modulation configure result requires AM readback")
+        if (
+            self.modulation.source.availability is not Availability.VALUE
+            or self.modulation.source.value is not SourceModulationSource.INTERNAL
+        ):
+            raise ValueError("source modulation configure result requires internal source readback")
+        if self.modulation.parameters.availability is not Availability.VALUE:
+            raise ValueError("source modulation configure result requires depth readback")
+        parameters = self.modulation.parameters.value
+        if (
+            not isinstance(parameters, tuple)
+            or len(parameters) != 1
+            or parameters[0].kind is not SourceModulationParameterKind.DEPTH_PERCENT
+        ):
+            raise ValueError("source modulation configure result requires one AM depth readback")
+        _require_finite(
+            parameters[0].value,
+            "source modulation configure result depth_percent",
+            minimum=0.0,
+            maximum=100.0,
+        )
+        if self.modulation.internal_frequency_hz.availability is not Availability.VALUE:
+            raise ValueError("source modulation configure result requires internal frequency readback")
+        _require_finite(
+            self.modulation.internal_frequency_hz.value,
+            "source modulation configure result internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.modulation.internal_frequency_hz.value <= 0:
+            raise ValueError(
+                "source modulation configure result internal_frequency_hz must be > 0"
+            )
+        if (
+            self.modulation.internal_waveform_kind.availability is not Availability.VALUE
+            or self.modulation.internal_waveform_kind.value is not SourceWaveformKind.SINE
+        ):
+            raise ValueError("source modulation configure result requires internal sine readback")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3218,6 +3334,14 @@ class SourceHarmonicConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceModulationConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_modulation_v2(
+        self,
+        request: SourceModulationConfigureRequest,
+    ) -> SourceModulationConfigureResult: ...
+
+
+@runtime_checkable
 class SourceOutputV2Driver(InstrumentDriver, Protocol):
     def set_source_output_v2(
         self,
@@ -3472,4 +3596,8 @@ __all__ = [
     "SourceHarmonicConfigureResult",
     "SourceHarmonicConfigureV2Driver",
     "SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceModulationConfigureRequest",
+    "SourceModulationConfigureResult",
+    "SourceModulationConfigureV2Driver",
+    "SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
 ]

@@ -60,7 +60,12 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
     assert module.__all__[len(r5_exports) : len(r5_exports) + len(m5_exports)] == m5_exports
     match = re.search(r"M6-A／Harmonic 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
     assert match is not None
-    assert module.__all__[len(r5_exports) + len(m5_exports) :] == match.group(1).splitlines()
+    harmonic_exports = match.group(1).splitlines()
+    harmonic_start = len(r5_exports) + len(m5_exports)
+    assert module.__all__[harmonic_start : harmonic_start + len(harmonic_exports)] == harmonic_exports
+    match = re.search(r"M6-A／内部 AM 调制在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
+    assert match is not None
+    assert module.__all__[harmonic_start + len(harmonic_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -121,6 +126,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "sources",
             "parameter_kinds",
             "inactive_readable",
+            "configuration_readable",
         ),
         "SourceSweepCapabilityProfile": (
             "spacing_modes",
@@ -237,6 +243,12 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
         ),
         "SourceHarmonicConfigureRequest": ("channel", "order", "preset"),
         "SourceHarmonicConfigureResult": ("channel", "harmonics", "output_enabled"),
+        "SourceModulationConfigureRequest": (
+            "channel",
+            "depth_percent",
+            "internal_frequency_hz",
+        ),
+        "SourceModulationConfigureResult": ("channel", "modulation", "output_enabled"),
         "SourceAffectedClosure": (
             "operation",
             "context_id",
@@ -401,6 +413,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
+        "source.modulation_configure_v2": ("configure_source_modulation_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
@@ -544,6 +557,53 @@ def test_source_v2_harmonic_write_models_are_closed_and_serializable() -> None:
                     Availability.NOT_QUERIED,
                     SourceReasonCode.NOT_REQUESTED,
                 ),
+            ),
+            False,
+        )
+
+
+def test_source_v2_modulation_write_models_are_closed_and_serializable() -> None:
+    modulation = module.ModulationFacet(
+        enabled=Observed.value_of(True),
+        kind=Observed.value_of(module.SourceModulationKind.AM),
+        source=Observed.value_of(module.SourceModulationSource.INTERNAL),
+        parameters=Observed.value_of(
+            (
+                module.SourceModulationParameter(
+                    module.SourceModulationParameterKind.DEPTH_PERCENT,
+                    80.0,
+                ),
+            )
+        ),
+        internal_frequency_hz=Observed.value_of(25.0),
+        internal_waveform_kind=Observed.value_of(module.SourceWaveformKind.SINE),
+    )
+    request = module.SourceModulationConfigureRequest(
+        channel=1,
+        depth_percent=80.0,
+        internal_frequency_hz=25.0,
+    )
+    result = module.SourceModulationConfigureResult(1, modulation, False)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceModulationConfigureRequest",
+        "channel": 1,
+        "depth_percent": 80.0,
+        "internal_frequency_hz": 25.0,
+    }
+    assert result.modulation.kind.value is module.SourceModulationKind.AM
+    with pytest.raises(ValueError, match="must be <= 100.0"):
+        module.SourceModulationConfigureRequest(1, 100.1, 25.0)
+    with pytest.raises(ValueError, match="must be > 0"):
+        module.SourceModulationConfigureRequest(1, 80.0, 0.0)
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceModulationConfigureResult(1, modulation, True)
+    with pytest.raises(ValueError, match="internal sine readback"):
+        module.SourceModulationConfigureResult(
+            1,
+            replace(
+                modulation,
+                internal_waveform_kind=Observed.value_of(module.SourceWaveformKind.SQUARE),
             ),
             False,
         )
@@ -747,6 +807,121 @@ def test_source_v2_harmonic_write_requires_direction_and_configuration_readback(
             descriptor,
             type(
                 "MissingHarmonicWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                },
+            )(),
+        )
+
+
+def test_source_v2_modulation_write_requires_internal_am_direction_and_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    modulation = module.SourceFeatureCapability(
+        feature=module.SourceFeature.MODULATION,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourceModulationCapabilityProfile(
+            kinds=(module.SourceModulationKind.AM,),
+            sources=(module.SourceModulationSource.INTERNAL,),
+            parameter_kinds=(module.SourceModulationParameterKind.DEPTH_PERCENT,),
+            inactive_readable=False,
+            configuration_readable=True,
+        ),
+    )
+    modulation_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.MODULATION,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.MODULATION,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(basic, modulation, output),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                modulation_query,
+                extensions.query_contract.facets[2],
+            ),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=("source.snapshot_v2", "source.modulation_configure_v2"),
+    )
+
+    class ModulationWriteDriver(SourceV2FakeDriver):
+        def configure_source_modulation_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, ModulationWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="CONFIGURE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(modulation, directions=(module.SourceFeatureDirection.READ,)),
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable internal AM configuration"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(
+                            modulation,
+                            profile=replace(
+                                modulation.profile,
+                                configuration_readable=False,
+                            ),
+                        ),
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable output state"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        modulation,
+                        replace(output, profile=replace(output.profile, output_readable=False)),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="configure_source_modulation_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingModulationWriteDriver",
                 (),
                 {
                     "close": lambda self: None,

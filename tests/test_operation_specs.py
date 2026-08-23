@@ -6,6 +6,7 @@ from wavebench.errors import ConfigError
 from wavebench.instruments.source_extensions import (
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
     SourceEnergyEffect,
@@ -46,6 +47,11 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
             ("source_v2", "output_must_be_off"),
         ),
         (
+            SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-modulation",
+            ("source_v2", "output_must_be_off", "am_internal_only"),
+        ),
+        (
             SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
             "source-v2-output",
             ("source_v2", "dangerous_output"),
@@ -83,6 +89,9 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
     assert SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
     assert SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT.energy_effect is SourceEnergyEffect.EMIT

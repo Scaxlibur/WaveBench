@@ -34,6 +34,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
+        "source.modulation_configure_v2",
     }
     assert all(require_operation_spec(operation).effect == "write" for operation in inventoried_operations)
 
@@ -64,16 +65,18 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         for kind in ALLOWED_STEP_KINDS
         if kind.startswith("source.") and kind != "source.status"
     } == expected_v1_run_steps | expected_v2_run_steps
-    assert {
-        spec.operation
-        for spec in list_operation_specs(instrument_kind="source")
-        if "_v2" in spec.operation and spec.effect == "write"
-    } == {
+    expected_v2_operations = {
         "source.basic_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
+        "source.modulation_configure_v2",
     }
+    assert {
+        spec.operation
+        for spec in list_operation_specs(instrument_kind="source")
+        if "_v2" in spec.operation and spec.effect == "write"
+    } == expected_v2_operations
 
     with TemporaryDirectory() as tmp:
         valid_steps = {
