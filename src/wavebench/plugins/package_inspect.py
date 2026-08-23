@@ -6,6 +6,7 @@ import csv
 from dataclasses import dataclass
 from email.parser import Parser
 from hashlib import sha256
+import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
@@ -23,6 +24,13 @@ from packaging.version import InvalidVersion, Version
 
 from wavebench import __version__
 from wavebench.errors import ConfigError
+from wavebench.instruments.source_conformance import (
+    MAX_SOURCE_CONFORMANCE_BYTES,
+    SOURCE_CONFORMANCE_DIRECTORY,
+    SourceConformanceManifest,
+    parse_source_conformance_manifest,
+    source_conformance_wheel_binding_digest,
+)
 
 
 ENTRY_POINT_GROUP = "wavebench.instruments"
@@ -93,6 +101,8 @@ class PluginPackage:
     metadata_sha256: str
     record_sha256: str
     member_paths: tuple[str, ...]
+    source_conformance_manifests: tuple[SourceConformanceManifest, ...] = ()
+    source_conformance_wheel_sha256: str | None = None
     build_backend: str | None = None
 
     @property
@@ -301,6 +311,20 @@ def inspect_plugin_wheel(path: str | Path) -> PluginPackage:
                     "wheel 文件名标签与 WHEEL 元数据不一致"
                 )
             member_paths = _validate_record(archive, infos, record_names[0], record_text)
+            source_conformance_wheel_sha256 = source_conformance_wheel_binding_digest(
+                (
+                    (info.filename, archive.read(info))
+                    for info in infos
+                    if not info.is_dir()
+                ),
+                dist_info=dist_info,
+            )
+            source_conformance_manifests = _read_source_conformance_manifests(
+                archive,
+                infos,
+                dist_info=dist_info,
+                wheel_sha256=source_conformance_wheel_sha256,
+            )
     except BadZipFile as exc:
         raise ConfigError("plugin wheel is not a valid ZIP archive / 插件 wheel 不是有效 ZIP") from exc
     message = Parser().parsestr(metadata_text)
@@ -321,6 +345,12 @@ def inspect_plugin_wheel(path: str | Path) -> PluginPackage:
     dependencies = tuple(message.get_all("Requires-Dist", ()))
     _validate_wavebench_requirement(dependencies)
     entry_points = _parse_entry_points(entry_text)
+    for manifest in source_conformance_manifests:
+        if Version(manifest.plugin_version) != parsed_version:
+            raise ConfigError(
+                "Source conformance plugin_version does not match wheel metadata / "
+                "Source conformance 插件版本与 wheel 元数据不一致"
+            )
     return PluginPackage(
         input_path=wheel_path,
         wheel_path=wheel_path,
@@ -337,6 +367,8 @@ def inspect_plugin_wheel(path: str | Path) -> PluginPackage:
         metadata_sha256=sha256(metadata_text.encode()).hexdigest(),
         record_sha256=sha256(record_text.encode()).hexdigest(),
         member_paths=member_paths,
+        source_conformance_manifests=source_conformance_manifests,
+        source_conformance_wheel_sha256=source_conformance_wheel_sha256,
     )
 
 
@@ -420,6 +452,62 @@ def _read_small_text(archive: ZipFile, name: str) -> str:
         return archive.read(info).decode("utf-8")
     except UnicodeError as exc:
         raise ConfigError(f"wheel metadata must be UTF-8 / wheel metadata 必须是 UTF-8: {PurePosixPath(name).name}") from exc
+
+
+def _read_source_conformance_manifests(
+    archive: ZipFile,
+    infos: Iterable[object],
+    *,
+    dist_info: str,
+    wheel_sha256: str,
+) -> tuple[SourceConformanceManifest, ...]:
+    prefix = f"{dist_info}/{SOURCE_CONFORMANCE_DIRECTORY}/"
+    reserved = [
+        info
+        for info in infos
+        if SOURCE_CONFORMANCE_DIRECTORY in PurePosixPath(info.filename).parts
+    ]
+    if any(not info.filename.startswith(prefix) for info in reserved):
+        raise ConfigError(
+            "Source conformance evidence must belong to the wheel distribution / "
+            "Source conformance 证据必须属于当前 wheel distribution"
+        )
+    manifests: list[SourceConformanceManifest] = []
+    manifest_ids: set[str] = set()
+    for info in reserved:
+        if info.is_dir():
+            continue
+        relative = info.filename.removeprefix(prefix)
+        if "/" in relative or not relative.endswith(".json"):
+            raise ConfigError(
+                "Source conformance evidence must use a direct <manifest_id>.json path / "
+                "Source conformance 证据路径必须为直接子级 JSON"
+            )
+        if info.file_size > MAX_SOURCE_CONFORMANCE_BYTES:
+            raise ConfigError("Source conformance manifest is too large / Source conformance manifest 过大")
+        try:
+            document = json.loads(archive.read(info).decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ConfigError(
+                "Source conformance manifest must be valid UTF-8 JSON / "
+                "Source conformance manifest 必须是有效的 UTF-8 JSON"
+            ) from exc
+        manifest = parse_source_conformance_manifest(document)
+        if relative != f"{manifest.manifest_id}.json":
+            raise ConfigError(
+                "Source conformance filename does not match manifest_id / "
+                "Source conformance 文件名与 manifest_id 不一致"
+            )
+        if manifest.manifest_id in manifest_ids:
+            raise ConfigError("duplicate Source conformance manifest_id / Source conformance manifest_id 重复")
+        if manifest.wheel_sha256 != wheel_sha256:
+            raise ConfigError(
+                "Source conformance wheel_sha256 does not match wheel binding / "
+                "Source conformance wheel_sha256 与 wheel binding 不一致"
+            )
+        manifest_ids.add(manifest.manifest_id)
+        manifests.append(manifest)
+    return tuple(sorted(manifests, key=lambda item: item.manifest_id))
 
 
 def _validate_wheel_metadata(text: str) -> frozenset[object]:

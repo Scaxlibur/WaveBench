@@ -4,12 +4,21 @@ from base64 import urlsafe_b64encode
 import csv
 from hashlib import sha256
 import io
+import json
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
 from wavebench.errors import ConfigError
+from wavebench.instruments.source_conformance import (
+    SOURCE_CONFORMANCE_DIRECTORY,
+    SOURCE_CONFORMANCE_SCHEMA,
+    SOURCE_CONFORMANCE_SCHEME,
+    source_conformance_evidence_digest,
+    source_conformance_wheel_binding_digest,
+)
+from wavebench.instruments.source_extensions import SOURCE_CONTRACT_VERSION
 from wavebench.plugins.package_inspect import (
     build_subprocess_environment,
     inspect_plugin_package,
@@ -91,6 +100,67 @@ def _wheel(
     return path
 
 
+def _wheel_with_source_conformance(
+    root: Path,
+    *,
+    wheel_sha256: str | None = None,
+    manifest_path: str | None = None,
+) -> Path:
+    name = "wavebench-example-scope"
+    version = "0.1.0"
+    dist_info = "wavebench_example_scope-0.1.0.dist-info"
+    manifest_id = "example-basic-read-a1"
+    path = manifest_path or (
+        f"{dist_info}/{SOURCE_CONFORMANCE_DIRECTORY}/{manifest_id}.json"
+    )
+    placeholder = _wheel(root, extra_members={path: b"{}"})
+    with ZipFile(placeholder) as archive:
+        binding = source_conformance_wheel_binding_digest(
+            (
+                (info.filename, archive.read(info))
+                for info in archive.infolist()
+                if not info.is_dir()
+            ),
+            dist_info=dist_info,
+        )
+    document: dict[str, object] = {
+        "schema": SOURCE_CONFORMANCE_SCHEMA,
+        "manifest_id": manifest_id,
+        "conformance_scheme": SOURCE_CONFORMANCE_SCHEME,
+        "claimed_level": "A1",
+        "capability": "source.snapshot_v2",
+        "feature": "basic",
+        "direction": "read",
+        "model": "EX1",
+        "firmware_id": "1.0",
+        "option_ids": [],
+        "channels": [1],
+        "core_version": "0.8.24",
+        "plugin_version": version,
+        "wheel_sha256": wheel_sha256 or binding,
+        "descriptor_digest": "sha256:" + "1" * 64,
+        "source_contract_version": SOURCE_CONTRACT_VERSION,
+        "fixture": {"transport": "fake"},
+        "safety_limits": {"output": "off"},
+        "budget": {"admitted": True},
+        "results": {"queries": 3},
+        "session_health": {"after": "healthy", "before": "healthy"},
+        "final_state": {"output": "off"},
+        "coverage": ["basic read contract"],
+        "limitations": ["no hardware coverage"],
+        "evidence_digest": "sha256:" + "0" * 64,
+    }
+    document["evidence_digest"] = source_conformance_evidence_digest(document)
+    return _wheel(
+        root,
+        name=name,
+        version=version,
+        extra_members={
+            path: json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        },
+    )
+
+
 def test_inspect_wheel_reads_metadata_entry_points_and_hash(tmp_path):
     path = _wheel(tmp_path)
 
@@ -103,6 +173,40 @@ def test_inspect_wheel_reads_metadata_entry_points_and_hash(tmp_path):
     assert len(package.sha256) == 64
     assert package.size_bytes == path.stat().st_size
     assert package.source_kind == "wheel"
+
+
+def test_inspect_wheel_verifies_source_conformance_binding(tmp_path):
+    path = _wheel_with_source_conformance(tmp_path)
+
+    package = inspect_plugin_wheel(path)
+
+    assert package.source_conformance_wheel_sha256 is not None
+    assert tuple(
+        item.manifest_id for item in package.source_conformance_manifests
+    ) == ("example-basic-read-a1",)
+
+
+def test_inspect_wheel_rejects_source_conformance_binding_mismatch(tmp_path):
+    path = _wheel_with_source_conformance(
+        tmp_path,
+        wheel_sha256="sha256:" + "9" * 64,
+    )
+
+    with pytest.raises(ConfigError, match="wheel_sha256"):
+        inspect_plugin_wheel(path)
+
+
+def test_inspect_wheel_rejects_cross_distribution_source_conformance(tmp_path):
+    path = _wheel_with_source_conformance(
+        tmp_path,
+        manifest_path=(
+            "foreign-0.1.0.dist-info/"
+            f"{SOURCE_CONFORMANCE_DIRECTORY}/example-basic-read-a1.json"
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="belong to the wheel distribution"):
+        inspect_plugin_wheel(path)
 
 
 @pytest.mark.parametrize(

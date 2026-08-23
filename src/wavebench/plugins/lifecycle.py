@@ -776,6 +776,7 @@ import zipfile
 
 from wavebench.instruments.api import descriptor_from_entry_point
 from wavebench.instruments.registry import _validate_descriptor
+from wavebench.instruments.source_conformance import validate_source_conformance_distribution
 from wavebench.instruments.source_extension_capabilities import validate_source_plugin_dependencies
 
 (
@@ -820,7 +821,14 @@ if len(entries) != 1 or entries[0].name != expected_driver or entries[0].value !
 descriptor = descriptor_from_entry_point(entries[0].load())
 if descriptor.driver_id != expected_driver or descriptor.aliases:
     raise SystemExit("descriptor identity mismatch")
+descriptor = descriptor.with_distribution(
+    distribution=dist.metadata.get("Name", ""),
+    version=dist.version,
+    source=f"entry_point:{expected_driver}",
+    origin="entry_point",
+)
 _validate_descriptor(descriptor, expected_kind=None)
+validate_source_conformance_distribution(descriptor, dist)
 validate_source_plugin_dependencies(
     descriptor,
     tuple(dist.metadata.get_all("Requires-Dist") or ()),

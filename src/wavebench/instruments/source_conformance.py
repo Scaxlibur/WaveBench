@@ -61,6 +61,80 @@ _REQUIRED_FIELDS = frozenset(
         "evidence_digest",
     }
 )
+_CAPABILITY_SCOPE: Mapping[
+    str,
+    tuple[SourceFeature | None, frozenset[SourceFeatureDirection]],
+] = {
+    "source.snapshot_v2": (None, frozenset({SourceFeatureDirection.READ})),
+    "source.basic_configure_v2": (
+        SourceFeature.BASIC,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.output_v2": (
+        SourceFeature.OUTPUT,
+        frozenset({SourceFeatureDirection.ENABLE, SourceFeatureDirection.DISABLE}),
+    ),
+    "source.harmonics_configure_v2": (
+        SourceFeature.HARMONICS,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.harmonics_disable_v2": (
+        SourceFeature.HARMONICS,
+        frozenset({SourceFeatureDirection.DISABLE}),
+    ),
+    "source.modulation_configure_v2": (
+        SourceFeature.MODULATION,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.modulation_pm_configure_v2": (
+        SourceFeature.MODULATION,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.modulation_fm_configure_v2": (
+        SourceFeature.MODULATION,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.modulation_pwm_configure_v2": (
+        SourceFeature.MODULATION,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.pulse_configure_v2": (
+        SourceFeature.PULSE,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.burst_configure_v2": (
+        SourceFeature.BURST,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.sweep_configure_v2": (
+        SourceFeature.SWEEP,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.arbitrary_storage_v2": (
+        SourceFeature.ARBITRARY,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.arbitrary_select_v2": (
+        SourceFeature.ARBITRARY,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.combine_configure_v2": (
+        SourceFeature.COMBINE,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.coupling_configure_v2": (
+        SourceFeature.COUPLING,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.tracking_configure_v2": (
+        SourceFeature.TRACKING,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.phase_relation_configure_v2": (
+        SourceFeature.PHASE_RELATION,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+}
 
 
 class SourceConformanceLevel(StrEnum):
@@ -321,6 +395,14 @@ def _validate_manifest_descriptor_binding(
 ) -> None:
     if manifest.capability not in getattr(descriptor, "capabilities", ()):
         raise ConfigError("Source conformance evidence claims an undeclared capability")
+    scope = _CAPABILITY_SCOPE.get(manifest.capability)
+    if scope is None:
+        raise ConfigError("Source conformance evidence claims an unsupported capability")
+    expected_feature, directions = scope
+    if expected_feature is not None and manifest.feature is not expected_feature:
+        raise ConfigError("Source conformance capability does not match its feature")
+    if manifest.direction not in directions:
+        raise ConfigError("Source conformance capability does not match its direction")
     if manifest.model not in getattr(descriptor, "models", ()):
         raise ConfigError("Source conformance evidence claims an undeclared model")
     if Version(manifest.plugin_version) != Version(str(getattr(descriptor, "version", ""))):

@@ -20,6 +20,7 @@ from .api import (
 from .builtin import BUILTIN_INSTRUMENTS
 from .capabilities import CAPABILITY_METHODS
 from .scope_extension_capabilities import validate_scope_descriptor
+from .source_conformance import validate_source_conformance_distribution
 from .source_extension_capabilities import validate_source_descriptor
 from .migrations import BUILTIN_MIGRATION_DISTRIBUTIONS
 
@@ -151,6 +152,10 @@ class InstrumentRegistry:
             version=version,
             source=f"entry_point:{entry_point.name}",
             origin="entry_point",
+        )
+        validate_source_conformance_distribution(
+            descriptor,
+            getattr(entry_point, "dist", None),
         )
         _assert_external_does_not_override_builtins(descriptor, self.builtins)
         return descriptor
