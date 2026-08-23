@@ -712,6 +712,17 @@ def build_parser() -> argparse.ArgumentParser:
     source_modulation_configure_v2.add_argument("--internal-frequency-hz", type=float, required=True)
     add_runtime_options(source_modulation_configure_v2)
 
+    source_pulse_configure_v2 = source_sub.add_parser(
+        "pulse-configure-v2",
+        help="Configure one OFF Source V2 channel with a WIDTH pulse shape",
+    )
+    source_pulse_configure_v2.add_argument("--channel", type=int, required=True)
+    source_pulse_configure_v2.add_argument("--width-s", type=float, required=True)
+    source_pulse_configure_v2.add_argument("--delay-s", type=float, required=True)
+    source_pulse_configure_v2.add_argument("--leading-transition-s", type=float, required=True)
+    source_pulse_configure_v2.add_argument("--trailing-transition-s", type=float, required=True)
+    add_runtime_options(source_pulse_configure_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

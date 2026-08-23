@@ -30,6 +30,7 @@ from wavebench.instruments.source_extensions import (
     SourceHarmonicPreset,
     SourceModulationConfigureRequest,
     SourceOutputRequest,
+    SourcePulseConfigureRequest,
     SourceWaveformKind,
 )
 from wavebench.logging import CommandLogger
@@ -411,6 +412,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.harmonics_configure_v2")
             elif step.kind == "source.modulation_configure_v2":
                 add("source", "source.snapshot_v2", "source.modulation_configure_v2")
+            elif step.kind == "source.pulse_configure_v2":
+                add("source", "source.snapshot_v2", "source.pulse_configure_v2")
             elif step.kind == "power.status":
                 add("power", "power.status")
             elif step.kind == "power.set":
@@ -1153,6 +1156,17 @@ class RunService:
                     channel=step.fields["channel"],
                     depth_percent=step.fields["depth_percent"],
                     internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.pulse_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_pulse_v2(
+                SourcePulseConfigureRequest(
+                    channel=step.fields["channel"],
+                    width_s=step.fields["width_s"],
+                    delay_s=step.fields["delay_s"],
+                    leading_transition_s=step.fields["leading_transition_s"],
+                    trailing_transition_s=step.fields["trailing_transition_s"],
                 )
             )
             artifact = {"source_operation": source_operation}

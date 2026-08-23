@@ -313,6 +313,21 @@ def _source_modulation_configure_v2_request(args: argparse.Namespace):
         raise ConfigError(str(exc)) from exc
 
 
+def _source_pulse_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourcePulseConfigureRequest
+
+    try:
+        return SourcePulseConfigureRequest(
+            channel=args.channel,
+            width_s=args.width_s,
+            delay_s=args.delay_s,
+            leading_transition_s=args.leading_transition_s,
+            trailing_transition_s=args.trailing_transition_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
     policy = getattr(args, "error_policy", None)
     if policy is None:
@@ -1175,6 +1190,15 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "modulation-configure-v2":
                 _, payload = service.configure_modulation_v2(
                     _source_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pulse-configure-v2":
+                _, payload = service.configure_pulse_v2(
+                    _source_pulse_configure_v2_request(args)
                 )
                 if args.json:
                     _emit_json_result(payload)

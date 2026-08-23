@@ -493,6 +493,10 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
         "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
         "operation": "source.modulation_configure_v2",
     }
+    pulse_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.pulse_configure_v2",
+    }
 
     class _Service:
         def configure_basic_v2(self, request):
@@ -516,6 +520,14 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             assert request.depth_percent == 80.0
             assert request.internal_frequency_hz == 25.0
             return object(), modulation_artifact
+
+        def configure_pulse_v2(self, request):
+            assert request.channel == 1
+            assert request.width_s == 1.0e-6
+            assert request.delay_s == 0.0
+            assert request.leading_transition_s == 1.0e-8
+            assert request.trailing_transition_s == 1.0e-8
+            return object(), pulse_artifact
 
     with patch("wavebench.cli._load_source_service", return_value=_Service()):
         basic_code = cli.main(
@@ -577,6 +589,26 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             ]
         )
         modulation_payload = json.loads(capsys.readouterr().out)
+        pulse_code = cli.main(
+            [
+                "--json",
+                "source",
+                "pulse-configure-v2",
+                "--channel",
+                "1",
+                "--width-s",
+                "1e-6",
+                "--delay-s",
+                "0",
+                "--leading-transition-s",
+                "1e-8",
+                "--trailing-transition-s",
+                "1e-8",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        pulse_payload = json.loads(capsys.readouterr().out)
 
     assert basic_code == 0
     assert basic_payload["result"] == basic_artifact
@@ -586,6 +618,8 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
     assert harmonic_payload["result"] == harmonic_artifact
     assert modulation_code == 0
     assert modulation_payload["result"] == modulation_artifact
+    assert pulse_code == 0
+    assert pulse_payload["result"] == pulse_artifact
 
 
 def test_source_v2_write_cli_keeps_failure_operation_artifact(capsys) -> None:
@@ -648,3 +682,35 @@ def test_source_v2_modulation_cli_rejects_invalid_request_before_driver_call(cap
     assert exit_code == 2
     assert payload["schema"] == "wavebench.error.v1"
     assert "depth_percent" in payload["message"]
+
+
+def test_source_v2_pulse_cli_rejects_invalid_request_before_driver_call(capsys) -> None:
+    class _Service:
+        def configure_pulse_v2(self, request):
+            raise AssertionError(request)
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "pulse-configure-v2",
+                "--channel",
+                "1",
+                "--width-s",
+                "3e-9",
+                "--delay-s",
+                "0",
+                "--leading-transition-s",
+                "1e-9",
+                "--trailing-transition-s",
+                "1e-9",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert payload["schema"] == "wavebench.error.v1"
+    assert "width_s" in payload["message"]

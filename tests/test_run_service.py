@@ -533,6 +533,37 @@ internal_frequency_hz = 25
 
             open_services.assert_not_called()
 
+    def test_check_requires_source_v2_pulse_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 1
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.pulse_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
     def test_check_accepts_source_v2_steps_without_v1_source_write_capabilities(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(
@@ -567,6 +598,14 @@ kind = "source.modulation_configure_v2"
 channel = 1
 depth_percent = 80
 internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 1
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
 """,
                 )
             )
@@ -578,6 +617,7 @@ internal_frequency_hz = 25
                     "source.output_v2",
                     "source.harmonics_configure_v2",
                     "source.modulation_configure_v2",
+                    "source.pulse_configure_v2",
                 ),
             )
             service = RunService(config=make_config(tmp), logger=CommandLogger())
@@ -1428,6 +1468,14 @@ depth_percent = 80
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.pulse_configure_v2"
+channel = 1
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
+
+[[steps]]
 kind = "source.output_enable_v2"
 channel = 1
 
@@ -1452,6 +1500,10 @@ channel = 1
                 },
                 {
                     "schema": "wavebench.source.operation.v1",
+                    "operation": "source.pulse_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
                     "operation": "source.output_enable_v2",
                 },
                 {
@@ -1463,9 +1515,10 @@ channel = 1
             source.configure_basic_v2.return_value = (SimpleNamespace(), artifacts[0])
             source.configure_harmonics_v2.return_value = (SimpleNamespace(), artifacts[1])
             source.configure_modulation_v2.return_value = (SimpleNamespace(), artifacts[2])
+            source.configure_pulse_v2.return_value = (SimpleNamespace(), artifacts[3])
             source.set_output_v2.side_effect = [
-                (SimpleNamespace(), artifacts[3]),
                 (SimpleNamespace(), artifacts[4]),
+                (SimpleNamespace(), artifacts[5]),
             ]
 
             class OfflineV2RunService(RunService):
@@ -1496,6 +1549,12 @@ channel = 1
             self.assertEqual(modulation_request.channel, 1)
             self.assertEqual(modulation_request.depth_percent, 80.0)
             self.assertEqual(modulation_request.internal_frequency_hz, 25.0)
+            pulse_request = source.configure_pulse_v2.call_args.args[0]
+            self.assertEqual(pulse_request.channel, 1)
+            self.assertEqual(pulse_request.width_s, 1.0e-6)
+            self.assertEqual(pulse_request.delay_s, 0.0)
+            self.assertEqual(pulse_request.leading_transition_s, 1.0e-8)
+            self.assertEqual(pulse_request.trailing_transition_s, 1.0e-8)
             self.assertEqual(
                 [
                     (item.args[0].channel, item.args[0].enabled)

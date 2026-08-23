@@ -320,6 +320,14 @@ kind = "source.modulation_configure_v2"
 channel = 2
 depth_percent = 80
 internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 2
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
 """))
 
         basic = plan.steps[0]
@@ -335,6 +343,17 @@ internal_frequency_hz = 25
         self.assertEqual(
             modulation.fields,
             {"channel": 2, "depth_percent": 80.0, "internal_frequency_hz": 25.0},
+        )
+        pulse = plan.steps[5]
+        self.assertEqual(
+            pulse.fields,
+            {
+                "channel": 2,
+                "width_s": 1.0e-6,
+                "delay_s": 0.0,
+                "leading_transition_s": 1.0e-8,
+                "trailing_transition_s": 1.0e-8,
+            },
         )
 
         empty_patch = self._write_plan("""
@@ -404,6 +423,30 @@ internal_frequency_hz = 0
         with self.assertRaisesRegex(ConfigError, "internal_frequency_hz must be > 0"):
             load_run_plan(zero_internal_frequency)
 
+        short_width = self._write_plan("""
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 2
+width_s = 3e-9
+delay_s = 0
+leading_transition_s = 1e-9
+trailing_transition_s = 1e-9
+""")
+        with self.assertRaisesRegex(ConfigError, "width_s must be >="):
+            load_run_plan(short_width)
+
+        oversized_transition = self._write_plan("""
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 2
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 7e-7
+trailing_transition_s = 1e-8
+""")
+        with self.assertRaisesRegex(ConfigError, "leading_transition_s must be <="):
+            load_run_plan(oversized_transition)
+
 
     def test_format_run_plan_schema_lists_expect_and_power_output(self):
         text = format_run_plan_schema()
@@ -413,6 +456,7 @@ internal_frequency_hz = 0
         self.assertIn("source.output_enable_v2", text)
         self.assertIn("source.harmonics_configure_v2", text)
         self.assertIn("source.modulation_configure_v2", text)
+        self.assertIn("source.pulse_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)

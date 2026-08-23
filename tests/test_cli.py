@@ -673,6 +673,22 @@ class CliTests(unittest.TestCase):
                 "25",
             ]
         )
+        pulse = build_parser().parse_args(
+            [
+                "source",
+                "pulse-configure-v2",
+                "--channel",
+                "2",
+                "--width-s",
+                "1e-6",
+                "--delay-s",
+                "0",
+                "--leading-transition-s",
+                "1e-8",
+                "--trailing-transition-s",
+                "1e-8",
+            ]
+        )
 
         self.assertEqual(basic.command, "basic-configure-v2")
         self.assertEqual(basic.channel, 2)
@@ -690,6 +706,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(modulation.channel, 2)
         self.assertEqual(modulation.depth_percent, 80.0)
         self.assertEqual(modulation.internal_frequency_hz, 25.0)
+        self.assertEqual(pulse.command, "pulse-configure-v2")
+        self.assertEqual(pulse.channel, 2)
+        self.assertEqual(pulse.width_s, 1.0e-6)
+        self.assertEqual(pulse.delay_s, 0.0)
+        self.assertEqual(pulse.leading_transition_s, 1.0e-8)
+        self.assertEqual(pulse.trailing_transition_s, 1.0e-8)
 
     def test_fetch_accepts_points(self):
         args = build_parser().parse_args(["scope", "fetch", "--points", "dmax"])
