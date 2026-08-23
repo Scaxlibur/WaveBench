@@ -687,6 +687,7 @@ class SourceCrossChannelCapabilityProfile:
     supported_channel_sets: tuple[tuple[int, ...], ...]
     relation_graph_readable: bool
     shared_power_constraint_readable: bool
+    configuration_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.relation_kinds, SourceFeature, "cross-channel relation_kinds")
@@ -715,6 +716,10 @@ class SourceCrossChannelCapabilityProfile:
         _require_bool(
             self.shared_power_constraint_readable,
             "cross-channel shared_power_constraint_readable",
+        )
+        _require_bool(
+            self.configuration_readable,
+            "cross-channel configuration_readable",
         )
 
 
@@ -1421,6 +1426,100 @@ SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT = SourceOperationContract(
 )
 
 
+def _source_cross_channel_configure_operation_contract(
+    *,
+    operation: str,
+    capability: str,
+    feature: SourceFeature,
+    relation_field: SourceFieldId,
+    v1_overlapping_routes: tuple[SourceV1WriteRouteId, ...],
+) -> SourceOperationContract:
+    return SourceOperationContract(
+        operation=operation,
+        capability=capability,
+        feature=feature,
+        direction=SourceFeatureDirection.CONFIGURE,
+        energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+        storage_effect=SourceStorageEffect.NONE,
+        required_fields=tuple(
+            sorted(
+                (
+                    SourceFieldId.OUTPUT,
+                    relation_field,
+                    SourceFieldId.RELATION_GRAPH,
+                    SourceFieldId.IDENTITY,
+                ),
+                key=lambda field: field.value,
+            )
+        ),
+        changed_fields=(relation_field,),
+        postcondition_fields=tuple(
+            sorted(
+                (
+                    SourceFieldId.OUTPUT,
+                    relation_field,
+                    SourceFieldId.RELATION_GRAPH,
+                ),
+                key=lambda field: field.value,
+            )
+        ),
+        cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+        v1_equivalent_routes=(),
+        v1_overlapping_routes=v1_overlapping_routes,
+        operation_timeout_ms=5_000,
+        main_max_steps=1,
+        recovery_max_steps=1,
+        verification_max_steps=2,
+    )
+
+
+SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT = (
+    _source_cross_channel_configure_operation_contract(
+        operation="source.combine_configure_v2",
+        capability="source.combine_configure_v2",
+        feature=SourceFeature.COMBINE,
+        relation_field=SourceFieldId.COMBINE,
+        v1_overlapping_routes=(SourceV1WriteRouteId.RESTORE,),
+    )
+)
+
+
+SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT = (
+    _source_cross_channel_configure_operation_contract(
+        operation="source.coupling_configure_v2",
+        capability="source.coupling_configure_v2",
+        feature=SourceFeature.COUPLING,
+        relation_field=SourceFieldId.COUPLING,
+        v1_overlapping_routes=(
+            SourceV1WriteRouteId.CONFIGURE_COUPLING,
+            SourceV1WriteRouteId.RESTORE,
+        ),
+    )
+)
+
+
+SOURCE_TRACKING_CONFIGURE_V2_OPERATION_CONTRACT = (
+    _source_cross_channel_configure_operation_contract(
+        operation="source.tracking_configure_v2",
+        capability="source.tracking_configure_v2",
+        feature=SourceFeature.TRACKING,
+        relation_field=SourceFieldId.TRACKING,
+        v1_overlapping_routes=(SourceV1WriteRouteId.RESTORE,),
+    )
+)
+
+
+SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT = (
+    _source_cross_channel_configure_operation_contract(
+        operation="source.phase_relation_configure_v2",
+        capability="source.phase_relation_configure_v2",
+        feature=SourceFeature.PHASE_RELATION,
+        relation_field=SourceFieldId.PHASE_RELATION,
+        v1_overlapping_routes=(SourceV1WriteRouteId.RESTORE,),
+    )
+)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceAffectedClosure:
     """A core-created, context-bound field closure for one Source operation."""
@@ -1722,11 +1821,21 @@ _FEATURE_SCOPES: dict[SourceFeature, frozenset[SourceFacetScope]] = {
     SourceFeature.CASCADE: frozenset(
         {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
     ),
-    SourceFeature.COMBINE: frozenset({SourceFacetScope.CHANNEL_SET}),
-    SourceFeature.TRACKING: frozenset({SourceFacetScope.CHANNEL_SET}),
-    SourceFeature.COUPLING: frozenset({SourceFacetScope.CHANNEL_SET}),
-    SourceFeature.COPY: frozenset({SourceFacetScope.CHANNEL_SET}),
-    SourceFeature.PHASE_RELATION: frozenset({SourceFacetScope.CHANNEL_SET}),
+    SourceFeature.COMBINE: frozenset(
+        {SourceFacetScope.CHANNEL_SET, SourceFacetScope.INSTRUMENT}
+    ),
+    SourceFeature.TRACKING: frozenset(
+        {SourceFacetScope.CHANNEL_SET, SourceFacetScope.INSTRUMENT}
+    ),
+    SourceFeature.COUPLING: frozenset(
+        {SourceFacetScope.CHANNEL_SET, SourceFacetScope.INSTRUMENT}
+    ),
+    SourceFeature.COPY: frozenset(
+        {SourceFacetScope.CHANNEL_SET, SourceFacetScope.INSTRUMENT}
+    ),
+    SourceFeature.PHASE_RELATION: frozenset(
+        {SourceFacetScope.CHANNEL_SET, SourceFacetScope.INSTRUMENT}
+    ),
     SourceFeature.SHARED_POWER: frozenset({SourceFacetScope.INSTRUMENT}),
 }
 
@@ -2603,6 +2712,70 @@ class SourceArbitrarySelectRequest:
         )
         if self.sample_rate_hz <= 0:
             raise ValueError("source arbitrary true-ARB sample_rate_hz must be > 0")
+
+
+def _validate_cross_channel_configure_request(
+    *,
+    channels: object,
+    enabled: object,
+    label: str,
+) -> None:
+    _require_positive_channels(channels, f"{label} channels")
+    if len(channels) < 2:
+        raise ValueError(f"{label} requires two or more channels")
+    _require_bool(enabled, f"{label} enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCombineConfigureRequest:
+    channels: tuple[int, ...]
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _validate_cross_channel_configure_request(
+            channels=self.channels,
+            enabled=self.enabled,
+            label="source combine configure",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingConfigureRequest:
+    channels: tuple[int, ...]
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _validate_cross_channel_configure_request(
+            channels=self.channels,
+            enabled=self.enabled,
+            label="source coupling configure",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTrackingConfigureRequest:
+    channels: tuple[int, ...]
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _validate_cross_channel_configure_request(
+            channels=self.channels,
+            enabled=self.enabled,
+            label="source tracking configure",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SourcePhaseRelationConfigureRequest:
+    channels: tuple[int, ...]
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _validate_cross_channel_configure_request(
+            channels=self.channels,
+            enabled=self.enabled,
+            label="source phase relation configure",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3886,6 +4059,77 @@ class SourceRelationState:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceRelationOutputState:
+    """One affected output's final state reported by a relation mutation."""
+
+    channel: int
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source relation output state channel", minimum=1)
+        _require_bool(self.enabled, "source relation output state enabled")
+        if self.enabled:
+            raise ValueError("source relation output state requires enabled=False")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCrossChannelConfigureResult:
+    """Typed driver readback shared by the four M6-C relation operations."""
+
+    feature: SourceFeature
+    channels: tuple[int, ...]
+    enabled: bool
+    relation: SourceRelationState
+    outputs: tuple[SourceRelationOutputState, ...]
+
+    def __post_init__(self) -> None:
+        if self.feature not in {
+            SourceFeature.COMBINE,
+            SourceFeature.COUPLING,
+            SourceFeature.TRACKING,
+            SourceFeature.PHASE_RELATION,
+        }:
+            raise ValueError("source cross-channel configure result feature is invalid")
+        _require_positive_channels(
+            self.channels,
+            "source cross-channel configure result channels",
+        )
+        if len(self.channels) < 2:
+            raise ValueError(
+                "source cross-channel configure result requires two or more channels"
+            )
+        _require_bool(self.enabled, "source cross-channel configure result enabled")
+        if not isinstance(self.relation, SourceRelationState):
+            raise ValueError(
+                "source cross-channel configure result relation has an invalid type"
+            )
+        if (
+            self.relation.feature is not self.feature
+            or self.relation.channels != self.channels
+            or self.relation.enabled.availability is not Availability.VALUE
+            or self.relation.enabled.value is not self.enabled
+        ):
+            raise ValueError(
+                "source cross-channel configure result relation does not match request state"
+            )
+        if not isinstance(self.outputs, tuple) or any(
+            not isinstance(item, SourceRelationOutputState) for item in self.outputs
+        ):
+            raise ValueError(
+                "source cross-channel configure result outputs have an invalid type"
+            )
+        output_channels = tuple(item.channel for item in self.outputs)
+        if (
+            len(output_channels) < 2
+            or len(set(output_channels)) != len(output_channels)
+            or tuple(sorted(output_channels)) != output_channels
+        ):
+            raise ValueError(
+                "source cross-channel configure result outputs must be sorted and unique"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceSharedPowerState:
     participants: tuple[int, ...]
     active_power_upper_w: Observed[float]
@@ -4532,6 +4776,38 @@ class SourceArbitrarySelectV2Driver(InstrumentDriver, Protocol):
     ) -> SourceArbitrarySelectResult: ...
 
 
+@runtime_checkable
+class SourceCombineConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_combine_v2(
+        self,
+        request: SourceCombineConfigureRequest,
+    ) -> SourceCrossChannelConfigureResult: ...
+
+
+@runtime_checkable
+class SourceCouplingConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_coupling_v2(
+        self,
+        request: SourceCouplingConfigureRequest,
+    ) -> SourceCrossChannelConfigureResult: ...
+
+
+@runtime_checkable
+class SourceTrackingConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_tracking_v2(
+        self,
+        request: SourceTrackingConfigureRequest,
+    ) -> SourceCrossChannelConfigureResult: ...
+
+
+@runtime_checkable
+class SourcePhaseRelationConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_phase_relation_v2(
+        self,
+        request: SourcePhaseRelationConfigureRequest,
+    ) -> SourceCrossChannelConfigureResult: ...
+
+
 def source_v2_to_data(value: object) -> object:
     """Convert Source V2 public values into strict JSON-compatible data."""
 
@@ -4817,4 +5093,18 @@ __all__ = [
     "SourceArbitrarySelectResult",
     "SourceArbitrarySelectV2Driver",
     "SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT",
+    "SourceRelationOutputState",
+    "SourceCrossChannelConfigureResult",
+    "SourceCombineConfigureRequest",
+    "SourceCombineConfigureV2Driver",
+    "SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceCouplingConfigureRequest",
+    "SourceCouplingConfigureV2Driver",
+    "SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceTrackingConfigureRequest",
+    "SourceTrackingConfigureV2Driver",
+    "SOURCE_TRACKING_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourcePhaseRelationConfigureRequest",
+    "SourcePhaseRelationConfigureV2Driver",
+    "SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT",
 ]

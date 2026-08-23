@@ -108,7 +108,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[sweep_start + len(sweep_exports) :] == match.group(1).splitlines()
+    arbitrary_exports = match.group(1).splitlines()
+    arbitrary_start = sweep_start + len(sweep_exports)
+    assert module.__all__[arbitrary_start : arbitrary_start + len(arbitrary_exports)] == arbitrary_exports
+    match = re.search(
+        r"M6-C／跨通道关系在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[arbitrary_start + len(arbitrary_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -216,6 +225,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "supported_channel_sets",
             "relation_graph_readable",
             "shared_power_constraint_readable",
+            "configuration_readable",
         ),
         "ResistanceBounds": ("minimum_ohm", "maximum_ohm"),
         "PortVoltageBounds": (
@@ -342,6 +352,18 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "trailing_transition_s",
         ),
         "SourcePulseConfigureResult": ("channel", "pulse", "output_enabled"),
+        "SourceRelationOutputState": ("channel", "enabled"),
+        "SourceCrossChannelConfigureResult": (
+            "feature",
+            "channels",
+            "enabled",
+            "relation",
+            "outputs",
+        ),
+        "SourceCombineConfigureRequest": ("channels", "enabled"),
+        "SourceCouplingConfigureRequest": ("channels", "enabled"),
+        "SourceTrackingConfigureRequest": ("channels", "enabled"),
+        "SourcePhaseRelationConfigureRequest": ("channels", "enabled"),
         "SourceAffectedClosure": (
             "operation",
             "context_id",
@@ -519,6 +541,12 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
                 "mutate_source_arbitrary_storage_v2",
             ),
             "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
+            "source.combine_configure_v2": ("configure_source_combine_v2",),
+            "source.coupling_configure_v2": ("configure_source_coupling_v2",),
+            "source.tracking_configure_v2": ("configure_source_tracking_v2",),
+            "source.phase_relation_configure_v2": (
+                "configure_source_phase_relation_v2",
+            ),
         }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
     assert {key: CAPABILITY_METHODS[key] for key in expected} == expected
@@ -1204,6 +1232,65 @@ def test_source_v2_arbitrary_write_models_keep_payload_out_of_public_data() -> N
     assert selected.arbitrary.selected_waveform_id.value == "slot_a"
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceArbitrarySelectResult(1, basic, arbitrary, True)
+
+
+def test_source_v2_cross_channel_write_models_are_closed_and_serializable() -> None:
+    relation = module.SourceRelationState(
+        feature=module.SourceFeature.COMBINE,
+        channels=(1, 2),
+        enabled=Observed.value_of(True),
+    )
+    result = module.SourceCrossChannelConfigureResult(
+        feature=module.SourceFeature.COMBINE,
+        channels=(1, 2),
+        enabled=True,
+        relation=relation,
+        outputs=(
+            module.SourceRelationOutputState(channel=1, enabled=False),
+            module.SourceRelationOutputState(channel=2, enabled=False),
+        ),
+    )
+    request_types = (
+        module.SourceCombineConfigureRequest,
+        module.SourceCouplingConfigureRequest,
+        module.SourceTrackingConfigureRequest,
+        module.SourcePhaseRelationConfigureRequest,
+    )
+
+    for request_type in request_types:
+        request = request_type(channels=(1, 2), enabled=True)
+        assert module.source_v2_to_data(request) == {
+            "type": request_type.__name__,
+            "channels": [1, 2],
+            "enabled": True,
+        }
+        with pytest.raises(ValueError, match="two or more channels"):
+            request_type(channels=(1,), enabled=True)
+        with pytest.raises(ValueError, match="sorted and unique"):
+            request_type(channels=(2, 1), enabled=True)
+
+    assert result.relation.enabled.value is True
+    with pytest.raises(ValueError, match="requires enabled=False"):
+        module.SourceRelationOutputState(channel=1, enabled=True)
+    with pytest.raises(ValueError, match="does not match request state"):
+        module.SourceCrossChannelConfigureResult(
+            feature=module.SourceFeature.COMBINE,
+            channels=(1, 2),
+            enabled=False,
+            relation=relation,
+            outputs=result.outputs,
+        )
+    with pytest.raises(ValueError, match="outputs must be sorted and unique"):
+        module.SourceCrossChannelConfigureResult(
+            feature=module.SourceFeature.COMBINE,
+            channels=(1, 2),
+            enabled=True,
+            relation=relation,
+            outputs=(
+                module.SourceRelationOutputState(channel=2, enabled=False),
+                module.SourceRelationOutputState(channel=1, enabled=False),
+            ),
+        )
 
 
 def test_source_v2_arbitrary_write_capabilities_require_explicit_readback() -> None:

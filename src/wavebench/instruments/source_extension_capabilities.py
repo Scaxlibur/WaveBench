@@ -17,6 +17,7 @@ from .source_extensions import (
     SOURCE_SNAPSHOT_MIN_CORE_VERSION,
     SourceAmplitudeUnit,
     SourceArbitraryCapabilityProfile,
+    SourceCrossChannelCapabilityProfile,
     SourceDescriptorExtensions,
     SourceAnchorField,
     SourceBasicCapabilityProfile,
@@ -62,6 +63,12 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
             "mutate_source_arbitrary_storage_v2",
         ),
         "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
+        "source.combine_configure_v2": ("configure_source_combine_v2",),
+        "source.coupling_configure_v2": ("configure_source_coupling_v2",),
+        "source.tracking_configure_v2": ("configure_source_tracking_v2",),
+        "source.phase_relation_configure_v2": (
+            "configure_source_phase_relation_v2",
+        ),
     }
 )
 
@@ -79,6 +86,10 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.output_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
+        "source.combine_configure_v2",
+        "source.coupling_configure_v2",
+        "source.tracking_configure_v2",
+        "source.phase_relation_configure_v2",
     }
 )
 
@@ -553,6 +564,31 @@ def _validate_write_contract(
                 "source.arbitrary_select_v2 requires readable output state on every channel"
             )
 
+    _validate_cross_channel_write_capability(
+        extensions,
+        capabilities,
+        capability="source.combine_configure_v2",
+        feature_kind=SourceFeature.COMBINE,
+    )
+    _validate_cross_channel_write_capability(
+        extensions,
+        capabilities,
+        capability="source.coupling_configure_v2",
+        feature_kind=SourceFeature.COUPLING,
+    )
+    _validate_cross_channel_write_capability(
+        extensions,
+        capabilities,
+        capability="source.tracking_configure_v2",
+        feature_kind=SourceFeature.TRACKING,
+    )
+    _validate_cross_channel_write_capability(
+        extensions,
+        capabilities,
+        capability="source.phase_relation_configure_v2",
+        feature_kind=SourceFeature.PHASE_RELATION,
+    )
+
     if "source.output_v2" in capabilities:
         enabled = _channels_with_direction(
             extensions,
@@ -572,6 +608,73 @@ def _validate_write_contract(
             raise ConfigError(
                 "source.output_v2 requires readable output state on every channel"
             )
+
+
+def _validate_cross_channel_write_capability(
+    extensions: SourceDescriptorExtensions,
+    capabilities: frozenset[str],
+    *,
+    capability: str,
+    feature_kind: SourceFeature,
+) -> None:
+    if capability not in capabilities:
+        return
+    configurable = tuple(
+        feature
+        for feature in extensions.features
+        if (
+            feature.feature is feature_kind
+            and feature.scope is SourceFacetScope.CHANNEL_SET
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.CONFIGURE in feature.directions
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceCrossChannelCapabilityProfile)
+        )
+    )
+    if not configurable:
+        raise ConfigError(
+            f"{capability} requires {feature_kind.value} CHANNEL_SET read/configure directions"
+        )
+    for feature in configurable:
+        profile = feature.profile
+        if (
+            feature_kind not in profile.relation_kinds
+            or feature.channels not in profile.supported_channel_sets
+            or not profile.configuration_readable
+        ):
+            raise ConfigError(
+                f"{capability} requires readable declared {feature_kind.value} relation state"
+            )
+    graph_features = tuple(
+        feature
+        for feature in extensions.features
+        if (
+            feature.feature is feature_kind
+            and feature.scope is SourceFacetScope.INSTRUMENT
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceCrossChannelCapabilityProfile)
+            and feature.profile.relation_graph_readable
+        )
+    )
+    graph_facets = tuple(
+        facet
+        for facet in extensions.query_contract.facets
+        if (
+            facet.feature is feature_kind
+            and facet.scope is SourceFacetScope.INSTRUMENT
+            and SourceFieldId.RELATION_GRAPH in facet.fields
+        )
+    )
+    if not graph_features or len(graph_facets) != 1:
+        raise ConfigError(
+            f"{capability} requires one readable instrument relation graph"
+        )
+    output_readable = _channels_with_output_readback(extensions)
+    if any(not set(feature.channels) <= output_readable for feature in configurable):
+        raise ConfigError(
+            f"{capability} requires readable output state on every declared relation channel"
+        )
 
 
 def _channels_with_direction(
@@ -910,6 +1013,18 @@ def _validate_declared_write_directions(
                 "source.arbitrary_storage_v2",
                 "source.arbitrary_select_v2",
             }
+        ),
+        (SourceFeature.COMBINE, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.combine_configure_v2"}
+        ),
+        (SourceFeature.COUPLING, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.coupling_configure_v2"}
+        ),
+        (SourceFeature.TRACKING, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.tracking_configure_v2"}
+        ),
+        (SourceFeature.PHASE_RELATION, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.phase_relation_configure_v2"}
         ),
         (SourceFeature.OUTPUT, SourceFeatureDirection.ENABLE): frozenset(
             {"source.output_v2"}

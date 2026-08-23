@@ -554,6 +554,25 @@ SourceArbitrarySelectV2Driver
 SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT
 ```
 
+M6-C／跨通道关系在上述清单末尾追加以下精确条目：
+
+```text
+SourceRelationOutputState
+SourceCrossChannelConfigureResult
+SourceCombineConfigureRequest
+SourceCombineConfigureV2Driver
+SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT
+SourceCouplingConfigureRequest
+SourceCouplingConfigureV2Driver
+SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT
+SourceTrackingConfigureRequest
+SourceTrackingConfigureV2Driver
+SOURCE_TRACKING_CONFIGURE_V2_OPERATION_CONTRACT
+SourcePhaseRelationConfigureRequest
+SourcePhaseRelationConfigureV2Driver
+SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -1091,6 +1110,7 @@ class SourceCrossChannelCapabilityProfile:
     supported_channel_sets: tuple[tuple[int, ...], ...]
     relation_graph_readable: bool
     shared_power_constraint_readable: bool
+    configuration_readable: bool = False
 ```
 
 `SourceFeatureProfile` 是上述公共 profile 的封闭 union：
