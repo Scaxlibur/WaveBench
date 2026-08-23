@@ -30,6 +30,7 @@ from wavebench.instruments.source_extensions import (
     SourceHarmonicPreset,
     SourceModulationConfigureRequest,
     SourceOutputRequest,
+    SourcePmModulationConfigureRequest,
     SourcePulseConfigureRequest,
     SourceWaveformKind,
 )
@@ -412,6 +413,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.harmonics_configure_v2")
             elif step.kind == "source.modulation_configure_v2":
                 add("source", "source.snapshot_v2", "source.modulation_configure_v2")
+            elif step.kind == "source.modulation_pm_configure_v2":
+                add("source", "source.snapshot_v2", "source.modulation_pm_configure_v2")
             elif step.kind == "source.pulse_configure_v2":
                 add("source", "source.snapshot_v2", "source.pulse_configure_v2")
             elif step.kind == "power.status":
@@ -1155,6 +1158,15 @@ class RunService:
                 SourceModulationConfigureRequest(
                     channel=step.fields["channel"],
                     depth_percent=step.fields["depth_percent"],
+                    internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.modulation_pm_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_pm_modulation_v2(
+                SourcePmModulationConfigureRequest(
+                    channel=step.fields["channel"],
+                    phase_deviation_deg=step.fields["phase_deviation_deg"],
                     internal_frequency_hz=step.fields["internal_frequency_hz"],
                 )
             )

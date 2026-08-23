@@ -322,6 +322,12 @@ depth_percent = 80
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 2
+phase_deviation_deg = 90
+internal_frequency_hz = 25
+
+[[steps]]
 kind = "source.pulse_configure_v2"
 channel = 2
 width_s = 1e-6
@@ -344,7 +350,12 @@ trailing_transition_s = 1e-8
             modulation.fields,
             {"channel": 2, "depth_percent": 80.0, "internal_frequency_hz": 25.0},
         )
-        pulse = plan.steps[5]
+        pm = plan.steps[5]
+        self.assertEqual(
+            pm.fields,
+            {"channel": 2, "phase_deviation_deg": 90.0, "internal_frequency_hz": 25.0},
+        )
+        pulse = plan.steps[6]
         self.assertEqual(
             pulse.fields,
             {
@@ -423,6 +434,16 @@ internal_frequency_hz = 0
         with self.assertRaisesRegex(ConfigError, "internal_frequency_hz must be > 0"):
             load_run_plan(zero_internal_frequency)
 
+        excessive_pm_deviation = self._write_plan("""
+[[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 2
+phase_deviation_deg = 360.1
+internal_frequency_hz = 25
+""")
+        with self.assertRaisesRegex(ConfigError, "phase_deviation_deg must be in"):
+            load_run_plan(excessive_pm_deviation)
+
         short_width = self._write_plan("""
 [[steps]]
 kind = "source.pulse_configure_v2"
@@ -456,6 +477,7 @@ trailing_transition_s = 1e-8
         self.assertIn("source.output_enable_v2", text)
         self.assertIn("source.harmonics_configure_v2", text)
         self.assertIn("source.modulation_configure_v2", text)
+        self.assertIn("source.modulation_pm_configure_v2", text)
         self.assertIn("source.pulse_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)

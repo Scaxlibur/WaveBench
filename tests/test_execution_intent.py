@@ -128,6 +128,12 @@ depth_percent = 80
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 1
+phase_deviation_deg = 90
+internal_frequency_hz = 25
+
+[[steps]]
 kind = "source.pulse_configure_v2"
 channel = 1
 width_s = 1e-6
@@ -146,6 +152,7 @@ trailing_transition_s = 1e-8
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
         "source.modulation_configure_v2",
+        "source.modulation_pm_configure_v2",
         "source.pulse_configure_v2",
     ]
     assert intent.operations[0]["parameters"]["frequency_hz"] == 2000.0
@@ -163,12 +170,22 @@ trailing_transition_s = 1e-8
     ]
     assert intent.operations[5]["parameters"] == {
         "channel": 1,
+        "phase_deviation_deg": 90.0,
+        "internal_frequency_hz": 25.0,
+    }
+    assert intent.operations[5]["risk_flags"] == [
+        "source_v2",
+        "output_must_be_off",
+        "pm_internal_only",
+    ]
+    assert intent.operations[6]["parameters"] == {
+        "channel": 1,
         "width_s": 1.0e-6,
         "delay_s": 0.0,
         "leading_transition_s": 1.0e-8,
         "trailing_transition_s": 1.0e-8,
     }
-    assert intent.operations[5]["risk_flags"] == [
+    assert intent.operations[6]["risk_flags"] == [
         "source_v2",
         "output_must_be_off",
         "pulse_width_only",

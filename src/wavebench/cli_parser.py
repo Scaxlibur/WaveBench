@@ -723,6 +723,23 @@ def build_parser() -> argparse.ArgumentParser:
     source_pulse_configure_v2.add_argument("--trailing-transition-s", type=float, required=True)
     add_runtime_options(source_pulse_configure_v2)
 
+    source_pm_modulation_configure_v2 = source_sub.add_parser(
+        "pm-modulation-configure-v2",
+        help="Configure one OFF Source V2 channel with internal sine PM",
+    )
+    source_pm_modulation_configure_v2.add_argument("--channel", type=int, required=True)
+    source_pm_modulation_configure_v2.add_argument(
+        "--phase-deviation-deg",
+        type=float,
+        required=True,
+    )
+    source_pm_modulation_configure_v2.add_argument(
+        "--internal-frequency-hz",
+        type=float,
+        required=True,
+    )
+    add_runtime_options(source_pm_modulation_configure_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

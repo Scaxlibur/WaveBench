@@ -31,6 +31,7 @@ ALLOWED_STEP_KINDS = {
     "source.output_disable_v2",
     "source.harmonics_configure_v2",
     "source.modulation_configure_v2",
+    "source.modulation_pm_configure_v2",
     "source.pulse_configure_v2",
     "power.status",
     "power.set",
@@ -53,6 +54,11 @@ _REQUIRED_FIELDS = {
     "source.output_disable_v2": ("channel",),
     "source.harmonics_configure_v2": ("channel", "order", "preset"),
     "source.modulation_configure_v2": ("channel", "depth_percent", "internal_frequency_hz"),
+    "source.modulation_pm_configure_v2": (
+        "channel",
+        "phase_deviation_deg",
+        "internal_frequency_hz",
+    ),
     "source.pulse_configure_v2": (
         "channel",
         "width_s",
@@ -136,6 +142,7 @@ _OPTIONAL_FIELDS = {
     "source.output_disable_v2": {"on_failure"},
     "source.harmonics_configure_v2": {"on_failure"},
     "source.modulation_configure_v2": {"on_failure"},
+    "source.modulation_pm_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
     "power.set": {"channel", "on_failure"},
@@ -167,6 +174,7 @@ _STEP_NOTES = {
     "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
     "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
     "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
+    "source.modulation_pm_configure_v2": "Configure one OFF Source V2 channel with internal sine PM; it does not enable output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
     "power.set": "Set DP800 voltage/current limit; does not change output state.",
@@ -615,6 +623,21 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         if internal_frequency <= 0:
             raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
         fields["depth_percent"] = depth
+        fields["internal_frequency_hz"] = internal_frequency
+    elif kind == "source.modulation_pm_configure_v2":
+        phase_deviation = _finite_float(
+            fields["phase_deviation_deg"],
+            f"{prefix}.phase_deviation_deg",
+        )
+        if not 0 <= phase_deviation <= 360:
+            raise ConfigError(f"{prefix}.phase_deviation_deg must be in [0, 360]")
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["phase_deviation_deg"] = phase_deviation
         fields["internal_frequency_hz"] = internal_frequency
     elif kind == "source.pulse_configure_v2":
         width = _finite_float(fields["width_s"], f"{prefix}.width_s")
