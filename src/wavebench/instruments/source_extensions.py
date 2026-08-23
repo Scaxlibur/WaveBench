@@ -279,6 +279,7 @@ class SourceModulationParameterKind(StrEnum):
     FREQUENCY_DEVIATION_HZ = "frequency_deviation_hz"
     PHASE_DEVIATION_DEG = "phase_deviation_deg"
     DUTY_DEVIATION_PERCENT = "duty_deviation_percent"
+    WIDTH_DEVIATION_S = "width_deviation_s"
     SYMBOL_RATE_HZ = "symbol_rate_hz"
 
 
@@ -1171,6 +1172,36 @@ SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     v1_equivalent_routes=(),
     v1_overlapping_routes=(
         SourceV1WriteRouteId.CONFIGURE_FM,
+        SourceV1WriteRouteId.RESTORE,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.modulation_pwm_configure_v2",
+    capability="source.modulation_pwm_configure_v2",
+    feature=SourceFeature.MODULATION,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.MODULATION,),
+    postcondition_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_PWM,
         SourceV1WriteRouteId.RESTORE,
     ),
     operation_timeout_ms=5_000,
@@ -2464,6 +2495,57 @@ class SourceFmModulationConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourcePwmModulationConfigureRequest:
+    channel: int
+    internal_frequency_hz: float
+    duty_deviation_percent: float | None = None
+    width_deviation_s: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source PWM modulation configure channel", minimum=1)
+        _require_finite(
+            self.internal_frequency_hz,
+            "source PWM modulation configure internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.internal_frequency_hz <= 0:
+            raise ValueError(
+                "source PWM modulation configure internal_frequency_hz must be > 0"
+            )
+        if (self.duty_deviation_percent is None) == (self.width_deviation_s is None):
+            raise ValueError(
+                "source PWM modulation configure requires exactly one deviation branch"
+            )
+        if self.duty_deviation_percent is not None:
+            _require_finite(
+                self.duty_deviation_percent,
+                "source PWM modulation configure duty_deviation_percent",
+                minimum=0.0,
+                maximum=50.0,
+            )
+        if self.width_deviation_s is not None:
+            _require_finite(
+                self.width_deviation_s,
+                "source PWM modulation configure width_deviation_s",
+                minimum=0.0,
+                maximum=500_000.0,
+            )
+
+    @property
+    def deviation_parameter(self) -> SourceModulationParameter:
+        if self.duty_deviation_percent is not None:
+            return SourceModulationParameter(
+                SourceModulationParameterKind.DUTY_DEVIATION_PERCENT,
+                self.duty_deviation_percent,
+            )
+        assert self.width_deviation_s is not None
+        return SourceModulationParameter(
+            SourceModulationParameterKind.WIDTH_DEVIATION_S,
+            self.width_deviation_s,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourcePulseConfigureRequest:
     channel: int
     width_s: float
@@ -2959,6 +3041,90 @@ class SourceFmModulationConfigureResult:
         ):
             raise ValueError(
                 "source FM modulation configure result requires internal sine readback"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourcePwmModulationConfigureResult:
+    channel: int
+    modulation: ModulationFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source PWM modulation configure result channel", minimum=1)
+        if not isinstance(self.modulation, ModulationFacet):
+            raise ValueError(
+                "source PWM modulation configure result modulation has an invalid type"
+            )
+        _require_bool(self.output_enabled, "source PWM modulation configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source PWM modulation configure result requires output_enabled=False")
+        if (
+            self.modulation.enabled.availability is not Availability.VALUE
+            or self.modulation.enabled.value is not True
+        ):
+            raise ValueError(
+                "source PWM modulation configure result requires enabled modulation readback"
+            )
+        if (
+            self.modulation.kind.availability is not Availability.VALUE
+            or self.modulation.kind.value is not SourceModulationKind.PWM
+        ):
+            raise ValueError("source PWM modulation configure result requires PWM readback")
+        if (
+            self.modulation.source.availability is not Availability.VALUE
+            or self.modulation.source.value is not SourceModulationSource.INTERNAL
+        ):
+            raise ValueError(
+                "source PWM modulation configure result requires internal source readback"
+            )
+        if self.modulation.parameters.availability is not Availability.VALUE:
+            raise ValueError(
+                "source PWM modulation configure result requires deviation readback"
+            )
+        parameters = self.modulation.parameters.value
+        if not isinstance(parameters, tuple) or len(parameters) != 1:
+            raise ValueError(
+                "source PWM modulation configure result requires one PWM deviation readback"
+            )
+        parameter = parameters[0]
+        if parameter.kind is SourceModulationParameterKind.DUTY_DEVIATION_PERCENT:
+            _require_finite(
+                parameter.value,
+                "source PWM modulation configure result duty_deviation_percent",
+                minimum=0.0,
+                maximum=50.0,
+            )
+        elif parameter.kind is SourceModulationParameterKind.WIDTH_DEVIATION_S:
+            _require_finite(
+                parameter.value,
+                "source PWM modulation configure result width_deviation_s",
+                minimum=0.0,
+                maximum=500_000.0,
+            )
+        else:
+            raise ValueError(
+                "source PWM modulation configure result requires a PWM deviation readback"
+            )
+        if self.modulation.internal_frequency_hz.availability is not Availability.VALUE:
+            raise ValueError(
+                "source PWM modulation configure result requires internal frequency readback"
+            )
+        _require_finite(
+            self.modulation.internal_frequency_hz.value,
+            "source PWM modulation configure result internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.modulation.internal_frequency_hz.value <= 0:
+            raise ValueError(
+                "source PWM modulation configure result internal_frequency_hz must be > 0"
+            )
+        if (
+            self.modulation.internal_waveform_kind.availability is not Availability.VALUE
+            or self.modulation.internal_waveform_kind.value is not SourceWaveformKind.SINE
+        ):
+            raise ValueError(
+                "source PWM modulation configure result requires internal sine readback"
             )
 
 
@@ -3874,6 +4040,14 @@ class SourceFmModulationConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourcePwmModulationConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_pwm_modulation_v2(
+        self,
+        request: SourcePwmModulationConfigureRequest,
+    ) -> SourcePwmModulationConfigureResult: ...
+
+
+@runtime_checkable
 class SourcePulseConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_pulse_v2(
         self,
@@ -4156,4 +4330,8 @@ __all__ = [
     "SourceFmModulationConfigureResult",
     "SourceFmModulationConfigureV2Driver",
     "SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourcePwmModulationConfigureRequest",
+    "SourcePwmModulationConfigureResult",
+    "SourcePwmModulationConfigureV2Driver",
+    "SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
 ]

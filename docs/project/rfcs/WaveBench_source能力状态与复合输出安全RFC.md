@@ -521,6 +521,15 @@ SourceFmModulationConfigureV2Driver
 SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+M6-A／内部 PWM 调制在上述清单末尾追加以下精确条目：
+
+```text
+SourcePwmModulationConfigureRequest
+SourcePwmModulationConfigureResult
+SourcePwmModulationConfigureV2Driver
+SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -555,6 +564,7 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | `source.modulation_configure_v2` | `configure_source_modulation_v2` | 内部 AM 配置 |
 | `source.modulation_pm_configure_v2` | `configure_source_pm_modulation_v2` | 独立 PM 配置 |
 | `source.modulation_fm_configure_v2` | `configure_source_fm_modulation_v2` | 独立 FM 配置 |
+| `source.modulation_pwm_configure_v2` | `configure_source_pwm_modulation_v2` | 独立 PWM 配置 |
 | `source.pulse_configure_v2` | `configure_source_pulse_v2` | Pulse 配置 |
 | `source.sweep_configure_v2` | `configure_source_sweep_v2` | Sweep 配置 |
 | `source.burst_configure_v2` | `configure_source_burst_v2` | Burst 配置 |
@@ -573,7 +583,7 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 不得由插件自行拼接字符串。
 
 R6／M6-A 将 `source.modulation_pm_configure_v2`、`source.burst_configure_v2` 与
-`source.modulation_fm_configure_v2` 明确加入已授权的窄 capability。
+`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2` 明确加入已授权的窄 capability。
 现有 `source.modulation_configure_v2` 保持内部 AM 的首版语义，不因 PM 子项扩张；分离 capability 使 PM-only
 插件不会改变 V1 AM route，也使 AM-only 插件无需提供 PM 入口。Burst capability 也不授权 arm、fire 或任何
 输出开启路径。
@@ -3232,8 +3242,35 @@ capability 独立决定。
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写
 capability 声明或实机验收。
 
-内部 PWM 与 Sweep 将在 FM 的公共合同、离线事务、CLI/run plan 和兼容测试完成后各自增加明确范围；它们目前仍是
-保留 ID，不因本 FM 子项自动注册或改变其 V1 route。
+### M6-A 下一子能力：内部 PWM 调制
+
+`source.modulation_pwm_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内部正弦 PWM。typed request 固定为
+`channel`、`internal_frequency_hz` 和恰好一个显式单位分支：`duty_deviation_percent` 或 `width_deviation_s`。
+配置完成后 PWM 必为 enabled、source 必为 `internal`、internal waveform 必为 `sine`。内部频率必须为有限正值；
+DUTY deviation 必须为 `[0, 50]` 的有限值，WIDTH deviation 必须为 `[0, 500000]` 秒的有限值。它不提供
+disable、partial patch、外部／通道调制源、内部波形选择、多参数组合、AM、FM、PM、ASK、FSK 或 PSK。
+
+为避免把秒单位伪装成百分比，`SourceModulationParameterKind` 在既有枚举末尾追加
+`width_deviation_s`。descriptor 必须同时声明 Modulation `READ`／`CONFIGURE`、`pwm`、`internal` 与
+`configuration_readable = true`；同一 channel 的 Output `READ` 与 output state readback 也为必需。profile 的
+`parameter_kinds` 必须至少包含 `duty_deviation_percent` 或 `width_deviation_s` 之一；核心在运行时按 request
+选择的分支检查该 parameter kind，因此设备可诚实声明其支持的 PWM 分支，不必用虚假默认值补齐另一个分支。
+
+该 operation 使用 `POTENTIAL_WHILE_OFF`，静态字段闭包为同一 channel 的 Modulation／Output 和仪器 Identity。
+后续事务使用 fresh consistent snapshot、目标 output OFF、单次 driver 写、独立 postcondition 和主写入后的最多一次
+V2 OFF recovery；配置本身不隐式开启输出，也不恢复调制状态。postcondition 必须确认 output 仍为 OFF，并逐项确认
+enabled、PWM、internal source、所选 deviation 分支、internal frequency 与 internal waveform。
+
+本子能力不要求调制包络、RMS、Noise 峰值、实际端接、共享功率或热模型；它仅授权 OFF 状态下的配置，
+不构成调制后输出 ON 的严格复合预算证明。`source.output_v2` 不会由 PWM 配置成功获得额外授权。
+
+双合同插件声明 `source.modulation_pwm_configure_v2` 后，V1 `configure_pwm_modulation` 与 restore 必须在
+仪器 I/O 前拒绝，而不是部分映射：V1 请求允许 disabled 及更多内部函数，不能无损映射到这个首版范围。
+V1-only 插件和未声明该 PWM V2 capability 的双合同插件继续走 V1 PWM 路径；AM、FM、PM 的 V1 route 按各自
+capability 独立决定。
+
+Sweep 将在 PWM 的公共合同、离线事务、CLI/run plan 和兼容测试完成后增加明确范围；它目前仍是保留 ID，
+不因本 PWM 子项自动注册或改变其 V1 route。
 
 ### R6 延后事项
 
