@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -11,10 +14,15 @@ from wavebench.services.run_plan import load_run_plan
 from wavebench.services.source_state import RestorableSourceState
 
 
+V1_RUN_JSON_GOLDEN_DIGESTS = (
+    Path(__file__).parent / "fixtures" / "v1-source-status-run-json.sha256"
+)
+
+
 def _plan(directory: Path):
     path = directory / "plan.toml"
     path.write_text('[[steps]]\nkind = "source.status"\n', encoding="utf-8")
-    return load_run_plan(path)
+    return replace(load_run_plan(path), path=Path("v1-source-status-plan.toml"))
 
 
 def _write(
@@ -54,13 +62,27 @@ def _write(
     return run_path.read_bytes()
 
 
+def _v1_run_json_golden_digest() -> str:
+    digests = {
+        name: digest
+        for name, digest in (
+            line.split(maxsplit=1)
+            for line in V1_RUN_JSON_GOLDEN_DIGESTS.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    }
+    return digests["crlf" if os.linesep == "\r\n" else "lf"]
+
+
 def test_empty_source_operation_namespace_preserves_v1_run_json_bytes() -> None:
     with TemporaryDirectory() as tmp:
         directory = Path(tmp)
         default_bytes = _write(directory)
-        explicit_none_bytes = _write(directory, source_operations=None)
+        expected_digest = _v1_run_json_golden_digest()
 
-        assert default_bytes == explicit_none_bytes
+        assert sha256(default_bytes).hexdigest() == expected_digest
+        for source_operations in (None, []):
+            assert _write(directory, source_operations=source_operations) == default_bytes
         run = json.loads(default_bytes)
         assert "source_operations" not in run
         assert run["restore"]["source_state_scope"] == "basic"

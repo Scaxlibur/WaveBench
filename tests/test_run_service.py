@@ -1321,6 +1321,8 @@ state = "on"
                 source.set_square_duty_cycle.assert_called_once_with(channel=2, duty_percent=25.0)
                 source.set_output.assert_called_once_with(channel=2, enabled=True)
                 self.assertEqual(len(result.steps), 6)
+                run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+                self.assertNotIn("source_operations", run_data)
 
     def test_runs_source_v2_steps_and_writes_operation_artifacts(self):
         with TemporaryDirectory() as tmp:
