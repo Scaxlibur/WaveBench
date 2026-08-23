@@ -528,8 +528,8 @@ def _require_text_list(value: object, label: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not value:
         raise ConfigError(f"Source conformance {label} must be a non-empty JSON array")
     result = tuple(_require_text(item, label) for item in value)
-    if len(set(result)) != len(result) or tuple(sorted(result)) != result:
-        raise ConfigError(f"Source conformance {label} must be sorted and unique")
+    if len(set(result)) != len(result):
+        raise ConfigError(f"Source conformance {label} must be unique")
     return result
 
 
