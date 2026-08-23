@@ -75,7 +75,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
     assert module.__all__[pulse_start : pulse_start + len(pulse_exports)] == pulse_exports
     match = re.search(r"M6-A／内部 PM 调制在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
     assert match is not None
-    assert module.__all__[pulse_start + len(pulse_exports) :] == match.group(1).splitlines()
+    pm_exports = match.group(1).splitlines()
+    pm_start = pulse_start + len(pulse_exports)
+    assert module.__all__[pm_start : pm_start + len(pm_exports)] == pm_exports
+    match = re.search(
+        r"M6-A／内部 Triggered Burst 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[pm_start + len(pm_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -149,6 +158,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "trigger_sources",
             "timing_readable",
             "gate_readable",
+            "triggered_internal_configuration_readable",
         ),
         "SourcePulseCapabilityProfile": (
             "hold_modes",
@@ -266,6 +276,14 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "internal_frequency_hz",
         ),
         "SourcePmModulationConfigureResult": ("channel", "modulation", "output_enabled"),
+        "SourceBurstConfigureRequest": (
+            "channel",
+            "cycles",
+            "phase_deg",
+            "internal_period_s",
+            "delay_s",
+        ),
+        "SourceBurstConfigureResult": ("channel", "burst", "output_enabled"),
         "SourcePulseConfigureRequest": (
             "channel",
             "width_s",
@@ -441,6 +459,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
+        "source.burst_configure_v2": ("configure_source_burst_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
@@ -678,6 +697,67 @@ def test_source_v2_pm_modulation_write_models_are_closed_and_serializable() -> N
             replace(
                 modulation,
                 kind=Observed.value_of(module.SourceModulationKind.AM),
+            ),
+            False,
+        )
+
+
+def test_source_v2_burst_write_models_are_closed_and_serializable() -> None:
+    burst = module.BurstFacet(
+        enabled=Observed.value_of(True),
+        mode=Observed.value_of(module.SourceBurstMode.TRIGGERED),
+        cycles=Observed.value_of(12),
+        phase_deg=Observed.value_of(30.0),
+        internal_period_s=Observed.value_of(0.25),
+        delay_s=Observed.value_of(0.5),
+        gate_polarity=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+        trigger=Observed.value_of(
+            module.SourceTriggerState(
+                source=Observed.value_of(module.SourceTriggerSource.INTERNAL),
+                slope=Observed.value_of(module.SourceTriggerSlope.POSITIVE),
+                output=Observed.value_of(module.SourceTriggerOutput.OFF),
+            )
+        ),
+    )
+    request = module.SourceBurstConfigureRequest(
+        channel=1,
+        cycles=12,
+        phase_deg=30.0,
+        internal_period_s=0.25,
+        delay_s=0.5,
+    )
+    result = module.SourceBurstConfigureResult(1, burst, False)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceBurstConfigureRequest",
+        "channel": 1,
+        "cycles": 12,
+        "phase_deg": 30.0,
+        "internal_period_s": 0.25,
+        "delay_s": 0.5,
+    }
+    assert result.burst.mode.value is module.SourceBurstMode.TRIGGERED
+    with pytest.raises(ValueError, match="must be <= 500000"):
+        module.SourceBurstConfigureRequest(1, 500_001, 30.0, 0.25, 0.5)
+    with pytest.raises(ValueError, match="must be > 0"):
+        module.SourceBurstConfigureRequest(1, 12, 30.0, 0.0, 0.5)
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceBurstConfigureResult(1, burst, True)
+    with pytest.raises(ValueError, match="internal trigger readback"):
+        module.SourceBurstConfigureResult(
+            1,
+            replace(
+                burst,
+                trigger=Observed.value_of(
+                    module.SourceTriggerState(
+                        source=Observed.value_of(module.SourceTriggerSource.EXTERNAL),
+                        slope=Observed.value_of(module.SourceTriggerSlope.POSITIVE),
+                        output=Observed.value_of(module.SourceTriggerOutput.OFF),
+                    )
+                ),
             ),
             False,
         )
@@ -1269,6 +1349,121 @@ def test_source_v2_pulse_write_requires_width_direction_and_readback() -> None:
             descriptor,
             type(
                 "MissingPulseWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                },
+            )(),
+        )
+
+
+def test_source_v2_burst_write_requires_triggered_internal_direction_and_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    burst = module.SourceFeatureCapability(
+        feature=module.SourceFeature.BURST,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourceBurstCapabilityProfile(
+            modes=(module.SourceBurstMode.TRIGGERED,),
+            trigger_sources=(module.SourceTriggerSource.INTERNAL,),
+            timing_readable=True,
+            gate_readable=False,
+            triggered_internal_configuration_readable=True,
+        ),
+    )
+    burst_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.BURST,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.BURST,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(basic, burst, output),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                burst_query,
+                extensions.query_contract.facets[2],
+            ),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=("source.snapshot_v2", "source.burst_configure_v2"),
+    )
+
+    class BurstWriteDriver(SourceV2FakeDriver):
+        def configure_source_burst_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, BurstWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="CONFIGURE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(burst, directions=(module.SourceFeatureDirection.READ,)),
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable internal triggered burst configuration"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(
+                            burst,
+                            profile=replace(
+                                burst.profile,
+                                triggered_internal_configuration_readable=False,
+                            ),
+                        ),
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable output state"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        burst,
+                        replace(output, profile=replace(output.profile, output_readable=False)),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="configure_source_burst_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingBurstWriteDriver",
                 (),
                 {
                     "close": lambda self: None,

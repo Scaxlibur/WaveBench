@@ -557,12 +557,17 @@ class SourceBurstCapabilityProfile:
     trigger_sources: tuple[SourceTriggerSource, ...]
     timing_readable: bool
     gate_readable: bool
+    triggered_internal_configuration_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.modes, SourceBurstMode, "burst modes")
         _require_enum_tuple(self.trigger_sources, SourceTriggerSource, "burst trigger_sources")
         _require_bool(self.timing_readable, "burst timing_readable")
         _require_bool(self.gate_readable, "burst gate_readable")
+        _require_bool(
+            self.triggered_internal_configuration_readable,
+            "burst triggered_internal_configuration_readable",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1106,6 +1111,37 @@ SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     v1_overlapping_routes=(
         SourceV1WriteRouteId.CONFIGURE_PM,
         SourceV1WriteRouteId.RESTORE,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.burst_configure_v2",
+    capability="source.burst_configure_v2",
+    feature=SourceFeature.BURST,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BURST,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.BURST,),
+    postcondition_fields=(
+        SourceFieldId.BURST,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_BURST,
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.TRIGGER_BURST,
     ),
     operation_timeout_ms=5_000,
     main_max_steps=1,
@@ -2336,6 +2372,40 @@ class SourcePmModulationConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceBurstConfigureRequest:
+    channel: int
+    cycles: int
+    phase_deg: float
+    internal_period_s: float
+    delay_s: float
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source burst configure channel", minimum=1)
+        _require_int(self.cycles, "source burst configure cycles", minimum=1)
+        if self.cycles > 500_000:
+            raise ValueError("source burst configure cycles must be <= 500000")
+        _require_finite(
+            self.phase_deg,
+            "source burst configure phase_deg",
+            minimum=0.0,
+            maximum=360.0,
+        )
+        _require_finite(
+            self.internal_period_s,
+            "source burst configure internal_period_s",
+            minimum=0.0,
+        )
+        if self.internal_period_s <= 0:
+            raise ValueError("source burst configure internal_period_s must be > 0")
+        _require_finite(
+            self.delay_s,
+            "source burst configure delay_s",
+            minimum=0.0,
+            maximum=85.0,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourcePulseConfigureRequest:
     channel: int
     width_s: float
@@ -2689,6 +2759,71 @@ class SourcePmModulationConfigureResult:
             raise ValueError(
                 "source PM modulation configure result requires internal sine readback"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBurstConfigureResult:
+    channel: int
+    burst: BurstFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source burst configure result channel", minimum=1)
+        if not isinstance(self.burst, BurstFacet):
+            raise ValueError("source burst configure result burst has an invalid type")
+        _require_bool(self.output_enabled, "source burst configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source burst configure result requires output_enabled=False")
+        if (
+            self.burst.enabled.availability is not Availability.VALUE
+            or self.burst.enabled.value is not True
+        ):
+            raise ValueError("source burst configure result requires enabled burst readback")
+        if (
+            self.burst.mode.availability is not Availability.VALUE
+            or self.burst.mode.value is not SourceBurstMode.TRIGGERED
+        ):
+            raise ValueError("source burst configure result requires triggered mode readback")
+        values: dict[str, int | float] = {}
+        for label, observed in (
+            ("cycles", self.burst.cycles),
+            ("phase_deg", self.burst.phase_deg),
+            ("internal_period_s", self.burst.internal_period_s),
+            ("delay_s", self.burst.delay_s),
+        ):
+            if observed.availability is not Availability.VALUE:
+                raise ValueError(f"source burst configure result requires {label} readback")
+            values[label] = observed.value
+        SourceBurstConfigureRequest(
+            channel=self.channel,
+            cycles=values["cycles"],  # type: ignore[arg-type]
+            phase_deg=values["phase_deg"],  # type: ignore[arg-type]
+            internal_period_s=values["internal_period_s"],  # type: ignore[arg-type]
+            delay_s=values["delay_s"],  # type: ignore[arg-type]
+        )
+        if self.burst.trigger.availability is not Availability.VALUE or not isinstance(
+            self.burst.trigger.value,
+            SourceTriggerState,
+        ):
+            raise ValueError("source burst configure result requires trigger readback")
+        trigger = self.burst.trigger.value
+        if (
+            trigger.source.availability is not Availability.VALUE
+            or trigger.source.value is not SourceTriggerSource.INTERNAL
+        ):
+            raise ValueError("source burst configure result requires internal trigger readback")
+        if (
+            trigger.slope.availability is not Availability.VALUE
+            or trigger.slope.value is not SourceTriggerSlope.POSITIVE
+        ):
+            raise ValueError(
+                "source burst configure result requires positive trigger slope readback"
+            )
+        if (
+            trigger.output.availability is not Availability.VALUE
+            or trigger.output.value is not SourceTriggerOutput.OFF
+        ):
+            raise ValueError("source burst configure result requires trigger output OFF readback")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3587,6 +3722,14 @@ class SourcePmModulationConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceBurstConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_burst_v2(
+        self,
+        request: SourceBurstConfigureRequest,
+    ) -> SourceBurstConfigureResult: ...
+
+
+@runtime_checkable
 class SourcePulseConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_pulse_v2(
         self,
@@ -3861,4 +4004,8 @@ __all__ = [
     "SourcePmModulationConfigureResult",
     "SourcePmModulationConfigureV2Driver",
     "SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceBurstConfigureRequest",
+    "SourceBurstConfigureResult",
+    "SourceBurstConfigureV2Driver",
+    "SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT",
 ]
