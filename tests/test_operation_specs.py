@@ -9,6 +9,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
@@ -51,6 +52,11 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
         ),
         (
             SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-harmonics",
+            ("source_v2", "output_must_be_off"),
+        ),
+        (
+            SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT,
             "source-v2-harmonics",
             ("source_v2", "output_must_be_off"),
         ),
@@ -137,6 +143,9 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
     assert SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT.energy_effect is (
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
     assert SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (

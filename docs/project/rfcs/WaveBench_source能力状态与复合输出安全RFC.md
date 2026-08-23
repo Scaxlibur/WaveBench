@@ -1,13 +1,13 @@
 # WaveBench Source V2 能力、状态与复合输出安全 RFC
 
 > 状态：`Accepted`
-> 修订：`R6`
+> 修订：`R7`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 子项已进入核心
-> `0.8.24` 开发线；R6 已接受。
+> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic 配置／关闭、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 子项已进入核心
+> `0.8.24` 开发线；R7 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2` 和
-> `source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
+> `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
 > M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 已完成；
 > 在该里程碑范围内，Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 与内部 Sweep 子项均具备公开 Service、CLI 与 run plan 入口。
 
@@ -52,6 +52,7 @@ Harmonic、Modulation、Sweep、Burst、Pulse、Noise、DC、ARB、Counter、Com
 | R4 | Accepted | 冻结 M4 的 Source operation contract、affected closure、固定 phase、core-owned baseline 与离线事务协调者；不注册任何 V2 写 capability |
 | R5 | Accepted | 冻结 M4.5 的 V1 写路由清单和 additive artifact 边界，并实现 C1 的受管 wheel/descriptor PEP 440 交叉门与 V1/V2 兼容 fixture；不注册任何 V2 写 capability |
 | R6 | Accepted | 冻结基本写入安全、核心接口归属和兼容边界；授权按 M5-A → M5-B → M5-C → M5-D → C2 → M6-A → M6-B → M6-C → M7 → C3 实施 |
+| R7 | Accepted | 为已关闭输出的 Harmonic 状态增加独立关闭 capability；不改变 basic 写入、V1 签名或输出 ON 准入 |
 
 ## Accepted R5 范围
 
@@ -474,6 +475,10 @@ SourceHarmonicConfigureRequest
 SourceHarmonicConfigureResult
 SourceHarmonicConfigureV2Driver
 SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT
+SourceHarmonicDisableRequest
+SourceHarmonicDisableResult
+SourceHarmonicDisableV2Driver
+SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT
 ```
 
 M6-A／内部 AM 调制在上述清单末尾追加以下精确条目：
@@ -604,6 +609,7 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | `source.basic_configure_v2` | `configure_source_basic_v2` | 基础函数、频率、Vpp、偏置和方波参数 |
 | `source.output_v2` | `set_source_output_v2` | 单独的 ON/OFF 转换 |
 | `source.harmonics_configure_v2` | `configure_source_harmonics_v2` | 谐波配置 |
+| `source.harmonics_disable_v2` | `disable_source_harmonics_v2` | 关闭 Harmonic 状态 |
 | `source.modulation_configure_v2` | `configure_source_modulation_v2` | 内部 AM 配置 |
 | `source.modulation_pm_configure_v2` | `configure_source_pm_modulation_v2` | 独立 PM 配置 |
 | `source.modulation_fm_configure_v2` | `configure_source_fm_modulation_v2` | 独立 FM 配置 |

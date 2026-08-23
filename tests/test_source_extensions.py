@@ -302,6 +302,8 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
         ),
         "SourceHarmonicConfigureRequest": ("channel", "order", "preset"),
         "SourceHarmonicConfigureResult": ("channel", "harmonics", "output_enabled"),
+        "SourceHarmonicDisableRequest": ("channel",),
+        "SourceHarmonicDisableResult": ("channel", "harmonics", "output_enabled"),
         "SourceModulationConfigureRequest": (
             "channel",
             "depth_percent",
@@ -528,6 +530,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
+        "source.harmonics_disable_v2": ("disable_source_harmonics_v2",),
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
@@ -690,6 +693,47 @@ def test_source_v2_harmonic_write_models_are_closed_and_serializable() -> None:
                     SourceReasonCode.NOT_REQUESTED,
                 ),
             ),
+            False,
+        )
+
+
+def test_source_v2_harmonic_disable_models_are_closed_and_serializable() -> None:
+    disabled_harmonics = module.HarmonicFacet(
+        enabled=Observed.value_of(False),
+        completeness=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+        maximum_supported_order=Observed.value_of(16),
+        components=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+        configured_order=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+        preset=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+    )
+    request = module.SourceHarmonicDisableRequest(channel=1)
+    result = module.SourceHarmonicDisableResult(1, disabled_harmonics, False)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceHarmonicDisableRequest",
+        "channel": 1,
+    }
+    assert result.harmonics.enabled.value is False
+    with pytest.raises(ValueError, match="must be >= 1"):
+        module.SourceHarmonicDisableRequest(channel=0)
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceHarmonicDisableResult(1, disabled_harmonics, True)
+    with pytest.raises(ValueError, match="disabled harmonic readback"):
+        module.SourceHarmonicDisableResult(
+            1,
+            replace(disabled_harmonics, enabled=Observed.value_of(True)),
             False,
         )
 
@@ -1624,6 +1668,78 @@ def test_source_v2_harmonic_write_requires_direction_and_configuration_readback(
             descriptor,
             type(
                 "MissingHarmonicWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                },
+        )(),
+    )
+
+
+def test_source_v2_harmonic_disable_requires_direction_and_state_readback() -> None:
+    extensions = source_extensions_with_harmonics()
+    basic, harmonic, output = extensions.features
+    disableable_harmonic = replace(
+        harmonic,
+        directions=(SourceFeatureDirection.DISABLE, SourceFeatureDirection.READ),
+    )
+    disableable_extensions = replace(
+        extensions,
+        features=(basic, disableable_harmonic, output),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=disableable_extensions),
+        capabilities=("source.snapshot_v2", "source.harmonics_disable_v2"),
+    )
+
+    class HarmonicDisableDriver(SourceV2FakeDriver):
+        def disable_source_harmonics_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, HarmonicDisableDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="DISABLE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    disableable_extensions,
+                    features=(basic, harmonic, output),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="must declare read"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    disableable_extensions,
+                    features=(
+                        basic,
+                        replace(
+                            disableable_harmonic,
+                            directions=(SourceFeatureDirection.DISABLE,),
+                        ),
+                        output,
+                    ),
+                    query_contract=replace(
+                        disableable_extensions.query_contract,
+                        facets=tuple(
+                            facet
+                            for facet in disableable_extensions.query_contract.facets
+                            if facet.feature is not module.SourceFeature.HARMONICS
+                        ),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="disable_source_harmonics_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingHarmonicDisableDriver",
                 (),
                 {
                     "close": lambda self: None,

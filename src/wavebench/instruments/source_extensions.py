@@ -1096,6 +1096,36 @@ SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
 )
 
 
+SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.harmonics_disable_v2",
+    capability="source.harmonics_disable_v2",
+    feature=SourceFeature.HARMONICS,
+    direction=SourceFeatureDirection.DISABLE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.HARMONICS,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.HARMONICS,),
+    postcondition_fields=(
+        SourceFieldId.HARMONICS,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_HARMONICS,
+        SourceV1WriteRouteId.RESTORE,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
 SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation="source.modulation_configure_v2",
     capability="source.modulation_configure_v2",
@@ -2792,6 +2822,14 @@ class SourceHarmonicConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceHarmonicDisableRequest:
+    channel: int
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source harmonic disable channel", minimum=1)
+
+
+@dataclass(frozen=True, slots=True)
 class SourceModulationConfigureRequest:
     channel: int
     depth_percent: float
@@ -3208,6 +3246,26 @@ class SourceHarmonicConfigureResult:
             raise ValueError("source harmonic configure result requires configured_order readback")
         if self.harmonics.preset.availability is not Availability.VALUE:
             raise ValueError("source harmonic configure result requires preset readback")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceHarmonicDisableResult:
+    channel: int
+    harmonics: HarmonicFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source harmonic disable result channel", minimum=1)
+        if not isinstance(self.harmonics, HarmonicFacet):
+            raise ValueError("source harmonic disable result harmonics has an invalid type")
+        _require_bool(self.output_enabled, "source harmonic disable result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source harmonic disable result requires output_enabled=False")
+        if (
+            self.harmonics.enabled.availability is not Availability.VALUE
+            or self.harmonics.enabled.value is not False
+        ):
+            raise ValueError("source harmonic disable result requires disabled harmonic readback")
 
 
 @dataclass(frozen=True, slots=True)
@@ -4690,6 +4748,14 @@ class SourceHarmonicConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceHarmonicDisableV2Driver(InstrumentDriver, Protocol):
+    def disable_source_harmonics_v2(
+        self,
+        request: SourceHarmonicDisableRequest,
+    ) -> SourceHarmonicDisableResult: ...
+
+
+@runtime_checkable
 class SourceModulationConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_modulation_v2(
         self,
@@ -5055,6 +5121,10 @@ __all__ = [
     "SourceHarmonicConfigureResult",
     "SourceHarmonicConfigureV2Driver",
     "SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceHarmonicDisableRequest",
+    "SourceHarmonicDisableResult",
+    "SourceHarmonicDisableV2Driver",
+    "SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT",
     "SourceModulationConfigureRequest",
     "SourceModulationConfigureResult",
     "SourceModulationConfigureV2Driver",

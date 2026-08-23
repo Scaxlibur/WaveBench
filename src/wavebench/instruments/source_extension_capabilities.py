@@ -50,6 +50,7 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
+        "source.harmonics_disable_v2": ("disable_source_harmonics_v2",),
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
@@ -76,6 +77,7 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
     {
         "source.basic_configure_v2",
         "source.harmonics_configure_v2",
+        "source.harmonics_disable_v2",
         "source.modulation_configure_v2",
         "source.pulse_configure_v2",
         "source.modulation_pm_configure_v2",
@@ -367,6 +369,26 @@ def _validate_write_contract(
         if not configurable <= output_readable:
             raise ConfigError(
                 "source.harmonics_configure_v2 requires readable output state on every channel"
+            )
+
+    if "source.harmonics_disable_v2" in capabilities:
+        disableable = _channels_with_direction(
+            extensions,
+            SourceFeature.HARMONICS,
+            SourceFeatureDirection.DISABLE,
+        )
+        if not disableable:
+            raise ConfigError(
+                "source.harmonics_disable_v2 requires harmonics feature DISABLE directions"
+            )
+        readable = _channels_with_harmonic_enabled_readback(extensions)
+        if not disableable <= readable:
+            raise ConfigError(
+                "source.harmonics_disable_v2 requires readable harmonic state on every channel"
+            )
+        if not disableable <= output_readable:
+            raise ConfigError(
+                "source.harmonics_disable_v2 requires readable output state on every channel"
             )
 
     if "source.modulation_configure_v2" in capabilities:
@@ -732,6 +754,23 @@ def _channels_with_harmonic_configuration_readback(
     )
 
 
+def _channels_with_harmonic_enabled_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.HARMONICS
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceHarmonicCapabilityProfile)
+        )
+        for channel in feature.channels
+    )
+
+
 def _channels_with_output_readback(extensions: SourceDescriptorExtensions) -> frozenset[int]:
     return frozenset(
         channel
@@ -990,6 +1029,9 @@ def _validate_declared_write_directions(
         ),
         (SourceFeature.HARMONICS, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.harmonics_configure_v2"}
+        ),
+        (SourceFeature.HARMONICS, SourceFeatureDirection.DISABLE): frozenset(
+            {"source.harmonics_disable_v2"}
         ),
         (SourceFeature.MODULATION, SourceFeatureDirection.CONFIGURE): frozenset(
             {
