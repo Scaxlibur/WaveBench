@@ -66,6 +66,7 @@ from wavebench.instruments.source_extensions import (
     ModulationFacet,
     Observed,
     OutputFacet,
+    PulseFacet,
     PatchAction,
     PatchValue,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -74,6 +75,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
+    SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
     SnapshotConsistencyState,
     SourceDescriptorExtensions,
     SourceAmplitude,
@@ -103,6 +105,11 @@ from wavebench.instruments.source_extensions import (
     SourceOutputRequest,
     SourceOutputResult,
     SourceOutputV2Driver,
+    SourcePulseCapabilityProfile,
+    SourcePulseConfigureRequest,
+    SourcePulseConfigureResult,
+    SourcePulseConfigureV2Driver,
+    SourcePulseHoldBasis,
     SourceScopeRef,
     SourceSnapshotV2,
     SourceSnapshotV2Driver,
@@ -159,6 +166,15 @@ class _SourceModulationConfigureV2Transaction:
     """Core transaction result shared by the internal AM public route."""
 
     result: SourceModulationConfigureResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourcePulseConfigureV2Transaction:
+    """Core transaction result shared by the WIDTH Pulse public route."""
+
+    result: SourcePulseConfigureResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
@@ -379,6 +395,20 @@ class SourceService(SessionStateAliasMixin):
         """Configure one OFF source channel with the declared internal AM scope."""
 
         transaction = self._configure_modulation_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_pulse_v2(
+        self,
+        request: SourcePulseConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourcePulseConfigureResult, dict[str, object]]:
+        """Configure one OFF source channel with the declared WIDTH Pulse scope."""
+
+        transaction = self._configure_pulse_v2_transaction(
             request,
             correlation_id=correlation_id,
         )
@@ -1294,6 +1324,193 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _configure_pulse_v2_transaction(
+        self,
+        request: SourcePulseConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> _SourcePulseConfigureV2Transaction:
+        """Execute one declared WIDTH Pulse transaction while output is OFF."""
+
+        operation = "source.pulse_configure_v2"
+        if not isinstance(request, SourcePulseConfigureRequest):
+            raise ConfigError(f"{operation} requires SourcePulseConfigureRequest")
+        self._require(
+            operation,
+            "source.snapshot_v2",
+            "source.pulse_configure_v2",
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            fields = self._source_pulse_v2_fields(request.channel)
+            pulse_field = next(field for field in fields if field.field is SourceFieldId.PULSE)
+            output_field = next(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            target_scope = SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel)
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(target_scope,),
+                emergency_off_outputs=(target_scope,),
+                restore_order=(),
+                non_restorable_fields=(output_field, pulse_field),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourcePulseConfigureResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_pulse, preflight_output = self._source_v2_pulse_preflight_target(
+                        preflight_snapshot,
+                        request.channel,
+                        operation=operation,
+                    )
+                    self._validate_source_pulse_v2_preflight(
+                        request,
+                        preflight_snapshot,
+                        preflight_pulse,
+                        preflight_output,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest((request.channel, preflight_pulse, preflight_output))
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write"},
+                    fields=(pulse_field,),
+                    max_steps=SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        result = cast(
+                            SourcePulseConfigureV2Driver,
+                            source,
+                        ).configure_source_pulse_v2(request)
+                        self._validate_source_pulse_v2_result(request, result)
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=(output_field, pulse_field),
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            postcondition_pulse, postcondition_output = (
+                                self._source_v2_pulse_target(
+                                    postcondition_snapshot,
+                                    request.channel,
+                                    operation=operation,
+                                )
+                            )
+                            assert result is not None
+                            self._validate_source_pulse_v2_postcondition(
+                                request,
+                                result,
+                                postcondition_snapshot,
+                                postcondition_pulse,
+                                postcondition_output,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=(output_field, pulse_field),
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_output_off(
+                                context,
+                                source,
+                                request.channel,
+                                extensions,
+                                output_field,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_pulse_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourcePulseConfigureV2Transaction(
+                    result=result,
+                    artifact=self._source_pulse_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
     @staticmethod
     def _source_basic_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
         target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
@@ -1347,6 +1564,30 @@ class SourceService(SessionStateAliasMixin):
         target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
         fields = (
             SourceFieldRef(SourceFieldId.MODULATION, target),
+            SourceFieldRef(SourceFieldId.OUTPUT, target),
+            SourceFieldRef(
+                SourceFieldId.IDENTITY,
+                SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _source_pulse_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
+        target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+        fields = (
+            SourceFieldRef(SourceFieldId.PULSE, target),
             SourceFieldRef(SourceFieldId.OUTPUT, target),
             SourceFieldRef(
                 SourceFieldId.IDENTITY,
@@ -1449,6 +1690,28 @@ class SourceService(SessionStateAliasMixin):
         return target.modulation.value, target.output.value
 
     @staticmethod
+    def _source_v2_pulse_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[PulseFacet, OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.pulse.availability is not Availability.VALUE or not isinstance(
+            target.pulse.value,
+            PulseFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable pulse state")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.pulse.value, target.output.value
+
+    @staticmethod
     def _source_v2_harmonic_preflight_target(
         snapshot: SourceSnapshotV2,
         channel: int,
@@ -1491,6 +1754,28 @@ class SourceService(SessionStateAliasMixin):
         ):
             raise ConfigError(f"{operation} requires readable output state")
         return target.modulation, target.output.value
+
+    @staticmethod
+    def _source_v2_pulse_preflight_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[Observed[PulseFacet], OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.pulse.availability is Availability.VALUE and not isinstance(
+            target.pulse.value,
+            PulseFacet,
+        ):
+            raise ConfigError(f"{operation} pulse state has an invalid type")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.pulse, target.output.value
 
     @staticmethod
     def _source_v2_output_target(
@@ -1806,6 +2091,111 @@ class SourceService(SessionStateAliasMixin):
         self._validate_source_modulation_v2_readback(request, modulation, operation=operation)
         if result.modulation != modulation:
             raise ConfigError(f"{operation} result readback does not match postcondition")
+
+    @staticmethod
+    def _source_pulse_runtime_profile(
+        snapshot: SourceSnapshotV2,
+        *,
+        channel: int,
+        operation: str,
+    ) -> SourcePulseCapabilityProfile:
+        feature = next(
+            (
+                candidate
+                for candidate in snapshot.runtime_profile.features
+                if candidate.feature is SourceFeature.PULSE
+                and candidate.scope is SourceFacetScope.CHANNEL
+                and channel in candidate.channels
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(feature.profile, SourcePulseCapabilityProfile):
+            raise ConfigError(f"{operation} is not available for the runtime target channel")
+        return feature.profile
+
+    def _validate_source_pulse_v2_preflight(
+        self,
+        request: SourcePulseConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        pulse: Observed[PulseFacet],
+        output: OutputFacet,
+    ) -> None:
+        del pulse
+        operation = "source.pulse_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} requires target output OFF")
+        profile = self._source_pulse_runtime_profile(
+            snapshot,
+            channel=request.channel,
+            operation=operation,
+        )
+        if SourcePulseHoldBasis.WIDTH not in profile.hold_modes:
+            raise ConfigError(f"{operation} WIDTH hold is not supported by the runtime profile")
+        if not profile.delay_readable or not profile.transitions_readable:
+            raise ConfigError(f"{operation} requires delay and transition readback")
+        if not profile.width_configuration_readable:
+            raise ConfigError(f"{operation} requires configured WIDTH pulse readback")
+
+    @staticmethod
+    def _validate_source_pulse_v2_readback(
+        request: SourcePulseConfigureRequest,
+        pulse: PulseFacet,
+        *,
+        operation: str,
+    ) -> None:
+        if (
+            pulse.hold_basis.availability is not Availability.VALUE
+            or pulse.hold_basis.value is not SourcePulseHoldBasis.WIDTH
+        ):
+            raise ConfigError(f"{operation} postcondition does not report WIDTH hold")
+        for label, observed, expected in (
+            ("width", pulse.width_s, request.width_s),
+            ("delay", pulse.delay_s, request.delay_s),
+            ("leading transition", pulse.leading_transition_s, request.leading_transition_s),
+            ("trailing transition", pulse.trailing_transition_s, request.trailing_transition_s),
+        ):
+            if observed.availability is not Availability.VALUE or observed.value != expected:
+                raise ConfigError(f"{operation} {label} readback does not match request")
+
+    def _validate_source_pulse_v2_result(
+        self,
+        request: SourcePulseConfigureRequest,
+        result: object,
+    ) -> None:
+        operation = "source.pulse_configure_v2"
+        if not isinstance(result, SourcePulseConfigureResult):
+            raise ConfigError(
+                "configure_source_pulse_v2() returned an invalid SourcePulseConfigureResult"
+            )
+        if result.channel != request.channel:
+            raise ConfigError(f"{operation} result channel does not match request")
+        if result.output_enabled:
+            raise ConfigError(f"{operation} result reports output ON")
+        self._validate_source_pulse_v2_readback(
+            request,
+            result.pulse,
+            operation=operation,
+        )
+
+    def _validate_source_pulse_v2_postcondition(
+        self,
+        request: SourcePulseConfigureRequest,
+        result: SourcePulseConfigureResult,
+        snapshot: SourceSnapshotV2,
+        pulse: PulseFacet,
+        output: OutputFacet,
+    ) -> None:
+        del result
+        operation = "source.pulse_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} postcondition reports output ON")
+        self._validate_source_pulse_v2_readback(request, pulse, operation=operation)
 
     def _validate_source_basic_v2_result(
         self,
@@ -2325,6 +2715,60 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_pulse_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourcePulseConfigureRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourcePulseConfigureResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": "source.pulse_configure_v2",
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_channel": request.channel,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {"result": source_v2_to_data(result)}
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "output_expected": "off",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_output_v2_artifact(
         self,
         *,
@@ -2410,6 +2854,16 @@ class SourceService(SessionStateAliasMixin):
     ) -> None:
         try:
             setattr(exc, "source_operation_artifact", self._source_modulation_v2_artifact(**kwargs))
+        except Exception:
+            pass
+
+    def _attach_source_pulse_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(exc, "source_operation_artifact", self._source_pulse_v2_artifact(**kwargs))
         except Exception:
             pass
 
@@ -2733,6 +3187,10 @@ class SourceService(SessionStateAliasMixin):
         configuration: SourcePulseConfiguration,
         channel: int | None = None,
     ) -> SourcePulseProfile:
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.CONFIGURE_PULSE,
+            "source.pulse_configure_v2",
+        )
         if not isinstance(configuration, SourcePulseConfiguration):
             raise ConfigError("source pulse configuration must be SourcePulseConfiguration")
         source_cfg = self._source_config()
@@ -2874,6 +3332,7 @@ class SourceService(SessionStateAliasMixin):
             "source.basic_configure_v2",
             "source.harmonics_configure_v2",
             "source.modulation_configure_v2",
+            "source.pulse_configure_v2",
             "source.output_v2",
         )
         self.set_output(channel=state.channel, enabled=False)
