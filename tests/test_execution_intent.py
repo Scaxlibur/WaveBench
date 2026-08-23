@@ -114,6 +114,12 @@ channel = 1
 [[steps]]
 kind = "source.output_disable_v2"
 channel = 1
+
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 1
+order = 8
+preset = "odd"
 """,
             )
         )
@@ -124,8 +130,11 @@ channel = 1
         "source.basic_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
+        "source.harmonics_configure_v2",
     ]
     assert intent.operations[0]["parameters"]["frequency_hz"] == 2000.0
+    assert intent.operations[3]["parameters"] == {"channel": 1, "order": 8, "preset": "odd"}
+    assert intent.operations[3]["risk_flags"] == ["source_v2", "output_must_be_off"]
 
 
 def test_run_rejects_intent_mismatch_before_opening_instrument_services() -> None:

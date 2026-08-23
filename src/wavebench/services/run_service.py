@@ -26,6 +26,8 @@ from wavebench.instruments.source_extensions import (
     PatchValue,
     SourceBasicConfigureRequest,
     SourceBasicPatch,
+    SourceHarmonicConfigureRequest,
+    SourceHarmonicPreset,
     SourceOutputRequest,
     SourceWaveformKind,
 )
@@ -404,6 +406,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.basic_configure_v2")
             elif step.kind in {"source.output_enable_v2", "source.output_disable_v2"}:
                 add("source", "source.snapshot_v2", "source.output_v2")
+            elif step.kind == "source.harmonics_configure_v2":
+                add("source", "source.snapshot_v2", "source.harmonics_configure_v2")
             elif step.kind == "power.status":
                 add("power", "power.status")
             elif step.kind == "power.set":
@@ -1129,6 +1133,15 @@ class RunService:
         elif step.kind == "source.output_disable_v2":
             _, source_operation = self._source_service(services=services).set_output_v2(
                 SourceOutputRequest(channel=step.fields["channel"], enabled=False)
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.harmonics_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_harmonics_v2(
+                SourceHarmonicConfigureRequest(
+                    channel=step.fields["channel"],
+                    order=step.fields["order"],
+                    preset=SourceHarmonicPreset(step.fields["preset"]),
+                )
             )
             artifact = {"source_operation": source_operation}
         elif step.kind == "source.set_freq":

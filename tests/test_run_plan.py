@@ -308,6 +308,12 @@ channel = 2
 [[steps]]
 kind = "source.output_disable_v2"
 channel = 2
+
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 8
+preset = "ODD"
 """))
 
         basic = plan.steps[0]
@@ -317,6 +323,8 @@ channel = 2
         self.assertEqual(basic.fields["amplitude_vpp"], 0.0)
         self.assertEqual(basic.fields["offset_v"], -0.2)
         self.assertEqual(basic.fields["square_duty_cycle_percent"], 100.0)
+        harmonic = plan.steps[3]
+        self.assertEqual(harmonic.fields, {"channel": 2, "order": 8, "preset": "odd"})
 
         empty_patch = self._write_plan("""
 [[steps]]
@@ -335,6 +343,36 @@ waveform_kind = "arbitrary"
         with self.assertRaisesRegex(ConfigError, "waveform_kind must be one of"):
             load_run_plan(arbitrary)
 
+        order_too_low = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 1
+preset = "odd"
+""")
+        with self.assertRaisesRegex(ConfigError, "order must be >= 2"):
+            load_run_plan(order_too_low)
+
+        fractional_order = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 2.5
+preset = "odd"
+""")
+        with self.assertRaisesRegex(ConfigError, "order must be an integer >= 2"):
+            load_run_plan(fractional_order)
+
+        unsupported_preset = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 8
+preset = "user"
+""")
+        with self.assertRaisesRegex(ConfigError, "preset must be one of"):
+            load_run_plan(unsupported_preset)
+
 
     def test_format_run_plan_schema_lists_expect_and_power_output(self):
         text = format_run_plan_schema()
@@ -342,6 +380,7 @@ waveform_kind = "arbitrary"
         self.assertIn("source.arb_load", text)
         self.assertIn("source.basic_configure_v2", text)
         self.assertIn("source.output_enable_v2", text)
+        self.assertIn("source.harmonics_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)

@@ -33,6 +33,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.basic_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
+        "source.harmonics_configure_v2",
     }
     assert all(require_operation_spec(operation).effect == "write" for operation in inventoried_operations)
 
@@ -55,6 +56,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.basic_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
+        "source.harmonics_configure_v2",
     }
     assert {item.removeprefix("run-plan.") for item in entrypoints if item.startswith("run-plan.")} == expected_v1_run_steps
     assert {
@@ -70,6 +72,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.basic_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
+        "source.harmonics_configure_v2",
     }
 
     with TemporaryDirectory() as tmp:
@@ -77,6 +80,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
             "source.basic_configure_v2": "channel = 1\nfrequency_hz = 1000\n",
             "source.output_enable_v2": "channel = 1\n",
             "source.output_disable_v2": "channel = 1\n",
+            "source.harmonics_configure_v2": "channel = 1\norder = 8\npreset = \"odd\"\n",
         }
         for kind, fields in valid_steps.items():
             plan_path = Path(tmp) / f"{kind}.toml"

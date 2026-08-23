@@ -32,6 +32,7 @@ _STEP_OPERATIONS = {
     "source.basic_configure_v2": "source.basic_configure_v2",
     "source.output_enable_v2": "source.output_enable_v2",
     "source.output_disable_v2": "source.output_disable_v2",
+    "source.harmonics_configure_v2": "source.harmonics_configure_v2",
     "power.status": "power.status",
     "power.set": "power.set_voltage_current_limit",
     "power.output": "power.output",

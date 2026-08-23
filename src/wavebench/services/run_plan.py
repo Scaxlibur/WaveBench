@@ -29,6 +29,7 @@ ALLOWED_STEP_KINDS = {
     "source.basic_configure_v2",
     "source.output_enable_v2",
     "source.output_disable_v2",
+    "source.harmonics_configure_v2",
     "power.status",
     "power.set",
     "power.output",
@@ -48,6 +49,7 @@ _REQUIRED_FIELDS = {
     "source.basic_configure_v2": ("channel",),
     "source.output_enable_v2": ("channel",),
     "source.output_disable_v2": ("channel",),
+    "source.harmonics_configure_v2": ("channel", "order", "preset"),
     "sweep.frequency_response": ("reference_channel", "response_channel"),
     "sleep": ("duration_s",),
 }
@@ -122,6 +124,7 @@ _OPTIONAL_FIELDS = {
     },
     "source.output_enable_v2": {"on_failure"},
     "source.output_disable_v2": {"on_failure"},
+    "source.harmonics_configure_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
     "power.set": {"channel", "on_failure"},
     "power.output": {"channel", "on_failure"},
@@ -150,6 +153,7 @@ _STEP_NOTES = {
     "source.basic_configure_v2": "Configure one Source V2 channel while its output is OFF. At least one basic field is required.",
     "source.output_enable_v2": "Turn one Source V2 channel output on after a fresh V2 readback.",
     "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
+    "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
     "power.set": "Set DP800 voltage/current limit; does not change output state.",
     "power.output": "Turn power-supply channel output on or off; does not change voltage/current limit.",
@@ -576,6 +580,16 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             if not 0 <= duty <= 100:
                 raise ConfigError(f"{prefix}.square_duty_cycle_percent must be in [0, 100]")
             fields["square_duty_cycle_percent"] = duty
+    elif kind == "source.harmonics_configure_v2":
+        order = fields["order"]
+        if isinstance(order, bool) or not isinstance(order, int):
+            raise ConfigError(f"{prefix}.order must be an integer >= 2")
+        if order < 2:
+            raise ConfigError(f"{prefix}.order must be >= 2")
+        preset = _non_empty_str(fields["preset"], f"{prefix}.preset").lower()
+        if preset not in {"all", "even", "odd"}:
+            raise ConfigError(f"{prefix}.preset must be one of all, even, odd")
+        fields["preset"] = preset
     elif kind == "dmm.read":
         fields["function"] = _non_empty_str(fields.get("function", "dcv"), f"{prefix}.function").lower()
         if "expect" in fields:

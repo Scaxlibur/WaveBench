@@ -413,3 +413,13 @@ def test_v1_harmonic_route_rejects_before_io_for_a_dual_contract_driver() -> Non
 
     assert driver.v1_harmonic_calls == 0
     assert driver.transport.counters.write_requests == 0
+
+
+def test_v1_restore_rejects_before_io_for_a_harmonic_v2_driver() -> None:
+    service, driver = _service(dual_contract=True)
+
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.restore_restorable_state(object())  # type: ignore[arg-type]
+
+    assert driver.transport.counters.write_requests == 0
+    assert driver.transport.counters.query_calls == 0
