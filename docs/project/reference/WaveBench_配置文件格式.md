@@ -372,15 +372,15 @@ max_power_current_limit_a = 0.2
 
 这些参数是第一层执行安全上限。现有 V1 轴均为可选项；省略某一项表示该 V1 轴不设软件上限。
 
-- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`run plan` 中 `source.set_vpp` / `source.arb_load`，以及 `sweep.frequency_response` 的每个 `amplitudes_vpp` / 生成 Vpp 切片。
+- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`source basic-configure-v2`、`run plan` 中的 `source.set_vpp` / `source.arb_load` / `source.basic_configure_v2`，以及 `sweep.frequency_response` 的每个 `amplitudes_vpp` / 生成 Vpp 切片。
 - `max_power_voltage_v`：限制 `power set` 与 `run plan` 中 `power.set` 的设定电压。
 - `max_power_current_limit_a`：限制 `power set` 与 `run plan` 中 `power.set` 的限流值。
-- `min_source_port_voltage_v`、`max_source_port_voltage_v`：Source V2 能量增加操作的显式、有符号端口
-  电压区间。两项必须同时出现，值必须有限且满足最小值小于最大值；不能从 `max_source_vpp`
-  推导。两项同时缺失不会影响现有 V1 行为，但会让后续 Source V2 ON、fire、恢复 ON 或其它
-  增加端口能量的操作在仪器 I/O 前拒绝。
+- `min_source_port_voltage_v`、`max_source_port_voltage_v`：Source V2 的显式、有符号端口电压区间。
+  两项必须同时出现，值必须有限且满足最小值小于最大值；不能从 `max_source_vpp` 推导。两项同时缺失
+  不影响现有 V1 行为；已配置时，M5-D basic configure 与 output ON 都会检查 `offset ± Vpp / 2`。
 
-`run plan` 会在创建 run 目录和连接仪器前先检查这些上限。直接 CLI 设置也会在写仪器前检查。`source output on` / `power output on` 会先读取当前设定值，若当前设定值超限，则拒绝打开输出。
+`run plan` 会在创建 run 目录和连接仪器前先检查可静态判断的上限。直接 CLI 设置也会在写仪器前检查。
+`source output on` / `source output-v2 on` / `power output on` 会先读取当前设定值，若当前设定值超限，则拒绝打开输出。
 
 这层不会自动判断示波器 50Ω 输入阻抗，也不会替用户推断被测电路是否安全；它只是先挡住明确超过配置上限的写操作。
 
@@ -481,14 +481,15 @@ max_power_current_limit_a = 0.2
 
 这些参数是第一层执行安全上限。现有 V1 轴均为可选项；省略某一项表示该 V1 轴不设软件上限。
 
-- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`run plan` 中 `source.set_vpp` / `source.arb_load`，以及 `sweep.frequency_response` 的每个 `amplitudes_vpp` / 生成 Vpp 切片。
+- `max_source_vpp`：限制 `source set-vpp`、`source arb-load`、`source basic-configure-v2`、`run plan` 中的 `source.set_vpp` / `source.arb_load` / `source.basic_configure_v2`，以及 `sweep.frequency_response` 的每个 `amplitudes_vpp` / 生成 Vpp 切片。
 - `max_power_voltage_v`：限制 `power set` 与 `run plan` 中 `power.set` 的设定电压。
 - `max_power_current_limit_a`：限制 `power set` 与 `run plan` 中 `power.set` 的限流值。
-- `min_source_port_voltage_v`、`max_source_port_voltage_v`：只用于后续 Source V2 能量增加操作的
-  显式有符号端口电压区间。两项必须同时配置，且不从 `max_source_vpp` 推导；两项缺失时旧 V1
-  命令继续保持原有行为，V2 能量操作则在仪器 I/O 前拒绝。
+- `min_source_port_voltage_v`、`max_source_port_voltage_v`：Source V2 的显式有符号端口电压区间。
+  两项必须同时配置，且不从 `max_source_vpp` 推导；两项缺失时旧 V1 命令继续保持原有行为，已配置时
+  M5-D basic configure 与 output ON 使用 `offset ± Vpp / 2` 检查区间。
 
-`run plan` 会在创建 run 目录和连接仪器前先检查这些上限。直接 CLI 设置也会在写仪器前检查。`source output on` / `power output on` 会先读取当前设定值，若当前设定值超限，则拒绝打开输出。
+`run plan` 会在创建 run 目录和连接仪器前先检查可静态判断的上限。直接 CLI 设置也会在写仪器前检查。
+`source output on` / `source output-v2 on` / `power output on` 会先读取当前设定值，若当前设定值超限，则拒绝打开输出。
 
 这层不会自动判断示波器 50Ω 输入阻抗，也不会替用户推断被测电路是否安全；它只是先挡住明确超过配置上限的写操作。
 

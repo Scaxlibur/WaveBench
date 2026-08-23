@@ -4,9 +4,9 @@
 > 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B 与 M5-C 已进入核心 `0.8.24` 开发线；R6 已接受。
+> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C 与 M5-D 已进入核心 `0.8.24` 开发线；R6 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2`；M5-A 只冻结
-> 公共合同与 descriptor 校验，M5-B／M5-C 只提供内部写事务，尚未开放 Source V2 写入口。
+> 公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，M5-D 已开放受限的 Source V2 写入口。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -2692,7 +2692,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-A | `implemented-unreleased` | 公共类型与静态验证 | `basic_configure_v2`／`output_v2` 的 request、result、Protocol、descriptor validation 和 A0 构造测试通过；不开放写入口 |
 | M5-B | `implemented-unreleased` | 基础配置事务 | 输出 OFF 的 basic configure、单写、回读、失败恢复和 operation artifact 通过；不改变 V1 setter |
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
-| M5-D | 未开始 | 公共入口与双合同路由 | Service／CLI 后，新增 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
+| M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | 未开始 | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过 |
 | M6-A | 未开始 | 单通道高级配置 | Harmonic、Modulation、Pulse、Sweep、Burst 按 feature 独立 opt in，复用基本写入门 |
 | M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
@@ -2891,6 +2891,61 @@ postcondition 失败时，核心最多发送一次 recovery OFF，并在 OFF 回
 M5-C artifact 与 M5-B 使用相同 schema，记录 enable／disable 意图、是否实际写入、typed result、
 snapshot 摘要、phase 摘要、recovery 结果和脱敏 evidence ref。该 artifact 仍只在内部事务中存在，
 M5-D 才将其连接到公开入口与 `run.json`。
+
+### M5-D 公共入口、run plan 与双合同路由
+
+M5-D 将 M5-B／M5-C 的唯一核心事务开放为以下 Service 方法：
+
+```python
+SourceService.configure_basic_v2(request, *, correlation_id=None)
+SourceService.set_output_v2(request, *, correlation_id=None)
+```
+
+两者分别返回 `(typed_result, operation_artifact)`。`typed_result` 是已冻结的
+`SourceBasicConfigureResult` 或 `SourceOutputResult`；`operation_artifact` 使用
+`wavebench.source.operation.v1`。Service 不重新实现 preflight、写入、回读、recovery 或 session health
+逻辑，所有入口继续复用 M5-B／M5-C 事务。
+
+CLI 是 additive 的两个新子命令：
+
+```text
+wavebench source basic-configure-v2 --channel N \
+  [--waveform sine|square|ramp|pulse|noise|dc] \
+  [--frequency-hz HZ] [--amplitude-vpp VPP] [--offset-v V] \
+  [--square-duty-cycle-percent PERCENT]
+wavebench source output-v2 --channel N on|off
+```
+
+`basic-configure-v2` 至少需要一个 basic 字段。普通模式直接输出 operation artifact；`--json` 将它置于
+`wavebench.cli.result.v1.result`。写后失败时，CLI 的 `wavebench.error.v1` 会附加脱敏的
+`source_operation_artifact`。两个新命令不改变既有 V1 CLI 参数或成功 JSON。
+
+run plan 使用三个有方向 step，避免在 intent 中把 ON／OFF 混为同一 operation：
+
+| step kind | 必填字段 | 允许的额外字段 | 对应 operation |
+| --- | --- | --- | --- |
+| `source.basic_configure_v2` | `channel` | `waveform_kind`、`frequency_hz`、`amplitude_vpp`、`offset_v`、`square_duty_cycle_percent`；至少一个 | `source.basic_configure_v2` |
+| `source.output_enable_v2` | `channel` | 无 | `source.output_enable_v2` |
+| `source.output_disable_v2` | `channel` | 无 | `source.output_disable_v2` |
+
+字段存在表示 `PatchAction.SET`，缺失表示 `KEEP`。`waveform_kind` 只允许
+`sine`、`square`、`ramp`、`pulse`、`noise` 或 `dc`；`arbitrary` 与 `other` 仍不属于 M5-D basic patch。
+每个 step 的规范化字段和 operation 都进入 `wavebench.execution_intent.v1`。实际执行 V2 step 时，完整
+operation artifact 同时保存到 step 的 `artifact.source_operation` 和非空根键
+`run.json.source_operations`；写后失败带来的 artifact 也会保存。没有 V2 step 的 V1 run 保持没有该根键。
+
+双合同插件按当前已注册 V2 contract 路由，不混用 V1 状态视图来做 V2 安全决策：
+
+| 已声明 V2 capability | V1 route | M5-D 行为 |
+| --- | --- | --- |
+| `source.basic_configure_v2` | `set_frequency`、`set_function`、`set_amplitude_vpp`、`set_square_duty_cycle` | 映射到单次 basic V2 transaction。无法映射的 function 在写前拒绝。 |
+| `source.output_v2` | `set_output` | 映射到 enable 或 disable V2 transaction。 |
+| `source.basic_configure_v2` 或 `source.output_v2` | `restore_restorable_state`、`upload_arbitrary_waveform` | 属于重叠 route，在仪器 I/O 前拒绝。 |
+| `source.output_v2` | `trigger_burst`、`trigger_sweep` | 属于可能发信号的重叠 route，在仪器 I/O 前拒绝。 |
+| 当前两个写 capability 均未覆盖 | `configure_coupling`、`configure_harmonics`、AM／FM／PM／PWM、`configure_pulse`、`configure_burst`、`configure_sweep` | 保持 V1 路径，等待对应 feature 的 V2 capability。 |
+
+V1-only 插件继续使用原 V1 route。双合同 V1 setter 的返回值仅为兼容显示而从 V2 postcondition
+flatten 为 `SourceStatus`；该 adapter 不参与 V2 preflight、预算、恢复或 capability 决策。
 
 ### R6 延后事项
 

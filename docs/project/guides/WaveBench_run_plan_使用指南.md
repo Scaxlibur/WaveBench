@@ -361,6 +361,32 @@ state = "on"
 
 这看起来啰嗦，但它能避免现场调试时被隐藏动作吓到。
 
+### Source V2 基础写 step
+
+声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用三个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
+
+```toml
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+waveform_kind = "sine"
+frequency_hz = 1000
+amplitude_vpp = 1.0
+offset_v = 0.0
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 1
+```
+
+`source.basic_configure_v2` 的 `channel` 必填，五个 basic 字段中至少写一个；缺失字段保持当前值。
+`source.output_enable_v2` 和 `source.output_disable_v2` 都只接受 `channel`。执行意图会分别记录三个 operation，
+实际执行时的完整 Source V2 artifact 会写入 `run.json.source_operations`。没有声明 V2 capability 的旧插件继续使用 V1 step。
+
 ## 常见 `run check` 报错
 
 ### step kind 拼错
@@ -493,6 +519,7 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 | `restore` | source restore 的 snapshot / restore 状态；未启用时为空或简短状态。 |
 | `steps` | 每个 step 的执行记录。 |
 | `error` | run 级失败信息；例如 `code = "step_failed"` 或 `code = "safety_gate_failed"`。 |
+| `source_operations` | 实际执行的 Source V2 operation artifact；没有 Source V2 step 时不存在。 |
 
 `steps[]` 常见字段：
 

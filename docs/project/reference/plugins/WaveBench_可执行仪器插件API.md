@@ -140,7 +140,7 @@ def descriptor() -> InstrumentDescriptor:
 | `scope_coupling_policy` | 值由类型约定为三种策略 | scope 必须准确声明；无法证明时使用 `unknown`，核心会默认拒绝无法确认高阻的采集 |
 | `config_fields` | 当前只展示；为空时由 `option_specs` 推导 `options.<name>` | 只列出用户实际可配置的字段，不代表核心会按此字段授权 |
 | `scope_extensions` | 仅允许 scope descriptor 使用，类型必须为 `ScopeDescriptorExtensions` | 为 R1.3 capability 提供静态截图、采集控制和 trace profile；旧插件保持 `None` |
-| `source_extensions` | 仅允许 source descriptor 使用，类型必须为 `SourceDescriptorExtensions` | 为 `source.snapshot_v2` 提供 topology、只读 feature profile 和查询合同；旧插件保持 `None` |
+| `source_extensions` | 仅允许 source descriptor 使用，类型必须为 `SourceDescriptorExtensions` | 为 `source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2` 提供 topology、feature profile 和查询合同；旧插件保持 `None` |
 
 ### `scope_coupling_policy`
 
@@ -365,16 +365,31 @@ identity 必须是唯一、required 的 instrument-scope facet。声明为 `UNSU
 feature 不得进入查询计划。查询项、effect、字段覆盖、query count 和 deadline 由核心复核；不符合
 合同的执行记录不会生成 snapshot。
 
-公共调用入口为 `SourceService.snapshot_v2()` 和：
+只读公共调用入口为 `SourceService.snapshot_v2()` 和：
 
 ```text
 wavebench source snapshot-v2
 ```
 
-旧 `source.*` setter、output、trigger 和 ARB 路径继续遵守 V1 合同；M5-A 已注册两个 V2 写
-capability 以验证 descriptor 和 driver Protocol，但尚未提供
-`SourceService`、CLI 或 run plan 写入口。插件不得将 capability 注册视为自行发起写操作的许可，也
-不得通过现有 V1 路径绕过后续核心入口。
+基础写入入口由核心提供，不由插件拼接：
+
+```text
+SourceService.configure_basic_v2(request, *, correlation_id=None)
+SourceService.set_output_v2(request, *, correlation_id=None)
+wavebench source basic-configure-v2 --channel N ...
+wavebench source output-v2 --channel N on|off
+```
+
+两个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
+`wavebench.source.operation.v1`，不得包含 raw SCPI、完整响应、资源地址、序列号、授权 token 或 nonce。
+run plan 只接受 `source.basic_configure_v2`、`source.output_enable_v2` 与
+`source.output_disable_v2` 三个 Source V2 step；它们的 artifact 只在实际执行时写入
+`run.json.source_operations`。
+
+旧 `source.*` setter、output、trigger 和 ARB 路径继续保留。双合同插件上，四个 basic setter 与
+`set_output` 会进入相应 V2 transaction；restore、ARB upload 和 V2 output 重叠的 trigger 在仪器 I/O 前
+拒绝；尚无对应 V2 capability 的高级配置保持 V1。插件不得把 capability 注册视为自行发起写操作的许可，
+也不得通过已有 V1 方法绕过核心路由。
 
 ### Power、DMM 和 sweep analyzer
 

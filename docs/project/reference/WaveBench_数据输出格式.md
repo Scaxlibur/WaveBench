@@ -824,11 +824,12 @@ CLI 仍会在请求的 artifact 路径写入 `status = "failed"`、安全错误 
 报告 `scope_artifact.reason_code = "write_failed"`；若部分输出无法删除，还会报告
 `scope_output.reason_code = "remove_failed"`。
 
-## Source V2 snapshot 操作产物
+## Source V2 操作产物
 
-`wavebench source snapshot-v2` 返回 `wavebench.source.operation.v1`。使用 `--json` 时，该对象位于
-`wavebench.cli.result.v1.result`；普通模式直接输出缩进后的 operation artifact。当前命令不写入
-持久化文件，也不产生 conformance manifest。
+`wavebench source snapshot-v2`、`wavebench source basic-configure-v2` 和
+`wavebench source output-v2` 都返回 `wavebench.source.operation.v1`。使用 `--json` 时，该对象位于
+`wavebench.cli.result.v1.result`；普通模式直接输出缩进后的 operation artifact。CLI 不写入持久化文件，
+也不产生 conformance manifest。
 
 operation artifact 固定包含：
 
@@ -842,3 +843,7 @@ snapshot 使用 typed `Observed` 表达 `value`、`unsupported`、`not_applicabl
 `unavailable` 和 `unknown`，不会以 `0` 或空字符串冒充缺值。artifact 不包含协议执行记录、SCPI、
 完整响应、resource、序列号或原始 device revision token；revision token 只以 SHA-256 摘要出现在
 consistency 中。该 operation artifact 与插件 conformance manifest 是不同 schema，不能互换。
+
+Source V2 写 step 成功或写后失败时，`run.json.source_operations` 保存同一 schema 的完整 artifact，
+`steps[].artifact.source_operation` 保存当前 step 的同一完整 artifact。没有实际 Source V2 step 的 V1 run 不写
+`source_operations`，旧 reader 可以继续忽略该 append-only 根键。
