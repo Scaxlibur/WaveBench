@@ -99,7 +99,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
     assert module.__all__[pwm_start : pwm_start + len(pwm_exports)] == pwm_exports
     match = re.search(r"M6-A／内部 Sweep 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
     assert match is not None
-    assert module.__all__[pwm_start + len(pwm_exports) :] == match.group(1).splitlines()
+    sweep_exports = match.group(1).splitlines()
+    sweep_start = pwm_start + len(pwm_exports)
+    assert module.__all__[sweep_start : sweep_start + len(sweep_exports)] == sweep_exports
+    match = re.search(
+        r"M6-B／ARB storage 与 selection 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[sweep_start + len(sweep_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -187,6 +196,9 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "selection_readable",
             "storage_metadata_readable",
             "sample_rate_readable",
+            "storage_slot_metadata_readable",
+            "storage_write_modes",
+            "storage_max_payload_bytes",
         ),
         "SourceCounterCapabilityProfile": (
             "input_ids",
@@ -500,9 +512,14 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.burst_configure_v2": ("configure_source_burst_v2",),
         "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
-        "source.sweep_configure_v2": ("configure_source_sweep_v2",),
-        "source.output_v2": ("set_source_output_v2",),
-    }
+            "source.sweep_configure_v2": ("configure_source_sweep_v2",),
+            "source.output_v2": ("set_source_output_v2",),
+            "source.arbitrary_storage_v2": (
+                "read_source_arbitrary_storage_v2",
+                "mutate_source_arbitrary_storage_v2",
+            ),
+            "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
+        }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
     assert {key: CAPABILITY_METHODS[key] for key in expected} == expected
     validate_source_descriptor(descriptor)
@@ -1082,6 +1099,236 @@ def test_source_v2_pulse_write_models_are_closed_and_serializable() -> None:
         )
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourcePulseConfigureResult(1, pulse, True)
+
+
+def test_source_v2_arbitrary_write_models_keep_payload_out_of_public_data() -> None:
+    digest = "sha256:" + "a" * 64
+    previous_digest = "sha256:" + "b" * 64
+    storage_request = module.SourceArbitraryStorageRequest(
+        channel=1,
+        slot_id="slot_a",
+        write_mode=module.SourceStorageWriteMode.CREATE_ONLY,
+        payload_sha256=digest,
+        payload_size_bytes=3,
+    )
+    assert module.source_v2_to_data(storage_request) == {
+        "type": "SourceArbitraryStorageRequest",
+        "channel": 1,
+        "slot_id": "slot_a",
+        "write_mode": "create_only",
+        "payload_sha256": digest,
+        "payload_size_bytes": 3,
+        "expected_previous_sha256": None,
+    }
+    assert b"abc" not in module.source_v2_canonical_json(storage_request).encode()
+    with pytest.raises(ValueError, match="cannot set expected_previous_sha256"):
+        module.SourceArbitraryStorageRequest(
+            1,
+            "slot_a",
+            module.SourceStorageWriteMode.CREATE_ONLY,
+            digest,
+            3,
+            previous_digest,
+        )
+    replace_request = module.SourceArbitraryStorageRequest(
+        1,
+        "slot_a",
+        module.SourceStorageWriteMode.REPLACE_IF_DIGEST_MATCHES,
+        digest,
+        3,
+        previous_digest,
+    )
+    assert replace_request.expected_previous_sha256 == previous_digest
+    with pytest.raises(ValueError, match="require expected_previous_sha256"):
+        module.SourceArbitraryStorageRequest(
+            1,
+            "slot_a",
+            module.SourceStorageWriteMode.REPLACE_IF_DIGEST_MATCHES,
+            digest,
+            3,
+        )
+
+    empty_slot = module.SourceArbitraryStorageSlot(1, "slot_a", False)
+    assert empty_slot.payload_sha256 is None
+    with pytest.raises(ValueError, match="cannot carry payload metadata"):
+        module.SourceArbitraryStorageSlot(1, "slot_a", False, digest, 3)
+    result = module.SourceArbitraryStorageResult(1, "slot_a", digest, 3, True, False, True)
+    assert result.readback_verified is True
+    with pytest.raises(ValueError, match="write_completed=True"):
+        module.SourceArbitraryStorageResult(1, "slot_a", digest, 3, False, False, True)
+
+    dds = module.SourceArbitrarySelectRequest(
+        1,
+        "slot_a",
+        module.SourceArbitraryPlaybackMode.DDS,
+        playback_frequency_hz=1_000.0,
+    )
+    assert dds.sample_rate_hz is None
+    true_arb = module.SourceArbitrarySelectRequest(
+        1,
+        "slot_a",
+        module.SourceArbitraryPlaybackMode.TRUE_ARB,
+        sample_rate_hz=10_000.0,
+    )
+    assert true_arb.playback_frequency_hz is None
+    with pytest.raises(ValueError, match="cannot set sample_rate_hz"):
+        module.SourceArbitrarySelectRequest(
+            1,
+            "slot_a",
+            module.SourceArbitraryPlaybackMode.DDS,
+            playback_frequency_hz=1_000.0,
+            sample_rate_hz=10_000.0,
+        )
+    with pytest.raises(ValueError, match="cannot set playback_frequency_hz"):
+        module.SourceArbitrarySelectRequest(
+            1,
+            "slot_a",
+            module.SourceArbitraryPlaybackMode.TRUE_ARB,
+            playback_frequency_hz=1_000.0,
+            sample_rate_hz=10_000.0,
+        )
+
+    basic = replace(
+        basic_facet(),
+        waveform_kind=Observed.value_of(module.SourceWaveformKind.ARBITRARY),
+    )
+    arbitrary = module.ArbitraryFacet(
+        selected_waveform_id=Observed.value_of("slot_a"),
+        playback_mode=Observed.value_of(module.SourceArbitraryPlaybackMode.DDS),
+        playback_frequency_hz=Observed.value_of(1_000.0),
+        sample_rate_hz=Observed.value_of(10_000.0),
+        point_count=Observed.value_of(3),
+        storage_digest=Observed.value_of(digest),
+    )
+    selected = module.SourceArbitrarySelectResult(1, basic, arbitrary, False)
+    assert selected.arbitrary.selected_waveform_id.value == "slot_a"
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceArbitrarySelectResult(1, basic, arbitrary, True)
+
+
+def test_source_v2_arbitrary_write_capabilities_require_explicit_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    arbitrary = module.SourceFeatureCapability(
+        feature=module.SourceFeature.ARBITRARY,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourceArbitraryCapabilityProfile(
+            playback_modes=(
+                module.SourceArbitraryPlaybackMode.DDS,
+                module.SourceArbitraryPlaybackMode.TRUE_ARB,
+            ),
+            selection_readable=True,
+            storage_metadata_readable=True,
+            sample_rate_readable=True,
+            storage_slot_metadata_readable=True,
+            storage_write_modes=(
+                module.SourceStorageWriteMode.CREATE_ONLY,
+                module.SourceStorageWriteMode.REPLACE_IF_DIGEST_MATCHES,
+            ),
+            storage_max_payload_bytes=4096,
+        ),
+    )
+    arbitrary_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.ARBITRARY,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.ARBITRARY_SELECTION,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(
+            arbitrary,
+            replace(
+                basic,
+                profile=replace(
+                    basic.profile,
+                    waveform_kinds=(
+                        module.SourceWaveformKind.ARBITRARY,
+                        module.SourceWaveformKind.SINE,
+                    ),
+                ),
+            ),
+            output,
+        ),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(arbitrary_query, *extensions.query_contract.facets),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.arbitrary_storage_v2",
+            "source.arbitrary_select_v2",
+        ),
+    )
+
+    class ArbitraryWriteDriver(SourceV2FakeDriver):
+        def read_source_arbitrary_storage_v2(self, channel, slot_id):
+            raise AssertionError((channel, slot_id))
+
+        def mutate_source_arbitrary_storage_v2(self, request, payload):
+            raise AssertionError((request, payload))
+
+        def select_source_arbitrary_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, ArbitraryWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="authoritative slot metadata"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        replace(
+                            arbitrary,
+                            profile=replace(
+                                arbitrary.profile,
+                                storage_slot_metadata_readable=False,
+                            ),
+                        ),
+                        configured_extensions.features[1],
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="arbitrary basic waveform"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(arbitrary, basic, output),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="mutate_source_arbitrary_storage_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingArbitraryStorageDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                    "read_source_arbitrary_storage_v2": lambda self, channel, slot_id: None,
+                    "select_source_arbitrary_v2": lambda self, request: None,
+                },
+            )(),
+        )
 
 
 def test_source_v2_write_capabilities_require_matching_directions_and_readback() -> None:

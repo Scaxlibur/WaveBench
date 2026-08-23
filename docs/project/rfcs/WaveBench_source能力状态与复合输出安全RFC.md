@@ -539,6 +539,21 @@ SourceSweepConfigureV2Driver
 SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+M6-B／ARB storage 与 selection 在上述清单末尾追加以下精确条目：
+
+```text
+SourceStorageWriteMode
+SourceArbitraryStorageRequest
+SourceArbitraryStorageSlot
+SourceArbitraryStorageResult
+SourceArbitraryStorageV2Driver
+SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT
+SourceArbitrarySelectRequest
+SourceArbitrarySelectResult
+SourceArbitrarySelectV2Driver
+SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -725,6 +740,7 @@ class SourceStorageEffect(StrEnum):
     CREATE = "create"
     REPLACE = "replace"
     DELETE = "delete"
+    MUTATE = "mutate"
     UNKNOWN = "unknown"
 
 
@@ -1049,6 +1065,9 @@ class SourceArbitraryCapabilityProfile:
     selection_readable: bool
     storage_metadata_readable: bool
     sample_rate_readable: bool
+    storage_slot_metadata_readable: bool = False
+    storage_write_modes: tuple[SourceStorageWriteMode, ...] = ()
+    storage_max_payload_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1818,6 +1837,32 @@ class SourceArbitraryStorageResult:
     write_completed: bool
     rollback_available: bool
     readback_verified: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryStorageSlot:
+    channel: int
+    slot_id: str
+    exists: bool
+    payload_sha256: str | None = None
+    payload_size_bytes: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitrarySelectRequest:
+    channel: int
+    slot_id: str
+    playback_mode: SourceArbitraryPlaybackMode
+    playback_frequency_hz: float | None = None
+    sample_rate_hz: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitrarySelectResult:
+    channel: int
+    basic: BasicWaveFacet
+    arbitrary: ArbitraryFacet
+    output_enabled: bool
 ```
 
 - `slot_id` 必须显式给出；核心不自动挑选可覆盖槽位；
@@ -1831,8 +1876,67 @@ class SourceArbitraryStorageResult:
 - storage mutation 只记录摘要、大小和槽位的脱敏标识，artifact 不保存 payload；
 - storage mutation 请求不包含 `output_on`，也不签发能量转换准入决定。
 
+`SourceArbitraryStorageSlot` 是按明确 `channel`／`slot_id` 读取的权威槽位状态：空槽必须
+`exists=False` 且没有摘要或大小；已占用槽必须同时返回 SHA-256 与正的字节数。它不是 snapshot
+中可枚举的存储目录，也不会让核心扫描、选择或清理所有槽位。
+
+storage 的 payload 不进入 request 或 operation artifact。Service 在打开仪器前接收单独的 `bytes`
+参数，验证其长度和 SHA-256 与 request 完全一致；driver Protocol 使用以下两个方法：
+
+```python
+class SourceArbitraryStorageV2Driver(InstrumentDriver, Protocol):
+    def read_source_arbitrary_storage_v2(
+        self,
+        channel: int,
+        slot_id: str,
+    ) -> SourceArbitraryStorageSlot: ...
+
+    def mutate_source_arbitrary_storage_v2(
+        self,
+        request: SourceArbitraryStorageRequest,
+        payload: bytes,
+    ) -> SourceArbitraryStorageResult: ...
+```
+
+核心在 preflight 读取一次指定槽位；driver 在 mutation 内仍必须以设备可证明的原子语义执行
+`CREATE_ONLY` 或 compare-and-replace，不能仅依赖这次核心预读。写后核心再独立读取同一槽位，
+确认 channel、slot、摘要和大小。`write_completed` 与 `readback_verified` 只有为 `True` 才是成功
+result；`rollback_available` 只陈述该次写入的已验证恢复能力，不代表核心会自动覆盖或删除槽位。
+
+`source.arbitrary_storage_v2` 是 `ARBITRARY/CONFIGURE`、`energy_effect=none`、
+`storage_effect=mutate` 的 operation。它不要求任何端口 OFF，也不允许改变选择或输出：preflight
+和 postcondition 都回读目标通道的 ARB selection 与 output，确认它们保持原值。因此已独立输出的
+其他通道不受影响，目标通道也不会因为上传被核心强制关闭。
+
+选择是独立的 `source.arbitrary_select_v2` operation：DDS 必须且只能给出正的
+`playback_frequency_hz`；true-ARB 必须且只能给出正的 `sample_rate_hz`。`UNKNOWN` playback mode、
+两种速率同时给出或两者均缺失均在仪器 I/O 前拒绝。其 result 必须回读基本波形为 `arbitrary`、
+selected slot、playback mode、相应速率和 storage digest，且 `output_enabled=False`。该 operation
+使用 `POTENTIAL_WHILE_OFF`，只要求目标通道 OFF；没有已声明跨通道关系时，其他独立端口可继续 ON。
+
+声明 storage capability 的 profile 在原有 ARB 字段末尾追加：
+`storage_slot_metadata_readable`、`storage_write_modes` 与 `storage_max_payload_bytes`。前者表示可按
+明确槽位读取权威 exists／digest／size，后两者分别声明允许的覆盖模式和正的字节上限。声明 selection
+capability 还必须有可回读的 selection、storage digest、播放模式和基本 `arbitrary` 波形状态；若声明
+true-ARB，则 sample rate 也必须可读。两个 capability 都要求目标通道 output state 可读。
+
+`source.arbitrary_select_v2` 的 driver Protocol 仅接收同一 typed request：
+
+```python
+class SourceArbitrarySelectV2Driver(InstrumentDriver, Protocol):
+    def select_source_arbitrary_v2(
+        self,
+        request: SourceArbitrarySelectRequest,
+    ) -> SourceArbitrarySelectResult: ...
+```
+
+双合同插件声明 storage 或 selection capability 后，V1 `upload_arbitrary_waveform` 必须在读取本地文件、
+构造二进制块、打开 session 或发送仪器 I/O 前拒绝。该 V1 route 同时混合上传、选择、基本幅度配置和可选 ON，
+不能被任一窄 V2 operation 部分映射；V1-only 插件继续保持原行为。
+
 上传完成后，选择 ARB 使用新的 `source.arbitrary_select_v2` operation。若随后需要 ON，必须重新
-读取 fresh snapshot、计算预算，并以 `source.output_v2` 单独取得一次性准入决定。
+读取 fresh snapshot，并以 `source.output_v2` 当期的最终 Vpp／Offset 基础门单独取得一次性准入决定；
+storage 或 selection 成功本身不构成输出授权。
 
 ## 复合输出预算
 

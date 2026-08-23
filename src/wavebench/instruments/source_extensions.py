@@ -216,6 +216,11 @@ class SourceArbitraryPlaybackMode(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SourceStorageWriteMode(StrEnum):
+    CREATE_ONLY = "create_only"
+    REPLACE_IF_DIGEST_MATCHES = "replace_if_digest_matches"
+
+
 class SourceAmplitudeUnit(StrEnum):
     VPP = "vpp"
     VRMS = "vrms"
@@ -596,6 +601,9 @@ class SourceArbitraryCapabilityProfile:
     selection_readable: bool
     storage_metadata_readable: bool
     sample_rate_readable: bool
+    storage_slot_metadata_readable: bool = False
+    storage_write_modes: tuple[SourceStorageWriteMode, ...] = ()
+    storage_max_payload_bytes: int | None = None
 
     def __post_init__(self) -> None:
         _require_enum_tuple(
@@ -609,6 +617,26 @@ class SourceArbitraryCapabilityProfile:
             "arbitrary storage_metadata_readable",
         )
         _require_bool(self.sample_rate_readable, "arbitrary sample_rate_readable")
+        _require_bool(
+            self.storage_slot_metadata_readable,
+            "arbitrary storage_slot_metadata_readable",
+        )
+        _require_enum_tuple(
+            self.storage_write_modes,
+            SourceStorageWriteMode,
+            "arbitrary storage_write_modes",
+            allow_empty=True,
+        )
+        if self.storage_write_modes:
+            _require_int(
+                self.storage_max_payload_bytes,
+                "arbitrary storage_max_payload_bytes",
+                minimum=1,
+            )
+        elif self.storage_max_payload_bytes is not None:
+            raise ValueError(
+                "arbitrary storage_max_payload_bytes requires storage_write_modes"
+            )
 
 
 class SourceQueryEffect(StrEnum):
@@ -838,6 +866,7 @@ class SourceStorageEffect(StrEnum):
     CREATE = "create"
     REPLACE = "replace"
     DELETE = "delete"
+    MUTATE = "mutate"
     UNKNOWN = "unknown"
 
 
@@ -1328,6 +1357,67 @@ SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
     main_max_steps=1,
     recovery_max_steps=1,
     verification_max_steps=1,
+)
+
+
+SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.arbitrary_storage_v2",
+    capability="source.arbitrary_storage_v2",
+    feature=SourceFeature.ARBITRARY,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.NONE,
+    storage_effect=SourceStorageEffect.MUTATE,
+    required_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.ARBITRARY_STORAGE,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.ARBITRARY_STORAGE,),
+    postcondition_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.ARBITRARY_STORAGE,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.arbitrary_select_v2",
+    capability="source.arbitrary_select_v2",
+    feature=SourceFeature.ARBITRARY,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.READ,
+    required_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.BASIC,
+    ),
+    postcondition_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
 )
 
 
@@ -2410,6 +2500,112 @@ class SourceOutputRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArbitraryStorageRequest:
+    channel: int
+    slot_id: str
+    write_mode: SourceStorageWriteMode
+    payload_sha256: str
+    payload_size_bytes: int
+    expected_previous_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source arbitrary storage channel", minimum=1)
+        _require_token(self.slot_id, "source arbitrary storage slot_id")
+        if not isinstance(self.write_mode, SourceStorageWriteMode):
+            raise ValueError("source arbitrary storage write_mode has an invalid type")
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary storage payload_sha256 must be sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary storage payload_size_bytes",
+            minimum=1,
+        )
+        if self.write_mode is SourceStorageWriteMode.CREATE_ONLY:
+            if self.expected_previous_sha256 is not None:
+                raise ValueError(
+                    "create-only source arbitrary storage requests cannot set expected_previous_sha256"
+                )
+        elif (
+            not isinstance(self.expected_previous_sha256, str)
+            or _SHA256.fullmatch(self.expected_previous_sha256) is None
+        ):
+            raise ValueError(
+                "replace source arbitrary storage requests require expected_previous_sha256"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryStorageSlot:
+    channel: int
+    slot_id: str
+    exists: bool
+    payload_sha256: str | None = None
+    payload_size_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source arbitrary storage slot channel", minimum=1)
+        _require_token(self.slot_id, "source arbitrary storage slot_id")
+        _require_bool(self.exists, "source arbitrary storage slot exists")
+        if not self.exists:
+            if self.payload_sha256 is not None or self.payload_size_bytes is not None:
+                raise ValueError(
+                    "empty source arbitrary storage slots cannot carry payload metadata"
+                )
+            return
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "populated source arbitrary storage slots require a SHA-256 digest"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary storage slot payload_size_bytes",
+            minimum=1,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitrarySelectRequest:
+    channel: int
+    slot_id: str
+    playback_mode: SourceArbitraryPlaybackMode
+    playback_frequency_hz: float | None = None
+    sample_rate_hz: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source arbitrary select channel", minimum=1)
+        _require_token(self.slot_id, "source arbitrary select slot_id")
+        if self.playback_mode not in {
+            SourceArbitraryPlaybackMode.DDS,
+            SourceArbitraryPlaybackMode.TRUE_ARB,
+        }:
+            raise ValueError("source arbitrary select playback_mode has an invalid value")
+        if self.playback_mode is SourceArbitraryPlaybackMode.DDS:
+            _require_finite(
+                self.playback_frequency_hz,
+                "source arbitrary DDS playback_frequency_hz",
+                minimum=0.0,
+            )
+            if self.playback_frequency_hz <= 0:
+                raise ValueError("source arbitrary DDS playback_frequency_hz must be > 0")
+            if self.sample_rate_hz is not None:
+                raise ValueError("source arbitrary DDS selection cannot set sample_rate_hz")
+            return
+        if self.playback_frequency_hz is not None:
+            raise ValueError(
+                "source arbitrary true-ARB selection cannot set playback_frequency_hz"
+            )
+        _require_finite(
+            self.sample_rate_hz,
+            "source arbitrary true-ARB sample_rate_hz",
+            minimum=0.0,
+        )
+        if self.sample_rate_hz <= 0:
+            raise ValueError("source arbitrary true-ARB sample_rate_hz must be > 0")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceHarmonicConfigureRequest:
     channel: int
     order: int
@@ -2722,6 +2918,43 @@ class SourceOutputResult:
             raise ValueError(
                 "enabled source output results require final_amplitude and final_offset_v"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryStorageResult:
+    channel: int
+    slot_id: str
+    payload_sha256: str
+    payload_size_bytes: int
+    write_completed: bool
+    rollback_available: bool
+    readback_verified: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source arbitrary storage result channel", minimum=1)
+        _require_token(self.slot_id, "source arbitrary storage result slot_id")
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary storage result payload_sha256 must be sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary storage result payload_size_bytes",
+            minimum=1,
+        )
+        _require_bool(self.write_completed, "source arbitrary storage result write_completed")
+        _require_bool(
+            self.rollback_available,
+            "source arbitrary storage result rollback_available",
+        )
+        _require_bool(
+            self.readback_verified,
+            "source arbitrary storage result readback_verified",
+        )
+        if not self.write_completed:
+            raise ValueError("source arbitrary storage result requires write_completed=True")
+        if not self.readback_verified:
+            raise ValueError("source arbitrary storage result requires readback_verified=True")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3482,6 +3715,49 @@ class ArbitraryFacet:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArbitrarySelectResult:
+    channel: int
+    basic: BasicWaveFacet
+    arbitrary: ArbitraryFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source arbitrary select result channel", minimum=1)
+        if not isinstance(self.basic, BasicWaveFacet):
+            raise ValueError("source arbitrary select result basic has an invalid type")
+        if not isinstance(self.arbitrary, ArbitraryFacet):
+            raise ValueError("source arbitrary select result arbitrary has an invalid type")
+        _require_bool(
+            self.output_enabled,
+            "source arbitrary select result output_enabled",
+        )
+        if self.output_enabled:
+            raise ValueError("source arbitrary select result requires output_enabled=False")
+        if (
+            self.basic.waveform_kind.availability is not Availability.VALUE
+            or self.basic.waveform_kind.value is not SourceWaveformKind.ARBITRARY
+        ):
+            raise ValueError(
+                "source arbitrary select result requires arbitrary basic waveform readback"
+            )
+        if self.arbitrary.selected_waveform_id.availability is not Availability.VALUE:
+            raise ValueError(
+                "source arbitrary select result requires selected_waveform_id readback"
+            )
+        if self.arbitrary.playback_mode.availability is not Availability.VALUE or (
+            self.arbitrary.playback_mode.value
+            not in {SourceArbitraryPlaybackMode.DDS, SourceArbitraryPlaybackMode.TRUE_ARB}
+        ):
+            raise ValueError(
+                "source arbitrary select result requires a supported playback_mode readback"
+            )
+        if self.arbitrary.storage_digest.availability is not Availability.VALUE:
+            raise ValueError(
+                "source arbitrary select result requires storage_digest readback"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCounterMeasurementV2:
     kind: SourceCounterMeasurementKind
     value: float
@@ -4233,6 +4509,29 @@ class SourceOutputV2Driver(InstrumentDriver, Protocol):
     ) -> SourceOutputResult: ...
 
 
+@runtime_checkable
+class SourceArbitraryStorageV2Driver(InstrumentDriver, Protocol):
+    def read_source_arbitrary_storage_v2(
+        self,
+        channel: int,
+        slot_id: str,
+    ) -> SourceArbitraryStorageSlot: ...
+
+    def mutate_source_arbitrary_storage_v2(
+        self,
+        request: SourceArbitraryStorageRequest,
+        payload: bytes,
+    ) -> SourceArbitraryStorageResult: ...
+
+
+@runtime_checkable
+class SourceArbitrarySelectV2Driver(InstrumentDriver, Protocol):
+    def select_source_arbitrary_v2(
+        self,
+        request: SourceArbitrarySelectRequest,
+    ) -> SourceArbitrarySelectResult: ...
+
+
 def source_v2_to_data(value: object) -> object:
     """Convert Source V2 public values into strict JSON-compatible data."""
 
@@ -4508,4 +4807,14 @@ __all__ = [
     "SourceSweepConfigureResult",
     "SourceSweepConfigureV2Driver",
     "SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceStorageWriteMode",
+    "SourceArbitraryStorageRequest",
+    "SourceArbitraryStorageSlot",
+    "SourceArbitraryStorageResult",
+    "SourceArbitraryStorageV2Driver",
+    "SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT",
+    "SourceArbitrarySelectRequest",
+    "SourceArbitrarySelectResult",
+    "SourceArbitrarySelectV2Driver",
+    "SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT",
 ]

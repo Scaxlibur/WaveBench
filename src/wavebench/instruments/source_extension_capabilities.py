@@ -16,6 +16,7 @@ from .source_extensions import (
     SOURCE_CONTRACT_VERSION,
     SOURCE_SNAPSHOT_MIN_CORE_VERSION,
     SourceAmplitudeUnit,
+    SourceArbitraryCapabilityProfile,
     SourceDescriptorExtensions,
     SourceAnchorField,
     SourceBasicCapabilityProfile,
@@ -36,7 +37,9 @@ from .source_extensions import (
     SourcePulseHoldBasis,
     SourceQueryEffect,
     SourceSweepCapabilityProfile,
+    SourceArbitraryPlaybackMode,
     SourceTriggerSource,
+    SourceWaveformKind,
     SupportState,
 )
 
@@ -54,6 +57,11 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
         "source.sweep_configure_v2": ("configure_source_sweep_v2",),
         "source.output_v2": ("set_source_output_v2",),
+        "source.arbitrary_storage_v2": (
+            "read_source_arbitrary_storage_v2",
+            "mutate_source_arbitrary_storage_v2",
+        ),
+        "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
     }
 )
 
@@ -69,6 +77,8 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.modulation_pwm_configure_v2",
         "source.sweep_configure_v2",
         "source.output_v2",
+        "source.arbitrary_storage_v2",
+        "source.arbitrary_select_v2",
     }
 )
 
@@ -495,6 +505,54 @@ def _validate_write_contract(
                 "source.sweep_configure_v2 requires readable output state on every channel"
             )
 
+    if "source.arbitrary_storage_v2" in capabilities:
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.ARBITRARY,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.arbitrary_storage_v2 requires arbitrary feature CONFIGURE directions"
+            )
+        readable = _channels_with_arbitrary_storage_mutation_readback(extensions)
+        if not configurable <= readable:
+            raise ConfigError(
+                "source.arbitrary_storage_v2 requires readable selected state and authoritative "
+                "slot metadata on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.arbitrary_storage_v2 requires readable output state on every channel"
+            )
+
+    if "source.arbitrary_select_v2" in capabilities:
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.ARBITRARY,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.arbitrary_select_v2 requires arbitrary feature CONFIGURE directions"
+            )
+        readable = _channels_with_arbitrary_selection_readback(extensions)
+        if not configurable <= readable:
+            raise ConfigError(
+                "source.arbitrary_select_v2 requires readable selected waveform, playback mode, "
+                "and storage digest on every channel"
+            )
+        arbitrary_basic = _channels_with_arbitrary_basic_readback(extensions)
+        if not configurable <= arbitrary_basic:
+            raise ConfigError(
+                "source.arbitrary_select_v2 requires readable arbitrary basic waveform state "
+                "on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.arbitrary_select_v2 requires readable output state on every channel"
+            )
+
     if "source.output_v2" in capabilities:
         enabled = _channels_with_direction(
             extensions,
@@ -755,6 +813,70 @@ def _channels_with_sweep_configuration_readback(
     return sweep_channels & basic_sweep_channels
 
 
+def _channels_with_arbitrary_storage_mutation_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.ARBITRARY
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceArbitraryCapabilityProfile)
+            and feature.profile.selection_readable
+            and feature.profile.storage_metadata_readable
+            and feature.profile.storage_slot_metadata_readable
+            and bool(feature.profile.storage_write_modes)
+            and feature.profile.storage_max_payload_bytes is not None
+        )
+        for channel in feature.channels
+    )
+
+
+def _channels_with_arbitrary_selection_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.ARBITRARY
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceArbitraryCapabilityProfile)
+            and feature.profile.selection_readable
+            and feature.profile.storage_metadata_readable
+            and bool(feature.profile.playback_modes)
+            and (
+                SourceArbitraryPlaybackMode.TRUE_ARB not in feature.profile.playback_modes
+                or feature.profile.sample_rate_readable
+            )
+        )
+        for channel in feature.channels
+    )
+
+
+def _channels_with_arbitrary_basic_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.BASIC
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceBasicCapabilityProfile)
+            and SourceWaveformKind.ARBITRARY in feature.profile.waveform_kinds
+        )
+        for channel in feature.channels
+    )
+
+
 def _validate_declared_write_directions(
     extensions: SourceDescriptorExtensions,
     capabilities: frozenset[str],
@@ -782,6 +904,12 @@ def _validate_declared_write_directions(
         ),
         (SourceFeature.SWEEP, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.sweep_configure_v2"}
+        ),
+        (SourceFeature.ARBITRARY, SourceFeatureDirection.CONFIGURE): frozenset(
+            {
+                "source.arbitrary_storage_v2",
+                "source.arbitrary_select_v2",
+            }
         ),
         (SourceFeature.OUTPUT, SourceFeatureDirection.ENABLE): frozenset(
             {"source.output_v2"}
