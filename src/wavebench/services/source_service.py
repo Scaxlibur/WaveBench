@@ -162,13 +162,26 @@ class SourceService(SessionStateAliasMixin):
         require_capabilities(descriptor, capabilities, operation=operation)
 
     def _declared_source_capabilities(self) -> tuple[str, ...]:
-        """Return the descriptor declaration without opening an instrument session."""
+        """Best-effort descriptor lookup for an optional V1-to-V2 route decision.
 
-        source = self._source_config()
-        descriptor = self.descriptor or resolve_instrument_descriptor(
-            source.driver,
-            expected_kind="source",
-        )
+        The legacy method still owns validation when no descriptor is available.
+        This keeps V1 tests, mock sessions, and their original configuration
+        errors on the V1 path instead of making a route probe authoritative.
+        """
+
+        if self.descriptor is not None:
+            return self.descriptor.capabilities
+        try:
+            source = self._source_config()
+            driver_reference = getattr(source, "driver", None)
+            if not isinstance(driver_reference, str) or not driver_reference.strip():
+                return ()
+            descriptor = resolve_instrument_descriptor(
+                driver_reference,
+                expected_kind="source",
+            )
+        except (AttributeError, ConfigError):
+            return ()
         self.descriptor = descriptor
         return descriptor.capabilities
 
