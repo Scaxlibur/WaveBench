@@ -65,7 +65,12 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
     assert module.__all__[harmonic_start : harmonic_start + len(harmonic_exports)] == harmonic_exports
     match = re.search(r"M6-A／内部 AM 调制在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
     assert match is not None
-    assert module.__all__[harmonic_start + len(harmonic_exports) :] == match.group(1).splitlines()
+    modulation_exports = match.group(1).splitlines()
+    modulation_start = harmonic_start + len(harmonic_exports)
+    assert module.__all__[modulation_start : modulation_start + len(modulation_exports)] == modulation_exports
+    match = re.search(r"M6-A／WIDTH Pulse 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
+    assert match is not None
+    assert module.__all__[modulation_start + len(modulation_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -144,6 +149,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "hold_modes",
             "delay_readable",
             "transitions_readable",
+            "width_configuration_readable",
         ),
         "SourceArbitraryCapabilityProfile": (
             "playback_modes",
@@ -249,6 +255,14 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "internal_frequency_hz",
         ),
         "SourceModulationConfigureResult": ("channel", "modulation", "output_enabled"),
+        "SourcePulseConfigureRequest": (
+            "channel",
+            "width_s",
+            "delay_s",
+            "leading_transition_s",
+            "trailing_transition_s",
+        ),
+        "SourcePulseConfigureResult": ("channel", "pulse", "output_enabled"),
         "SourceAffectedClosure": (
             "operation",
             "context_id",
@@ -414,6 +428,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.basic_configure_v2": ("configure_source_basic_v2",),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
+        "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
@@ -607,6 +622,50 @@ def test_source_v2_modulation_write_models_are_closed_and_serializable() -> None
             ),
             False,
         )
+
+
+def test_source_v2_pulse_write_models_are_closed_and_serializable() -> None:
+    pulse = module.PulseFacet(
+        hold_basis=Observed.value_of(module.SourcePulseHoldBasis.WIDTH),
+        width_s=Observed.value_of(1.0e-6),
+        duty_cycle_percent=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+        delay_s=Observed.value_of(0.0),
+        leading_transition_s=Observed.value_of(1.0e-8),
+        trailing_transition_s=Observed.value_of(1.0e-8),
+    )
+    request = module.SourcePulseConfigureRequest(
+        channel=1,
+        width_s=1.0e-6,
+        delay_s=0.0,
+        leading_transition_s=1.0e-8,
+        trailing_transition_s=1.0e-8,
+    )
+    result = module.SourcePulseConfigureResult(1, pulse, False)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourcePulseConfigureRequest",
+        "channel": 1,
+        "width_s": 1.0e-6,
+        "delay_s": 0.0,
+        "leading_transition_s": 1.0e-8,
+        "trailing_transition_s": 1.0e-8,
+    }
+    assert result.pulse.hold_basis.value is module.SourcePulseHoldBasis.WIDTH
+    with pytest.raises(ValueError, match="must be >="):
+        module.SourcePulseConfigureRequest(1, 3.0e-9, 0.0, 1.0e-9, 1.0e-9)
+    with pytest.raises(ValueError, match="must be > 0"):
+        module.SourcePulseConfigureRequest(1, 1.0e-6, 0.0, 0.0, 1.0e-8)
+    with pytest.raises(ValueError, match="WIDTH hold readback"):
+        module.SourcePulseConfigureResult(
+            1,
+            replace(pulse, hold_basis=Observed.value_of(module.SourcePulseHoldBasis.DUTY)),
+            False,
+        )
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourcePulseConfigureResult(1, pulse, True)
 
 
 def test_source_v2_write_capabilities_require_matching_directions_and_readback() -> None:
@@ -922,6 +981,120 @@ def test_source_v2_modulation_write_requires_internal_am_direction_and_readback(
             descriptor,
             type(
                 "MissingModulationWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                },
+            )(),
+        )
+
+
+def test_source_v2_pulse_write_requires_width_direction_and_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    pulse = module.SourceFeatureCapability(
+        feature=module.SourceFeature.PULSE,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourcePulseCapabilityProfile(
+            hold_modes=(module.SourcePulseHoldBasis.WIDTH,),
+            delay_readable=True,
+            transitions_readable=True,
+            width_configuration_readable=True,
+        ),
+    )
+    pulse_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.PULSE,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.PULSE,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(basic, output, pulse),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                extensions.query_contract.facets[2],
+                pulse_query,
+            ),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=("source.snapshot_v2", "source.pulse_configure_v2"),
+    )
+
+    class PulseWriteDriver(SourceV2FakeDriver):
+        def configure_source_pulse_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, PulseWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="CONFIGURE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        output,
+                        replace(pulse, directions=(module.SourceFeatureDirection.READ,)),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable WIDTH pulse configuration"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        output,
+                        replace(
+                            pulse,
+                            profile=replace(
+                                pulse.profile,
+                                width_configuration_readable=False,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable output state"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(output, profile=replace(output.profile, output_readable=False)),
+                        pulse,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="configure_source_pulse_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingPulseWriteDriver",
                 (),
                 {
                     "close": lambda self: None,

@@ -4,12 +4,12 @@
 > 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic、内部 AM 子项已进入核心
+> 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic、内部 AM 子项，以及 WIDTH Pulse 的静态合同与 descriptor 门已进入核心
 > `0.8.24` 开发线；R6 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2` 和
-> `source.harmonics_configure_v2`、`source.modulation_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
+> `source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
 > M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 仍在进行；
-> 在该里程碑范围内，仅 Harmonic 与内部 AM 子项具备公开 Service、CLI 与 run plan 入口。
+> 在该里程碑范围内，Harmonic 与内部 AM 子项具备公开 Service、CLI 与 run plan 入口；WIDTH Pulse 仍只完成静态合同与 descriptor 门。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -483,6 +483,15 @@ SourceModulationConfigureRequest
 SourceModulationConfigureResult
 SourceModulationConfigureV2Driver
 SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
+M6-A／WIDTH Pulse 在上述清单末尾追加以下精确条目：
+
+```text
+SourcePulseConfigureRequest
+SourcePulseConfigureResult
+SourcePulseConfigureV2Driver
+SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
 ### capability 与 Protocol
@@ -2716,7 +2725,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
-| M6-A | `in-progress` | 单通道高级配置 | Harmonic、内部 AM 已 `implemented-unreleased`；FM／PM／PWM、Pulse、Sweep、Burst 继续按 feature 独立 opt in，复用基本写入门 |
+| M6-A | `in-progress` | 单通道高级配置 | Harmonic、内部 AM 已 `implemented-unreleased`；WIDTH Pulse 的合同与 descriptor 门已 `implemented-unreleased`，公开入口待后续子项完成；FM／PM／PWM、Sweep、Burst 继续按 feature 独立 opt in，复用基本写入门 |
 | M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
 | M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
@@ -3054,6 +3063,31 @@ V1，直到各自的 V2 capability 范围被单独冻结。
 一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不改变 M6-A 的整体状态，
 也不构成任何真实插件的写 capability 声明或实机验收。
+
+### M6-A 下一子能力：WIDTH Pulse
+
+`source.pulse_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的 WIDTH 脉冲形状。typed request 固定为
+`channel`、`width_s`、`delay_s`、`leading_transition_s` 与 `trailing_transition_s`。宽度必须不小于 `4 ns`，
+延迟必须为有限非负值，上升／下降沿必须为有限正值且各自不大于宽度的 `0.625` 倍。它不接受 DUTY hold、
+partial patch、波形自动切换、幅度／频率联动、Burst／Sweep／Modulation 联动、同步、trigger、输出 ON 或自动恢复。
+
+descriptor 必须同时声明 Pulse `READ`／`CONFIGURE`、WIDTH hold、delay 与 transition 可读，且
+`width_configuration_readable = true`。该 append-only profile 字段为真时，表示 WIDTH hold、width、delay、
+leading transition 与 trailing transition 都能以纯读 snapshot 独立回读。descriptor 还必须声明同一 channel 的
+Output `READ` 且可回读 output state。
+
+该 operation 使用 `POTENTIAL_WHILE_OFF`，静态字段闭包为同一 channel 的 Pulse／Output 和仪器 Identity。
+后续事务必须使用 fresh consistent snapshot、目标 output OFF、单次 driver 写、独立 postcondition 和主写入后的
+最多一次 V2 OFF recovery；它不隐式开启输出，也不把 Pulse state 纳入 basic restore。postcondition 必须确认
+output 仍为 OFF，并逐项确认 WIDTH hold、width、delay、leading transition 与 trailing transition。
+
+现有 `source.output_v2` 尚未获得 Pulse 输出 ON 的严格预算证明；本子能力只授权 OFF 状态配置，不能把配置成功
+解释为 Pulse 波形已获输出 ON 授权。双合同插件声明 `source.pulse_configure_v2` 后，V1 `configure_pulse` 应在
+仪器 I/O 前拒绝，而不是只映射 WIDTH 请求：V1 route 同时允许 DUTY hold，不能被首版 V2 无损覆盖。
+V1-only 插件及未声明该 capability 的双合同插件继续走 V1 路径。
+
+当前核心开发线已冻结 request/result、Protocol、operation contract 与 descriptor validation；尚未提供
+`SourceService`、CLI 或 run plan 入口。这一阶段不构成任何真实插件的写 capability 声明或实机验收。
 
 ### R6 延后事项
 

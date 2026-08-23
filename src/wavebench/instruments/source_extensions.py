@@ -570,11 +570,16 @@ class SourcePulseCapabilityProfile:
     hold_modes: tuple[SourcePulseHoldBasis, ...]
     delay_readable: bool
     transitions_readable: bool
+    width_configuration_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.hold_modes, SourcePulseHoldBasis, "pulse hold_modes")
         _require_bool(self.delay_readable, "pulse delay_readable")
         _require_bool(self.transitions_readable, "pulse transitions_readable")
+        _require_bool(
+            self.width_configuration_readable,
+            "pulse width_configuration_readable",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1070,6 +1075,36 @@ SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     v1_equivalent_routes=(),
     v1_overlapping_routes=(
         SourceV1WriteRouteId.CONFIGURE_AM,
+        SourceV1WriteRouteId.RESTORE,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.pulse_configure_v2",
+    capability="source.pulse_configure_v2",
+    feature=SourceFeature.PULSE,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.OUTPUT,
+        SourceFieldId.PULSE,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.PULSE,),
+    postcondition_fields=(
+        SourceFieldId.OUTPUT,
+        SourceFieldId.PULSE,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_PULSE,
         SourceV1WriteRouteId.RESTORE,
     ),
     operation_timeout_ms=5_000,
@@ -2246,6 +2281,43 @@ class SourceModulationConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourcePulseConfigureRequest:
+    channel: int
+    width_s: float
+    delay_s: float
+    leading_transition_s: float
+    trailing_transition_s: float
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source pulse configure channel", minimum=1)
+        _require_finite(
+            self.width_s,
+            "source pulse configure width_s",
+            minimum=4.0e-9,
+        )
+        _require_finite(
+            self.delay_s,
+            "source pulse configure delay_s",
+            minimum=0.0,
+        )
+        for label, value in (
+            ("leading_transition_s", self.leading_transition_s),
+            ("trailing_transition_s", self.trailing_transition_s),
+        ):
+            _require_finite(
+                value,
+                f"source pulse configure {label}",
+                minimum=0.0,
+            )
+            if value <= 0:
+                raise ValueError(f"source pulse configure {label} must be > 0")
+            if value > 0.625 * self.width_s:
+                raise ValueError(
+                    f"source pulse configure {label} must be <= 0.625 times width_s"
+                )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceBasicConfigureResult:
     channel: int
     basic: BasicWaveFacet
@@ -2607,6 +2679,43 @@ class PulseFacet:
                 minimum=0,
                 maximum=100,
             )
+
+
+@dataclass(frozen=True, slots=True)
+class SourcePulseConfigureResult:
+    channel: int
+    pulse: PulseFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source pulse configure result channel", minimum=1)
+        if not isinstance(self.pulse, PulseFacet):
+            raise ValueError("source pulse configure result pulse has an invalid type")
+        _require_bool(self.output_enabled, "source pulse configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source pulse configure result requires output_enabled=False")
+        if (
+            self.pulse.hold_basis.availability is not Availability.VALUE
+            or self.pulse.hold_basis.value is not SourcePulseHoldBasis.WIDTH
+        ):
+            raise ValueError("source pulse configure result requires WIDTH hold readback")
+        values: dict[str, float] = {}
+        for label, observed in (
+            ("width_s", self.pulse.width_s),
+            ("delay_s", self.pulse.delay_s),
+            ("leading_transition_s", self.pulse.leading_transition_s),
+            ("trailing_transition_s", self.pulse.trailing_transition_s),
+        ):
+            if observed.availability is not Availability.VALUE:
+                raise ValueError(f"source pulse configure result requires {label} readback")
+            values[label] = observed.value
+        SourcePulseConfigureRequest(
+            channel=self.channel,
+            width_s=values["width_s"],
+            delay_s=values["delay_s"],
+            leading_transition_s=values["leading_transition_s"],
+            trailing_transition_s=values["trailing_transition_s"],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3342,6 +3451,14 @@ class SourceModulationConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourcePulseConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_pulse_v2(
+        self,
+        request: SourcePulseConfigureRequest,
+    ) -> SourcePulseConfigureResult: ...
+
+
+@runtime_checkable
 class SourceOutputV2Driver(InstrumentDriver, Protocol):
     def set_source_output_v2(
         self,
@@ -3600,4 +3717,8 @@ __all__ = [
     "SourceModulationConfigureResult",
     "SourceModulationConfigureV2Driver",
     "SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourcePulseConfigureRequest",
+    "SourcePulseConfigureResult",
+    "SourcePulseConfigureV2Driver",
+    "SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT",
 ]
