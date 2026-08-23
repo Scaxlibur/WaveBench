@@ -505,6 +505,10 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
         "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
         "operation": "source.modulation_fm_configure_v2",
     }
+    pwm_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.modulation_pwm_configure_v2",
+    }
     burst_artifact = {
         "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
         "operation": "source.burst_configure_v2",
@@ -552,6 +556,13 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             assert request.frequency_deviation_hz == 12_500.0
             assert request.internal_frequency_hz == 25.0
             return object(), fm_artifact
+
+        def configure_pwm_modulation_v2(self, request):
+            assert request.channel == 1
+            assert request.internal_frequency_hz == 25.0
+            assert request.duty_deviation_percent == 25.0
+            assert request.width_deviation_s is None
+            return object(), pwm_artifact
 
         def configure_burst_v2(self, request):
             assert request.channel == 1
@@ -673,6 +684,22 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             ]
         )
         fm_payload = json.loads(capsys.readouterr().out)
+        pwm_code = cli.main(
+            [
+                "--json",
+                "source",
+                "pwm-modulation-configure-v2",
+                "--channel",
+                "1",
+                "--internal-frequency-hz",
+                "25",
+                "--duty-deviation-percent",
+                "25",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        pwm_payload = json.loads(capsys.readouterr().out)
         burst_code = cli.main(
             [
                 "--json",
@@ -708,6 +735,8 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
     assert pm_payload["result"] == pm_artifact
     assert fm_code == 0
     assert fm_payload["result"] == fm_artifact
+    assert pwm_code == 0
+    assert pwm_payload["result"] == pwm_artifact
     assert burst_code == 0
     assert burst_payload["result"] == burst_artifact
 
@@ -892,3 +921,31 @@ def test_source_v2_fm_modulation_cli_rejects_invalid_request_before_driver_call(
     assert exit_code == 2
     assert payload["schema"] == "wavebench.error.v1"
     assert "frequency_deviation_hz" in payload["message"]
+
+
+def test_source_v2_pwm_modulation_cli_rejects_invalid_request_before_driver_call(capsys) -> None:
+    class _Service:
+        def configure_pwm_modulation_v2(self, request):
+            raise AssertionError(request)
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "pwm-modulation-configure-v2",
+                "--channel",
+                "1",
+                "--internal-frequency-hz",
+                "25",
+                "--duty-deviation-percent",
+                "50.1",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert payload["schema"] == "wavebench.error.v1"
+    assert "duty_deviation_percent" in payload["message"]

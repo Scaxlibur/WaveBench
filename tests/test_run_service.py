@@ -641,6 +641,12 @@ frequency_deviation_hz = 12500
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 1
+internal_frequency_hz = 25
+duty_deviation_percent = 25
+
+[[steps]]
 kind = "source.burst_configure_v2"
 channel = 1
 cycles = 12
@@ -668,6 +674,7 @@ trailing_transition_s = 1e-8
                     "source.modulation_configure_v2",
                     "source.modulation_pm_configure_v2",
                     "source.modulation_fm_configure_v2",
+                    "source.modulation_pwm_configure_v2",
                     "source.burst_configure_v2",
                     "source.pulse_configure_v2",
                 ),
@@ -1532,6 +1539,12 @@ frequency_deviation_hz = 12500
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 1
+internal_frequency_hz = 25
+width_deviation_s = 1e-6
+
+[[steps]]
 kind = "source.burst_configure_v2"
 channel = 1
 cycles = 12
@@ -1580,6 +1593,10 @@ channel = 1
                 },
                 {
                     "schema": "wavebench.source.operation.v1",
+                    "operation": "source.modulation_pwm_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
                     "operation": "source.burst_configure_v2",
                 },
                 {
@@ -1601,11 +1618,12 @@ channel = 1
             source.configure_modulation_v2.return_value = (SimpleNamespace(), artifacts[2])
             source.configure_pm_modulation_v2.return_value = (SimpleNamespace(), artifacts[3])
             source.configure_fm_modulation_v2.return_value = (SimpleNamespace(), artifacts[4])
-            source.configure_burst_v2.return_value = (SimpleNamespace(), artifacts[5])
-            source.configure_pulse_v2.return_value = (SimpleNamespace(), artifacts[6])
+            source.configure_pwm_modulation_v2.return_value = (SimpleNamespace(), artifacts[5])
+            source.configure_burst_v2.return_value = (SimpleNamespace(), artifacts[6])
+            source.configure_pulse_v2.return_value = (SimpleNamespace(), artifacts[7])
             source.set_output_v2.side_effect = [
-                (SimpleNamespace(), artifacts[7]),
                 (SimpleNamespace(), artifacts[8]),
+                (SimpleNamespace(), artifacts[9]),
             ]
 
             class OfflineV2RunService(RunService):
@@ -1644,6 +1662,11 @@ channel = 1
             self.assertEqual(fm_request.channel, 1)
             self.assertEqual(fm_request.frequency_deviation_hz, 12_500.0)
             self.assertEqual(fm_request.internal_frequency_hz, 25.0)
+            pwm_request = source.configure_pwm_modulation_v2.call_args.args[0]
+            self.assertEqual(pwm_request.channel, 1)
+            self.assertEqual(pwm_request.internal_frequency_hz, 25.0)
+            self.assertIsNone(pwm_request.duty_deviation_percent)
+            self.assertEqual(pwm_request.width_deviation_s, 1.0e-6)
             burst_request = source.configure_burst_v2.call_args.args[0]
             self.assertEqual(burst_request.channel, 1)
             self.assertEqual(burst_request.cycles, 12)

@@ -33,6 +33,7 @@ ALLOWED_STEP_KINDS = {
     "source.modulation_configure_v2",
     "source.modulation_pm_configure_v2",
     "source.modulation_fm_configure_v2",
+    "source.modulation_pwm_configure_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
     "power.status",
@@ -64,6 +65,10 @@ _REQUIRED_FIELDS = {
     "source.modulation_fm_configure_v2": (
         "channel",
         "frequency_deviation_hz",
+        "internal_frequency_hz",
+    ),
+    "source.modulation_pwm_configure_v2": (
+        "channel",
         "internal_frequency_hz",
     ),
     "source.burst_configure_v2": (
@@ -158,6 +163,11 @@ _OPTIONAL_FIELDS = {
     "source.modulation_configure_v2": {"on_failure"},
     "source.modulation_pm_configure_v2": {"on_failure"},
     "source.modulation_fm_configure_v2": {"on_failure"},
+    "source.modulation_pwm_configure_v2": {
+        "duty_deviation_percent",
+        "width_deviation_s",
+        "on_failure",
+    },
     "source.burst_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
@@ -192,6 +202,7 @@ _STEP_NOTES = {
     "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
     "source.modulation_pm_configure_v2": "Configure one OFF Source V2 channel with internal sine PM; it does not enable output.",
     "source.modulation_fm_configure_v2": "Configure one OFF Source V2 channel with internal sine FM; it does not enable output.",
+    "source.modulation_pwm_configure_v2": "Configure one OFF Source V2 channel with internal sine PWM; it does not enable output.",
     "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
@@ -672,6 +683,36 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
         fields["frequency_deviation_hz"] = frequency_deviation
         fields["internal_frequency_hz"] = internal_frequency
+    elif kind == "source.modulation_pwm_configure_v2":
+        has_duty = "duty_deviation_percent" in fields
+        has_width = "width_deviation_s" in fields
+        if has_duty == has_width:
+            raise ConfigError(
+                f"{prefix} source.modulation_pwm_configure_v2 requires exactly one deviation branch"
+            )
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["internal_frequency_hz"] = internal_frequency
+        if has_duty:
+            duty = _finite_float(
+                fields["duty_deviation_percent"],
+                f"{prefix}.duty_deviation_percent",
+            )
+            if not 0 <= duty <= 50:
+                raise ConfigError(f"{prefix}.duty_deviation_percent must be in [0, 50]")
+            fields["duty_deviation_percent"] = duty
+        if has_width:
+            width = _finite_float(
+                fields["width_deviation_s"],
+                f"{prefix}.width_deviation_s",
+            )
+            if not 0 <= width <= 500_000:
+                raise ConfigError(f"{prefix}.width_deviation_s must be in [0, 500000]")
+            fields["width_deviation_s"] = width
     elif kind == "source.burst_configure_v2":
         cycles = fields["cycles"]
         if isinstance(cycles, bool) or not isinstance(cycles, int):

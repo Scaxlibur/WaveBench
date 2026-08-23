@@ -33,6 +33,7 @@ from wavebench.instruments.source_extensions import (
     SourceModulationConfigureRequest,
     SourceOutputRequest,
     SourcePmModulationConfigureRequest,
+    SourcePwmModulationConfigureRequest,
     SourcePulseConfigureRequest,
     SourceWaveformKind,
 )
@@ -419,6 +420,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.modulation_pm_configure_v2")
             elif step.kind == "source.modulation_fm_configure_v2":
                 add("source", "source.snapshot_v2", "source.modulation_fm_configure_v2")
+            elif step.kind == "source.modulation_pwm_configure_v2":
+                add("source", "source.snapshot_v2", "source.modulation_pwm_configure_v2")
             elif step.kind == "source.burst_configure_v2":
                 add("source", "source.snapshot_v2", "source.burst_configure_v2")
             elif step.kind == "source.pulse_configure_v2":
@@ -1183,6 +1186,16 @@ class RunService:
                     channel=step.fields["channel"],
                     frequency_deviation_hz=step.fields["frequency_deviation_hz"],
                     internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.modulation_pwm_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_pwm_modulation_v2(
+                SourcePwmModulationConfigureRequest(
+                    channel=step.fields["channel"],
+                    internal_frequency_hz=step.fields["internal_frequency_hz"],
+                    duty_deviation_percent=step.fields.get("duty_deviation_percent"),
+                    width_deviation_s=step.fields.get("width_deviation_s"),
                 )
             )
             artifact = {"source_operation": source_operation}

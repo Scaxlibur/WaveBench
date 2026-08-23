@@ -757,6 +757,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(source_fm_modulation_configure_v2)
 
+    source_pwm_modulation_configure_v2 = source_sub.add_parser(
+        "pwm-modulation-configure-v2",
+        help="Configure one OFF Source V2 channel with internal sine PWM",
+    )
+    source_pwm_modulation_configure_v2.add_argument("--channel", type=int, required=True)
+    source_pwm_modulation_configure_v2.add_argument(
+        "--internal-frequency-hz",
+        type=float,
+        required=True,
+    )
+    pwm_deviation = source_pwm_modulation_configure_v2.add_mutually_exclusive_group(
+        required=True
+    )
+    pwm_deviation.add_argument("--duty-deviation-percent", type=float)
+    pwm_deviation.add_argument("--width-deviation-s", type=float)
+    add_runtime_options(source_pwm_modulation_configure_v2)
+
     source_burst_configure_v2 = source_sub.add_parser(
         "burst-configure-v2",
         help="Configure one OFF Source V2 channel with an internal Triggered Burst",

@@ -713,6 +713,18 @@ class CliTests(unittest.TestCase):
                 "25",
             ]
         )
+        pwm = build_parser().parse_args(
+            [
+                "source",
+                "pwm-modulation-configure-v2",
+                "--channel",
+                "2",
+                "--internal-frequency-hz",
+                "25",
+                "--width-deviation-s",
+                "1e-6",
+            ]
+        )
         burst = build_parser().parse_args(
             [
                 "source",
@@ -760,6 +772,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(fm.channel, 2)
         self.assertEqual(fm.frequency_deviation_hz, 12_500.0)
         self.assertEqual(fm.internal_frequency_hz, 25.0)
+        self.assertEqual(pwm.command, "pwm-modulation-configure-v2")
+        self.assertEqual(pwm.channel, 2)
+        self.assertEqual(pwm.internal_frequency_hz, 25.0)
+        self.assertIsNone(pwm.duty_deviation_percent)
+        self.assertEqual(pwm.width_deviation_s, 1.0e-6)
         self.assertEqual(burst.command, "burst-configure-v2")
         self.assertEqual(burst.channel, 2)
         self.assertEqual(burst.cycles, 12)

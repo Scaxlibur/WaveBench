@@ -334,6 +334,12 @@ frequency_deviation_hz = 12500
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 2
+internal_frequency_hz = 25
+duty_deviation_percent = 25
+
+[[steps]]
 kind = "source.burst_configure_v2"
 channel = 2
 cycles = 12
@@ -378,7 +384,16 @@ trailing_transition_s = 1e-8
                 "internal_frequency_hz": 25.0,
             },
         )
-        burst = plan.steps[7]
+        pwm = plan.steps[7]
+        self.assertEqual(
+            pwm.fields,
+            {
+                "channel": 2,
+                "internal_frequency_hz": 25.0,
+                "duty_deviation_percent": 25.0,
+            },
+        )
+        burst = plan.steps[8]
         self.assertEqual(
             burst.fields,
             {
@@ -389,7 +404,7 @@ trailing_transition_s = 1e-8
                 "delay_s": 0.5,
             },
         )
-        pulse = plan.steps[8]
+        pulse = plan.steps[9]
         self.assertEqual(
             pulse.fields,
             {
@@ -488,6 +503,17 @@ internal_frequency_hz = 25
         with self.assertRaisesRegex(ConfigError, "frequency_deviation_hz must be > 0"):
             load_run_plan(zero_fm_deviation)
 
+        invalid_pwm_branches = self._write_plan("""
+[[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 2
+internal_frequency_hz = 25
+duty_deviation_percent = 25
+width_deviation_s = 1e-6
+""")
+        with self.assertRaisesRegex(ConfigError, "exactly one deviation branch"):
+            load_run_plan(invalid_pwm_branches)
+
         invalid_burst_cycles = self._write_plan("""
 [[steps]]
 kind = "source.burst_configure_v2"
@@ -535,6 +561,7 @@ trailing_transition_s = 1e-8
         self.assertIn("source.modulation_configure_v2", text)
         self.assertIn("source.modulation_pm_configure_v2", text)
         self.assertIn("source.modulation_fm_configure_v2", text)
+        self.assertIn("source.modulation_pwm_configure_v2", text)
         self.assertIn("source.burst_configure_v2", text)
         self.assertIn("source.pulse_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
