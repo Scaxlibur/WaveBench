@@ -1,11 +1,11 @@
 # WaveBench Source V2 能力、状态与复合输出安全 RFC
 
 > 状态：`Accepted`
-> 修订：`R5`
+> 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5 与 C1 已进入核心 `0.8.24` 开发线；只注册
-> `source.snapshot_v2`，未注册写 capability
+> 实施状态：P0、M1–M4、M4.5 与 C1 已进入核心 `0.8.24` 开发线；R6 已接受，
+> M5-A 起的基础写入实现尚未开始。当前只注册 `source.snapshot_v2`，未注册写 capability。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -47,6 +47,7 @@ Harmonic、Modulation、Sweep、Burst、Pulse、Noise、DC、ARB、Counter、Com
 | R3 | Accepted | 冻结 M3 的绝对端口电压配置、端接证据、预算 blocker、端口/共享功率预算模型和纯计算器；不注册任何 V2 写 capability |
 | R4 | Accepted | 冻结 M4 的 Source operation contract、affected closure、固定 phase、core-owned baseline 与离线事务协调者；不注册任何 V2 写 capability |
 | R5 | Accepted | 冻结 M4.5 的 V1 写路由清单和 additive artifact 边界，并实现 C1 的受管 wheel/descriptor PEP 440 交叉门与 V1/V2 兼容 fixture；不注册任何 V2 写 capability |
+| R6 | Accepted | 冻结基本写入安全、核心接口归属和兼容边界；授权按 M5-A → M5-B → M5-C → M5-D → C2 → M6-A → M6-B → M6-C → M7 → C3 实施 |
 
 ## Accepted R5 范围
 
@@ -2654,9 +2655,8 @@ R5 已加入以下纯离线兼容 fixture，作为上述要求的持续回归：
 5. 本次接受只授权 M1–M2。组合／标量 fake、负向测试和兼容矩阵属于实施退出门，不再作为
    `Accepted` 之前必须先写代码的条件。
 
-后续任一 V2 写 capability 注册前，还必须补齐该 feature 的 request/result、完整
-`SourceOperationContract`、closure、预算、恢复、artifact、双合同入口和 A0 验收；本 RFC
-`Accepted` 不会自动批准全部保留写 ID。
+R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础写入冻结较小的安全集合，
+并授权按其里程碑逐项注册 capability；R6 仍不会自动批准未列入对应里程碑的保留写 ID。
 
 ## 实施里程碑
 
@@ -2669,9 +2669,17 @@ R5 已加入以下纯离线兼容 fixture，作为上述要求的持续回归：
 | M4 | `implemented-unreleased` | Source operation context | phase、单写、closure、cleanup reserve、session health、nonce 和恢复 fixture 通过；仍不注册写 capability |
 | M4.5 | `implemented-unreleased` | V1 路由审计与 artifact 兼容防线 | 18 条 V1 写路由及其间接入口冻结；V2 写 operation/run plan 为零；空 `source_operations` 不改变 V1 `run.json`，非空根键保持 additive |
 | C1 | `implemented-unreleased` | 受管插件版本门与兼容矩阵 | metadata import-before gate、wheel/descriptor PEP 440 交叉校验、合成 V1 entry point 的 V1 成功/V2 零 I/O 拒绝，以及生命周期回滚 fixture 通过 |
-| M5 | 未授权 | 分 feature 写 capability | basic/output 起步；每项分别完成 request/result、预算、恢复、双合同映射和 A0 |
-| M6 | 未授权 | ARB storage 与跨通道 | CAS storage、selection、Combine/Coupling 图、多通道 OFF 和共享功率合同通过 |
-| M7 | 未授权 | 插件逐项 opt in | 在单独授权和合适接线下按 scheme `wavebench.source.a0-a5.v1` 逐 capability 验收 |
+| R6 | `Accepted` | 基础写入方向 | 冻结基本安全、核心接口、V1 兼容和下列实施顺序 |
+| M5-A | 未开始 | 公共类型与静态验证 | `basic_configure_v2`／`output_v2` 的 request、result、Protocol、descriptor validation 和 A0 构造测试通过；不开放写入口 |
+| M5-B | 未开始 | 基础配置事务 | 输出 OFF 的 basic configure、单写、回读、失败恢复和 operation artifact 通过；不改变 V1 setter |
+| M5-C | 未开始 | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
+| M5-D | 未开始 | 公共入口与双合同路由 | Service／CLI 后，新增 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
+| C2 | 未开始 | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过 |
+| M6-A | 未开始 | 单通道高级配置 | Harmonic、Modulation、Pulse、Sweep、Burst 按 feature 独立 opt in，复用基本写入门 |
+| M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
+| M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
+| M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
+| C3 | 未开始 | 稳定发布审计 | 首个真实插件完成 M5 基础能力、文档和包检查完成、无未登记写 capability |
 | P0 | `implemented-unreleased` | V1 `amplitude=None` 失败关闭 | ON 对缺失、非有限、非 VPP 或负 Vpp 在 driver 写入前返回稳定 `ConfigError`；OFF 保持原有可执行语义 |
 
 ## 已否决方案
@@ -2728,9 +2736,63 @@ R5 已加入以下纯离线兼容 fixture，作为上述要求的持续回归：
 - R5 的合成 fixture 证明当前核心门禁及回滚语义，不替代历史核心发行物、外部插件 wheel 或实机的
   独立兼容与 conformance 验收。
 
-## 剩余开放问题
+## R6 基础写入修订
 
-以下问题不阻塞 snapshot-only 的 M1–M2，但会阻塞对应写 capability：
+R6 在不改变 Source V1 公共合同的前提下，授权基础 Source V2 写能力。其目标是让已经能返回最终
+Vpp、Offset 和输出状态的设备正常使用信号发生器功能，而不是把完整电气模型、统计模型或发布
+基础设施变成每次写入的前置条件。
+
+### R6 基本安全
+
+`source.basic_configure_v2` 与 `source.output_v2` 使用以下核心门：
+
+1. 请求值、设备回读值和单位必须有效；Vpp 必须为有限、非负的最终输出 Vpp，Offset 必须为有限值。
+2. 若配置了 `max_source_vpp`，目标与回读 Vpp 不得超过该限制；没有该配置时，不将其解释为拒绝
+   基础 Source V2 功能。
+3. 若同时配置了 `min_source_port_voltage_v` 和 `max_source_port_voltage_v`，核心以
+   `offset ± Vpp / 2` 检查该端口区间；两个配置均缺失时，不增加额外端口电压限制。
+4. 基础配置要求目标通道在写前为 OFF；不支持 V2 live mutation。独立端口可以同时保持 ON，核心
+   不为缺少共享功率或热模型而全局拒绝。
+5. 每个目标字段最多写入一次；写后必须独立回读。结果不明时不得重试；在 session 仍允许 recovery
+   I/O 时请求受影响端口 OFF，`poisoned` session 仍遵守 transport RFC 的 close-only 规则。
+6. `source.output_v2` 的 OFF 不因 Vpp、Offset、端接或预算信息缺失而拒绝；ON 使用 fresh snapshot
+   和上述数值检查。
+
+基础写入不要求 `SourceTerminationEvidence`、`CompositeOutputBudget`、RMS、Noise crest factor、ARB
+插值上界、复杂负载或共享热功率模型。R3 的严格预算模型继续保留给明确选择它的后续 capability，
+不能反向限制 R6 的 basic/output 正常路径。
+
+Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使用 `offset ± Vpp / 2`；不要求独立
+`SourceNoisePeakConstraint`。若设备只能提供标称值、RMS 或载波幅度，插件不得为该模式声明
+`source.output_v2`，直到能够返回最终 Vpp 或定义专项 capability。
+
+跨通道关系不构成全局单端口 ON 限制。没有已启用 Combine、Coupling、Tracking 或相位关系时，端口
+分别检查。关系影响多个端口时，相关配置要求受影响端口 OFF，并要求插件回读每个受影响端口的最终
+状态；无法确定影响范围时只拒绝该跨通道 operation。
+
+### R6 接口归属与兼容
+
+- 核心拥有所有 V2 capability ID、request/result、Protocol、`OperationSpec`、错误 envelope、CLI、
+  run plan step 和 operation artifact；插件不得自行拼接新的公共写 ID。
+- `source.basic_configure_v2` 和 `source.output_v2` 是独立 capability，不提供通用
+  `source.patch_v2`、`source.arm_v2` 或 `source.fire_v2`。
+- 新类型、descriptor 字段和 artifact 键必须 append-only；既有 `SourceDriver`、`SourceStatus`、
+  V1 CLI、V1 run step、V1 JSON 和 V1 artifact 不改变语义。
+- V1-only 插件继续执行 V1 路径。双合同插件声明某项 V2 capability 后，核心在 M5-D 将同义或副作用
+  重叠的 V1 route 映射到 V2，无法无损映射时在仪器 I/O 前拒绝；不相交的 V1 route 保持原行为。
+- M5-D 在同一开发线内先完成 Service／CLI，再增加 V2 run plan step、intent 和 artifact；中间不发布
+  稳定写接口。
+
+### R6 延后事项
+
+RMS、统计 Noise、反应性／非线性负载、ARB 插值过冲、共享热功率、manifest 签名和信任根不阻塞
+基础写入。它们仅在某一设备无法返回最终 Vpp／Offset、或某一后续 capability 明确需要更窄边界时
+再按 feature 增加；不得用缺少这些模型作为阻止普通信号发生器基本配置和独立端口输出的理由。
+
+## 剩余开放问题（不阻塞 R6 基础写入）
+
+以下问题不阻塞 R6 的 basic/output 正常路径。它们只影响无法返回最终 Vpp／Offset、需要更精确电气
+边界，或明确选择严格预算模型的后续 capability：
 
 1. `SourceTerminationEvidence` 对应的 TOML、run intent 和 CLI 人工确认语法；公共类型和有效期规则已冻结。
 2. 反应性、频率相关、非线性和未知负载是否扩展首版纯电阻模型；未扩展前固定失败关闭。
@@ -2741,7 +2803,6 @@ R5 已加入以下纯离线兼容 fixture，作为上述要求的持续回归：
 7. conformance manifest 是否增加签名、签名信任根和长期保留策略；schema、scheme、wheel 路径和摘要已冻结。
 8. 历史插件证据逐份迁移后的正式 manifest 清单；禁止全局等级替换。
 
-这些问题描述的是「未来端口电压、电流或功率能否被保守上界覆盖」，只读 snapshot 不执行
-setter、trigger、storage mutation 或输出转换，因此不需要用尚未证明的负载／过冲模型放行任何
-动作。它们会阻塞写能力，是因为输出 ON、fire、恢复 ON 和 live mutation 必须证明完整目标状态
-在实验台绝对电压、Vpp、端接和设备共享功率边界内；缺少任一硬边界时只能失败关闭。
+这些问题描述的是更精确的端口电压、电流和功率上界。R6 只使用设备最终回读的 Vpp、Offset、输出
+状态和已配置的基础限制；不能获得这些基本事实时才失败关闭。后续 feature 若需要额外模型，必须在
+其 capability 合同中明确声明，而不是把全部问题提升为普通 Source V2 写入的前置条件。
