@@ -165,10 +165,12 @@ def build_source_snapshot(
     plan: SourceSemanticQueryPlan,
     execution: SourceQueryExecutionRecord,
     session_health_after: str,
+    allow_uncertain_session: bool = False,
 ) -> SourceSnapshotV2:
     if time.monotonic() > plan.deadline_monotonic:
         raise SourceSnapshotContractError("source snapshot query deadline was exceeded")
-    if session_health_after != "healthy":
+    accepted_health = {"healthy", "uncertain"} if allow_uncertain_session else {"healthy"}
+    if session_health_after not in accepted_health:
         raise SourceSnapshotContractError(
             "source snapshot session health changed before validation completed"
         )

@@ -4,9 +4,9 @@
 > 修订：`R6`
 > 核心基线：WaveBench `0.8.23`，`master@6cd2eb5`
 > 首个支持版本：WaveBench `0.8.24`
-> 实施状态：P0、M1–M4、M4.5、C1 与 M5-A 已进入核心 `0.8.24` 开发线；R6 已接受。
+> 实施状态：P0、M1–M4、M4.5、C1、M5-A 与 M5-B 已进入核心 `0.8.24` 开发线；R6 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2` 和 `source.output_v2`；M5-A 只冻结
-> 公共合同与 descriptor 校验，尚未开放 Source V2 写入口。
+> 公共合同与 descriptor 校验，M5-B 只提供内部基础配置事务，尚未开放 Source V2 写入口。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -2690,7 +2690,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | C1 | `implemented-unreleased` | 受管插件版本门与兼容矩阵 | metadata import-before gate、wheel/descriptor PEP 440 交叉校验、合成 V1 entry point 的 V1 成功/V2 零 I/O 拒绝，以及生命周期回滚 fixture 通过 |
 | R6 | `Accepted` | 基础写入方向 | 冻结基本安全、核心接口、V1 兼容和下列实施顺序 |
 | M5-A | `implemented-unreleased` | 公共类型与静态验证 | `basic_configure_v2`／`output_v2` 的 request、result、Protocol、descriptor validation 和 A0 构造测试通过；不开放写入口 |
-| M5-B | 未开始 | 基础配置事务 | 输出 OFF 的 basic configure、单写、回读、失败恢复和 operation artifact 通过；不改变 V1 setter |
+| M5-B | `implemented-unreleased` | 基础配置事务 | 输出 OFF 的 basic configure、单写、回读、失败恢复和 operation artifact 通过；不改变 V1 setter |
 | M5-C | 未开始 | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | 未开始 | 公共入口与双合同路由 | Service／CLI 后，新增 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | 未开始 | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过 |
@@ -2811,7 +2811,8 @@ Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使�
 M5-A 只增加闭合的单通道 model，不提供自由 mapping 或通用 patch capability。`PatchValue` 只有
 `KEEP` 与 `SET` 两种 action；`SET` 必须带有限值，`KEEP` 必须不带值。`SourceBasicPatch` 仅含
 `waveform_kind`、`frequency_hz`、`amplitude_vpp`、`offset_v` 和 `square_duty_cycle_percent`，并且至少
-有一个字段为 `SET`。`SourceBasicConfigureRequest` 只接受 `PatchMode.PATCH`，不接受 replace-all。
+有一个字段为 `SET`。`ARBITRARY` 与 `OTHER` 不属于此 basic patch。`SourceBasicConfigureRequest` 只接受
+`PatchMode.PATCH`，不接受 replace-all。
 
 `SourceBasicConfigureResult` 返回同一 channel 的 `BasicWaveFacet` 和 `output_enabled=False`。其中最终
 幅度必须是有限、非负的 Vpp，最终 Offset 必须为有限值。`SourceOutputRequest` 是单通道的
@@ -2833,6 +2834,37 @@ Offset。方向、profile、channel 或 required method 不匹配时，在 facto
 
 M5-A 不增加 `SourceService` 写方法、CLI 写命令或 run plan step；现有 V1 setter、CLI、run plan、TUI
 和 artifact 保持原样。capability 注册只让核心识别插件合同，不构成可调用写入口。
+
+### M5-B 基础配置事务
+
+M5-B 只实现 `SourceService` 内部的 `_configure_basic_v2_transaction()`；它不是公开 Python API，也不新增
+CLI、TUI 或 run plan 入口。M5-D 以前，外部调用方不能借此绕过 Service／CLI 的统一接口设计。
+
+事务仅处理一个 channel，按以下顺序执行：
+
+1. 在独占会话中读取 fresh、consistent 的 Source V2 snapshot，确认目标 channel 输出为 OFF，并确认
+   runtime profile 仍支持 `BASIC/CONFIGURE`。
+2. 使用当前最终 Vpp、Offset 与 patch 中明确设置的值检查 `max_source_vpp`；只有两个绝对端口电压
+   限制均已配置时，才检查 `offset ± Vpp / 2`。不引入端接、RMS、Noise crest factor、ARB 过冲或共享
+   功率前置条件。
+3. 以单一 `configure_source_basic_v2(request)` 调用执行配置。每个 target field 在正常路径上至多发送
+   一次写入；值相同的请求允许 driver 返回零写入结果。
+4. 读取独立 postcondition snapshot，确认目标仍为 OFF、每个 `SET` 字段与回读相符，且最终 Vpp／Offset
+   与 driver result 相符。
+
+snapshot 的 transport 步数由该 descriptor 已声明的 `query_contract.max_queries` 限定，因此组合式与
+独立标量式 Source V2 driver 都能使用该事务；核心不会把它缩窄为某一种协议批处理方式。
+
+当 MAIN 已开始而 result 或 postcondition 失败时，核心最多尝试一次 `source.output_v2` 的 OFF。只有
+插件同时声明该 capability、session 仍允许 recovery I/O 且 OFF 回读成功时，artifact 记录
+`off_verified`；basic 状态仍可能未知，因此 session 保持 `uncertain`，不会伪装为已恢复。未声明
+`source.output_v2` 时，核心不会调用 V1 `set_output` 作为旁路，连接转为 `poisoned`。任何 recovery
+write、OFF readback 或同步失败也保持更保守的 session 状态。
+
+成功与 MAIN 后失败的内部 artifact 均使用 `wavebench.source.operation.v1`，包含 capability 决定、
+typed request/result、preflight／postcondition snapshot 摘要、phase 摘要、最终 session 状态和脱敏
+evidence ref。它不包含 raw SCPI、资源地址、完整响应、授权 token 或 baseline nonce。M5-B 尚不将
+这些 artifact 写入 `run.json`；该连接由 M5-D 负责。
 
 ### R6 延后事项
 

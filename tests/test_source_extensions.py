@@ -432,6 +432,13 @@ def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
         module.PatchValue(module.PatchAction.KEEP, 1.0)
     with pytest.raises(ValueError, match="at least one SET"):
         module.SourceBasicPatch()
+    with pytest.raises(ValueError, match="arbitrary or other"):
+        module.SourceBasicPatch(
+            waveform_kind=module.PatchValue(
+                module.PatchAction.SET,
+                module.SourceWaveformKind.ARBITRARY,
+            )
+        )
     with pytest.raises(ValueError, match="must be >= 0.0"):
         module.SourceBasicPatch(amplitude_vpp=module.PatchValue(module.PatchAction.SET, -0.1))
     with pytest.raises(ValueError, match="only supports PATCH"):

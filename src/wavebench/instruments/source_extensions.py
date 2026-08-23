@@ -2082,6 +2082,13 @@ class SourceBasicPatch:
             SourceWaveformKind,
         ):
             raise ValueError("source basic patch waveform_kind must be SourceWaveformKind")
+        if self.waveform_kind.action is PatchAction.SET and self.waveform_kind.value in {
+            SourceWaveformKind.ARBITRARY,
+            SourceWaveformKind.OTHER,
+        }:
+            raise ValueError(
+                "source basic patch waveform_kind cannot configure arbitrary or other waveforms"
+            )
         for label, value, minimum, maximum in (
             ("frequency_hz", self.frequency_hz, 0.0, None),
             ("amplitude_vpp", self.amplitude_vpp, 0.0, None),

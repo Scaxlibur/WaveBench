@@ -60,9 +60,34 @@ from wavebench.instruments.models import (
     SourceStatus,
 )
 from wavebench.instruments.source_extensions import (
+    Availability,
+    BasicWaveFacet,
+    OutputFacet,
+    PatchAction,
+    SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_CONTRACT_VERSION,
+    SnapshotConsistencyState,
     SourceDescriptorExtensions,
+    SourceAmplitude,
+    SourceAmplitudeUnit,
+    SourceBasicCapabilityProfile,
+    SourceBasicConfigureRequest,
+    SourceBasicConfigureResult,
+    SourceBasicConfigureV2Driver,
+    SourceFacetScope,
+    SourceFieldId,
+    SourceFieldRef,
+    SourceFeature,
+    SourceFeatureDirection,
+    SourceOutputRequest,
+    SourceOutputResult,
+    SourceOutputV2Driver,
+    SourceScopeRef,
     SourceSnapshotV2,
     SourceSnapshotV2Driver,
+    SupportState,
+    source_v2_digest,
+    source_v2_to_data,
 )
 from wavebench.logging import CommandLogger
 from wavebench.instruments.registry import resolve_instrument_descriptor
@@ -81,6 +106,19 @@ from wavebench.services.source_snapshot_v2 import (
     build_source_snapshot_plan,
     new_source_snapshot_context,
 )
+from wavebench.services.source_operation_context import (
+    SourceOperationContextCoordinator,
+    SourceOperationPhase,
+)
+from wavebench.transport.session import SessionHealth
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceBasicConfigureV2Transaction:
+    """Internal M5-B result; public Source V2 write entry points come later."""
+
+    result: SourceBasicConfigureResult
+    artifact: dict[str, object]
 
 
 @dataclass
@@ -199,45 +237,613 @@ class SourceService(SessionStateAliasMixin):
     def snapshot_v2(self, *, correlation_id: str | None = None) -> SourceSnapshotV2:
         self._require("source.snapshot_v2", "source.snapshot_v2")
         with self._source_session() as source:
-            descriptor = self.descriptor
-            extensions = None if descriptor is None else descriptor.source_extensions
-            if not isinstance(extensions, SourceDescriptorExtensions):
-                raise SourceSnapshotContractError(
-                    "source.snapshot_v2 requires validated source_extensions"
-                )
             session_state = self.session_state
             if session_state is None:
                 raise SourceSnapshotContractError(
                     "source.snapshot_v2 requires a connection-bound session state"
                 )
             with session_state.transaction_lock:
-                if session_state.health.value != "healthy":
-                    raise SourceSnapshotContractError(
-                        "source.snapshot_v2 requires a healthy session"
-                    )
-                timeout_ms = min(
-                    SOURCE_SNAPSHOT_OPERATION_TIMEOUT_MS,
-                    extensions.query_contract.timeout_ms,
-                    self.config.connection.timeout_ms,
-                )
-                context = new_source_snapshot_context(
-                    session_epoch=session_state.epoch_id,
-                    session_health_before=session_state.health.value,
-                    descriptor_extensions=extensions,
-                    timeout_ms=timeout_ms,
+                return self._snapshot_v2_with_open_source(
+                    source,
                     correlation_id=correlation_id,
                 )
-                plan = build_source_snapshot_plan(context)
-                execution = cast(
-                    SourceSnapshotV2Driver,
-                    source,
-                ).execute_source_query_plan_v2(plan)
-                return build_source_snapshot(
-                    context=context,
-                    plan=plan,
-                    execution=execution,
-                    session_health_after=session_state.health.value,
+
+    def _snapshot_v2_with_open_source(
+        self,
+        source: SourceDriver,
+        *,
+        correlation_id: str | None,
+        allow_uncertain_session: bool = False,
+        deadline: float | None = None,
+    ) -> SourceSnapshotV2:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.source_extensions
+        if not isinstance(extensions, SourceDescriptorExtensions):
+            raise SourceSnapshotContractError(
+                "source.snapshot_v2 requires validated source_extensions"
+            )
+        session_state = self.session_state
+        if session_state is None:
+            raise SourceSnapshotContractError(
+                "source.snapshot_v2 requires a connection-bound session state"
+            )
+        accepted_health = {SessionHealth.HEALTHY}
+        if allow_uncertain_session:
+            accepted_health.add(SessionHealth.UNCERTAIN)
+        if session_state.health not in accepted_health:
+            raise SourceSnapshotContractError(
+                "source.snapshot_v2 requires a healthy session"
+            )
+        timeout_ms = min(
+            SOURCE_SNAPSHOT_OPERATION_TIMEOUT_MS,
+            extensions.query_contract.timeout_ms,
+            self.config.connection.timeout_ms,
+        )
+        if deadline is not None:
+            remaining_ms = int((deadline - time.monotonic()) * 1000.0)
+            if remaining_ms < 1:
+                raise SourceSnapshotContractError("source snapshot query deadline was exceeded")
+            timeout_ms = min(timeout_ms, remaining_ms)
+        context = new_source_snapshot_context(
+            session_epoch=session_state.epoch_id,
+            session_health_before=session_state.health.value,
+            descriptor_extensions=extensions,
+            timeout_ms=timeout_ms,
+            correlation_id=correlation_id,
+        )
+        plan = build_source_snapshot_plan(context)
+        execution = cast(
+            SourceSnapshotV2Driver,
+            source,
+        ).execute_source_query_plan_v2(plan)
+        return build_source_snapshot(
+            context=context,
+            plan=plan,
+            execution=execution,
+            session_health_after=session_state.health.value,
+            allow_uncertain_session=allow_uncertain_session,
+        )
+
+    def _configure_basic_v2_transaction(
+        self,
+        request: SourceBasicConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> _SourceBasicConfigureV2Transaction:
+        """Execute the private M5-B basic-write transaction.
+
+        This method deliberately remains private until M5-D owns the public
+        Service, CLI, run-plan and V1 dual-contract routes.  It is the single
+        core path that M5-B tests use to prove the write/recovery contract.
+        """
+
+        if not isinstance(request, SourceBasicConfigureRequest):
+            raise ConfigError("source.basic_configure_v2 requires SourceBasicConfigureRequest")
+        self._require(
+            "source.basic_configure_v2",
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(
+                    "source.basic_configure_v2 requires validated source_extensions"
                 )
+            if session_state is None:
+                raise ConfigError(
+                    "source.basic_configure_v2 requires a connection-bound session state"
+                )
+            fields = self._source_basic_v2_fields(request.channel)
+            output_field = next(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec("source.basic_configure_v2"),
+                operation_contract=SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(
+                    SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel),
+                ),
+                emergency_off_outputs=(
+                    SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel),
+                ),
+                restore_order=(),
+                non_restorable_fields=(
+                    next(field for field in fields if field.field is SourceFieldId.BASIC),
+                    output_field,
+                ),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceBasicConfigureResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_basic, preflight_output = self._source_basic_v2_target(
+                        preflight_snapshot,
+                        request.channel,
+                    )
+                    self._validate_source_basic_v2_preflight(
+                        request,
+                        preflight_snapshot,
+                        preflight_basic,
+                        preflight_output,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest((request.channel, preflight_basic, preflight_output))
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write"},
+                    fields=(
+                        next(field for field in fields if field.field is SourceFieldId.BASIC),
+                    ),
+                    max_steps=SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        result = cast(SourceBasicConfigureV2Driver, source).configure_source_basic_v2(
+                            request
+                        )
+                        self._validate_source_basic_v2_result(request, result)
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=(
+                                next(
+                                    field
+                                    for field in fields
+                                    if field.field is SourceFieldId.BASIC
+                                ),
+                                output_field,
+                            ),
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            postcondition_basic, postcondition_output = (
+                                self._source_basic_v2_target(
+                                    postcondition_snapshot,
+                                    request.channel,
+                                )
+                            )
+                            assert result is not None
+                            self._validate_source_basic_v2_postcondition(
+                                request,
+                                result,
+                                postcondition_snapshot,
+                                postcondition_basic,
+                                postcondition_output,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=(
+                                    next(
+                                        field
+                                        for field in fields
+                                        if field.field is SourceFieldId.BASIC
+                                    ),
+                                    output_field,
+                                ),
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_basic_v2_off(
+                                context,
+                                source,
+                                request.channel,
+                                extensions,
+                                output_field,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_basic_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceBasicConfigureV2Transaction(
+                    result=result,
+                    artifact=self._source_basic_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
+    @staticmethod
+    def _source_basic_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
+        target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+        fields = (
+            SourceFieldRef(SourceFieldId.BASIC, target),
+            SourceFieldRef(SourceFieldId.OUTPUT, target),
+            SourceFieldRef(
+                SourceFieldId.IDENTITY,
+                SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _source_basic_v2_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+    ) -> tuple[BasicWaveFacet, OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError("source.basic_configure_v2 target channel is absent from snapshot")
+        if target.basic.availability is not Availability.VALUE or not isinstance(
+            target.basic.value,
+            BasicWaveFacet,
+        ):
+            raise ConfigError("source.basic_configure_v2 requires readable basic state")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError("source.basic_configure_v2 requires readable output state")
+        return target.basic.value, target.output.value
+
+    def _validate_source_basic_v2_preflight(
+        self,
+        request: SourceBasicConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        output: OutputFacet,
+    ) -> None:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError("source.basic_configure_v2 requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError("source.basic_configure_v2 requires target output OFF")
+        if not any(
+            feature.feature is SourceFeature.BASIC
+            and feature.scope is SourceFacetScope.CHANNEL
+            and request.channel in feature.channels
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.CONFIGURE in feature.directions
+            for feature in snapshot.runtime_profile.features
+        ):
+            raise ConfigError(
+                "source.basic_configure_v2 is not available for the runtime target channel"
+            )
+        runtime_basic = next(
+            feature
+            for feature in snapshot.runtime_profile.features
+            if feature.feature is SourceFeature.BASIC
+            and feature.scope is SourceFacetScope.CHANNEL
+            and request.channel in feature.channels
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.CONFIGURE in feature.directions
+        )
+        assert isinstance(runtime_basic.profile, SourceBasicCapabilityProfile)
+        if (
+            request.patch.waveform_kind.action is PatchAction.SET
+            and request.patch.waveform_kind.value not in runtime_basic.profile.waveform_kinds
+        ):
+            raise ConfigError(
+                "source.basic_configure_v2 waveform_kind is not supported by the runtime profile"
+            )
+        current_vpp, current_offset = self._source_basic_v2_amplitude_offset(basic)
+        patch = request.patch
+        requested_vpp = (
+            float(patch.amplitude_vpp.value)
+            if patch.amplitude_vpp.action is PatchAction.SET
+            else current_vpp
+        )
+        requested_offset = (
+            float(patch.offset_v.value)
+            if patch.offset_v.action is PatchAction.SET
+            else current_offset
+        )
+        self._check_source_basic_v2_limits(requested_vpp, requested_offset)
+
+    def _validate_source_basic_v2_result(
+        self,
+        request: SourceBasicConfigureRequest,
+        result: object,
+    ) -> None:
+        if not isinstance(result, SourceBasicConfigureResult):
+            raise ConfigError(
+                "configure_source_basic_v2() returned an invalid SourceBasicConfigureResult"
+            )
+        if result.channel != request.channel:
+            raise ConfigError("source.basic_configure_v2 result channel does not match request")
+        if result.output_enabled:
+            raise ConfigError("source.basic_configure_v2 result reports output ON")
+        vpp, offset = self._source_basic_v2_amplitude_offset(result.basic)
+        self._check_source_basic_v2_limits(vpp, offset)
+        self._validate_source_basic_v2_patch_readback(request, result.basic)
+
+    def _validate_source_basic_v2_postcondition(
+        self,
+        request: SourceBasicConfigureRequest,
+        result: SourceBasicConfigureResult,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        output: OutputFacet,
+    ) -> None:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError("source.basic_configure_v2 postcondition snapshot is inconsistent")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError("source.basic_configure_v2 postcondition reports output ON")
+        self._validate_source_basic_v2_patch_readback(request, basic)
+        result_vpp, result_offset = self._source_basic_v2_amplitude_offset(result.basic)
+        post_vpp, post_offset = self._source_basic_v2_amplitude_offset(basic)
+        if (result_vpp, result_offset) != (post_vpp, post_offset):
+            raise ConfigError(
+                "source.basic_configure_v2 final amplitude or offset readback does not match"
+            )
+        self._check_source_basic_v2_limits(post_vpp, post_offset)
+
+    @staticmethod
+    def _source_basic_v2_amplitude_offset(basic: BasicWaveFacet) -> tuple[float, float]:
+        amplitude = basic.amplitude
+        if amplitude.availability is not Availability.VALUE or not isinstance(
+            amplitude.value,
+            SourceAmplitude,
+        ):
+            raise ConfigError("source.basic_configure_v2 requires a final Vpp amplitude")
+        if amplitude.value.unit is not SourceAmplitudeUnit.VPP:
+            raise ConfigError("source.basic_configure_v2 requires a final Vpp amplitude")
+        offset = basic.offset_v
+        if offset.availability is not Availability.VALUE:
+            raise ConfigError("source.basic_configure_v2 requires a final offset")
+        return float(amplitude.value.value), float(offset.value)
+
+    @staticmethod
+    def _validate_source_basic_v2_patch_readback(
+        request: SourceBasicConfigureRequest,
+        basic: BasicWaveFacet,
+    ) -> None:
+        patch = request.patch
+        values = (
+            ("waveform_kind", patch.waveform_kind, basic.waveform_kind),
+            ("frequency_hz", patch.frequency_hz, basic.frequency_hz),
+            ("offset_v", patch.offset_v, basic.offset_v),
+            (
+                "square_duty_cycle_percent",
+                patch.square_duty_cycle_percent,
+                basic.square_duty_cycle_percent,
+            ),
+        )
+        for name, patch_value, observed in values:
+            if patch_value.action is not PatchAction.SET:
+                continue
+            if observed.availability is not Availability.VALUE or observed.value != patch_value.value:
+                raise ConfigError(
+                    f"source.basic_configure_v2 {name} readback does not match request"
+                )
+        if patch.amplitude_vpp.action is PatchAction.SET:
+            actual_vpp, _ = SourceService._source_basic_v2_amplitude_offset(basic)
+            if actual_vpp != patch.amplitude_vpp.value:
+                raise ConfigError(
+                    "source.basic_configure_v2 amplitude_vpp readback does not match request"
+                )
+
+    def _check_source_basic_v2_limits(self, vpp: float, offset: float) -> None:
+        self._check_source_vpp(vpp, field="source.basic_configure_v2 final amplitude")
+        limits = self.config.safety_limits
+        minimum = limits.min_source_port_voltage_v
+        maximum = limits.max_source_port_voltage_v
+        if minimum is None or maximum is None:
+            return
+        low = offset - (vpp / 2.0)
+        high = offset + (vpp / 2.0)
+        if low < minimum or high > maximum:
+            raise ConfigError(
+                "source.basic_configure_v2 final port voltage exceeds configured limits"
+            )
+
+    def _recover_source_basic_v2_off(
+        self,
+        context: SourceOperationContextCoordinator,
+        source: SourceDriver,
+        channel: int,
+        extensions: SourceDescriptorExtensions,
+        output_field: SourceFieldRef,
+    ) -> dict[str, object]:
+        descriptor = self.descriptor
+        session_state = self.session_state
+        if session_state is None or session_state.health is SessionHealth.POISONED:
+            return {"status": "not_attempted", "reason": "session_poisoned"}
+        if descriptor is None or "source.output_v2" not in descriptor.capabilities:
+            return {"status": "not_attempted", "reason": "output_capability_unavailable"}
+        if not callable(getattr(source, "set_source_output_v2", None)):
+            return {"status": "not_attempted", "reason": "output_method_unavailable"}
+        try:
+            safe_state = context.make_phase_spec(
+                SourceOperationPhase.FAILURE_SAFE_STATE,
+                allowed_io={"write"},
+                fields=(output_field,),
+                max_steps=1,
+            )
+            with context.authorize_phase(safe_state):
+                result = cast(SourceOutputV2Driver, source).set_source_output_v2(
+                    SourceOutputRequest(channel=channel, enabled=False)
+                )
+                if (
+                    not isinstance(result, SourceOutputResult)
+                    or result.channel != channel
+                    or result.enabled
+                ):
+                    raise ConfigError("source.basic_configure_v2 recovery OFF is not proven")
+        except BaseException:
+            return {
+                "status": "off_failed",
+                "session_health": session_state.health.value,
+            }
+        if session_state.health is SessionHealth.POISONED:
+            return {"status": "off_sent_unverified", "reason": "session_poisoned"}
+        try:
+            verification = context.make_phase_spec(
+                SourceOperationPhase.CLEANUP_VERIFICATION,
+                allowed_io={"query"},
+                fields=(output_field,),
+                max_steps=extensions.query_contract.max_queries,
+            )
+            with context.authorize_phase(verification) as authorization:
+                snapshot = self._snapshot_v2_with_open_source(
+                    source,
+                    correlation_id=context.correlation_id,
+                    allow_uncertain_session=True,
+                    deadline=authorization.deadline,
+                )
+                _, output = self._source_basic_v2_target(snapshot, channel)
+                if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+                    raise ConfigError("source.basic_configure_v2 recovery OFF readback is not proven")
+                context.mark_safe_state_verified(
+                    authorization,
+                    io_kind="query",
+                    fields=(output_field,),
+                )
+        except BaseException:
+            return {
+                "status": "off_sent_unverified",
+                "session_health": session_state.health.value,
+            }
+        return {
+            "status": "off_verified",
+            "session_health": session_state.health.value,
+        }
+
+    def _source_basic_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceBasicConfigureRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceBasicConfigureResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": "source.basic_configure_v2",
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_channel": request.channel,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {"result": source_v2_to_data(result)}
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "output_expected": "off",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
+    def _attach_source_basic_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(exc, "source_operation_artifact", self._source_basic_v2_artifact(**kwargs))
+        except Exception:
+            pass
 
     def channel_profile(self, channel: int | None = None) -> SourceChannelProfile:
         source_cfg = self._source_config()
