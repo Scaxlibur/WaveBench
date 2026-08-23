@@ -1414,6 +1414,17 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     print(json.dumps(payload, indent=2, ensure_ascii=False))
                 return 0
+            if args.command == "harmonics-disable-v2":
+                from wavebench.instruments.source_extensions import SourceHarmonicDisableRequest
+
+                _, payload = service.disable_harmonics_v2(
+                    SourceHarmonicDisableRequest(channel=args.channel)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
             if args.command == "modulation-configure-v2":
                 _, payload = service.configure_modulation_v2(
                     _source_modulation_configure_v2_request(args)

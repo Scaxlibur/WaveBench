@@ -2909,7 +2909,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
-| M6-A | `implemented-unreleased` | 单通道高级配置 | Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 均已 `implemented-unreleased`；每项均独立 opt in 并复用基本写入门 |
+| M6-A | `implemented-unreleased` | 单通道高级配置 | Harmonic 配置／关闭、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 均已 `implemented-unreleased`；每项均独立 opt in 并复用基本写入门 |
 | M6-B | `implemented-unreleased` | ARB storage 与 selection | named-slot create/CAS、payload 摘要与独立 readback、OFF-only selection、Service／CLI／run plan／intent／artifact、V1 upload 零 I/O 拒绝和 A0 fake 通过；ON 仍由 `output_v2` 管理 |
 | M6-C | `implemented-unreleased` | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | `in-progress (A0)` | 插件逐项 opt in | SDG2000X 已完成 basic/output 的 A0 离线适配；A1–A3 仍待单独实机授权。第二种协议形态作为兼容验证，不阻塞首次发布 |
@@ -3214,6 +3214,22 @@ Modulation、Pulse、Sweep、Burst、ARB 或跨通道关系。
 写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不改变 M6-A 的整体状态，
 也不构成任何真实插件的写 capability 声明或实机验收。
+
+R7 追加独立的 `source.harmonics_disable_v2`，用于将单通道 Harmonic 状态明确关闭。它的 request
+只有 `channel`；result 必须回读 `harmonics.enabled = false` 和 `output_enabled = false`，不要求 order、preset、
+分量或默认值。它不复用 configure request，也不把 `SET(None)`、隐式 reset 或 basic waveform 写入解释为关闭。
+
+声明该 capability 的 descriptor 必须为同一通道声明 Harmonic `READ`／`DISABLE`、可读的 Harmonic enabled
+状态，以及 Output `READ` 和 output state readback；不要求 Harmonic `CONFIGURE`、可配置阶次或 preset 回读。
+operation 使用 `POTENTIAL_WHILE_OFF`：fresh snapshot 必须证明目标输出已关闭，主路径最多一次
+`disable_source_harmonics_v2(request)` 写入，随后独立读取 Harmonic／Output；若已经关闭，只保留 fresh
+readback，不发送多余写入。主写或写后回读失败时，核心至多使用已声明的 `source.output_v2` 执行一次 OFF
+recovery；该能力不授权输出 ON 或 live mutation。
+
+当前核心开发线提供 `SourceService.disable_harmonics_v2()`、
+`wavebench source harmonics-disable-v2 --channel N` 和 `source.harmonics_disable_v2` run plan step。
+双合同插件声明 configure 或 disable 任一 Harmonic V2 capability 后，V1 `configure_harmonics` 与 basic
+restore 都在仪器 I/O 前拒绝；没有声明任一 capability 的 V1-only 或双合同插件继续走既有 V1 路径。
 
 ### M6-A 已实现子能力：内部 AM 调制
 

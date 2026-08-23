@@ -35,6 +35,8 @@ from wavebench.instruments.source_extensions import (
     SourceHarmonicCapabilityProfile,
     SourceHarmonicConfigureRequest,
     SourceHarmonicConfigureResult,
+    SourceHarmonicDisableRequest,
+    SourceHarmonicDisableResult,
     SourceHarmonicPreset,
     OutputFacet,
     SourceOutputPolarity,
@@ -103,6 +105,9 @@ class _HarmonicWriteDriver:
         output_enabled: bool = False,
         postcondition_mismatch: bool = False,
         raise_after_write: bool = False,
+        harmonic_enabled: bool = False,
+        disable_postcondition_mismatch: bool = False,
+        raise_after_disable: bool = False,
     ) -> None:
         self.transport = GuardedAuditedTransport(
             _TextTransport(),
@@ -111,8 +116,11 @@ class _HarmonicWriteDriver:
         self.output_enabled = output_enabled
         self.postcondition_mismatch = postcondition_mismatch
         self.raise_after_write = raise_after_write
-        self.harmonics = _harmonics(enabled=False)
+        self.disable_postcondition_mismatch = disable_postcondition_mismatch
+        self.raise_after_disable = raise_after_disable
+        self.harmonics = _harmonics(enabled=harmonic_enabled)
         self.harmonic_requests: list[SourceHarmonicConfigureRequest] = []
+        self.harmonic_disable_requests: list[SourceHarmonicDisableRequest] = []
         self.output_requests: list[SourceOutputRequest] = []
         self.v1_harmonic_calls = 0
 
@@ -178,6 +186,21 @@ class _HarmonicWriteDriver:
             output_enabled=False,
         )
 
+    def disable_source_harmonics_v2(
+        self,
+        request: SourceHarmonicDisableRequest,
+    ) -> SourceHarmonicDisableResult:
+        self.transport.write("SOURCE:HARMONICS:DISABLE")
+        self.harmonic_disable_requests.append(request)
+        self.harmonics = _harmonics(enabled=False)
+        if self.raise_after_disable:
+            raise ConfigError("fake harmonic disable failed after write")
+        return SourceHarmonicDisableResult(
+            channel=request.channel,
+            harmonics=self.harmonics,
+            output_enabled=False,
+        )
+
     def set_source_output_v2(self, request: SourceOutputRequest) -> SourceOutputResult:
         self.transport.write("SOURCE:OUTPUT")
         self.output_requests.append(request)
@@ -199,6 +222,12 @@ class _HarmonicWriteDriver:
         )
 
     def _readback_harmonics(self) -> HarmonicFacet:
+        if self.disable_postcondition_mismatch and self.harmonic_disable_requests:
+            return _harmonics(
+                enabled=True,
+                order=8,
+                preset=SourceHarmonicPreset.ODD,
+            )
         if not self.postcondition_mismatch or not self.harmonic_requests:
             return self.harmonics
         request = self.harmonic_requests[-1]
@@ -209,13 +238,20 @@ class _HarmonicWriteDriver:
         )
 
 
-def _extensions(*, presets: tuple[SourceHarmonicPreset, ...] | None = None):
+def _extensions(
+    *,
+    presets: tuple[SourceHarmonicPreset, ...] | None = None,
+    directions: tuple[SourceFeatureDirection, ...] = (
+        SourceFeatureDirection.CONFIGURE,
+        SourceFeatureDirection.READ,
+    ),
+):
     base = source_extensions()
     basic, output = base.features
     harmonic = SourceFeatureCapability(
         feature=SourceFeature.HARMONICS,
         support=SupportState.SUPPORTED,
-        directions=(SourceFeatureDirection.CONFIGURE, SourceFeatureDirection.READ),
+        directions=directions,
         scope=SourceFacetScope.CHANNEL,
         channels=(1,),
         applicability=SourceConstraintApplicability(),
@@ -297,6 +333,14 @@ def _service(
     raise_after_write: bool = False,
     presets: tuple[SourceHarmonicPreset, ...] | None = None,
     dual_contract: bool = False,
+    harmonic_capability: str = "source.harmonics_configure_v2",
+    harmonic_directions: tuple[SourceFeatureDirection, ...] = (
+        SourceFeatureDirection.CONFIGURE,
+        SourceFeatureDirection.READ,
+    ),
+    harmonic_enabled: bool = False,
+    disable_postcondition_mismatch: bool = False,
+    raise_after_disable: bool = False,
 ) -> tuple[SourceService, _HarmonicWriteDriver]:
     session_state = InstrumentSessionState(epoch_id="source-harmonics-v2")
     driver = _HarmonicWriteDriver(
@@ -304,16 +348,22 @@ def _service(
         output_enabled=output_enabled,
         postcondition_mismatch=postcondition_mismatch,
         raise_after_write=raise_after_write,
+        harmonic_enabled=harmonic_enabled,
+        disable_postcondition_mismatch=disable_postcondition_mismatch,
+        raise_after_disable=raise_after_disable,
     )
     capabilities = [
         "source.snapshot_v2",
-        "source.harmonics_configure_v2",
+        harmonic_capability,
         "source.output_v2",
     ]
     if dual_contract:
         capabilities.append("source.harmonic_configure")
     descriptor = replace(
-        source_descriptor(driver=driver, extensions=_extensions(presets=presets)),
+        source_descriptor(
+            driver=driver,
+            extensions=_extensions(presets=presets, directions=harmonic_directions),
+        ),
         capabilities=tuple(capabilities),
     )
     validate_source_descriptor(descriptor)
@@ -337,6 +387,28 @@ def _request(
     preset: SourceHarmonicPreset = SourceHarmonicPreset.ODD,
 ) -> SourceHarmonicConfigureRequest:
     return SourceHarmonicConfigureRequest(channel=1, order=order, preset=preset)
+
+
+def _disable_service(
+    *,
+    output_enabled: bool = False,
+    harmonic_enabled: bool = True,
+    disable_postcondition_mismatch: bool = False,
+    raise_after_disable: bool = False,
+    dual_contract: bool = False,
+) -> tuple[SourceService, _HarmonicWriteDriver]:
+    return _service(
+        output_enabled=output_enabled,
+        harmonic_enabled=harmonic_enabled,
+        disable_postcondition_mismatch=disable_postcondition_mismatch,
+        raise_after_disable=raise_after_disable,
+        dual_contract=dual_contract,
+        harmonic_capability="source.harmonics_disable_v2",
+        harmonic_directions=(
+            SourceFeatureDirection.DISABLE,
+            SourceFeatureDirection.READ,
+        ),
+    )
 
 
 def test_harmonic_configure_v2_writes_once_and_keeps_output_off() -> None:
@@ -397,6 +469,101 @@ def test_harmonic_configure_v2_postcondition_mismatch_runs_one_off_recovery() ->
         "status": "off_verified",
         "session_health": "uncertain",
     }
+
+
+def test_harmonic_disable_v2_writes_once_and_keeps_output_off() -> None:
+    service, driver = _disable_service()
+    request = SourceHarmonicDisableRequest(channel=1)
+
+    result, artifact = service.disable_harmonics_v2(request, correlation_id="harmonic-disable")
+
+    assert result.harmonics.enabled.value is False
+    assert driver.harmonic_disable_requests == [request]
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_completed == 1
+    assert artifact["operation"] == "source.harmonics_disable_v2"
+    assert artifact["request"] == {
+        "type": "SourceHarmonicDisableRequest",
+        "channel": 1,
+    }
+    assert artifact["mutation"]["status"] == "written"
+    assert artifact["final_state"] == {
+        "session_health": "healthy",
+        "output_expected": "off",
+    }
+    assert [item["phase"] for item in artifact["phases"]] == [
+        "preflight",
+        "main",
+        "postcondition",
+    ]
+
+
+def test_harmonic_disable_v2_requires_output_off_before_driver_write() -> None:
+    service, driver = _disable_service(output_enabled=True)
+
+    with pytest.raises(ConfigError, match="target output OFF"):
+        service.disable_harmonics_v2(SourceHarmonicDisableRequest(channel=1))
+
+    assert driver.harmonic_disable_requests == []
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_harmonic_disable_v2_is_a_zero_write_noop_when_already_disabled() -> None:
+    service, driver = _disable_service(harmonic_enabled=False)
+
+    result, artifact = service.disable_harmonics_v2(SourceHarmonicDisableRequest(channel=1))
+
+    assert result.harmonics.enabled.value is False
+    assert driver.harmonic_disable_requests == []
+    assert driver.transport.counters.write_requests == 0
+    assert artifact["mutation"]["status"] == "already_at_target"
+    assert [item["phase"] for item in artifact["phases"]] == ["preflight"]
+
+
+def test_harmonic_disable_v2_postcondition_mismatch_runs_one_off_recovery() -> None:
+    service, driver = _disable_service(disable_postcondition_mismatch=True)
+
+    with pytest.raises(ConfigError, match="postcondition reports harmonics enabled") as raised:
+        service.disable_harmonics_v2(SourceHarmonicDisableRequest(channel=1))
+
+    artifact = raised.value.source_operation_artifact
+    assert driver.harmonic_disable_requests == [SourceHarmonicDisableRequest(channel=1)]
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=False)]
+    assert artifact["recovery"] == {
+        "status": "off_verified",
+        "session_health": "uncertain",
+    }
+
+
+def test_harmonic_disable_v2_driver_failure_after_write_runs_one_off_recovery() -> None:
+    service, driver = _disable_service(raise_after_disable=True)
+
+    with pytest.raises(ConfigError, match="failed after write") as raised:
+        service.disable_harmonics_v2(SourceHarmonicDisableRequest(channel=1))
+
+    artifact = raised.value.source_operation_artifact
+    assert driver.harmonic_disable_requests == [SourceHarmonicDisableRequest(channel=1)]
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=False)]
+    assert artifact["recovery"] == {
+        "status": "off_verified",
+        "session_health": "uncertain",
+    }
+
+
+def test_v1_harmonic_route_rejects_before_io_for_a_harmonic_disable_v2_driver() -> None:
+    from wavebench.instruments.models import SourceHarmonicConfiguration
+
+    service, driver = _disable_service(dual_contract=True)
+
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.configure_harmonics(
+            1,
+            SourceHarmonicConfiguration(order=8, preset="ODD"),
+            check_errors=False,
+        )
+
+    assert driver.v1_harmonic_calls == 0
+    assert driver.transport.counters.write_requests == 0
 
 
 def test_v1_harmonic_route_rejects_before_io_for_a_dual_contract_driver() -> None:

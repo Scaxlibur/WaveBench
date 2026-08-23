@@ -35,6 +35,7 @@ from wavebench.instruments.source_extensions import (
     SourceCouplingConfigureRequest,
     SourceFmModulationConfigureRequest,
     SourceHarmonicConfigureRequest,
+    SourceHarmonicDisableRequest,
     SourceHarmonicPreset,
     SourceModulationConfigureRequest,
     SourceOutputRequest,
@@ -425,6 +426,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.output_v2")
             elif step.kind == "source.harmonics_configure_v2":
                 add("source", "source.snapshot_v2", "source.harmonics_configure_v2")
+            elif step.kind == "source.harmonics_disable_v2":
+                add("source", "source.snapshot_v2", "source.harmonics_disable_v2")
             elif step.kind == "source.modulation_configure_v2":
                 add("source", "source.snapshot_v2", "source.modulation_configure_v2")
             elif step.kind == "source.modulation_pm_configure_v2":
@@ -1185,6 +1188,11 @@ class RunService:
                     order=step.fields["order"],
                     preset=SourceHarmonicPreset(step.fields["preset"]),
                 )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.harmonics_disable_v2":
+            _, source_operation = self._source_service(services=services).disable_harmonics_v2(
+                SourceHarmonicDisableRequest(channel=step.fields["channel"])
             )
             artifact = {"source_operation": source_operation}
         elif step.kind == "source.modulation_configure_v2":

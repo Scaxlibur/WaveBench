@@ -703,6 +703,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(source_harmonics_configure_v2)
 
+    source_harmonics_disable_v2 = source_sub.add_parser(
+        "harmonics-disable-v2",
+        help="Disable Harmonic on one OFF Source V2 channel",
+    )
+    source_harmonics_disable_v2.add_argument("--channel", type=int, required=True)
+    add_runtime_options(source_harmonics_disable_v2)
+
     source_modulation_configure_v2 = source_sub.add_parser(
         "modulation-configure-v2",
         help="Configure one OFF Source V2 channel with internal sine AM",

@@ -270,6 +270,29 @@ trailing_transition_s = 1e-8
     ]
 
 
+def test_execution_intent_records_harmonic_disable_as_its_own_operation() -> None:
+    with TemporaryDirectory() as tmp:
+        plan = load_run_plan(
+            write_plan(
+                tmp,
+                """
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 1
+""",
+            )
+        )
+        intent = build_execution_intent(plan, make_config(tmp))
+
+    assert len(intent.operations) == 1
+    operation = intent.operations[0]
+    assert operation["step_index"] == 0
+    assert operation["step_kind"] == "source.harmonics_disable_v2"
+    assert operation["operation"] == "source.harmonics_disable_v2"
+    assert operation["parameters"] == {"channel": 1}
+    assert operation["risk_flags"] == ["source_v2", "output_must_be_off"]
+
+
 def test_execution_intent_uses_distinct_source_v2_cross_channel_operations() -> None:
     with TemporaryDirectory() as tmp:
         plan = load_run_plan(

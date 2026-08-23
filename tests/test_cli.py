@@ -661,6 +661,9 @@ class CliTests(unittest.TestCase):
                 "odd",
             ]
         )
+        harmonic_disable = build_parser().parse_args(
+            ["source", "harmonics-disable-v2", "--channel", "2"]
+        )
         modulation = build_parser().parse_args(
             [
                 "source",
@@ -772,6 +775,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(harmonics.channel, 2)
         self.assertEqual(harmonics.order, 8)
         self.assertEqual(harmonics.preset, "odd")
+        self.assertEqual(harmonic_disable.command, "harmonics-disable-v2")
+        self.assertEqual(harmonic_disable.channel, 2)
         self.assertEqual(modulation.command, "modulation-configure-v2")
         self.assertEqual(modulation.channel, 2)
         self.assertEqual(modulation.depth_percent, 80.0)
@@ -808,6 +813,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(burst.phase_deg, 30.0)
         self.assertEqual(burst.internal_period_s, 0.25)
         self.assertEqual(burst.delay_s, 0.5)
+
+    def test_source_harmonics_disable_v2_dispatches_typed_request(self):
+        payload = {
+            "schema": "wavebench.source.operation.v1",
+            "operation": "source.harmonics_disable_v2",
+        }
+        service = Mock()
+        service.disable_harmonics_v2.return_value = (object(), payload)
+        stdout = io.StringIO()
+
+        with patch("wavebench.cli._load_source_service", return_value=service), redirect_stdout(stdout):
+            code = main(["source", "harmonics-disable-v2", "--channel", "2"])
+
+        self.assertEqual(code, 0)
+        request = service.disable_harmonics_v2.call_args.args[0]
+        self.assertEqual(request.channel, 2)
+        self.assertEqual(json.loads(stdout.getvalue()), payload)
 
     def test_fetch_accepts_points(self):
         args = build_parser().parse_args(["scope", "fetch", "--points", "dmax"])

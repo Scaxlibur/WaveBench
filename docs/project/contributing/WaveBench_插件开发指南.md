@@ -169,6 +169,11 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 声明 Harmonic `READ`／`CONFIGURE`、可配置 order 区间、允许预设，以及 configured order、preset 与输出状态
 可读。该 capability 只覆盖 `all`、`even`、`odd` 预设，不得借此支持 USER mask、逐分量幅度／相位或隐式输出 ON。
 
+Harmonic 关闭使用独立的 `source.harmonics_disable_v2`，driver 必须实现
+`disable_source_harmonics_v2(request)`。descriptor 必须声明同一通道的 Harmonic `READ`／`DISABLE` 与 output
+state readback；request 只有 channel，结果和独立回读都必须证明 Harmonic、输出均为 OFF。它不能作为隐式
+basic reset，也不要求 order 或 preset readback。
+
 内部 AM 使用独立的 `source.modulation_configure_v2`，driver 必须实现
 `configure_source_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`am`、
 `internal`、`depth_percent` 和 `configuration_readable = true`，并能回读同一 channel 的 output state。

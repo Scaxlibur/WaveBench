@@ -584,6 +584,23 @@ trailing_transition_s = 1e-8
         with self.assertRaisesRegex(ConfigError, "leading_transition_s must be <="):
             load_run_plan(oversized_transition)
 
+    def test_source_v2_harmonic_disable_step_accepts_only_channel(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 2
+"""))
+
+        self.assertEqual(plan.steps[0].fields, {"channel": 2})
+
+        extra_field = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 2
+order = 8
+""")
+        with self.assertRaisesRegex(ConfigError, "unknown key"):
+            load_run_plan(extra_field)
 
     def test_format_run_plan_schema_lists_expect_and_power_output(self):
         text = format_run_plan_schema()
@@ -592,6 +609,7 @@ trailing_transition_s = 1e-8
         self.assertIn("source.basic_configure_v2", text)
         self.assertIn("source.output_enable_v2", text)
         self.assertIn("source.harmonics_configure_v2", text)
+        self.assertIn("source.harmonics_disable_v2", text)
         self.assertIn("source.modulation_configure_v2", text)
         self.assertIn("source.modulation_pm_configure_v2", text)
         self.assertIn("source.modulation_fm_configure_v2", text)

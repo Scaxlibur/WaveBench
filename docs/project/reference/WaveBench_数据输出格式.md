@@ -845,9 +845,9 @@ snapshot 使用 typed `Observed` 表达 `value`、`unsupported`、`not_applicabl
 完整响应、resource、序列号或原始 device revision token；revision token 只以 SHA-256 摘要出现在
 consistency 中。该 operation artifact 与插件 conformance manifest 是不同 schema，不能互换。
 
-basic、output、Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内部 Triggered Burst 和 WIDTH Pulse 写 operation 还会记录 typed request、preflight／postcondition snapshot 摘要、
+basic、output、Harmonic 配置／关闭、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内部 Triggered Burst 和 WIDTH Pulse 写 operation 还会记录 typed request、preflight／postcondition snapshot 摘要、
 mutation result、phase 摘要、最终 session state，以及仅在主写入后失败时存在的 recovery。Harmonic artifact 的
-`operation` 固定为 `source.harmonics_configure_v2`；内部 AM artifact 的 `operation` 固定为
+`operation` 为 `source.harmonics_configure_v2` 或 `source.harmonics_disable_v2`；内部 AM artifact 的 `operation` 固定为
 `source.modulation_configure_v2`；内部 PM artifact 的 `operation` 固定为 `source.modulation_pm_configure_v2`；
 内部 FM artifact 的 `operation` 固定为 `source.modulation_fm_configure_v2`；内部 PWM artifact 的 `operation` 固定为
 `source.modulation_pwm_configure_v2`；内部 Sweep artifact 的 `operation` 固定为 `source.sweep_configure_v2`；内部 Triggered Burst artifact 的

@@ -389,6 +389,10 @@ order = 8
 preset = "odd"
 
 [[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 1
+
+[[steps]]
 kind = "source.modulation_configure_v2"
 channel = 1
 depth_percent = 80
@@ -458,7 +462,7 @@ enabled = true
 ```
 
 `source.basic_configure_v2` 的 `channel` 必填，五个 basic 字段中至少写一个；缺失字段保持当前值。
-`source.output_enable_v2` 和 `source.output_disable_v2` 都只接受 `channel`。`source.harmonics_configure_v2`
+`source.output_enable_v2`、`source.output_disable_v2` 和 `source.harmonics_disable_v2` 都只接受 `channel`。`source.harmonics_configure_v2`
 要求 `channel`、整数 `order >= 2` 与 `all`、`even`、`odd` 之一的 `preset`；核心还会在执行前检查运行时
 profile 是否支持该 order 和预设。`source.modulation_configure_v2` 要求 `channel`、位于 `[0, 100]` 的
 `depth_percent` 与有限正值 `internal_frequency_hz`；它只配置内部正弦 AM。
@@ -493,7 +497,7 @@ descriptor relation graph 展开实际受影响端口；只有展开后的端口
 
 Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内部 Triggered Burst 与 WIDTH Pulse step 都必须在目标输出已关闭时执行，完成后仍保持关闭；它们不会隐式开启输出。现有
 `restore.source_state` 只恢复 basic 状态，不恢复 Harmonic、调制、Burst 或 Pulse 配置。双合同插件声明
-`source.harmonics_configure_v2` 后，V1 `configure_harmonics` 会在仪器 I/O 前被拒绝；声明
+`source.harmonics_configure_v2` 或 `source.harmonics_disable_v2` 后，V1 `configure_harmonics` 会在仪器 I/O 前被拒绝；声明
 `source.modulation_configure_v2` 后，V1 `configure_am_modulation` 会在仪器 I/O 前被拒绝。未声明对应能力的
 旧插件继续使用 V1 路径。声明 `source.modulation_pm_configure_v2` 后，V1 `configure_pm_modulation` 也会在
 仪器 I/O 前被拒绝。声明 `source.modulation_fm_configure_v2` 后，V1 `configure_fm_modulation` 和 restore 也会在
@@ -506,7 +510,7 @@ Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内�
 声明 `source.coupling_configure_v2` 后，V1 `configure_coupling` 在仪器 I/O 前拒绝；声明任一跨通道 V2 capability
 后，V1 restore 也会在仪器 I/O 前拒绝，避免它在未知 relation state 下重开输出。
 
-执行意图会记录十七个 Source V2 operation，实际执行时的完整 Source V2 artifact 会写入
+执行意图会记录十八个 Source V2 operation，实际执行时的完整 Source V2 artifact 会写入
 `run.json.source_operations`；storage payload 只以文件名、SHA-256 与大小出现。没有声明 V2 capability 的旧插件继续使用 V1 step。
 
 ## 常见 `run check` 报错

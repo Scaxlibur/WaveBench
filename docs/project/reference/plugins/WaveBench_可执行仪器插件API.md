@@ -346,6 +346,7 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.basic_configure_v2` | `configure_source_basic_v2` |
 | `source.output_v2` | `set_source_output_v2` |
 | `source.harmonics_configure_v2` | `configure_source_harmonics_v2` |
+| `source.harmonics_disable_v2` | `disable_source_harmonics_v2` |
 | `source.modulation_configure_v2` | `configure_source_modulation_v2` |
 | `source.modulation_pm_configure_v2` | `configure_source_pm_modulation_v2` |
 | `source.modulation_fm_configure_v2` | `configure_source_fm_modulation_v2` |
@@ -363,14 +364,14 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 ### Source V2 扩展
 
 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 和 `source.phase_relation_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
+`source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 和 `source.phase_relation_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
 `wavebench.instrument.v2`。采用任一 Source V2 capability 的
 wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
 `source_extensions` 位于 descriptor 末尾且默认值为 `None`，因此未声明该能力的 V1 插件不需要
 修改 descriptor 或提高版本下限。
 
 插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
-`SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、`SourceHarmonicConfigureV2Driver`、
+`SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、`SourceHarmonicConfigureV2Driver`、`SourceHarmonicDisableV2Driver`、
 `SourceModulationConfigureV2Driver`、`SourcePmModulationConfigureV2Driver`、`SourceFmModulationConfigureV2Driver`、`SourcePwmModulationConfigureV2Driver`、`SourceSweepConfigureV2Driver`、`SourceBurstConfigureV2Driver`、`SourcePulseConfigureV2Driver`、`SourceArbitraryStorageV2Driver`、`SourceArbitrarySelectV2Driver`、`SourceCombineConfigureV2Driver`、`SourceCouplingConfigureV2Driver`、`SourceTrackingConfigureV2Driver`、`SourcePhaseRelationConfigureV2Driver`、query
 plan／execution record 和各类 typed profile。核心签发 semantic query plan；snapshot driver 只负责将
 item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
@@ -393,6 +394,7 @@ wavebench source snapshot-v2
 SourceService.configure_basic_v2(request, *, correlation_id=None)
 SourceService.set_output_v2(request, *, correlation_id=None)
 SourceService.configure_harmonics_v2(request, *, correlation_id=None)
+SourceService.disable_harmonics_v2(request, *, correlation_id=None)
 SourceService.configure_modulation_v2(request, *, correlation_id=None)
 SourceService.configure_pm_modulation_v2(request, *, correlation_id=None)
 SourceService.configure_fm_modulation_v2(request, *, correlation_id=None)
@@ -405,6 +407,7 @@ SourceService.select_arbitrary_v2(request, *, correlation_id=None)
 wavebench source basic-configure-v2 --channel N ...
 wavebench source output-v2 --channel N on|off
 wavebench source harmonics-configure-v2 --channel N --order N --preset all|even|odd
+wavebench source harmonics-disable-v2 --channel N
 wavebench source modulation-configure-v2 --channel N --depth-percent PERCENT --internal-frequency-hz HZ
 wavebench source pm-modulation-configure-v2 --channel N --phase-deviation-deg DEG --internal-frequency-hz HZ
 wavebench source fm-modulation-configure-v2 --channel N --frequency-deviation-hz HZ --internal-frequency-hz HZ
@@ -416,13 +419,18 @@ wavebench source arbitrary-storage-v2 --channel N --slot-id SLOT --payload-file 
 wavebench source arbitrary-select-v2 --channel N --slot-id SLOT --playback-mode dds|true-arb (--playback-frequency-hz HZ | --sample-rate-hz HZ)
 ```
 
-十二个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
+十三个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
 `wavebench.source.operation.v1`，不得包含 raw SCPI、完整响应、资源地址、序列号、授权 token 或 nonce。
 
 `source.harmonics_configure_v2` 只允许单通道的 `all`、`even`、`odd` 预设。descriptor 必须同时声明
 Harmonic `READ`／`CONFIGURE`、允许的 order 区间和预设，以及 configured order、preset 与输出状态的可读回。
 请求中的 `order` 必须落在运行时 profile 范围内；配置前后目标输出都必须回读为 OFF。该 operation 不提供
 USER mask、逐分量幅度或相位、默认值重置，也不会隐式开启输出。
+
+`source.harmonics_disable_v2` 只接受单通道 request。descriptor 必须同时声明 Harmonic `READ`／`DISABLE`
+与 output state readback；配置前后目标输出均须为 OFF，结果与独立 postcondition 都须确认
+`harmonics.enabled = false`。已关闭状态只产生 fresh readback，不发送重复写入；该 capability 不要求 order、
+preset 或分量 readback，也不授权输出 ON。
 
 `source.modulation_configure_v2` 只允许单通道、输出 OFF 时的内部正弦 AM。descriptor 必须同时声明
 Modulation `READ`／`CONFIGURE`、`am`、`internal`、`depth_percent` 与 `configuration_readable = true`，并能回读
@@ -474,12 +482,12 @@ selection request 使用 DDS 的 `playback_frequency_hz` 或 true-ARB 的 `sampl
 ARB V2 capability，V1 `upload_arbitrary_waveform` 会在读取本地 waveform 文件、构造块或发送仪器 I/O 前拒绝。
 
 run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`source.output_disable_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2` 十七个 Source V2 step；它们的 artifact 只在实际执行时写入
+`source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2` 十八个 Source V2 step；它们的 artifact 只在实际执行时写入
 `run.json.source_operations`。
 
 旧 `source.*` setter、output、trigger 和 ARB 路径继续保留。双合同插件上，四个 basic setter 与
 `set_output` 会进入相应 V2 transaction；restore、ARB upload 和 V2 output 重叠的 trigger 在仪器 I/O 前
-拒绝。双合同插件声明 `source.harmonics_configure_v2` 时，V1 `configure_harmonics` 和 basic restore
+拒绝。双合同插件声明 `source.harmonics_configure_v2` 或 `source.harmonics_disable_v2` 时，V1 `configure_harmonics` 和 basic restore
 在仪器 I/O 前拒绝；声明 `source.modulation_configure_v2` 时，V1 `configure_am_modulation` 和 basic restore
 也在仪器 I/O 前拒绝；声明 `source.modulation_pm_configure_v2` 时，V1 `configure_pm_modulation` 和 basic restore
 也在仪器 I/O 前拒绝；声明 `source.modulation_fm_configure_v2` 时，V1 `configure_fm_modulation` 和 basic restore
