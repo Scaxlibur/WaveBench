@@ -343,6 +343,39 @@ def test_v1_frequency_route_maps_to_v2_for_a_dual_contract_driver() -> None:
     assert driver.transport.counters.write_completed == 1
 
 
+@pytest.mark.parametrize(
+    ("method", "value", "patch_field", "expected"),
+    (
+        ("set_frequency", 2_000.0, "frequency_hz", 2_000.0),
+        ("set_function", "SIN", "waveform_kind", "sine"),
+        ("set_amplitude_vpp", 1.5, "amplitude_vpp", 1.5),
+        ("set_square_duty_cycle", 25.0, "square_duty_cycle_percent", 25.0),
+    ),
+)
+def test_all_v1_basic_routes_use_the_v2_transaction_when_declared(
+    method: str,
+    value: object,
+    patch_field: str,
+    expected: object,
+) -> None:
+    service, driver = _service()
+
+    if method == "set_frequency":
+        service.set_frequency(channel=1, value_hz=value)
+    elif method == "set_function":
+        service.set_function(channel=1, function=value)
+    elif method == "set_amplitude_vpp":
+        service.set_amplitude_vpp(channel=1, value_vpp=value)
+    else:
+        service.set_square_duty_cycle(channel=1, duty_percent=value)
+
+    assert len(driver.basic_requests) == 1
+    patch_value = getattr(driver.basic_requests[0].patch, patch_field)
+    assert patch_value.action is PatchAction.SET
+    assert getattr(patch_value.value, "value", patch_value.value) == expected
+    assert driver.transport.counters.write_completed == 1
+
+
 def test_v1_restore_route_rejects_before_io_for_a_dual_contract_driver() -> None:
     service, driver = _service()
 
@@ -357,6 +390,29 @@ def test_v1_restore_route_rejects_before_io_for_a_dual_contract_driver() -> None
                 amplitude_unit="VPP",
             )
         )
+
+    assert driver.transport.counters.write_requests == 0
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ("upload", "trigger_burst", "trigger_sweep"),
+)
+def test_overlapping_v1_routes_reject_before_io_for_a_dual_contract_driver(operation: str) -> None:
+    service, driver = _service()
+
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        if operation == "upload":
+            service.upload_arbitrary_waveform(
+                channel=1,
+                file_path="unused.npy",
+                playback_frequency_hz=1_000.0,
+                amplitude_vpp=1.0,
+            )
+        elif operation == "trigger_burst":
+            service.trigger_burst(channel=1)
+        else:
+            service.trigger_sweep(channel=1)
 
     assert driver.transport.counters.write_requests == 0
 
