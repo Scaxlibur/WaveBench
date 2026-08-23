@@ -328,6 +328,14 @@ phase_deviation_deg = 90
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.burst_configure_v2"
+channel = 2
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
 kind = "source.pulse_configure_v2"
 channel = 2
 width_s = 1e-6
@@ -355,7 +363,18 @@ trailing_transition_s = 1e-8
             pm.fields,
             {"channel": 2, "phase_deviation_deg": 90.0, "internal_frequency_hz": 25.0},
         )
-        pulse = plan.steps[6]
+        burst = plan.steps[6]
+        self.assertEqual(
+            burst.fields,
+            {
+                "channel": 2,
+                "cycles": 12,
+                "phase_deg": 30.0,
+                "internal_period_s": 0.25,
+                "delay_s": 0.5,
+            },
+        )
+        pulse = plan.steps[7]
         self.assertEqual(
             pulse.fields,
             {
@@ -444,6 +463,18 @@ internal_frequency_hz = 25
         with self.assertRaisesRegex(ConfigError, "phase_deviation_deg must be in"):
             load_run_plan(excessive_pm_deviation)
 
+        invalid_burst_cycles = self._write_plan("""
+[[steps]]
+kind = "source.burst_configure_v2"
+channel = 2
+cycles = 0
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+""")
+        with self.assertRaisesRegex(ConfigError, "cycles must be in"):
+            load_run_plan(invalid_burst_cycles)
+
         short_width = self._write_plan("""
 [[steps]]
 kind = "source.pulse_configure_v2"
@@ -478,6 +509,7 @@ trailing_transition_s = 1e-8
         self.assertIn("source.harmonics_configure_v2", text)
         self.assertIn("source.modulation_configure_v2", text)
         self.assertIn("source.modulation_pm_configure_v2", text)
+        self.assertIn("source.burst_configure_v2", text)
         self.assertIn("source.pulse_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)

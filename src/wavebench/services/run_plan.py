@@ -32,6 +32,7 @@ ALLOWED_STEP_KINDS = {
     "source.harmonics_configure_v2",
     "source.modulation_configure_v2",
     "source.modulation_pm_configure_v2",
+    "source.burst_configure_v2",
     "source.pulse_configure_v2",
     "power.status",
     "power.set",
@@ -58,6 +59,13 @@ _REQUIRED_FIELDS = {
         "channel",
         "phase_deviation_deg",
         "internal_frequency_hz",
+    ),
+    "source.burst_configure_v2": (
+        "channel",
+        "cycles",
+        "phase_deg",
+        "internal_period_s",
+        "delay_s",
     ),
     "source.pulse_configure_v2": (
         "channel",
@@ -143,6 +151,7 @@ _OPTIONAL_FIELDS = {
     "source.harmonics_configure_v2": {"on_failure"},
     "source.modulation_configure_v2": {"on_failure"},
     "source.modulation_pm_configure_v2": {"on_failure"},
+    "source.burst_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
     "power.status": {"channel", "on_failure"},
     "power.set": {"channel", "on_failure"},
@@ -175,6 +184,7 @@ _STEP_NOTES = {
     "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
     "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
     "source.modulation_pm_configure_v2": "Configure one OFF Source V2 channel with internal sine PM; it does not enable output.",
+    "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "power.status": "Read power-supply channel state without changing output.",
     "power.set": "Set DP800 voltage/current limit; does not change output state.",
@@ -639,6 +649,27 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
         fields["phase_deviation_deg"] = phase_deviation
         fields["internal_frequency_hz"] = internal_frequency
+    elif kind == "source.burst_configure_v2":
+        cycles = fields["cycles"]
+        if isinstance(cycles, bool) or not isinstance(cycles, int):
+            raise ConfigError(f"{prefix}.cycles must be an integer in [1, 500000]")
+        if not 1 <= cycles <= 500_000:
+            raise ConfigError(f"{prefix}.cycles must be in [1, 500000]")
+        phase = _finite_float(fields["phase_deg"], f"{prefix}.phase_deg")
+        if not 0 <= phase <= 360:
+            raise ConfigError(f"{prefix}.phase_deg must be in [0, 360]")
+        internal_period = _finite_float(
+            fields["internal_period_s"],
+            f"{prefix}.internal_period_s",
+        )
+        if internal_period <= 0:
+            raise ConfigError(f"{prefix}.internal_period_s must be > 0")
+        delay = _finite_float(fields["delay_s"], f"{prefix}.delay_s")
+        if not 0 <= delay <= 85:
+            raise ConfigError(f"{prefix}.delay_s must be in [0, 85]")
+        fields["phase_deg"] = phase
+        fields["internal_period_s"] = internal_period
+        fields["delay_s"] = delay
     elif kind == "source.pulse_configure_v2":
         width = _finite_float(fields["width_s"], f"{prefix}.width_s")
         if width < 4.0e-9:

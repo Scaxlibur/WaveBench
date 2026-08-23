@@ -341,6 +341,21 @@ def _source_pm_modulation_configure_v2_request(args: argparse.Namespace):
         raise ConfigError(str(exc)) from exc
 
 
+def _source_burst_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourceBurstConfigureRequest
+
+    try:
+        return SourceBurstConfigureRequest(
+            channel=args.channel,
+            cycles=args.cycles,
+            phase_deg=args.phase_deg,
+            internal_period_s=args.internal_period_s,
+            delay_s=args.delay_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
     policy = getattr(args, "error_policy", None)
     if policy is None:
@@ -1221,6 +1236,15 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "pm-modulation-configure-v2":
                 _, payload = service.configure_pm_modulation_v2(
                     _source_pm_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "burst-configure-v2":
+                _, payload = service.configure_burst_v2(
+                    _source_burst_configure_v2_request(args)
                 )
                 if args.json:
                     _emit_json_result(payload)

@@ -62,6 +62,7 @@ from wavebench.instruments.models import (
 from wavebench.instruments.source_extensions import (
     Availability,
     BasicWaveFacet,
+    BurstFacet,
     HarmonicFacet,
     ModulationFacet,
     Observed,
@@ -70,6 +71,7 @@ from wavebench.instruments.source_extensions import (
     PatchAction,
     PatchValue,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_CONTRACT_VERSION,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -86,6 +88,11 @@ from wavebench.instruments.source_extensions import (
     SourceBasicConfigureResult,
     SourceBasicConfigureV2Driver,
     SourceBasicPatch,
+    SourceBurstCapabilityProfile,
+    SourceBurstConfigureRequest,
+    SourceBurstConfigureResult,
+    SourceBurstConfigureV2Driver,
+    SourceBurstMode,
     SourceFacetScope,
     SourceFieldId,
     SourceFieldRef,
@@ -117,6 +124,10 @@ from wavebench.instruments.source_extensions import (
     SourceScopeRef,
     SourceSnapshotV2,
     SourceSnapshotV2Driver,
+    SourceTriggerOutput,
+    SourceTriggerSlope,
+    SourceTriggerSource,
+    SourceTriggerState,
     SourceV1WriteRouteId,
     SourceWaveformKind,
     SupportState,
@@ -179,6 +190,15 @@ class _SourcePmModulationConfigureV2Transaction:
     """Core transaction result shared by the internal PM public route."""
 
     result: SourcePmModulationConfigureResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceBurstConfigureV2Transaction:
+    """Core transaction result shared by the internal Triggered Burst route."""
+
+    result: SourceBurstConfigureResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
@@ -422,6 +442,20 @@ class SourceService(SessionStateAliasMixin):
         """Configure one OFF source channel with the declared internal PM scope."""
 
         transaction = self._configure_pm_modulation_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_burst_v2(
+        self,
+        request: SourceBurstConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceBurstConfigureResult, dict[str, object]]:
+        """Configure one OFF source channel with the internal Triggered Burst scope."""
+
+        transaction = self._configure_burst_v2_transaction(
             request,
             correlation_id=correlation_id,
         )
@@ -1544,6 +1578,193 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _configure_burst_v2_transaction(
+        self,
+        request: SourceBurstConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> _SourceBurstConfigureV2Transaction:
+        """Execute one declared internal Triggered Burst transaction while output is OFF."""
+
+        operation = "source.burst_configure_v2"
+        if not isinstance(request, SourceBurstConfigureRequest):
+            raise ConfigError(f"{operation} requires SourceBurstConfigureRequest")
+        self._require(
+            operation,
+            "source.snapshot_v2",
+            "source.burst_configure_v2",
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            fields = self._source_burst_v2_fields(request.channel)
+            burst_field = next(field for field in fields if field.field is SourceFieldId.BURST)
+            output_field = next(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            target_scope = SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel)
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(target_scope,),
+                emergency_off_outputs=(target_scope,),
+                restore_order=(),
+                non_restorable_fields=(burst_field, output_field),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceBurstConfigureResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_burst, preflight_output = self._source_v2_burst_preflight_target(
+                        preflight_snapshot,
+                        request.channel,
+                        operation=operation,
+                    )
+                    self._validate_source_burst_v2_preflight(
+                        request,
+                        preflight_snapshot,
+                        preflight_burst,
+                        preflight_output,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest((request.channel, preflight_burst, preflight_output))
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write"},
+                    fields=(burst_field,),
+                    max_steps=SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        result = cast(
+                            SourceBurstConfigureV2Driver,
+                            source,
+                        ).configure_source_burst_v2(request)
+                        self._validate_source_burst_v2_result(request, result)
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=(burst_field, output_field),
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            postcondition_burst, postcondition_output = (
+                                self._source_v2_burst_target(
+                                    postcondition_snapshot,
+                                    request.channel,
+                                    operation=operation,
+                                )
+                            )
+                            assert result is not None
+                            self._validate_source_burst_v2_postcondition(
+                                request,
+                                result,
+                                postcondition_snapshot,
+                                postcondition_burst,
+                                postcondition_output,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=(burst_field, output_field),
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_output_off(
+                                context,
+                                source,
+                                request.channel,
+                                extensions,
+                                output_field,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_burst_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceBurstConfigureV2Transaction(
+                    result=result,
+                    artifact=self._source_burst_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
     def _configure_pulse_v2_transaction(
         self,
         request: SourcePulseConfigureRequest,
@@ -1804,6 +2025,30 @@ class SourceService(SessionStateAliasMixin):
         )
 
     @staticmethod
+    def _source_burst_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
+        target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+        fields = (
+            SourceFieldRef(SourceFieldId.BURST, target),
+            SourceFieldRef(SourceFieldId.OUTPUT, target),
+            SourceFieldRef(
+                SourceFieldId.IDENTITY,
+                SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
+    @staticmethod
     def _source_pulse_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
         target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
         fields = (
@@ -1910,6 +2155,28 @@ class SourceService(SessionStateAliasMixin):
         return target.modulation.value, target.output.value
 
     @staticmethod
+    def _source_v2_burst_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[BurstFacet, OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.burst.availability is not Availability.VALUE or not isinstance(
+            target.burst.value,
+            BurstFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable burst state")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.burst.value, target.output.value
+
+    @staticmethod
     def _source_v2_pulse_target(
         snapshot: SourceSnapshotV2,
         channel: int,
@@ -1974,6 +2241,28 @@ class SourceService(SessionStateAliasMixin):
         ):
             raise ConfigError(f"{operation} requires readable output state")
         return target.modulation, target.output.value
+
+    @staticmethod
+    def _source_v2_burst_preflight_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[Observed[BurstFacet], OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.burst.availability is Availability.VALUE and not isinstance(
+            target.burst.value,
+            BurstFacet,
+        ):
+            raise ConfigError(f"{operation} burst state has an invalid type")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.burst, target.output.value
 
     @staticmethod
     def _source_v2_pulse_preflight_target(
@@ -2444,6 +2733,136 @@ class SourceService(SessionStateAliasMixin):
         )
         if result.modulation != modulation:
             raise ConfigError(f"{operation} result readback does not match postcondition")
+
+    @staticmethod
+    def _source_burst_runtime_profile(
+        snapshot: SourceSnapshotV2,
+        *,
+        channel: int,
+        operation: str,
+    ) -> SourceBurstCapabilityProfile:
+        feature = next(
+            (
+                candidate
+                for candidate in snapshot.runtime_profile.features
+                if candidate.feature is SourceFeature.BURST
+                and candidate.scope is SourceFacetScope.CHANNEL
+                and channel in candidate.channels
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(feature.profile, SourceBurstCapabilityProfile):
+            raise ConfigError(f"{operation} is not available for the runtime target channel")
+        return feature.profile
+
+    def _validate_source_burst_v2_preflight(
+        self,
+        request: SourceBurstConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        burst: Observed[BurstFacet],
+        output: OutputFacet,
+    ) -> None:
+        del burst
+        operation = "source.burst_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} requires target output OFF")
+        profile = self._source_burst_runtime_profile(
+            snapshot,
+            channel=request.channel,
+            operation=operation,
+        )
+        if SourceBurstMode.TRIGGERED not in profile.modes:
+            raise ConfigError(f"{operation} triggered mode is not supported by the runtime profile")
+        if SourceTriggerSource.INTERNAL not in profile.trigger_sources:
+            raise ConfigError(f"{operation} internal trigger is not supported by the runtime profile")
+        if not profile.timing_readable:
+            raise ConfigError(f"{operation} requires burst timing readback")
+        if not profile.triggered_internal_configuration_readable:
+            raise ConfigError(f"{operation} requires configured internal triggered burst readback")
+
+    @staticmethod
+    def _validate_source_burst_v2_readback(
+        request: SourceBurstConfigureRequest,
+        burst: BurstFacet,
+        *,
+        operation: str,
+    ) -> None:
+        if burst.enabled.availability is not Availability.VALUE or burst.enabled.value is not True:
+            raise ConfigError(f"{operation} postcondition reports burst disabled")
+        if (
+            burst.mode.availability is not Availability.VALUE
+            or burst.mode.value is not SourceBurstMode.TRIGGERED
+        ):
+            raise ConfigError(f"{operation} postcondition does not report triggered mode")
+        for label, observed, expected in (
+            ("cycles", burst.cycles, request.cycles),
+            ("phase", burst.phase_deg, request.phase_deg),
+            ("internal period", burst.internal_period_s, request.internal_period_s),
+            ("delay", burst.delay_s, request.delay_s),
+        ):
+            if observed.availability is not Availability.VALUE or observed.value != expected:
+                raise ConfigError(f"{operation} {label} readback does not match request")
+        if burst.trigger.availability is not Availability.VALUE or not isinstance(
+            burst.trigger.value,
+            SourceTriggerState,
+        ):
+            raise ConfigError(f"{operation} trigger readback does not match scope")
+        trigger = burst.trigger.value
+        if (
+            trigger.source.availability is not Availability.VALUE
+            or trigger.source.value is not SourceTriggerSource.INTERNAL
+        ):
+            raise ConfigError(f"{operation} trigger source does not match scope")
+        if (
+            trigger.slope.availability is not Availability.VALUE
+            or trigger.slope.value is not SourceTriggerSlope.POSITIVE
+        ):
+            raise ConfigError(f"{operation} trigger slope does not match scope")
+        if (
+            trigger.output.availability is not Availability.VALUE
+            or trigger.output.value is not SourceTriggerOutput.OFF
+        ):
+            raise ConfigError(f"{operation} trigger output does not match scope")
+
+    def _validate_source_burst_v2_result(
+        self,
+        request: SourceBurstConfigureRequest,
+        result: object,
+    ) -> None:
+        operation = "source.burst_configure_v2"
+        if not isinstance(result, SourceBurstConfigureResult):
+            raise ConfigError(
+                "configure_source_burst_v2() returned an invalid SourceBurstConfigureResult"
+            )
+        if result.channel != request.channel:
+            raise ConfigError(f"{operation} result channel does not match request")
+        if result.output_enabled:
+            raise ConfigError(f"{operation} result reports output ON")
+        self._validate_source_burst_v2_readback(
+            request,
+            result.burst,
+            operation=operation,
+        )
+
+    def _validate_source_burst_v2_postcondition(
+        self,
+        request: SourceBurstConfigureRequest,
+        result: SourceBurstConfigureResult,
+        snapshot: SourceSnapshotV2,
+        burst: BurstFacet,
+        output: OutputFacet,
+    ) -> None:
+        del result
+        operation = "source.burst_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} postcondition reports output ON")
+        self._validate_source_burst_v2_readback(request, burst, operation=operation)
 
     @staticmethod
     def _source_pulse_runtime_profile(
@@ -3122,6 +3541,60 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_burst_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceBurstConfigureRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceBurstConfigureResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": "source.burst_configure_v2",
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_channel": request.channel,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {"result": source_v2_to_data(result)}
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "output_expected": "off",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_pulse_v2_artifact(
         self,
         *,
@@ -3275,6 +3748,16 @@ class SourceService(SessionStateAliasMixin):
                 "source_operation_artifact",
                 self._source_pm_modulation_v2_artifact(**kwargs),
             )
+        except Exception:
+            pass
+
+    def _attach_source_burst_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(exc, "source_operation_artifact", self._source_burst_v2_artifact(**kwargs))
         except Exception:
             pass
 
@@ -3641,6 +4124,10 @@ class SourceService(SessionStateAliasMixin):
         configuration: SourceBurstConfiguration,
         channel: int | None = None,
     ) -> SourceBurstProfile:
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.CONFIGURE_BURST,
+            "source.burst_configure_v2",
+        )
         if not isinstance(configuration, SourceBurstConfiguration):
             raise ConfigError("source burst configuration must be SourceBurstConfiguration")
         source_cfg = self._source_config()
@@ -3672,6 +4159,7 @@ class SourceService(SessionStateAliasMixin):
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.TRIGGER_BURST,
             "source.output_v2",
+            "source.burst_configure_v2",
         )
         required = ["source.burst_trigger"]
         if source_cfg.check_errors:
@@ -3758,6 +4246,7 @@ class SourceService(SessionStateAliasMixin):
             "source.harmonics_configure_v2",
             "source.modulation_configure_v2",
             "source.modulation_pm_configure_v2",
+            "source.burst_configure_v2",
             "source.pulse_configure_v2",
             "source.output_v2",
         )

@@ -701,6 +701,22 @@ class CliTests(unittest.TestCase):
                 "25",
             ]
         )
+        burst = build_parser().parse_args(
+            [
+                "source",
+                "burst-configure-v2",
+                "--channel",
+                "2",
+                "--cycles",
+                "12",
+                "--phase-deg",
+                "30",
+                "--internal-period-s",
+                "0.25",
+                "--delay-s",
+                "0.5",
+            ]
+        )
 
         self.assertEqual(basic.command, "basic-configure-v2")
         self.assertEqual(basic.channel, 2)
@@ -728,6 +744,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(pm.channel, 2)
         self.assertEqual(pm.phase_deviation_deg, 90.0)
         self.assertEqual(pm.internal_frequency_hz, 25.0)
+        self.assertEqual(burst.command, "burst-configure-v2")
+        self.assertEqual(burst.channel, 2)
+        self.assertEqual(burst.cycles, 12)
+        self.assertEqual(burst.phase_deg, 30.0)
+        self.assertEqual(burst.internal_period_s, 0.25)
+        self.assertEqual(burst.delay_s, 0.5)
 
     def test_fetch_accepts_points(self):
         args = build_parser().parse_args(["scope", "fetch", "--points", "dmax"])

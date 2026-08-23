@@ -740,6 +740,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(source_pm_modulation_configure_v2)
 
+    source_burst_configure_v2 = source_sub.add_parser(
+        "burst-configure-v2",
+        help="Configure one OFF Source V2 channel with an internal Triggered Burst",
+    )
+    source_burst_configure_v2.add_argument("--channel", type=int, required=True)
+    source_burst_configure_v2.add_argument("--cycles", type=int, required=True)
+    source_burst_configure_v2.add_argument("--phase-deg", type=float, required=True)
+    source_burst_configure_v2.add_argument("--internal-period-s", type=float, required=True)
+    source_burst_configure_v2.add_argument("--delay-s", type=float, required=True)
+    add_runtime_options(source_burst_configure_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

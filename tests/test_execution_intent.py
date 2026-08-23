@@ -134,6 +134,14 @@ phase_deviation_deg = 90
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.burst_configure_v2"
+channel = 1
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
 kind = "source.pulse_configure_v2"
 channel = 1
 width_s = 1e-6
@@ -153,6 +161,7 @@ trailing_transition_s = 1e-8
         "source.harmonics_configure_v2",
         "source.modulation_configure_v2",
         "source.modulation_pm_configure_v2",
+        "source.burst_configure_v2",
         "source.pulse_configure_v2",
     ]
     assert intent.operations[0]["parameters"]["frequency_hz"] == 2000.0
@@ -180,12 +189,24 @@ trailing_transition_s = 1e-8
     ]
     assert intent.operations[6]["parameters"] == {
         "channel": 1,
+        "cycles": 12,
+        "phase_deg": 30.0,
+        "internal_period_s": 0.25,
+        "delay_s": 0.5,
+    }
+    assert intent.operations[6]["risk_flags"] == [
+        "source_v2",
+        "output_must_be_off",
+        "burst_internal_triggered_only",
+    ]
+    assert intent.operations[7]["parameters"] == {
+        "channel": 1,
         "width_s": 1.0e-6,
         "delay_s": 0.0,
         "leading_transition_s": 1.0e-8,
         "trailing_transition_s": 1.0e-8,
     }
-    assert intent.operations[6]["risk_flags"] == [
+    assert intent.operations[7]["risk_flags"] == [
         "source_v2",
         "output_must_be_off",
         "pulse_width_only",

@@ -501,6 +501,10 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
         "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
         "operation": "source.modulation_pm_configure_v2",
     }
+    burst_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.burst_configure_v2",
+    }
 
     class _Service:
         def configure_basic_v2(self, request):
@@ -538,6 +542,14 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             assert request.phase_deviation_deg == 90.0
             assert request.internal_frequency_hz == 25.0
             return object(), pm_artifact
+
+        def configure_burst_v2(self, request):
+            assert request.channel == 1
+            assert request.cycles == 12
+            assert request.phase_deg == 30.0
+            assert request.internal_period_s == 0.25
+            assert request.delay_s == 0.5
+            return object(), burst_artifact
 
     with patch("wavebench.cli._load_source_service", return_value=_Service()):
         basic_code = cli.main(
@@ -635,6 +647,26 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             ]
         )
         pm_payload = json.loads(capsys.readouterr().out)
+        burst_code = cli.main(
+            [
+                "--json",
+                "source",
+                "burst-configure-v2",
+                "--channel",
+                "1",
+                "--cycles",
+                "12",
+                "--phase-deg",
+                "30",
+                "--internal-period-s",
+                "0.25",
+                "--delay-s",
+                "0.5",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        burst_payload = json.loads(capsys.readouterr().out)
 
     assert basic_code == 0
     assert basic_payload["result"] == basic_artifact
@@ -648,6 +680,8 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
     assert pulse_payload["result"] == pulse_artifact
     assert pm_code == 0
     assert pm_payload["result"] == pm_artifact
+    assert burst_code == 0
+    assert burst_payload["result"] == burst_artifact
 
 
 def test_source_v2_write_cli_keeps_failure_operation_artifact(capsys) -> None:
@@ -770,3 +804,35 @@ def test_source_v2_pm_modulation_cli_rejects_invalid_request_before_driver_call(
     assert exit_code == 2
     assert payload["schema"] == "wavebench.error.v1"
     assert "phase_deviation_deg" in payload["message"]
+
+
+def test_source_v2_burst_cli_rejects_invalid_request_before_driver_call(capsys) -> None:
+    class _Service:
+        def configure_burst_v2(self, request):
+            raise AssertionError(request)
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "burst-configure-v2",
+                "--channel",
+                "1",
+                "--cycles",
+                "500001",
+                "--phase-deg",
+                "30",
+                "--internal-period-s",
+                "0.25",
+                "--delay-s",
+                "0.5",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert payload["schema"] == "wavebench.error.v1"
+    assert "cycles" in payload["message"]

@@ -635,6 +635,14 @@ phase_deviation_deg = 90
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.burst_configure_v2"
+channel = 1
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
 kind = "source.pulse_configure_v2"
 channel = 1
 width_s = 1e-6
@@ -653,6 +661,7 @@ trailing_transition_s = 1e-8
                     "source.harmonics_configure_v2",
                     "source.modulation_configure_v2",
                     "source.modulation_pm_configure_v2",
+                    "source.burst_configure_v2",
                     "source.pulse_configure_v2",
                 ),
             )
@@ -1510,6 +1519,14 @@ phase_deviation_deg = 90
 internal_frequency_hz = 25
 
 [[steps]]
+kind = "source.burst_configure_v2"
+channel = 1
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
 kind = "source.pulse_configure_v2"
 channel = 1
 width_s = 1e-6
@@ -1546,6 +1563,10 @@ channel = 1
                 },
                 {
                     "schema": "wavebench.source.operation.v1",
+                    "operation": "source.burst_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
                     "operation": "source.pulse_configure_v2",
                 },
                 {
@@ -1562,10 +1583,11 @@ channel = 1
             source.configure_harmonics_v2.return_value = (SimpleNamespace(), artifacts[1])
             source.configure_modulation_v2.return_value = (SimpleNamespace(), artifacts[2])
             source.configure_pm_modulation_v2.return_value = (SimpleNamespace(), artifacts[3])
-            source.configure_pulse_v2.return_value = (SimpleNamespace(), artifacts[4])
+            source.configure_burst_v2.return_value = (SimpleNamespace(), artifacts[4])
+            source.configure_pulse_v2.return_value = (SimpleNamespace(), artifacts[5])
             source.set_output_v2.side_effect = [
-                (SimpleNamespace(), artifacts[5]),
                 (SimpleNamespace(), artifacts[6]),
+                (SimpleNamespace(), artifacts[7]),
             ]
 
             class OfflineV2RunService(RunService):
@@ -1600,6 +1622,12 @@ channel = 1
             self.assertEqual(pm_request.channel, 1)
             self.assertEqual(pm_request.phase_deviation_deg, 90.0)
             self.assertEqual(pm_request.internal_frequency_hz, 25.0)
+            burst_request = source.configure_burst_v2.call_args.args[0]
+            self.assertEqual(burst_request.channel, 1)
+            self.assertEqual(burst_request.cycles, 12)
+            self.assertEqual(burst_request.phase_deg, 30.0)
+            self.assertEqual(burst_request.internal_period_s, 0.25)
+            self.assertEqual(burst_request.delay_s, 0.5)
             pulse_request = source.configure_pulse_v2.call_args.args[0]
             self.assertEqual(pulse_request.channel, 1)
             self.assertEqual(pulse_request.width_s, 1.0e-6)

@@ -26,6 +26,7 @@ from wavebench.instruments.source_extensions import (
     PatchValue,
     SourceBasicConfigureRequest,
     SourceBasicPatch,
+    SourceBurstConfigureRequest,
     SourceHarmonicConfigureRequest,
     SourceHarmonicPreset,
     SourceModulationConfigureRequest,
@@ -415,6 +416,8 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.modulation_configure_v2")
             elif step.kind == "source.modulation_pm_configure_v2":
                 add("source", "source.snapshot_v2", "source.modulation_pm_configure_v2")
+            elif step.kind == "source.burst_configure_v2":
+                add("source", "source.snapshot_v2", "source.burst_configure_v2")
             elif step.kind == "source.pulse_configure_v2":
                 add("source", "source.snapshot_v2", "source.pulse_configure_v2")
             elif step.kind == "power.status":
@@ -1168,6 +1171,17 @@ class RunService:
                     channel=step.fields["channel"],
                     phase_deviation_deg=step.fields["phase_deviation_deg"],
                     internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.burst_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_burst_v2(
+                SourceBurstConfigureRequest(
+                    channel=step.fields["channel"],
+                    cycles=step.fields["cycles"],
+                    phase_deg=step.fields["phase_deg"],
+                    internal_period_s=step.fields["internal_period_s"],
+                    delay_s=step.fields["delay_s"],
                 )
             )
             artifact = {"source_operation": source_operation}
