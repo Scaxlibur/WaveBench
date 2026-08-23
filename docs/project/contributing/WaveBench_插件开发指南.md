@@ -169,6 +169,12 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 声明 Harmonic `READ`／`CONFIGURE`、可配置 order 区间、允许预设，以及 configured order、preset 与输出状态
 可读。该 capability 只覆盖 `all`、`even`、`odd` 预设，不得借此支持 USER mask、逐分量幅度／相位或隐式输出 ON。
 
+内部 AM 使用独立的 `source.modulation_configure_v2`，driver 必须实现
+`configure_source_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`am`、
+`internal`、`depth_percent` 和 `configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的内部正弦 AM：深度为 `[0, 100]`，内部频率为有限正值；不得借此支持
+disable、外部调制源、内部波形选择、FM／PM／PWM 或隐式输出 ON。
+
 实际插件声明任一 Source V2 写 capability 前，至少完成该 capability 的 A0 离线 fixture；声明的方向、profile、
 方法与版本门必须同时通过核心校验。没有实机证据时，不得把核心合同注册描述为已完成设备写能力验收。
 
