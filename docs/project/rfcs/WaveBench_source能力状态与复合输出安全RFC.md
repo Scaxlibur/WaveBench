@@ -2997,7 +2997,8 @@ Modulation、Pulse、Sweep、Burst、ARB 或跨通道关系。
 `source.output_v2` 决定，并沿用 M5-C 的最终 Vpp／Offset 基础限制，不在本子能力中引入新的 RMS、
 统计 Noise、共享功率或逐分量人工预算门。
 
-双合同插件的 V1 `configure_harmonics` 映射到该 V2 事务；V1-only 插件以及未声明
+双合同插件的 V1 `configure_harmonics` 在仪器 I/O 前拒绝：V1 返回值要求完整的固定 H2–H16 profile，
+无法由允许稀疏或部分观测的 V2 Harmonic facet 无损构造。V1-only 插件以及未声明
 `source.harmonics_configure_v2` 的双合同插件继续走原 V1 路径。M6-A 的后续子能力必须重新审计自己
 相关的 V1 route，不能因 Harmonic 已实现而扩大本 capability 的范围。
 

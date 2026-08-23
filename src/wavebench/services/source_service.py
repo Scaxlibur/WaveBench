@@ -62,11 +62,14 @@ from wavebench.instruments.models import (
 from wavebench.instruments.source_extensions import (
     Availability,
     BasicWaveFacet,
+    HarmonicFacet,
+    Observed,
     OutputFacet,
     PatchAction,
     PatchValue,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_CONTRACT_VERSION,
+    SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
     SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
     SnapshotConsistencyState,
@@ -83,6 +86,10 @@ from wavebench.instruments.source_extensions import (
     SourceFieldRef,
     SourceFeature,
     SourceFeatureDirection,
+    SourceHarmonicCapabilityProfile,
+    SourceHarmonicConfigureRequest,
+    SourceHarmonicConfigureResult,
+    SourceHarmonicConfigureV2Driver,
     SourceOutputRequest,
     SourceOutputResult,
     SourceOutputV2Driver,
@@ -124,6 +131,15 @@ class _SourceBasicConfigureV2Transaction:
     """Core transaction result shared by public and V1-adapter routes."""
 
     result: SourceBasicConfigureResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceHarmonicConfigureV2Transaction:
+    """Core transaction result shared by the Harmonic public route."""
+
+    result: SourceHarmonicConfigureResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
@@ -316,6 +332,20 @@ class SourceService(SessionStateAliasMixin):
         """Configure one OFF source channel and return its typed result and artifact."""
 
         transaction = self._configure_basic_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def configure_harmonics_v2(
+        self,
+        request: SourceHarmonicConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceHarmonicConfigureResult, dict[str, object]]:
+        """Configure one OFF source channel's declared Harmonic preset."""
+
+        transaction = self._configure_harmonics_v2_transaction(
             request,
             correlation_id=correlation_id,
         )
@@ -850,11 +880,223 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _configure_harmonics_v2_transaction(
+        self,
+        request: SourceHarmonicConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> _SourceHarmonicConfigureV2Transaction:
+        """Execute one declared Harmonic preset transaction while output is OFF."""
+
+        operation = "source.harmonics_configure_v2"
+        if not isinstance(request, SourceHarmonicConfigureRequest):
+            raise ConfigError(f"{operation} requires SourceHarmonicConfigureRequest")
+        self._require(
+            operation,
+            "source.snapshot_v2",
+            "source.harmonics_configure_v2",
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            fields = self._source_harmonics_v2_fields(request.channel)
+            harmonic_field = next(
+                field for field in fields if field.field is SourceFieldId.HARMONICS
+            )
+            output_field = next(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            target_scope = SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel)
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(target_scope,),
+                emergency_off_outputs=(target_scope,),
+                restore_order=(),
+                non_restorable_fields=(harmonic_field, output_field),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceHarmonicConfigureResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_harmonics, preflight_output = self._source_v2_harmonic_preflight_target(
+                        preflight_snapshot,
+                        request.channel,
+                        operation=operation,
+                    )
+                    self._validate_source_harmonic_v2_preflight(
+                        request,
+                        preflight_snapshot,
+                        preflight_harmonics,
+                        preflight_output,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest((request.channel, preflight_harmonics, preflight_output))
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write"},
+                    fields=(harmonic_field,),
+                    max_steps=SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        result = cast(SourceHarmonicConfigureV2Driver, source).configure_source_harmonics_v2(
+                            request
+                        )
+                        self._validate_source_harmonic_v2_result(request, result)
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=(harmonic_field, output_field),
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            postcondition_harmonics, postcondition_output = (
+                                self._source_v2_harmonic_target(
+                                    postcondition_snapshot,
+                                    request.channel,
+                                    operation=operation,
+                                )
+                            )
+                            assert result is not None
+                            self._validate_source_harmonic_v2_postcondition(
+                                request,
+                                result,
+                                postcondition_snapshot,
+                                postcondition_harmonics,
+                                postcondition_output,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=(harmonic_field, output_field),
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_output_off(
+                                context,
+                                source,
+                                request.channel,
+                                extensions,
+                                output_field,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_harmonic_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceHarmonicConfigureV2Transaction(
+                    result=result,
+                    artifact=self._source_harmonic_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
     @staticmethod
     def _source_basic_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
         target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
         fields = (
             SourceFieldRef(SourceFieldId.BASIC, target),
+            SourceFieldRef(SourceFieldId.OUTPUT, target),
+            SourceFieldRef(
+                SourceFieldId.IDENTITY,
+                SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _source_harmonics_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
+        target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+        fields = (
+            SourceFieldRef(SourceFieldId.HARMONICS, target),
             SourceFieldRef(SourceFieldId.OUTPUT, target),
             SourceFieldRef(
                 SourceFieldId.IDENTITY,
@@ -911,6 +1153,50 @@ class SourceService(SessionStateAliasMixin):
         ):
             raise ConfigError(f"{operation} requires readable output state")
         return target.basic.value, target.output.value
+
+    @staticmethod
+    def _source_v2_harmonic_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[HarmonicFacet, OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.harmonics.availability is not Availability.VALUE or not isinstance(
+            target.harmonics.value,
+            HarmonicFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable harmonic state")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.harmonics.value, target.output.value
+
+    @staticmethod
+    def _source_v2_harmonic_preflight_target(
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[Observed[HarmonicFacet], OutputFacet]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        if target.harmonics.availability is Availability.VALUE and not isinstance(
+            target.harmonics.value,
+            HarmonicFacet,
+        ):
+            raise ConfigError(f"{operation} harmonic state has an invalid type")
+        if target.output.availability is not Availability.VALUE or not isinstance(
+            target.output.value,
+            OutputFacet,
+        ):
+            raise ConfigError(f"{operation} requires readable output state")
+        return target.harmonics, target.output.value
 
     @staticmethod
     def _source_v2_output_target(
@@ -988,6 +1274,117 @@ class SourceService(SessionStateAliasMixin):
             requested_offset,
             operation="source.basic_configure_v2",
         )
+
+    @staticmethod
+    def _source_harmonic_runtime_profile(
+        snapshot: SourceSnapshotV2,
+        *,
+        channel: int,
+        operation: str,
+    ) -> SourceHarmonicCapabilityProfile:
+        feature = next(
+            (
+                candidate
+                for candidate in snapshot.runtime_profile.features
+                if candidate.feature is SourceFeature.HARMONICS
+                and candidate.scope is SourceFacetScope.CHANNEL
+                and channel in candidate.channels
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(feature.profile, SourceHarmonicCapabilityProfile):
+            raise ConfigError(f"{operation} is not available for the runtime target channel")
+        return feature.profile
+
+    def _validate_source_harmonic_v2_preflight(
+        self,
+        request: SourceHarmonicConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        harmonics: Observed[HarmonicFacet],
+        output: OutputFacet,
+    ) -> None:
+        del harmonics
+        operation = "source.harmonics_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} requires target output OFF")
+        profile = self._source_harmonic_runtime_profile(
+            snapshot,
+            channel=request.channel,
+            operation=operation,
+        )
+        if not profile.minimum_order <= request.order <= profile.maximum_order:
+            raise ConfigError(f"{operation} order is not supported by the runtime profile")
+        if request.preset not in profile.presets:
+            raise ConfigError(f"{operation} preset is not supported by the runtime profile")
+        if not profile.configured_order_readable or not profile.preset_readable:
+            raise ConfigError(f"{operation} requires configured order and preset readback")
+
+    @staticmethod
+    def _validate_source_harmonic_v2_readback(
+        request: SourceHarmonicConfigureRequest,
+        harmonics: HarmonicFacet,
+        *,
+        operation: str,
+    ) -> None:
+        if harmonics.enabled.availability is not Availability.VALUE or harmonics.enabled.value is not True:
+            raise ConfigError(f"{operation} postcondition reports harmonics disabled")
+        if (
+            harmonics.configured_order.availability is not Availability.VALUE
+            or harmonics.configured_order.value != request.order
+        ):
+            raise ConfigError(f"{operation} configured order readback does not match request")
+        if (
+            harmonics.preset.availability is not Availability.VALUE
+            or harmonics.preset.value is not request.preset
+        ):
+            raise ConfigError(f"{operation} preset readback does not match request")
+
+    def _validate_source_harmonic_v2_result(
+        self,
+        request: SourceHarmonicConfigureRequest,
+        result: object,
+    ) -> None:
+        operation = "source.harmonics_configure_v2"
+        if not isinstance(result, SourceHarmonicConfigureResult):
+            raise ConfigError(
+                "configure_source_harmonics_v2() returned an invalid SourceHarmonicConfigureResult"
+            )
+        if result.channel != request.channel:
+            raise ConfigError(f"{operation} result channel does not match request")
+        if result.output_enabled:
+            raise ConfigError(f"{operation} result reports output ON")
+        self._validate_source_harmonic_v2_readback(
+            request,
+            result.harmonics,
+            operation=operation,
+        )
+
+    def _validate_source_harmonic_v2_postcondition(
+        self,
+        request: SourceHarmonicConfigureRequest,
+        result: SourceHarmonicConfigureResult,
+        snapshot: SourceSnapshotV2,
+        harmonics: HarmonicFacet,
+        output: OutputFacet,
+    ) -> None:
+        operation = "source.harmonics_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+            raise ConfigError(f"{operation} postcondition reports output ON")
+        self._validate_source_harmonic_v2_readback(request, harmonics, operation=operation)
+        result_order = result.harmonics.configured_order.value
+        result_preset = result.harmonics.preset.value
+        assert result_order is not None and result_preset is not None
+        if (result_order, result_preset) != (
+            harmonics.configured_order.value,
+            harmonics.preset.value,
+        ):
+            raise ConfigError(f"{operation} result readback does not match postcondition")
 
     def _validate_source_basic_v2_result(
         self,
@@ -1399,6 +1796,60 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_harmonic_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceHarmonicConfigureRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceHarmonicConfigureResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": "source.harmonics_configure_v2",
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_channel": request.channel,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {"result": source_v2_to_data(result)}
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "output_expected": "off",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_output_v2_artifact(
         self,
         *,
@@ -1464,6 +1915,16 @@ class SourceService(SessionStateAliasMixin):
     ) -> None:
         try:
             setattr(exc, "source_operation_artifact", self._source_basic_v2_artifact(**kwargs))
+        except Exception:
+            pass
+
+    def _attach_source_harmonic_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(exc, "source_operation_artifact", self._source_harmonic_v2_artifact(**kwargs))
         except Exception:
             pass
 
@@ -1617,6 +2078,10 @@ class SourceService(SessionStateAliasMixin):
         *,
         check_errors: bool = True,
     ) -> SourceHarmonicProfile:
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.CONFIGURE_HARMONICS,
+            "source.harmonics_configure_v2",
+        )
         if not isinstance(configuration, SourceHarmonicConfiguration):
             raise ConfigError("source harmonic configuration must be SourceHarmonicConfiguration")
         required = ["source.harmonic_configure"]
@@ -1918,6 +2383,7 @@ class SourceService(SessionStateAliasMixin):
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.RESTORE,
             "source.basic_configure_v2",
+            "source.harmonics_configure_v2",
             "source.output_v2",
         )
         self.set_output(channel=state.channel, enabled=False)

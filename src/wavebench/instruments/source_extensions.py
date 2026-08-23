@@ -1035,8 +1035,11 @@ SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
         SourceFieldId.OUTPUT,
     ),
     cleanup_verification_fields=(SourceFieldId.OUTPUT,),
-    v1_equivalent_routes=(SourceV1WriteRouteId.CONFIGURE_HARMONICS,),
-    v1_overlapping_routes=(SourceV1WriteRouteId.RESTORE,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_HARMONICS,
+        SourceV1WriteRouteId.RESTORE,
+    ),
     operation_timeout_ms=5_000,
     main_max_steps=1,
     recovery_max_steps=1,
