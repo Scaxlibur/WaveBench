@@ -36,6 +36,7 @@ from tests.source_v2_fixtures import (
     basic_facet,
     source_descriptor,
     source_extensions,
+    source_extensions_with_harmonics,
 )
 
 
@@ -55,7 +56,11 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
     assert module.__all__[: len(r5_exports)] == r5_exports
     match = re.search(r"R6／M5-A 在上述 R5 清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
     assert match is not None
-    assert module.__all__[len(r5_exports) :] == match.group(1).splitlines()
+    m5_exports = match.group(1).splitlines()
+    assert module.__all__[len(r5_exports) : len(r5_exports) + len(m5_exports)] == m5_exports
+    match = re.search(r"M6-A／Harmonic 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
+    assert match is not None
+    assert module.__all__[len(r5_exports) + len(m5_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -107,6 +112,9 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "maximum_order",
             "amplitude_kinds",
             "completeness_modes",
+            "presets",
+            "configured_order_readable",
+            "preset_readable",
         ),
         "SourceModulationCapabilityProfile": (
             "kinds",
@@ -227,6 +235,8 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "final_amplitude",
             "final_offset_v",
         ),
+        "SourceHarmonicConfigureRequest": ("channel", "order", "preset"),
+        "SourceHarmonicConfigureResult": ("channel", "harmonics", "output_enabled"),
         "SourceAffectedClosure": (
             "operation",
             "context_id",
@@ -284,6 +294,8 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "completeness",
             "maximum_supported_order",
             "components",
+            "configured_order",
+            "preset",
         ),
         "ModulationFacet": (
             "enabled",
@@ -388,6 +400,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
     expected = {
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
@@ -479,6 +492,60 @@ def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
             1,
             False,
             module.SourceAmplitude(-0.1, module.SourceAmplitudeUnit.VPP),
+        )
+
+
+def test_source_v2_harmonic_write_models_are_closed_and_serializable() -> None:
+    harmonics = module.HarmonicFacet(
+        enabled=Observed.value_of(True),
+        completeness=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+        maximum_supported_order=Observed.value_of(16),
+        components=Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        ),
+        configured_order=Observed.value_of(8),
+        preset=Observed.value_of(module.SourceHarmonicPreset.ODD),
+    )
+    request = module.SourceHarmonicConfigureRequest(
+        channel=1,
+        order=8,
+        preset=module.SourceHarmonicPreset.ODD,
+    )
+    result = module.SourceHarmonicConfigureResult(1, harmonics, False)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceHarmonicConfigureRequest",
+        "channel": 1,
+        "order": 8,
+        "preset": "odd",
+    }
+    assert result.harmonics.configured_order.value == 8
+    assert result.harmonics.preset.value is module.SourceHarmonicPreset.ODD
+    with pytest.raises(ValueError, match="must be >= 2"):
+        module.SourceHarmonicConfigureRequest(
+            channel=1,
+            order=1,
+            preset=module.SourceHarmonicPreset.ALL,
+        )
+    with pytest.raises(ValueError, match="invalid type"):
+        module.SourceHarmonicConfigureRequest(channel=1, order=8, preset="ODD")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceHarmonicConfigureResult(1, harmonics, True)
+    with pytest.raises(ValueError, match="configured_order readback"):
+        module.SourceHarmonicConfigureResult(
+            1,
+            replace(
+                harmonics,
+                configured_order=Observed.missing(
+                    Availability.NOT_QUERIED,
+                    SourceReasonCode.NOT_REQUESTED,
+                ),
+            ),
+            False,
         )
 
 
@@ -610,6 +677,83 @@ def test_source_output_v2_descriptor_keeps_off_available_without_final_vpp_readb
     )
 
     validate_source_descriptor(descriptor)
+
+
+def test_source_v2_harmonic_write_requires_direction_and_configuration_readback() -> None:
+    extensions = source_extensions_with_harmonics()
+    basic, harmonic, output = extensions.features
+    configured_harmonic = replace(
+        harmonic,
+        directions=(SourceFeatureDirection.CONFIGURE, SourceFeatureDirection.READ),
+        profile=replace(
+            harmonic.profile,
+            presets=(
+                module.SourceHarmonicPreset.ALL,
+                module.SourceHarmonicPreset.EVEN,
+                module.SourceHarmonicPreset.ODD,
+            ),
+            configured_order_readable=True,
+            preset_readable=True,
+        ),
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(basic, configured_harmonic, output),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=("source.snapshot_v2", "source.harmonics_configure_v2"),
+    )
+
+    class HarmonicWriteDriver(SourceV2FakeDriver):
+        def configure_source_harmonics_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, HarmonicWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="CONFIGURE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(basic, harmonic, output),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="configured order and preset"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(
+                            configured_harmonic,
+                            profile=replace(
+                                configured_harmonic.profile,
+                                preset_readable=False,
+                            ),
+                        ),
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="configure_source_harmonics_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingHarmonicWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                },
+            )(),
+        )
 
 
 def test_source_v2_rejects_invalid_feature_scope_and_query_field_ownership() -> None:

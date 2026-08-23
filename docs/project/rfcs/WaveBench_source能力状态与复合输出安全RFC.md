@@ -464,6 +464,16 @@ SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT
 SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT
 ```
 
+M6-A／Harmonic 在上述清单末尾追加以下精确条目：
+
+```text
+SourceHarmonicPreset
+SourceHarmonicConfigureRequest
+SourceHarmonicConfigureResult
+SourceHarmonicConfigureV2Driver
+SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。

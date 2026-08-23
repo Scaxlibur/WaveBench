@@ -23,6 +23,7 @@ from .source_extensions import (
     SourceFacetScope,
     SourceFeature,
     SourceFeatureDirection,
+    SourceHarmonicCapabilityProfile,
     SourceOutputCapabilityProfile,
     SourceQueryEffect,
     SupportState,
@@ -33,6 +34,7 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
     {
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
 )
@@ -40,6 +42,7 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
 _SOURCE_WRITE_CAPABILITIES = frozenset(
     {
         "source.basic_configure_v2",
+        "source.harmonics_configure_v2",
         "source.output_v2",
     }
 )
@@ -299,6 +302,27 @@ def _validate_write_contract(
                 "source.basic_configure_v2 requires readable output state on every channel"
             )
 
+    if "source.harmonics_configure_v2" in capabilities:
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.HARMONICS,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.harmonics_configure_v2 requires harmonics feature CONFIGURE directions"
+            )
+        readable = _channels_with_harmonic_configuration_readback(extensions)
+        if not configurable <= readable:
+            raise ConfigError(
+                "source.harmonics_configure_v2 requires readable configured order and preset "
+                "on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.harmonics_configure_v2 requires readable output state on every channel"
+            )
+
     if "source.output_v2" in capabilities:
         enabled = _channels_with_direction(
             extensions,
@@ -355,6 +379,26 @@ def _channels_with_basic_final_vpp(extensions: SourceDescriptorExtensions) -> fr
     )
 
 
+def _channels_with_harmonic_configuration_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.HARMONICS
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceHarmonicCapabilityProfile)
+            and feature.profile.presets
+            and feature.profile.configured_order_readable
+            and feature.profile.preset_readable
+        )
+        for channel in feature.channels
+    )
+
+
 def _channels_with_output_readback(extensions: SourceDescriptorExtensions) -> frozenset[int]:
     return frozenset(
         channel
@@ -377,6 +421,7 @@ def _validate_declared_write_directions(
 ) -> None:
     capability_by_direction = {
         (SourceFeature.BASIC, SourceFeatureDirection.CONFIGURE): "source.basic_configure_v2",
+        (SourceFeature.HARMONICS, SourceFeatureDirection.CONFIGURE): "source.harmonics_configure_v2",
         (SourceFeature.OUTPUT, SourceFeatureDirection.ENABLE): "source.output_v2",
         (SourceFeature.OUTPUT, SourceFeatureDirection.DISABLE): "source.output_v2",
     }

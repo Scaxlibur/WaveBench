@@ -7,7 +7,7 @@ does not provide a Source write entry point or perform instrument I/O.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
@@ -241,6 +241,12 @@ class HarmonicCompleteness(StrEnum):
     ACTIVE_ONLY = "active_only"
     SELECTED_ONLY = "selected_only"
     PARTIAL = "partial"
+
+
+class SourceHarmonicPreset(StrEnum):
+    ALL = "all"
+    EVEN = "even"
+    ODD = "odd"
 
 
 class ComponentAmplitudeKind(StrEnum):
@@ -484,6 +490,9 @@ class SourceHarmonicCapabilityProfile:
     maximum_order: int
     amplitude_kinds: tuple[ComponentAmplitudeKind, ...]
     completeness_modes: tuple[HarmonicCompleteness, ...]
+    presets: tuple[SourceHarmonicPreset, ...] = ()
+    configured_order_readable: bool = False
+    preset_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_int(self.minimum_order, "harmonic minimum_order", minimum=2)
@@ -498,6 +507,14 @@ class SourceHarmonicCapabilityProfile:
             HarmonicCompleteness,
             "harmonic completeness_modes",
         )
+        _require_enum_tuple(
+            self.presets,
+            SourceHarmonicPreset,
+            "harmonic presets",
+            allow_empty=True,
+        )
+        _require_bool(self.configured_order_readable, "harmonic configured_order_readable")
+        _require_bool(self.preset_readable, "harmonic preset_readable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -996,6 +1013,33 @@ SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation_timeout_ms=5_000,
     main_max_steps=1,
     recovery_max_steps=2,
+    verification_max_steps=2,
+)
+
+
+SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.harmonics_configure_v2",
+    capability="source.harmonics_configure_v2",
+    feature=SourceFeature.HARMONICS,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.HARMONICS,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.HARMONICS,),
+    postcondition_fields=(
+        SourceFieldId.HARMONICS,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(SourceV1WriteRouteId.CONFIGURE_HARMONICS,),
+    v1_overlapping_routes=(SourceV1WriteRouteId.RESTORE,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
     verification_max_steps=2,
 )
 
@@ -2131,6 +2175,19 @@ class SourceOutputRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceHarmonicConfigureRequest:
+    channel: int
+    order: int
+    preset: SourceHarmonicPreset
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source harmonic configure channel", minimum=1)
+        _require_int(self.order, "source harmonic configure order", minimum=2)
+        if not isinstance(self.preset, SourceHarmonicPreset):
+            raise ValueError("source harmonic configure preset has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceBasicConfigureResult:
     channel: int
     basic: BasicWaveFacet
@@ -2203,12 +2260,26 @@ class HarmonicFacet:
     completeness: Observed[HarmonicCompleteness]
     maximum_supported_order: Observed[int]
     components: Observed[tuple[SourceHarmonicComponentV2, ...]]
+    configured_order: Observed[int] = field(
+        default_factory=lambda: Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        )
+    )
+    preset: Observed[SourceHarmonicPreset] = field(
+        default_factory=lambda: Observed.missing(
+            Availability.NOT_QUERIED,
+            SourceReasonCode.NOT_REQUESTED,
+        )
+    )
 
     def __post_init__(self) -> None:
         _require_observed(self.enabled, "harmonic enabled")
         _require_observed(self.completeness, "harmonic completeness")
         _require_observed(self.maximum_supported_order, "harmonic maximum_supported_order")
         _require_observed(self.components, "harmonic components")
+        _require_observed(self.configured_order, "harmonic configured_order")
+        _require_observed(self.preset, "harmonic preset")
         if self.enabled.availability is Availability.VALUE:
             _require_bool(self.enabled.value, "harmonic enabled value")
         if self.maximum_supported_order.availability is Availability.VALUE:
@@ -2217,6 +2288,17 @@ class HarmonicFacet:
                 "harmonic maximum_supported_order value",
                 minimum=2,
             )
+        if self.configured_order.availability is Availability.VALUE:
+            _require_int(
+                self.configured_order.value,
+                "harmonic configured_order value",
+                minimum=2,
+            )
+        if self.preset.availability is Availability.VALUE and not isinstance(
+            self.preset.value,
+            SourceHarmonicPreset,
+        ):
+            raise ValueError("harmonic preset value has an invalid type")
         if self.components.availability is Availability.VALUE:
             components = self.components.value
             if not isinstance(components, tuple) or any(
@@ -2226,6 +2308,30 @@ class HarmonicFacet:
             orders = tuple(item.order for item in components)
             if len(set(orders)) != len(orders) or tuple(sorted(orders)) != orders:
                 raise ValueError("harmonic components must be sorted by order and unique")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceHarmonicConfigureResult:
+    channel: int
+    harmonics: HarmonicFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source harmonic configure result channel", minimum=1)
+        if not isinstance(self.harmonics, HarmonicFacet):
+            raise ValueError("source harmonic configure result harmonics has an invalid type")
+        _require_bool(self.output_enabled, "source harmonic configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source harmonic configure result requires output_enabled=False")
+        if (
+            self.harmonics.enabled.availability is not Availability.VALUE
+            or self.harmonics.enabled.value is not True
+        ):
+            raise ValueError("source harmonic configure result requires enabled harmonic readback")
+        if self.harmonics.configured_order.availability is not Availability.VALUE:
+            raise ValueError("source harmonic configure result requires configured_order readback")
+        if self.harmonics.preset.availability is not Availability.VALUE:
+            raise ValueError("source harmonic configure result requires preset readback")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3101,6 +3207,14 @@ class SourceBasicConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceHarmonicConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_harmonics_v2(
+        self,
+        request: SourceHarmonicConfigureRequest,
+    ) -> SourceHarmonicConfigureResult: ...
+
+
+@runtime_checkable
 class SourceOutputV2Driver(InstrumentDriver, Protocol):
     def set_source_output_v2(
         self,
@@ -3350,4 +3464,9 @@ __all__ = [
     "SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT",
     "SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT",
     "SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT",
+    "SourceHarmonicPreset",
+    "SourceHarmonicConfigureRequest",
+    "SourceHarmonicConfigureResult",
+    "SourceHarmonicConfigureV2Driver",
+    "SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT",
 ]
