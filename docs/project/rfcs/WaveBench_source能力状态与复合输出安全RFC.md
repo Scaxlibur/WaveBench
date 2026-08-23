@@ -2776,6 +2776,10 @@ Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使�
   run plan step 和 operation artifact；插件不得自行拼接新的公共写 ID。
 - `source.basic_configure_v2` 和 `source.output_v2` 是独立 capability，不提供通用
   `source.patch_v2`、`source.arm_v2` 或 `source.fire_v2`。
+- `source.output_v2` 使用两个核心 operation contract：`source.output_enable_v2` 的 direction 为
+  `ENABLE`、energy effect 为 `EMIT`；`source.output_disable_v2` 的 direction 为 `DISABLE`、energy
+  effect 为 `DECREASE_ONLY`。二者共享 capability 和 driver 方法，但各自拥有 closure、phase、
+  artifact 和错误路径，不能用一个方向不明确的 contract 混合表示。
 - 新类型、descriptor 字段和 artifact 键必须 append-only；既有 `SourceDriver`、`SourceStatus`、
   V1 CLI、V1 run step、V1 JSON 和 V1 artifact 不改变语义。
 - V1-only 插件继续执行 V1 路径。双合同插件声明某项 V2 capability 后，核心在 M5-D 将同义或副作用
