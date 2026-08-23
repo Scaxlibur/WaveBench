@@ -350,13 +350,14 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.modulation_pm_configure_v2` | `configure_source_pm_modulation_v2` |
 | `source.modulation_fm_configure_v2` | `configure_source_fm_modulation_v2` |
 | `source.modulation_pwm_configure_v2` | `configure_source_pwm_modulation_v2` |
+| `source.sweep_configure_v2` | `configure_source_sweep_v2` |
 | `source.burst_configure_v2` | `configure_source_burst_v2` |
 | `source.pulse_configure_v2` | `configure_source_pulse_v2` |
 
 ### Source V2 扩展
 
 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.burst_configure_v2` 和 `source.pulse_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
+`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2` 和 `source.pulse_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
 `wavebench.instrument.v2`。采用任一 Source V2 capability 的
 wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
 `source_extensions` 位于 descriptor 末尾且默认值为 `None`，因此未声明该能力的 V1 插件不需要
@@ -364,7 +365,7 @@ wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更�
 
 插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
 `SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、`SourceHarmonicConfigureV2Driver`、
-`SourceModulationConfigureV2Driver`、`SourcePmModulationConfigureV2Driver`、`SourceFmModulationConfigureV2Driver`、`SourcePwmModulationConfigureV2Driver`、`SourceBurstConfigureV2Driver`、`SourcePulseConfigureV2Driver`、query
+`SourceModulationConfigureV2Driver`、`SourcePmModulationConfigureV2Driver`、`SourceFmModulationConfigureV2Driver`、`SourcePwmModulationConfigureV2Driver`、`SourceSweepConfigureV2Driver`、`SourceBurstConfigureV2Driver`、`SourcePulseConfigureV2Driver`、query
 plan／execution record 和各类 typed profile。核心签发 semantic query plan；snapshot driver 只负责将
 item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
 `NOT_APPLICABLE`、runtime profile 或 snapshot consistency。
@@ -390,6 +391,7 @@ SourceService.configure_modulation_v2(request, *, correlation_id=None)
 SourceService.configure_pm_modulation_v2(request, *, correlation_id=None)
 SourceService.configure_fm_modulation_v2(request, *, correlation_id=None)
 SourceService.configure_pwm_modulation_v2(request, *, correlation_id=None)
+SourceService.configure_sweep_v2(request, *, correlation_id=None)
 SourceService.configure_burst_v2(request, *, correlation_id=None)
 SourceService.configure_pulse_v2(request, *, correlation_id=None)
 wavebench source basic-configure-v2 --channel N ...
@@ -399,11 +401,12 @@ wavebench source modulation-configure-v2 --channel N --depth-percent PERCENT --i
 wavebench source pm-modulation-configure-v2 --channel N --phase-deviation-deg DEG --internal-frequency-hz HZ
 wavebench source fm-modulation-configure-v2 --channel N --frequency-deviation-hz HZ --internal-frequency-hz HZ
 wavebench source pwm-modulation-configure-v2 --channel N --internal-frequency-hz HZ (--duty-deviation-percent PERCENT | --width-deviation-s S)
+wavebench source sweep-configure-v2 --channel N --start-hz F --stop-hz F --spacing linear|logarithmic|step --steps N --sweep-time-s S
 wavebench source burst-configure-v2 --channel N --cycles N --phase-deg DEG --internal-period-s S --delay-s S
 wavebench source pulse-configure-v2 --channel N --width-s S --delay-s S --leading-transition-s S --trailing-transition-s S
 ```
 
-九个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
+十个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
 `wavebench.source.operation.v1`，不得包含 raw SCPI、完整响应、资源地址、序列号、授权 token 或 nonce。
 
 `source.harmonics_configure_v2` 只允许单通道的 `all`、`even`、`odd` 预设。descriptor 必须同时声明
@@ -432,6 +435,13 @@ Modulation `READ`／`CONFIGURE`、`pwm`、`internal`、`configuration_readable =
 `internal_frequency_hz`，以及恰好一个显式单位分支：`[0, 50]` 的 `duty_deviation_percent` 或 `[0, 500000]` 秒的
 `width_deviation_s`；该 operation 不提供 disable、外部调制源、内部波形选择、AM／FM／PM 或隐式输出 ON。
 
+`source.sweep_configure_v2` 只允许单通道、输出 OFF 时的内建 Sweep。descriptor 必须同时声明 Sweep
+`READ`／`CONFIGURE`、至少一个 spacing、internal trigger、timing／marker 与 `configuration_readable = true`；同一 channel
+的 Basic `READ` 必须声明 `sweep` frequency mode，Output `READ` 也必须能够回读 output state。request 包含有限正值且 start 不大于 stop 的
+start/stop、一个已声明的 spacing、`[2, 2048]` 的 steps 和 `[0.001, 300]` 秒的 sweep time。配置后必须回读 Basic 的
+`frequency_mode = sweep`、enabled Sweep、零 hold／return、internal positive trigger、trigger output OFF、marker disabled
+及全部 request 字段。它不提供 center/span、marker、外部／手动 trigger、arm、fire、输出 ON 或返回固定频率。
+
 `source.burst_configure_v2` 只允许单通道、输出 OFF 时的内部 Triggered Burst。descriptor 必须同时声明
 Burst `READ`／`CONFIGURE`、`triggered`、`internal`、`timing_readable = true` 与
 `triggered_internal_configuration_readable = true`，并能回读同一 channel 的 output state。request 包含
@@ -444,7 +454,7 @@ Pulse `READ`／`CONFIGURE`、WIDTH hold、delay、transition 与 `width_configur
 有限正值且各自不超过 width 的 `0.625` 倍；该 operation 不提供 DUTY hold、partial patch、trigger、输出 ON 或隐式波形切换。
 
 run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`source.output_disable_v2`、
-`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.burst_configure_v2` 与 `source.pulse_configure_v2` 十个 Source V2 step；它们的 artifact 只在实际执行时写入
+`source.harmonics_configure_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2` 与 `source.pulse_configure_v2` 十一个 Source V2 step；它们的 artifact 只在实际执行时写入
 `run.json.source_operations`。
 
 旧 `source.*` setter、output、trigger 和 ARB 路径继续保留。双合同插件上，四个 basic setter 与
@@ -454,9 +464,10 @@ run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`sourc
 也在仪器 I/O 前拒绝；声明 `source.modulation_pm_configure_v2` 时，V1 `configure_pm_modulation` 和 basic restore
 也在仪器 I/O 前拒绝；声明 `source.modulation_fm_configure_v2` 时，V1 `configure_fm_modulation` 和 basic restore
 也在仪器 I/O 前拒绝；声明 `source.modulation_pwm_configure_v2` 时，V1 `configure_pwm_modulation` 和 basic restore
+也在仪器 I/O 前拒绝；声明 `source.sweep_configure_v2` 时，V1 `configure_sweep`、`trigger_sweep` 和 basic restore
 也在仪器 I/O 前拒绝；声明 `source.burst_configure_v2` 时，V1 `configure_burst`、`trigger_burst` 和 basic restore
 也在仪器 I/O 前拒绝；声明 `source.pulse_configure_v2` 时，V1 `configure_pulse` 和 basic restore 也在仪器 I/O 前拒绝。
-Sweep 等尚无对应 V2 capability 的高级配置保持 V1。插件不得把 capability 注册视为
+ARB 等尚无对应 V2 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
 
 ### Power、DMM 和 sweep analyzer

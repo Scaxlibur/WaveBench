@@ -194,6 +194,13 @@ disable、外部调制源、内部波形选择、AM／PM／PWM 或隐式输出 O
 request 包含有限正值的内部频率，以及恰好一个分支——`[0, 50]` 的 DUTY deviation 或 `[0, 500000]` 秒的 WIDTH
 deviation；不得借此支持 disable、外部调制源、内部波形选择、AM／FM／PM 或隐式输出 ON。
 
+内部 Sweep 使用独立的 `source.sweep_configure_v2`，driver 必须实现
+`configure_source_sweep_v2(request)`。descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、internal
+trigger、timing／marker 与 `configuration_readable = true`；同一 channel 的 Basic `READ` 必须声明 `sweep` frequency
+mode，Output `READ` 也必须能够回读 output state。该 capability 只覆盖输出 OFF 时的内建 Sweep：request 包含 start/stop、一个已声明的
+spacing、`[2, 2048]` 的 steps 和 `[0.001, 300]` 秒的 sweep time；不得借此支持 center/span、marker、外部／手动 trigger、
+arm、fire、输出 ON 或返回固定频率。
+
 内部 Triggered Burst 使用独立的 `source.burst_configure_v2`，driver 必须实现
 `configure_source_burst_v2(request)`。descriptor 必须声明 Burst `READ`／`CONFIGURE`、`triggered`、`internal`、
 `timing_readable = true` 和 `triggered_internal_configuration_readable = true`，并能回读同一 channel 的 output state。
