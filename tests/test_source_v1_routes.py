@@ -41,6 +41,8 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.sweep_configure_v2",
         "source.burst_configure_v2",
         "source.pulse_configure_v2",
+        "source.arbitrary_storage_v2",
+        "source.arbitrary_select_v2",
     }
     assert all(require_operation_spec(operation).effect == "write" for operation in inventoried_operations)
 
@@ -71,6 +73,8 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.sweep_configure_v2",
         "source.burst_configure_v2",
         "source.pulse_configure_v2",
+        "source.arbitrary_storage_v2",
+        "source.arbitrary_select_v2",
     }
     assert {item.removeprefix("run-plan.") for item in entrypoints if item.startswith("run-plan.")} == expected_v1_run_steps
     assert {
@@ -90,6 +94,8 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.sweep_configure_v2",
         "source.burst_configure_v2",
         "source.pulse_configure_v2",
+        "source.arbitrary_storage_v2",
+        "source.arbitrary_select_v2",
     }
     assert {
         spec.operation
@@ -110,6 +116,8 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
             "source.sweep_configure_v2": "channel = 1\nstart_hz = 100\nstop_hz = 1000\nspacing = \"linear\"\nsteps = 101\nsweep_time_s = 1\n",
             "source.burst_configure_v2": "channel = 1\ncycles = 12\nphase_deg = 30\ninternal_period_s = 0.25\ndelay_s = 0.5\n",
             "source.pulse_configure_v2": "channel = 1\nwidth_s = 1e-6\ndelay_s = 0\nleading_transition_s = 1e-8\ntrailing_transition_s = 1e-8\n",
+            "source.arbitrary_storage_v2": "channel = 1\nslot_id = \"slot_a\"\nfile = \"payload.bin\"\nwrite_mode = \"create_only\"\n",
+            "source.arbitrary_select_v2": "channel = 1\nslot_id = \"slot_a\"\nplayback_mode = \"dds\"\nplayback_frequency_hz = 1000\n",
         }
         for kind, fields in valid_steps.items():
             plan_path = Path(tmp) / f"{kind}.toml"
