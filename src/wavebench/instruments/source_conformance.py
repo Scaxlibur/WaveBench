@@ -373,7 +373,14 @@ def validate_source_conformance_distribution(
                 raise ConfigError("Source conformance evidence is attached to the wrong feature")
             if manifest.direction not in owner.directions:
                 raise ConfigError("Source conformance evidence claims an undeclared direction")
-            if not set(manifest.channels) <= set(owner.channels):
+            declared_channels = {
+                channel
+                for candidate in extensions.features
+                if candidate.feature is manifest.feature
+                and manifest.direction in candidate.directions
+                for channel in candidate.channels
+            }
+            if not set(manifest.channels) <= declared_channels:
                 raise ConfigError("Source conformance evidence claims undeclared channels")
             applicability = owner.applicability
             if applicability.models and manifest.model not in applicability.models:
