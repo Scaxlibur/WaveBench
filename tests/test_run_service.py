@@ -441,6 +441,75 @@ screenshot = true
 
             open_services.assert_not_called()
 
+    def test_check_requires_source_v2_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+frequency_hz = 1000
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.basic_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_accepts_source_v2_steps_without_v1_source_write_capabilities(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[safety]
+safety_gate = true
+off_source_channels = [1]
+
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+frequency_hz = 1000
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 1
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=(
+                    "source.snapshot_v2",
+                    "source.basic_configure_v2",
+                    "source.output_v2",
+                ),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ):
+                service.check(plan)
+
     def test_check_requires_protection_capability_for_power_output_on(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(
@@ -1252,6 +1321,126 @@ state = "on"
                 source.set_square_duty_cycle.assert_called_once_with(channel=2, duty_percent=25.0)
                 source.set_output.assert_called_once_with(channel=2, enabled=True)
                 self.assertEqual(len(result.steps), 6)
+
+    def test_runs_source_v2_steps_and_writes_operation_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+waveform_kind = "square"
+frequency_hz = 1000
+amplitude_vpp = 1.5
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 1
+""",
+                )
+            )
+            artifacts = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.basic_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.output_enable_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.output_disable_v2",
+                },
+            ]
+            source = Mock()
+            source.configure_basic_v2.return_value = (SimpleNamespace(), artifacts[0])
+            source.set_output_v2.side_effect = [
+                (SimpleNamespace(), artifacts[1]),
+                (SimpleNamespace(), artifacts[2]),
+            ]
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            request = source.configure_basic_v2.call_args.args[0]
+            self.assertEqual(request.channel, 1)
+            self.assertEqual(request.patch.waveform_kind.value.value, "square")
+            self.assertEqual(request.patch.frequency_hz.value, 1000.0)
+            self.assertEqual(request.patch.amplitude_vpp.value, 1.5)
+            self.assertEqual(
+                [
+                    (item.args[0].channel, item.args[0].enabled)
+                    for item in source.set_output_v2.call_args_list
+                ],
+                [(1, True), (1, False)],
+            )
+            self.assertEqual(run_data["source_operations"], artifacts)
+            self.assertEqual(
+                [record.artifact["source_operation"] for record in result.steps],
+                artifacts,
+            )
+
+    def test_source_v2_failure_artifact_is_written_to_run_root(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+frequency_hz = 1000
+""",
+                )
+            )
+            artifact = {
+                "schema": "wavebench.source.operation.v1",
+                "operation": "source.basic_configure_v2",
+                "recovery": {"status": "off_verified"},
+            }
+            failure = ConfigError("postcondition mismatch")
+            failure.source_operation_artifact = artifact
+            source = Mock()
+            source.configure_basic_v2.side_effect = failure
+            run_dir = Path(tmp) / "source-v2-failure"
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            with patch("wavebench.services.run_service.new_package_dir", return_value=run_dir):
+                with self.assertRaisesRegex(ConfigError, "postcondition mismatch"):
+                    OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            run_data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_data["source_operations"], [artifact])
 
     def test_restores_source_state_after_success_when_enabled(self):
         with TemporaryDirectory() as tmp:
