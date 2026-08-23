@@ -35,6 +35,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
         "source.modulation_configure_v2",
+        "source.modulation_pm_configure_v2",
         "source.pulse_configure_v2",
     }
     assert all(require_operation_spec(operation).effect == "write" for operation in inventoried_operations)
@@ -74,6 +75,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
         "source.modulation_configure_v2",
+        "source.modulation_pm_configure_v2",
         "source.pulse_configure_v2",
     }
     assert {
