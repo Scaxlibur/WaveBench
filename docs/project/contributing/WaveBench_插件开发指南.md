@@ -213,6 +213,20 @@ delay 与 transition 可读，以及 `width_configuration_readable = true`，并
 该 capability 只覆盖输出 OFF 时的完整 WIDTH 形状：width 不小于 `4 ns`，delay 为有限非负值，两个 transition
 为有限正值且各自不超过 width 的 `0.625` 倍；不得借此支持 DUTY hold、partial patch、trigger、输出 ON 或隐式波形切换。
 
+ARB storage 与 selection 分别使用 `source.arbitrary_storage_v2` 和 `source.arbitrary_select_v2`。storage driver
+必须同时实现 `read_source_arbitrary_storage_v2(channel, slot_id)` 与
+`mutate_source_arbitrary_storage_v2(request, payload)`；前者返回指定命名槽位的 exists、SHA-256 与大小，后者必须在
+设备侧以 create-only 或 compare-and-replace 语义执行单次 mutation。payload 只作为独立 `bytes` 参数传递，不能进入
+request、descriptor evidence 或 operation artifact。声明 storage capability 的 ARB profile 必须显式给出
+`storage_slot_metadata_readable`、`storage_write_modes` 与 `storage_max_payload_bytes`，并能回读 selection 与 output state。
+storage 不选择波形、不改变输出，也不要求其它独立端口关闭。
+
+selection driver 实现 `select_source_arbitrary_v2(request)`。descriptor 必须声明 ARB `READ`／`CONFIGURE`、可读的
+selection 与 storage digest、允许 playback mode；true-ARB 还要求 sample rate 可读，Basic 必须支持可读的
+`arbitrary` waveform，Output 必须能回读 state。DDS 只接受 playback frequency，true-ARB 只接受 sample rate；
+selection 只允许目标输出 OFF，完成后仍为 OFF，不会隐式 ON。声明任一 ARB V2 capability 后，V1
+`upload_arbitrary_waveform` 会在本地文件读取和仪器 I/O 前被拒绝，不能把混合 upload／selection／ON 的旧 route 部分映射。
+
 实际插件声明任一 Source V2 写 capability 前，至少完成该 capability 的 A0 离线 fixture；声明的方向、profile、
 方法与版本门必须同时通过核心校验。没有实机证据时，不得把核心合同注册描述为已完成设备写能力验收。
 

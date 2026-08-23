@@ -361,9 +361,9 @@ state = "on"
 
 这看起来啰嗦，但它能避免现场调试时被隐藏动作吓到。
 
-### Source V2 基础、Harmonic、内部 AM、内部 PM 与 WIDTH Pulse 写 step
+### Source V2 基础、高级配置与 ARB 写 step
 
-声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用七个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
+声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用十三个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
 
 ```toml
 [[steps]]
@@ -436,6 +436,20 @@ width_s = 1e-6
 delay_s = 0
 leading_transition_s = 1e-8
 trailing_transition_s = 1e-8
+
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot_a"
+file = "payload.bin"
+write_mode = "create_only"
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+playback_frequency_hz = 1000
 ```
 
 `source.basic_configure_v2` 的 `channel` 必填，五个 basic 字段中至少写一个；缺失字段保持当前值。
@@ -458,6 +472,15 @@ profile 是否支持该 order 和预设。`source.modulation_configure_v2` 要�
 `source.pulse_configure_v2` 要求 `channel`、不小于 `4 ns` 的 `width_s`、有限非负 `delay_s`，以及有限正值
 `leading_transition_s`／`trailing_transition_s`；两个 transition 都不能超过 width 的 `0.625` 倍，且它只配置 WIDTH 脉冲形状。
 
+`source.arbitrary_storage_v2` 要求 `channel`、安全 token 形式的 `slot_id`、相对或绝对的 `file`，以及
+`create_only` 或 `replace_if_digest_matches` 的 `write_mode`。replace mode 还必须给出
+`expected_previous_sha256`。执行时会从 plan 所在目录解析相对文件，计算 payload 的 SHA-256 和大小；这些字节不会
+写入执行意图或 Source operation artifact。storage 不选择波形、不改变输出，目标或其它独立端口不需要因上传被关闭。
+
+`source.arbitrary_select_v2` 要求 `channel`、`slot_id` 与 `dds`／`true_arb` 之一的 `playback_mode`。DDS 只接受
+正的 `playback_frequency_hz`；true-ARB 只接受正的 `sample_rate_hz`。该 step 必须在目标输出已关闭时执行，完成后仍关闭；
+它不包含 output ON。
+
 Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内部 Triggered Burst 与 WIDTH Pulse step 都必须在目标输出已关闭时执行，完成后仍保持关闭；它们不会隐式开启输出。现有
 `restore.source_state` 只恢复 basic 状态，不恢复 Harmonic、调制、Burst 或 Pulse 配置。双合同插件声明
 `source.harmonics_configure_v2` 后，V1 `configure_harmonics` 会在仪器 I/O 前被拒绝；声明
@@ -470,8 +493,8 @@ Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内�
 仪器 I/O 前被拒绝。声明 `source.pulse_configure_v2` 后，V1 `configure_pulse` 也会在仪器 I/O 前被拒绝，
 因为 V1 route 还允许 DUTY hold。该 step 不会让 `source.output_enable_v2` 获得 Pulse 输出 ON 授权。
 
-执行意图会分别记录十一个 operation，实际执行时的完整 Source V2 artifact 会写入
-`run.json.source_operations`。没有声明 V2 capability 的旧插件继续使用 V1 step。
+执行意图会记录十三个 Source V2 operation，实际执行时的完整 Source V2 artifact 会写入
+`run.json.source_operations`；storage payload 只以文件名、SHA-256 与大小出现。没有声明 V2 capability 的旧插件继续使用 V1 step。
 
 ## 常见 `run check` 报错
 

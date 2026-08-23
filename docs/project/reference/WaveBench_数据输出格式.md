@@ -828,7 +828,7 @@ CLI 仍会在请求的 artifact 路径写入 `status = "failed"`、安全错误 
 
 `wavebench source snapshot-v2`、`wavebench source basic-configure-v2`、`wavebench source output-v2`、
 `wavebench source harmonics-configure-v2`、`wavebench source modulation-configure-v2` 和
-`wavebench source pm-modulation-configure-v2`、`wavebench source fm-modulation-configure-v2`、`wavebench source pwm-modulation-configure-v2`、`wavebench source sweep-configure-v2`、`wavebench source burst-configure-v2`、`wavebench source pulse-configure-v2` 都返回
+`wavebench source pm-modulation-configure-v2`、`wavebench source fm-modulation-configure-v2`、`wavebench source pwm-modulation-configure-v2`、`wavebench source sweep-configure-v2`、`wavebench source burst-configure-v2`、`wavebench source pulse-configure-v2`、`wavebench source arbitrary-storage-v2` 和 `wavebench source arbitrary-select-v2` 都返回
 `wavebench.source.operation.v1`。使用 `--json` 时，该对象
 位于 `wavebench.cli.result.v1.result`；普通模式直接输出缩进后的 operation artifact。CLI 不写入持久化文件，也不产生 conformance manifest。
 
@@ -853,6 +853,13 @@ mutation result、phase 摘要、最终 session state，以及仅在主写入后
 `source.modulation_pwm_configure_v2`；内部 Sweep artifact 的 `operation` 固定为 `source.sweep_configure_v2`；内部 Triggered Burst artifact 的
 `operation` 固定为 `source.burst_configure_v2`；WIDTH Pulse artifact 的 `operation` 固定为
 `source.pulse_configure_v2`。八者的 `final_state.output_expected` 都固定为 `off`。
+
+ARB storage artifact 的 `operation` 固定为 `source.arbitrary_storage_v2`。它记录 typed request、preflight／
+postcondition snapshot 摘要、命名槽位的 exists／SHA-256／大小、mutation result、phase 与 session state；不记录
+payload bytes、本地文件路径或设备私有二进制命令。其 `final_state.output_expected` 与
+`selection_expected` 都为 `unchanged`。ARB selection artifact 的 `operation` 固定为
+`source.arbitrary_select_v2`，记录 typed request、snapshot 摘要、mutation result、phase、可选 recovery 和
+session state；其 `final_state.output_expected` 固定为 `off`。
 
 Source V2 写 step 成功或写后失败时，`run.json.source_operations` 保存同一 schema 的完整 artifact，
 `steps[].artifact.source_operation` 保存当前 step 的同一完整 artifact。没有实际 Source V2 step 的 V1 run 不写

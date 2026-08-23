@@ -2884,7 +2884,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
 | M6-A | `implemented-unreleased` | 单通道高级配置 | Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 均已 `implemented-unreleased`；每项均独立 opt in 并复用基本写入门 |
-| M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
+| M6-B | `implemented-unreleased` | ARB storage 与 selection | named-slot create/CAS、payload 摘要与独立 readback、OFF-only selection、Service／CLI／run plan／intent／artifact、V1 upload 零 I/O 拒绝和 A0 fake 通过；ON 仍由 `output_v2` 管理 |
 | M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
 | C3 | 未开始 | 稳定发布审计 | 首个真实插件完成 M5 基础能力、文档和包检查完成、无未登记写 capability |
@@ -3419,6 +3419,67 @@ I/O 前拒绝，不能把 V1 的 center/span、外部／手动 trigger、marker 
 `source.sweep_configure_v2` run plan step。三者只接受同一类型化 request，复用 fresh snapshot、目标 output OFF、单写、
 独立回读、写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写 capability 声明或实机验收。
+
+### M6-B 已实现：ARB storage 与 selection
+
+M6-B 使用两个独立 capability，不把上传、选择、基本幅度配置或输出 ON 合并为一个 driver 调用：
+
+```text
+source.arbitrary_storage_v2  -> read_source_arbitrary_storage_v2, mutate_source_arbitrary_storage_v2
+source.arbitrary_select_v2   -> select_source_arbitrary_v2
+```
+
+`SourceService.mutate_arbitrary_storage_v2(request, *, payload, correlation_id=None)` 在打开仪器前验证 payload
+确实是 `bytes`，且长度、SHA-256 与 request 完全一致。它随后执行指定槽位的 fresh snapshot／named-slot 预读、
+单次 `write_bytes` mutation，以及 snapshot／同一 named-slot 的独立 postcondition readback。`CREATE_ONLY` 的已占用
+槽位与 compare-and-replace 的旧摘要不匹配都在 binary write 前失败。storage 不关闭目标或其它独立端口；它必须回读并
+确认 ARB selection 与 output state 均未改变。主写后任何结果或回读不明都会保留失败 artifact 并把 session 收紧，
+不会换槽位或重试。
+
+`SourceService.select_arbitrary_v2(request, *, correlation_id=None)` 只在目标 output 已确认 OFF 时执行。DDS request
+只携带 `playback_frequency_hz`；true-ARB request 只携带 `sample_rate_hz`。事务复用 fresh snapshot、单次 selection write、
+独立 readback 和主写后最多一次 V2 OFF recovery；它要求回读 basic waveform 为 `arbitrary`、selected slot、playback mode、
+对应播放速率和 storage digest，且最终 output 保持 OFF。没有已声明跨通道关系时，其他独立端口可以继续 ON。
+
+CLI 使用 additive 子命令：
+
+```text
+wavebench source arbitrary-storage-v2 --channel N --slot-id SLOT --payload-file FILE \
+  --write-mode create-only|replace-if-digest-matches [--expected-previous-sha256 SHA256]
+wavebench source arbitrary-select-v2 --channel N --slot-id SLOT \
+  --playback-mode dds|true-arb (--playback-frequency-hz HZ | --sample-rate-hz HZ)
+```
+
+storage CLI 在加载 Source Service 前读取本地 payload、计算摘要并构造 typed request；文件不可读或参数不合法时不打开
+仪器。两条命令都返回 `wavebench.source.operation.v1`；storage artifact 只包含槽位、SHA-256、字节数、readback 与
+session 证据，不包含 payload 或本地文件路径。
+
+run plan 增加以下 step：
+
+```toml
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot_a"
+file = "payload.bin"
+write_mode = "create_only"
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+playback_frequency_hz = 1000
+```
+
+storage 的 `file` 可相对 plan 所在目录；execution intent 只记录文件名、SHA-256 与大小，实际 Source operation artifact
+仍不包含 payload。replace mode 必须增加 `expected_previous_sha256`。selection 使用 `dds` 时必须给
+`playback_frequency_hz`，使用 `true_arb` 时必须给 `sample_rate_hz`，两者互斥。两个 step 的完整 artifact 都在实际执行时
+写入 `steps[].artifact.source_operation` 与非空 `run.json.source_operations`。
+
+双合同插件声明任一 M6-B capability 后，V1 `upload_arbitrary_waveform` 在本地 waveform 文件读取、二进制块构造、
+session 打开和仪器 I/O 前拒绝；它混合了 storage、selection、基本配置和可选 ON，不能部分映射。当前实现只包含离线
+fixture 与 A0 合同证据，不声明真实插件 capability 或实机验收。
 
 ### R6 延后事项
 
