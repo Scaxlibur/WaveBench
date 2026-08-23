@@ -84,7 +84,12 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[pm_start + len(pm_exports) :] == match.group(1).splitlines()
+    burst_exports = match.group(1).splitlines()
+    burst_start = pm_start + len(pm_exports)
+    assert module.__all__[burst_start : burst_start + len(burst_exports)] == burst_exports
+    match = re.search(r"M6-A／内部 FM 调制在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```", rfc, re.S)
+    assert match is not None
+    assert module.__all__[burst_start + len(burst_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -284,6 +289,12 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "delay_s",
         ),
         "SourceBurstConfigureResult": ("channel", "burst", "output_enabled"),
+        "SourceFmModulationConfigureRequest": (
+            "channel",
+            "frequency_deviation_hz",
+            "internal_frequency_hz",
+        ),
+        "SourceFmModulationConfigureResult": ("channel", "modulation", "output_enabled"),
         "SourcePulseConfigureRequest": (
             "channel",
             "width_s",
@@ -460,6 +471,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
         "source.burst_configure_v2": ("configure_source_burst_v2",),
+        "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
     assert dict(SOURCE_EXTENSION_CAPABILITY_METHODS) == expected
@@ -758,6 +770,53 @@ def test_source_v2_burst_write_models_are_closed_and_serializable() -> None:
                         output=Observed.value_of(module.SourceTriggerOutput.OFF),
                     )
                 ),
+            ),
+            False,
+        )
+
+
+def test_source_v2_fm_modulation_write_models_are_closed_and_serializable() -> None:
+    modulation = module.ModulationFacet(
+        enabled=Observed.value_of(True),
+        kind=Observed.value_of(module.SourceModulationKind.FM),
+        source=Observed.value_of(module.SourceModulationSource.INTERNAL),
+        parameters=Observed.value_of(
+            (
+                module.SourceModulationParameter(
+                    module.SourceModulationParameterKind.FREQUENCY_DEVIATION_HZ,
+                    12_500.0,
+                ),
+            )
+        ),
+        internal_frequency_hz=Observed.value_of(25.0),
+        internal_waveform_kind=Observed.value_of(module.SourceWaveformKind.SINE),
+    )
+    request = module.SourceFmModulationConfigureRequest(
+        channel=1,
+        frequency_deviation_hz=12_500.0,
+        internal_frequency_hz=25.0,
+    )
+    result = module.SourceFmModulationConfigureResult(1, modulation, False)
+
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceFmModulationConfigureRequest",
+        "channel": 1,
+        "frequency_deviation_hz": 12_500.0,
+        "internal_frequency_hz": 25.0,
+    }
+    assert result.modulation.kind.value is module.SourceModulationKind.FM
+    with pytest.raises(ValueError, match="must be > 0"):
+        module.SourceFmModulationConfigureRequest(1, 0.0, 25.0)
+    with pytest.raises(ValueError, match="must be > 0"):
+        module.SourceFmModulationConfigureRequest(1, 12_500.0, 0.0)
+    with pytest.raises(ValueError, match="output_enabled=False"):
+        module.SourceFmModulationConfigureResult(1, modulation, True)
+    with pytest.raises(ValueError, match="FM readback"):
+        module.SourceFmModulationConfigureResult(
+            1,
+            replace(
+                modulation,
+                kind=Observed.value_of(module.SourceModulationKind.PM),
             ),
             False,
         )
@@ -1235,6 +1294,123 @@ def test_source_v2_pm_modulation_write_requires_internal_pm_direction_and_readba
             descriptor,
             type(
                 "MissingPmModulationWriteDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                },
+            )(),
+        )
+
+
+def test_source_v2_fm_modulation_write_requires_internal_fm_direction_and_readback() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    modulation = module.SourceFeatureCapability(
+        feature=module.SourceFeature.MODULATION,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourceModulationCapabilityProfile(
+            kinds=(module.SourceModulationKind.FM,),
+            sources=(module.SourceModulationSource.INTERNAL,),
+            parameter_kinds=(
+                module.SourceModulationParameterKind.FREQUENCY_DEVIATION_HZ,
+            ),
+            inactive_readable=False,
+            configuration_readable=True,
+        ),
+    )
+    modulation_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.MODULATION,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.MODULATION,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(basic, modulation, output),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                modulation_query,
+                extensions.query_contract.facets[2],
+            ),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=("source.snapshot_v2", "source.modulation_fm_configure_v2"),
+    )
+
+    class FmModulationWriteDriver(SourceV2FakeDriver):
+        def configure_source_fm_modulation_v2(self, request):
+            raise AssertionError(request)
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, FmModulationWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="CONFIGURE directions"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(modulation, directions=(module.SourceFeatureDirection.READ,)),
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable internal FM configuration"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        replace(
+                            modulation,
+                            profile=replace(
+                                modulation.profile,
+                                configuration_readable=False,
+                            ),
+                        ),
+                        output,
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="readable output state"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        basic,
+                        modulation,
+                        replace(output, profile=replace(output.profile, output_readable=False)),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="configure_source_fm_modulation_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingFmModulationWriteDriver",
                 (),
                 {
                     "close": lambda self: None,

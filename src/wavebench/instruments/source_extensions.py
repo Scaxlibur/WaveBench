@@ -1150,6 +1150,36 @@ SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
 )
 
 
+SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.modulation_fm_configure_v2",
+    capability="source.modulation_fm_configure_v2",
+    feature=SourceFeature.MODULATION,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.MODULATION,),
+    postcondition_fields=(
+        SourceFieldId.MODULATION,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_FM,
+        SourceV1WriteRouteId.RESTORE,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
 SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation="source.pulse_configure_v2",
     capability="source.pulse_configure_v2",
@@ -2406,6 +2436,34 @@ class SourceBurstConfigureRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceFmModulationConfigureRequest:
+    channel: int
+    frequency_deviation_hz: float
+    internal_frequency_hz: float
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source FM modulation configure channel", minimum=1)
+        _require_finite(
+            self.frequency_deviation_hz,
+            "source FM modulation configure frequency_deviation_hz",
+            minimum=0.0,
+        )
+        if self.frequency_deviation_hz <= 0:
+            raise ValueError(
+                "source FM modulation configure frequency_deviation_hz must be > 0"
+            )
+        _require_finite(
+            self.internal_frequency_hz,
+            "source FM modulation configure internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.internal_frequency_hz <= 0:
+            raise ValueError(
+                "source FM modulation configure internal_frequency_hz must be > 0"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class SourcePulseConfigureRequest:
     channel: int
     width_s: float
@@ -2824,6 +2882,84 @@ class SourceBurstConfigureResult:
             or trigger.output.value is not SourceTriggerOutput.OFF
         ):
             raise ValueError("source burst configure result requires trigger output OFF readback")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFmModulationConfigureResult:
+    channel: int
+    modulation: ModulationFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source FM modulation configure result channel", minimum=1)
+        if not isinstance(self.modulation, ModulationFacet):
+            raise ValueError(
+                "source FM modulation configure result modulation has an invalid type"
+            )
+        _require_bool(self.output_enabled, "source FM modulation configure result output_enabled")
+        if self.output_enabled:
+            raise ValueError("source FM modulation configure result requires output_enabled=False")
+        if (
+            self.modulation.enabled.availability is not Availability.VALUE
+            or self.modulation.enabled.value is not True
+        ):
+            raise ValueError(
+                "source FM modulation configure result requires enabled modulation readback"
+            )
+        if (
+            self.modulation.kind.availability is not Availability.VALUE
+            or self.modulation.kind.value is not SourceModulationKind.FM
+        ):
+            raise ValueError("source FM modulation configure result requires FM readback")
+        if (
+            self.modulation.source.availability is not Availability.VALUE
+            or self.modulation.source.value is not SourceModulationSource.INTERNAL
+        ):
+            raise ValueError(
+                "source FM modulation configure result requires internal source readback"
+            )
+        if self.modulation.parameters.availability is not Availability.VALUE:
+            raise ValueError(
+                "source FM modulation configure result requires frequency deviation readback"
+            )
+        parameters = self.modulation.parameters.value
+        if (
+            not isinstance(parameters, tuple)
+            or len(parameters) != 1
+            or parameters[0].kind is not SourceModulationParameterKind.FREQUENCY_DEVIATION_HZ
+        ):
+            raise ValueError(
+                "source FM modulation configure result requires one FM frequency deviation readback"
+            )
+        _require_finite(
+            parameters[0].value,
+            "source FM modulation configure result frequency_deviation_hz",
+            minimum=0.0,
+        )
+        if parameters[0].value <= 0:
+            raise ValueError(
+                "source FM modulation configure result frequency_deviation_hz must be > 0"
+            )
+        if self.modulation.internal_frequency_hz.availability is not Availability.VALUE:
+            raise ValueError(
+                "source FM modulation configure result requires internal frequency readback"
+            )
+        _require_finite(
+            self.modulation.internal_frequency_hz.value,
+            "source FM modulation configure result internal_frequency_hz",
+            minimum=0.0,
+        )
+        if self.modulation.internal_frequency_hz.value <= 0:
+            raise ValueError(
+                "source FM modulation configure result internal_frequency_hz must be > 0"
+            )
+        if (
+            self.modulation.internal_waveform_kind.availability is not Availability.VALUE
+            or self.modulation.internal_waveform_kind.value is not SourceWaveformKind.SINE
+        ):
+            raise ValueError(
+                "source FM modulation configure result requires internal sine readback"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3730,6 +3866,14 @@ class SourceBurstConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceFmModulationConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_fm_modulation_v2(
+        self,
+        request: SourceFmModulationConfigureRequest,
+    ) -> SourceFmModulationConfigureResult: ...
+
+
+@runtime_checkable
 class SourcePulseConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_pulse_v2(
         self,
@@ -4008,4 +4152,8 @@ __all__ = [
     "SourceBurstConfigureResult",
     "SourceBurstConfigureV2Driver",
     "SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceFmModulationConfigureRequest",
+    "SourceFmModulationConfigureResult",
+    "SourceFmModulationConfigureV2Driver",
+    "SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT",
 ]

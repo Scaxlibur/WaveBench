@@ -48,6 +48,7 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
         "source.burst_configure_v2": ("configure_source_burst_v2",),
+        "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.output_v2": ("set_source_output_v2",),
     }
 )
@@ -60,6 +61,7 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.pulse_configure_v2",
         "source.modulation_pm_configure_v2",
         "source.burst_configure_v2",
+        "source.modulation_fm_configure_v2",
         "source.output_v2",
     }
 )
@@ -382,6 +384,27 @@ def _validate_write_contract(
                 "source.modulation_pm_configure_v2 requires readable output state on every channel"
             )
 
+    if "source.modulation_fm_configure_v2" in capabilities:
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.MODULATION,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.modulation_fm_configure_v2 requires modulation feature CONFIGURE directions"
+            )
+        readable = _channels_with_fm_modulation_configuration_readback(extensions)
+        if not configurable <= readable:
+            raise ConfigError(
+                "source.modulation_fm_configure_v2 requires readable internal FM configuration "
+                "on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.modulation_fm_configure_v2 requires readable output state on every channel"
+            )
+
     if "source.pulse_configure_v2" in capabilities:
         configurable = _channels_with_direction(
             extensions,
@@ -559,6 +582,28 @@ def _channels_with_pm_modulation_configuration_readback(
     )
 
 
+def _channels_with_fm_modulation_configuration_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.MODULATION
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceModulationCapabilityProfile)
+            and SourceModulationKind.FM in feature.profile.kinds
+            and SourceModulationSource.INTERNAL in feature.profile.sources
+            and SourceModulationParameterKind.FREQUENCY_DEVIATION_HZ
+            in feature.profile.parameter_kinds
+            and feature.profile.configuration_readable
+        )
+        for channel in feature.channels
+    )
+
+
 def _channels_with_pulse_width_configuration_readback(
     extensions: SourceDescriptorExtensions,
 ) -> frozenset[int]:
@@ -616,6 +661,7 @@ def _validate_declared_write_directions(
             {
                 "source.modulation_configure_v2",
                 "source.modulation_pm_configure_v2",
+                "source.modulation_fm_configure_v2",
             }
         ),
         (SourceFeature.PULSE, SourceFeatureDirection.CONFIGURE): frozenset(

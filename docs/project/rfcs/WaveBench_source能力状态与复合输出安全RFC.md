@@ -512,6 +512,15 @@ SourceBurstConfigureV2Driver
 SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+M6-A／内部 FM 调制在上述清单末尾追加以下精确条目：
+
+```text
+SourceFmModulationConfigureRequest
+SourceFmModulationConfigureResult
+SourceFmModulationConfigureV2Driver
+SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -543,8 +552,9 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | `source.basic_configure_v2` | `configure_source_basic_v2` | 基础函数、频率、Vpp、偏置和方波参数 |
 | `source.output_v2` | `set_source_output_v2` | 单独的 ON/OFF 转换 |
 | `source.harmonics_configure_v2` | `configure_source_harmonics_v2` | 谐波配置 |
-| `source.modulation_configure_v2` | `configure_source_modulation_v2` | AM/FM/PM/PWM 等调制配置 |
+| `source.modulation_configure_v2` | `configure_source_modulation_v2` | 内部 AM 配置 |
 | `source.modulation_pm_configure_v2` | `configure_source_pm_modulation_v2` | 独立 PM 配置 |
+| `source.modulation_fm_configure_v2` | `configure_source_fm_modulation_v2` | 独立 FM 配置 |
 | `source.pulse_configure_v2` | `configure_source_pulse_v2` | Pulse 配置 |
 | `source.sweep_configure_v2` | `configure_source_sweep_v2` | Sweep 配置 |
 | `source.burst_configure_v2` | `configure_source_burst_v2` | Burst 配置 |
@@ -562,7 +572,8 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 保留 ID 不是已注册 capability，也不是实施授权。新增其它 V2 写 ID 必须通过后续 RFC 修订，
 不得由插件自行拼接字符串。
 
-R6／M6-A 将 `source.modulation_pm_configure_v2` 与 `source.burst_configure_v2` 明确加入已授权的窄 capability。
+R6／M6-A 将 `source.modulation_pm_configure_v2`、`source.burst_configure_v2` 与
+`source.modulation_fm_configure_v2` 明确加入已授权的窄 capability。
 现有 `source.modulation_configure_v2` 保持内部 AM 的首版语义，不因 PM 子项扩张；分离 capability 使 PM-only
 插件不会改变 V1 AM route，也使 AM-only 插件无需提供 PM 入口。Burst capability 也不授权 arm、fire 或任何
 输出开启路径。
@@ -2749,7 +2760,7 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 | M5-C | `implemented-unreleased` | 独立输出转换 | ON／OFF、最终 Vpp／Offset 检查、回读、失败 OFF 和 session health fixture 通过 |
 | M5-D | `implemented-unreleased` | 公共入口与双合同路由 | Service／CLI、三个有方向 run plan step、intent、artifact 和 V1 同义路径映射／零 I/O 拒绝通过 |
 | C2 | `implemented-unreleased` | 核心兼容与候选发布门 | 新旧核心／插件矩阵、wheel／sdist、全量离线测试和 V1 artifact 兼容通过；不发布、不声明真实插件写能力 |
-| M6-A | `in-progress` | 单通道高级配置 | Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst 已 `implemented-unreleased`；按「内部 FM → 内部 PWM → Sweep」逐项独立 opt in，复用基本写入门 |
+| M6-A | `in-progress` | 单通道高级配置 | Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst 已 `implemented-unreleased`；内部 FM 为当前下一子项，随后是内部 PWM 与 Sweep，均逐项独立 opt in 并复用基本写入门 |
 | M6-B | 未开始 | ARB storage 与 selection | 上传、覆盖、选择和 ON 分离；ON 仍由 `output_v2` 管理 |
 | M6-C | 未开始 | 跨通道配置 | Combine、Coupling、Tracking 和相位关系按受影响端口回读；独立端口允许同时 ON |
 | M7 | 未开始 | 插件逐项 opt in | 首个插件完成 basic/output 的 A0–A3；第二种协议形态作为兼容验证，不阻塞首次发布 |
@@ -3188,8 +3199,34 @@ Burst state。
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写
 capability 声明或实机验收。
 
-内部 FM、内部 PWM 和 Sweep 将在 Burst 的公共合同、离线事务、CLI/run plan 和兼容测试完成后各自增加明确
-范围；它们目前仍是保留 ID，不因本 Burst 子项自动注册或改变其 V1 route。
+### M6-A 下一子能力：内部 FM 调制
+
+`source.modulation_fm_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内部正弦 FM。typed request 固定为
+`channel`、`frequency_deviation_hz` 与 `internal_frequency_hz`：配置完成后 FM 必为 enabled、source 必为 `internal`、
+internal waveform 必为 `sine`。两个数值均必须是有限正值。首版不为 frequency deviation 人为增加设备无关的
+最大值；设备范围由 runtime profile 和 driver 拒绝结果表达。它不提供 disable、partial patch、外部／通道调制源、
+内部波形选择、多参数组合、AM、PM、PWM、ASK、FSK 或 PSK。
+
+descriptor 必须同时声明 Modulation `READ`／`CONFIGURE`、`fm`、`internal`、`frequency_deviation_hz` 与
+`configuration_readable = true`；同一 channel 的 Output `READ` 与 output state readback 也为必需。
+`configuration_readable` 表示 enabled、kind、source、parameters、internal frequency 与 internal waveform
+都能以纯读 snapshot 独立回读，不为 FM 添加第二个总开关。
+
+该 operation 使用 `POTENTIAL_WHILE_OFF`，静态字段闭包为同一 channel 的 Modulation／Output 和仪器 Identity。
+后续事务使用 fresh consistent snapshot、目标 output OFF、单次 driver 写、独立 postcondition 和主写入后的最多一次
+V2 OFF recovery；配置本身不隐式开启输出，也不恢复调制状态。postcondition 必须确认 output 仍为 OFF，并逐项确认
+enabled、FM、internal source、frequency deviation、internal frequency 与 internal waveform。
+
+本子能力不要求调制包络、RMS、Noise 峰值、实际端接、共享功率或热模型；它仅授权 OFF 状态下的配置，
+不构成调制后输出 ON 的严格复合预算证明。`source.output_v2` 不会由 FM 配置成功获得额外授权。
+
+双合同插件声明 `source.modulation_fm_configure_v2` 后，V1 `configure_fm_modulation` 与 restore 必须在
+仪器 I/O 前拒绝，而不是部分映射：V1 请求允许 disabled 及更多内部函数，不能无损映射到这个首版范围。
+V1-only 插件和未声明该 FM V2 capability 的双合同插件继续走 V1 FM 路径；AM、PM、PWM 的 V1 route 按各自
+capability 独立决定。
+
+内部 PWM 与 Sweep 将在 FM 的公共合同、离线事务、CLI/run plan 和兼容测试完成后各自增加明确范围；它们目前仍是
+保留 ID，不因本 FM 子项自动注册或改变其 V1 route。
 
 ### R6 延后事项
 
