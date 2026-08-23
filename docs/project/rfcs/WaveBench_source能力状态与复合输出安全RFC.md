@@ -3011,7 +3011,9 @@ Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使�
 - 新类型、descriptor 字段和 artifact 键必须 append-only；既有 `SourceDriver`、`SourceStatus`、
   V1 CLI、V1 run step、V1 JSON 和 V1 artifact 不改变语义。
 - V1-only 插件继续执行 V1 路径。双合同插件声明某项 V2 capability 后，核心在 M5-D 将同义或副作用
-  重叠的 V1 route 映射到 V2，无法无损映射时在仪器 I/O 前拒绝；不相交的 V1 route 保持原行为。
+  重叠的 V1 route 映射到 V2。`set_function` 有一项兼容例外：目标波形未在当前 V2 Basic profile 声明，
+  或 V2 preflight 无法为当前旧状态提供最终 Vpp／Offset 时，核心继续调用既有 V1 setter，不进入 V2 MAIN
+  写入；其余无法无损映射的重叠 route 在仪器 I/O 前拒绝。不相交的 V1 route 保持原行为。
 - M5-D 在同一开发线内先完成 Service／CLI，再增加 V2 run plan step、intent 和 artifact；中间不发布
   稳定写接口。
 
@@ -3147,7 +3149,7 @@ operation artifact 同时保存到 step 的 `artifact.source_operation` 和非�
 
 | 已声明 V2 capability | V1 route | M5-D 行为 |
 | --- | --- | --- |
-| `source.basic_configure_v2` | `set_frequency`、`set_function`、`set_amplitude_vpp`、`set_square_duty_cycle` | 映射到单次 basic V2 transaction。无法映射的 function 在写前拒绝。 |
+| `source.basic_configure_v2` | `set_frequency`、`set_function`、`set_amplitude_vpp`、`set_square_duty_cycle` | 可表达的请求映射到单次 basic V2 transaction。`set_function` 的目标波形未在 V2 profile 声明，或当前旧状态缺少最终 Vpp／Offset 时，保留既有 V1 setter；其它无法映射的 function 在写前拒绝。 |
 | `source.output_v2` | `set_output` | 映射到 enable 或 disable V2 transaction。 |
 | `source.basic_configure_v2` 或 `source.output_v2` | `restore_restorable_state`、`upload_arbitrary_waveform` | 属于重叠 route，在仪器 I/O 前拒绝。 |
 | `source.output_v2` | `trigger_burst`、`trigger_sweep` | 属于可能发信号的重叠 route，在仪器 I/O 前拒绝。 |
