@@ -1141,6 +1141,24 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     print(json.dumps(payload, indent=2, ensure_ascii=False))
                 return 0
+            if args.command == "harmonics-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceHarmonicConfigureRequest,
+                    SourceHarmonicPreset,
+                )
+
+                _, payload = service.configure_harmonics_v2(
+                    SourceHarmonicConfigureRequest(
+                        channel=args.channel,
+                        order=args.order,
+                        preset=SourceHarmonicPreset(args.preset),
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
             if args.command == "profile":
                 _print_source_channel_profile(service.channel_profile(channel=args.channel))
                 return 0

@@ -633,7 +633,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.channel, 2)
         self.assertEqual(args.value_hz, 1000.0)
 
-    def test_source_v2_basic_and_output_commands_accept_explicit_channels(self):
+    def test_source_v2_commands_accept_explicit_channels(self):
         basic = build_parser().parse_args(
             [
                 "source",
@@ -649,6 +649,18 @@ class CliTests(unittest.TestCase):
             ]
         )
         output = build_parser().parse_args(["source", "output-v2", "--channel", "2", "on"])
+        harmonics = build_parser().parse_args(
+            [
+                "source",
+                "harmonics-configure-v2",
+                "--channel",
+                "2",
+                "--order",
+                "8",
+                "--preset",
+                "odd",
+            ]
+        )
 
         self.assertEqual(basic.command, "basic-configure-v2")
         self.assertEqual(basic.channel, 2)
@@ -658,6 +670,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(output.command, "output-v2")
         self.assertEqual(output.channel, 2)
         self.assertEqual(output.state, "on")
+        self.assertEqual(harmonics.command, "harmonics-configure-v2")
+        self.assertEqual(harmonics.channel, 2)
+        self.assertEqual(harmonics.order, 8)
+        self.assertEqual(harmonics.preset, "odd")
 
     def test_fetch_accepts_points(self):
         args = build_parser().parse_args(["scope", "fetch", "--points", "dmax"])

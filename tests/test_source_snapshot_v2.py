@@ -34,6 +34,7 @@ from wavebench.instruments.source_extensions import (
     SourceFacetScope,
     SourceFeature,
     SourceFeatureCapability,
+    SourceHarmonicPreset,
     SourceTopologyContract,
     SupportState,
     source_snapshot_v2_operation_artifact,
@@ -484,6 +485,10 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
         "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
         "operation": "source.output_enable_v2",
     }
+    harmonic_artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.harmonics_configure_v2",
+    }
 
     class _Service:
         def configure_basic_v2(self, request):
@@ -495,6 +500,12 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             assert request.channel == 1
             assert request.enabled is True
             return object(), output_artifact
+
+        def configure_harmonics_v2(self, request):
+            assert request.channel == 1
+            assert request.order == 8
+            assert request.preset is SourceHarmonicPreset.ODD
+            return object(), harmonic_artifact
 
     with patch("wavebench.cli._load_source_service", return_value=_Service()):
         basic_code = cli.main(
@@ -524,11 +535,29 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             ]
         )
         output_payload = json.loads(capsys.readouterr().out)
+        harmonic_code = cli.main(
+            [
+                "--json",
+                "source",
+                "harmonics-configure-v2",
+                "--channel",
+                "1",
+                "--order",
+                "8",
+                "--preset",
+                "odd",
+                "--config",
+                "unused.toml",
+            ]
+        )
+        harmonic_payload = json.loads(capsys.readouterr().out)
 
     assert basic_code == 0
     assert basic_payload["result"] == basic_artifact
     assert output_code == 0
     assert output_payload["result"] == output_artifact
+    assert harmonic_code == 0
+    assert harmonic_payload["result"] == harmonic_artifact
 
 
 def test_source_v2_write_cli_keeps_failure_operation_artifact(capsys) -> None:

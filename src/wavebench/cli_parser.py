@@ -690,6 +690,19 @@ def build_parser() -> argparse.ArgumentParser:
     source_output_v2.add_argument("state", choices=("on", "off"))
     add_runtime_options(source_output_v2)
 
+    source_harmonics_configure_v2 = source_sub.add_parser(
+        "harmonics-configure-v2",
+        help="Configure one OFF Source V2 channel with a declared Harmonic preset",
+    )
+    source_harmonics_configure_v2.add_argument("--channel", type=int, required=True)
+    source_harmonics_configure_v2.add_argument("--order", type=int, required=True)
+    source_harmonics_configure_v2.add_argument(
+        "--preset",
+        choices=("all", "even", "odd"),
+        required=True,
+    )
+    add_runtime_options(source_harmonics_configure_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",
