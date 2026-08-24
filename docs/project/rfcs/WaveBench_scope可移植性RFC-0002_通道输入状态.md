@@ -1,6 +1,6 @@
 # RFC-0002：示波器通道输入状态 V2
 
-> 状态：`Draft R1`
+> 状态：`Implemented R1（未发布）`
 > 核心基线：现有 `scope.channel_coupling` 与高阻安全门
 > 目标：分开表达 coupling 与 termination
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
@@ -9,7 +9,21 @@
 
 现有 `channel_coupling(channel) -> str` 同时承载显示耦合和输入终端证明。部分仪器把
 termination 编入 `ACL/DCL/AC/DC` token，另一些仪器使用独立 query。为了保留两项真实状态，
-本 RFC 提议追加输入状态 V2，不修改旧 coupling token 或旧 capture 安全门。
+本 RFC 已追加输入状态 V2，不修改旧 coupling token 或旧 capture 安全门。
+
+## 核心实现状态
+
+核心开发线已经提供 `ScopeChannelInputStateV2`、独立 Protocol、
+`scope.channel_input_state_v2`、`ScopeService.channel_input_state_v2()` 和
+`wavebench scope channel-input-state`。该 capability 不需要 descriptor profile，但会触发
+factory construction barrier；缺方法、无效版本或 factory 内 I/O 都在第一次仪器命令前失败。
+
+R1 同时提供 V2 termination 的纯判断规则：`high_z` 通过，已明确允许时 `50_ohm` 通过，
+`unknown` 始终拒绝。标准 fetch/capture 仍使用 legacy coupling gate，不会因为 descriptor
+同时声明 V2 而改变调用顺序。
+
+本状态只表示核心离线实现完成。外部插件必须等待正式核心发行版本，再提高版本门或声明该
+capability。
 
 ## 当前问题
 
@@ -19,7 +33,7 @@ termination 编入 `ACL/DCL/AC/DC` token，另一些仪器使用独立 query。�
 反过来，如果直接把旧 `AC` 或 `DC` 当作高阻，也可能在 50 Ω 输入上继续执行采集。安全
 判断必须使用 descriptor 规定的终端策略和实际读取结果，不能靠字符串相似度推断。
 
-## 候选公共模型
+## 公共模型
 
 ~~~python
 ScopeInputCoupling = Literal["ac", "dc", "gnd", "unknown"]
@@ -35,7 +49,7 @@ class ScopeChannelInputStateV2:
     unavailable_fields: tuple[Literal["impedance_ohm"], ...] = ()
 ~~~
 
-候选 Protocol 与 capability：
+Protocol 与 capability：
 
 ~~~python
 class ScopeChannelInputStateDriverV2(Protocol):
@@ -49,7 +63,7 @@ class ScopeChannelInputStateDriverV2(Protocol):
 scope.channel_input_state_v2 -> get_channel_input_state_v2
 ~~~
 
-候选 operation 同样使用 `scope.channel_input_state_v2`。它是
+operation 同样使用 `scope.channel_input_state_v2`。它是
 `stateful_read / exclusive`，不提供输入设置或终端切换。
 
 ## 模型不变量
@@ -64,10 +78,9 @@ scope.channel_input_state_v2 -> get_channel_input_state_v2
 - 设备返回未识别但语法完整的 token 时可返回 `"unknown"`；
 - 响应缺失、格式损坏或 query 失败时 operation 失败，不能返回 `"unknown"`。
 
-精确枚举名和是否改用 `Enum` 在进入 `Accepted` 前冻结。语义不得退回大小写不一致的多组
-字符串。
+R1 冻结上述小写枚举和 availability 语义。后续修订不得退回大小写不一致的多组字符串。
 
-所有候选 public dataclass 必须在 `__post_init__` 中执行本 RFC 的类型、范围、枚举和
+所有 public dataclass 必须在 `__post_init__` 中执行本 RFC 的类型、范围、枚举和
 availability 不变量。构造失败属于参数或 driver contract failure；Service 不修正无效对象。
 
 ## 高阻安全规则
@@ -80,8 +93,7 @@ availability 不变量。构造失败属于参数或 driver contract failure；S
 - `switchable-termination` 的既有组合 token 继续保持当前兼容行为；
 - 旧 `require_high_impedance()`、CLI 参数和 capture 返回值不改变。
 
-首个 V2 实现不得让所有旧 switchable descriptor 强制迁移，否则新核心会改变旧插件在发送前
-的行为。
+R1 不让旧 switchable descriptor 强制迁移，否则新核心会改变旧插件在发送前的行为。
 
 ### V2 路径
 
@@ -102,6 +114,7 @@ capture 采用 V2，必须由 descriptor 显式 opt-in，并单独冻结与 lega
 - 方法存在但 capability 未声明时，不产生隐式能力；
 - 该 capability 不要求 descriptor profile；
 - construction barrier 必须覆盖 opt-in factory 内的 query/write；
+- 当前开发线的静态版本下限为 `0.8.24`；它不是外部插件的发行授权；
 - 参数错误、无效 channel 和不支持的安全策略在仪器 I/O 前失败。
 
 ## 序列化
@@ -146,5 +159,6 @@ JSON 应分别保存：
 
 ## 实施边界
 
-本 RFC 不授权修改真实仪器输入终端，也不把输入状态 V2 自动加入所有 capture。首轮实现应先
-提供纯读取和安全判定，随后再由需要真实 termination 的新 operation 显式依赖。
+本 RFC 不授权修改真实仪器输入终端，也不把输入状态 V2 自动加入所有 capture。R1 只提供
+纯读取和安全判定；随后需要真实 termination 的新 operation 必须显式依赖本 capability，不能
+改写 legacy capture 的前置检查。

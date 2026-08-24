@@ -149,6 +149,10 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 capability。发布时必须使用第一个实际包含完整合同的核心版本；同一版本号若存在不含合同的既有
 artifact，应改用可区分的更高版本。
 
+`scope.channel_input_state_v2` 是独立的只读输入状态 capability，不需要 `ScopeDescriptorExtensions`
+profile。它只报告 coupling、termination 和可解释的阻抗缺席状态；不设置终端，也不改变旧
+`scope.channel_coupling` 或标准 capture 的高阻前置检查。
+
 未采用新增 capability 的旧插件不需要提高核心版本下限。旧 `scope capture --screenshot` 不承载
 新 `scope.screenshot_v2`；新插件应使用独立截图 Service 或 `wavebench scope screenshot capture`。
 

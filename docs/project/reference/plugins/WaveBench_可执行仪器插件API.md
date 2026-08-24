@@ -260,6 +260,7 @@ capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader
 | `scope.capture_waveforms` | profile 为 `None` 时为 `capture_waveforms`；有 `waveform_binary_profile` 时为 `capture_waveforms_bounded` 和 waveform transfer recovery 方法 |
 | `scope.screenshot` | `screenshot_png` |
 | `scope.channel_coupling` | `channel_coupling` |
+| `scope.channel_input_state_v2` | `get_channel_input_state_v2` |
 | `scope.snapshot` | `get_snapshot` |
 | `scope.acquisition_status` | `get_acquisition_status` |
 | `scope.capture_average` | `capture_average` |
@@ -332,6 +333,12 @@ profile 依赖如下：
 
 `scope.acquisition_control` 还必须同时声明 `scope.acquisition_run_state`。缺少 profile、方法或核心
 版本门时，核心会拒绝 descriptor；只实现方法而不声明 capability，不会产生隐式能力。
+
+`scope.channel_input_state_v2` 是 scope 可移植性 V2 的只读 capability，不需要 descriptor profile。
+它要求 `ScopeChannelInputStateV2` 的 coupling、termination、`impedance_ohm` 与
+`unavailable_fields` 符合公共模型，并在 factory 内启用 construction barrier。它不设置输入终端，
+不替代旧 `scope.channel_coupling`，也不让标准 fetch/capture 改走 V2 安全门。当前开发线的静态
+下限为 `0.8.24`；正式发行前不得由插件提高 wheel 或 descriptor 版本门、声明该 capability。
 
 公共调用入口为 `ScopeService` 和以下 CLI：
 

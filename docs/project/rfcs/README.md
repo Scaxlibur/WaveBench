@@ -19,7 +19,7 @@ RFC 使用以下状态：
 | RFC | 状态 | 核心裁决 |
 | --- | --- | --- |
 | [RFC-0001：消费型文本查询与错误队列](WaveBench_scope可移植性RFC-0001_消费型文本查询.md) | `Superseded R1` | 使用 `ReplayPolicy.NO_REPLAY` 与 `scope.error_drain_v1`，不新增 `query_text_once()` |
-| [RFC-0002：通道输入状态 V2](WaveBench_scope可移植性RFC-0002_通道输入状态.md) | `Draft R1` | 追加 coupling/termination 分离模型，不修改旧 coupling 安全门 |
+| [RFC-0002：通道输入状态 V2](WaveBench_scope可移植性RFC-0002_通道输入状态.md) | `Implemented R1（未发布）` | 追加 coupling/termination 分离模型和 V2 安全判断，不修改旧 coupling 安全门 |
 | [RFC-0003：截图 framing 与菜单合同](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | `Superseded R1` | 使用 `query_binary()`、screenshot profile 和 `scope.screenshot_v2` |
 | [RFC-0004：数字通道状态 V2](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | `Draft R1` | 追加字段可缺失且保留作用域的 digital status；waveform 另行取证 |
 | [RFC-0005：可组合状态快照 V2](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | `Draft R1` | 追加分区和叶字段可缺失的 snapshot，不改变完整 snapshot/partial summary |
