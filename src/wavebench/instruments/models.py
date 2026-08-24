@@ -132,6 +132,47 @@ class ScopeAcquisitionStatus:
     segments_available: int | None
 
 
+ScopeInputCoupling = Literal["ac", "dc", "gnd", "unknown"]
+ScopeInputTermination = Literal["high_z", "50_ohm", "unknown"]
+ScopeChannelInputStateFieldV2 = Literal["impedance_ohm"]
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelInputStateV2:
+    """Typed read-only coupling and termination state for one analog channel."""
+
+    channel: int
+    coupling: ScopeInputCoupling
+    termination: ScopeInputTermination
+    impedance_ohm: float | None = None
+    unavailable_fields: tuple[ScopeChannelInputStateFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.channel, bool) or not isinstance(self.channel, int) or self.channel < 1:
+            raise ValueError("scope input-state channel must be a positive integer")
+        if self.coupling not in {"ac", "dc", "gnd", "unknown"}:
+            raise ValueError("scope input-state coupling is invalid")
+        if self.termination not in {"high_z", "50_ohm", "unknown"}:
+            raise ValueError("scope input-state termination is invalid")
+        if not isinstance(self.unavailable_fields, tuple):
+            raise TypeError("scope input-state unavailable_fields must be a tuple")
+        if self.impedance_ohm is None:
+            if self.unavailable_fields != ("impedance_ohm",):
+                raise ValueError(
+                    "scope input-state missing impedance must be marked unavailable"
+                )
+            return
+        if (
+            isinstance(self.impedance_ohm, bool)
+            or not isinstance(self.impedance_ohm, (int, float))
+            or not isfinite(self.impedance_ohm)
+            or self.impedance_ohm <= 0
+        ):
+            raise ValueError("scope input-state impedance must be a finite positive number")
+        if self.unavailable_fields:
+            raise ValueError("scope input-state available impedance cannot be unavailable")
+
+
 ScopeChannelArithmetic = Literal["OFF", "ENVELOPE", "AVERAGE", "SMOOTH", "FILTER"]
 ScopeDigitalActivity = Literal["LOW", "HIGH", "TOGGLE"]
 ScopeDigitalTechnology = Literal["TTL", "ECL", "CMOS", "MANUAL"]

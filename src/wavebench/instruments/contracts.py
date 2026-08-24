@@ -22,6 +22,7 @@ from .models import (
     ScopeAverageCaptureRequest,
     ScopeAverageCaptureResult,
     ScopeAcquisitionStatus,
+    ScopeChannelInputStateV2,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
     ScopeCursorReadout,
@@ -120,6 +121,11 @@ class ScopeSnapshotDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class ScopeAcquisitionStatusDriver(InstrumentDriver, Protocol):
     def get_acquisition_status(self) -> ScopeAcquisitionStatus: ...
+
+
+@runtime_checkable
+class ScopeChannelInputStateDriverV2(InstrumentDriver, Protocol):
+    def get_channel_input_state_v2(self, channel: int) -> ScopeChannelInputStateV2: ...
 
 
 @runtime_checkable

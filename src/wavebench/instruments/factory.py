@@ -22,6 +22,7 @@ from .api import DriverContext, InstrumentDescriptor
 from .capabilities import validate_declared_capabilities
 from .contracts import InstrumentDriver
 from .registry import resolve_instrument_descriptor
+from .scope_extension_capabilities import SCOPE_STRICT_V2_CAPABILITIES
 
 RSINSTRUMENT_BACKENDS = (
     "rsinstrument-socket",
@@ -70,6 +71,10 @@ def open_instrument_driver(
         if descriptor.scope_extensions is not None
         else None
     )
+    strict_v2_capability_opt_in = bool(
+        set(descriptor.capabilities) & SCOPE_STRICT_V2_CAPABILITIES
+    )
+    construction_latched = waveform_binary_profile is not None or strict_v2_capability_opt_in
     backend = _select_backend(configured_backend, descriptor.backends)
     _validate_resource_scheme(resource, descriptor.resource_schemes)
     try:
@@ -110,7 +115,7 @@ def open_instrument_driver(
                 lease=lease,
                 release_lease_on_close=lease_acquired_here,
                 session_state=session_state,
-                construction_latched=waveform_binary_profile is not None,
+                construction_latched=construction_latched,
             )
             opened_session_state = session_state
         except Exception:
@@ -152,7 +157,9 @@ def open_instrument_driver(
                 transport=opened_transports[0],
             )
             opened_transports[0]._mark_bounded_waveform_backend_verified()
-            opened_transports[0]._release_construction_latch()
+        if construction_latched:
+            for transport in opened_transports:
+                transport._release_construction_latch()
     except Exception as exc:
         _close_factory_failure(driver if "driver" in locals() else None, opened_transports)
         if isinstance(exc, ConfigError):

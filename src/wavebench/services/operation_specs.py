@@ -356,6 +356,13 @@ _BUILTIN_SPECS = (
         effect="stateful_read",
         safe_alternatives=("scope.idn", "scope.channel_coupling"),
     ),
+    _spec(
+        "scope.channel_input_state_v2",
+        "scope",
+        required_capabilities=("scope.channel_input_state_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+    ),
     _spec("scope.acquisition_status", "scope", required_capabilities=("scope.acquisition_status",), effect="stateful_read"),
     _spec("scope.channel_coupling", "scope", required_capabilities=("scope.channel_coupling",), effect="stateful_read"),
     _spec(

@@ -14,6 +14,8 @@ from .api import InstrumentDescriptor
 
 SCOPE_EXTENSIONS_MIN_CORE_VERSION = "0.8.23"
 SCOPE_WAVEFORM_BINARY_MIN_CORE_VERSION = "0.8.24"
+SCOPE_PORTABILITY_V2_MIN_CORE_VERSION = "0.8.24"
+SCOPE_STRICT_V2_CAPABILITIES = frozenset({"scope.channel_input_state_v2"})
 
 _WAVEFORM_BINARY_CAPABILITY_BY_OPERATION = {
     "fetch": "scope.fetch_waveform",
@@ -61,6 +63,7 @@ SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "verify_trace_transfer_state_restored",
         ),
         "scope.error_drain_v1": ("drain_errors",),
+        "scope.channel_input_state_v2": ("get_channel_input_state_v2",),
     }
 )
 
@@ -95,6 +98,13 @@ def validate_scope_descriptor(
             raise ConfigError(
                 "scope extension capabilities require wavebench_min_version "
                 f">= {SCOPE_EXTENSIONS_MIN_CORE_VERSION}"
+            )
+        if declared & SCOPE_STRICT_V2_CAPABILITIES and minimum < Version(
+            SCOPE_PORTABILITY_V2_MIN_CORE_VERSION
+        ):
+            raise ConfigError(
+                "scope portability V2 capabilities require wavebench_min_version "
+                f">= {SCOPE_PORTABILITY_V2_MIN_CORE_VERSION}"
             )
     dependencies = {
         "scope.acquisition_control": {"scope.acquisition_run_state"},
@@ -223,6 +233,8 @@ __all__ = [
     "EXPERIMENTAL_SCOPE_CAPABILITY_METHODS",
     "SCOPE_CAPABILITY_METHODS",
     "SCOPE_EXTENSIONS_MIN_CORE_VERSION",
+    "SCOPE_PORTABILITY_V2_MIN_CORE_VERSION",
+    "SCOPE_STRICT_V2_CAPABILITIES",
     "SCOPE_WAVEFORM_BINARY_MIN_CORE_VERSION",
     "validate_experimental_scope_descriptor",
     "validate_scope_descriptor",
