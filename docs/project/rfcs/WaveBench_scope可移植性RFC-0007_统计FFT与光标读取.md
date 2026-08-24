@@ -1,11 +1,11 @@
 # RFC-0007：可移植的统计、FFT 与光标读取 V2
 
-> 状态：`Implemented R1（未发布；仅 RFC-0007a）`
+> 状态：`Accepted R1（0007a 已实现；仅 0007b）`
 > 核心基线：现有 statistics、FFT status、math metadata 与 cursor readout
 > 范围：三个独立的只读 V2 capability
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0007a 已完成 selector/profile、纯文本 budget、factory gate 与 Service；0007b/0007c 仍为
-> Draft，不创建 V2 CLI、artifact、run plan step 或插件 opt-in
+> 本轮范围：0007a 已完成核心实现；0007b 已冻结 profile、纯文本 budget、factory gate 与 Service 边界；
+> 0007c 仍为 Draft，不创建 V2 CLI、artifact、run plan step 或插件 opt-in
 
 ## 摘要
 
@@ -132,7 +132,7 @@ scope.measurement_statistics_v2 -> get_measurement_statistics_v2
 window、vertical unit 与 frequency range。设备没有相应 query 时，不能用全局 acquisition
 sample rate、频率跨度或点数推导这些字段。
 
-### 候选模型
+### R1 模型
 
 ~~~python
 ScopeFftStatusFieldV2 = Literal[
@@ -161,6 +161,26 @@ class ScopeFftStatusV2:
     unavailable_fields: tuple[ScopeFftStatusFieldV2, ...] = ()
 ~~~
 
+~~~python
+SCOPE_FFT_STATUS_V2_MAX_QUERIES = 32
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFftStatusProfileV2:
+    readable_fields: tuple[ScopeFftStatusFieldV2, ...]
+    max_queries: int
+    allowed_effect: Literal["pure_read"] = "pure_read"
+~~~
+
+这不是 request variant profile：它只声明同一 descriptor 对已配置 FFT 状态的静态可读字段、文本查询预算和
+纯读取效果。它以 append-only 的 `ScopeDescriptorExtensions.fft_status_profile_v2` 追加，并与
+`scope.fft_status_v2` 和 `ScopeFftStatusDriverV2.get_fft_status_v2()` 一一对应。
+
+`readable_fields` 非空、唯一，按 `ScopeFftStatusFieldV2` 声明顺序排列；`max_queries` 为 `1..32` 的
+非 bool 整数，`allowed_effect` 固定为 `"pure_read"`。未列入 profile 的字段只能为 `None` 并进入
+`unavailable_fields`；已列入的字段必须有值且不得进入 `unavailable_fields`。R1 没有 FFT
+`not_applicable_fields`：一个字段不是 profile 的静态可读字段，就不能因为某次 query 失败被临时降级。
+
 不变量：
 
 - math index 是正的非 bool 整数；
@@ -176,7 +196,7 @@ class ScopeFftStatusV2:
 必须存在对应路径，每个非空字段不得进入路径集合。frequency start/stop 若只能成对查询，则
 必须同时有值或同时 unavailable；一次 query/parse failure 不能转成 unavailable。
 
-候选能力：
+R1 capability：
 
 ~~~text
 scope.fft_status_v2 -> get_fft_status_v2
@@ -290,7 +310,7 @@ class ScopeCursorReadoutDriverV2(Protocol):
 ~~~
 
 三个 operation 都是独立的 `stateful_read / exclusive`，不形成 `scope.analysis_v2` 这样的捆绑能力。
-0007a R1 按本节注册 capability、OperationSpec 和 Service；0007b/0007c 仍待各自接受后再实施。
+0007a 和 0007b R1 分别注册 capability、OperationSpec 和 Service；0007c 仍待接受后再实施。
 
 核心开发线已实现 `scope.measurement_statistics_v2` 的模型、profile、Protocol、factory gate、OperationSpec
 和 Service，不新增 `measurement-statistics-v2` CLI、artifact、run plan step 或持久化 JSON schema。已有
@@ -305,19 +325,35 @@ portability-V2 `OperationSpec`：60 秒 deadline、`stateful_read / exclusive`�
 driver 方法一次，先执行 profile 的零 I/O request preflight，再进入只允许 `query()` 的 `max_queries`
 phase；不得调用 legacy statistics、legacy identity preflight、error drain 或 R1.3 extension Service。
 
-FFT 和 cursor 首版没有
-请求 variant profile：它们读取当前已配置状态，是否支持该状态只能在有限状态 query 后判断。
-statistics capability 声明触发 strict construction barrier：factory 返回、profile/Protocol/capability 校验完成前，
+FFT 和 cursor 首版没有请求 variant profile：它们读取当前已配置状态，是否支持该状态只能在有限状态 query 后判断。
+0007b 的静态 FFT status profile 不改变这一点；它不选择 request variant，只约束已经证明为 FFT 的字段闭包和
+query budget。statistics 和 FFT capability 声明都触发 strict construction barrier：factory 返回、
+profile/Protocol/capability 校验完成前，
 所有仪器 I/O 都以 `factory_construction_pending` 发送前拒绝；required method/profile 缺失时关闭已开的
-transport。0007b/0007c 仍须在各自 Accepted 合同中独立决定其 factory 语义。
+transport。0007c 仍须在其 Accepted 合同中独立决定 factory 语义。
 
-R1 核心离线实现已覆盖 selector/profile 的发送前拒绝、完整结果和 selector echo、buffer result 拒绝、
-factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route。主包内建 descriptor 和外部插件在
-独立 conformance、版本下限和硬件证据完成前不得声明 statistics V2；该实现不授权 0007b FFT 或 0007c cursor。
+0007b 使用独立 portability-V2 `OperationSpec`：60 秒 deadline、`stateful_read / exclusive`、
+`error_check_minimum="disabled"`、无 required verified fields、无 restore coverage。Service 在 session 外拒绝
+非正／bool `math_index` 和 `configured_fft is not True`；后者只是调用意图，driver 必须在一个只允许
+`query()` 的 `max_queries` phase 内提供新鲜证据，证明该 index 当前是目标 FFT。非 FFT、未配置、索引不匹配、
+状态模糊或读取期间漂移均为 operation failure。
+
+该 phase 计数一次 `get_fft_status_v2()` 从进入到返回／抛出期间的全部受 guard 计数的文本 `query()`，包括
+FFT 配置证明和所有可读字段。禁止 write、binary query、`query_float_list()`、FFT waveform、legacy `idn()`、
+`*STB?`、`*ESR?`、error drain、math metadata、legacy FFT 或任何额外 Service preflight；超额、重放或续读
+均为 failure。Service 只调用 V2 driver 方法一次，不得 fallback 到 legacy `get_fft_status()`。
+
+0007b R1 不新增 `fft-status-v2` CLI、artifact、run-plan step 或持久化 JSON schema。既有
+`wavebench scope fft-status`、legacy model、Protocol、capability 和 JSON 继续只走 legacy Service。
+
+0007a R1 核心离线实现已覆盖 selector/profile 的发送前拒绝、完整结果和 selector echo、buffer result 拒绝、
+factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route。它本身不授权 0007b；后者只由本节
+单独接受的 FFT 合同授权。主包内建 descriptor 和外部插件在独立 conformance、版本下限和硬件证据完成前不得
+声明 statistics 或 FFT V2；0007a/0007b 均不授权 0007c cursor。
 
 ## 模型校验
 
-0007a R1 dataclass 与 0007b/0007c 候选 dataclass 必须以 `__post_init__` 实现本 RFC 的不变量：
+0007a/0007b R1 dataclass 与 0007c 候选 dataclass 必须以 `__post_init__` 实现本 RFC 的不变量：
 
 - selector 精确 XOR，slot/index/count 均拒绝 bool；
 - item/source/mode/function/unit 使用长度受限的 safe token；
@@ -337,10 +373,10 @@ factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route�
 ## 前置条件
 
 - `configured`、`configured_fft` 和 `configured_cursor` 必须是真正的 bool；0007a R1 要求
-  `configured is True`，调用方确认不能替代 driver 的新鲜状态解析；
+  `configured is True`，0007b R1 要求 `configured_fft is True`；调用方确认不能替代 driver 的新鲜状态解析；
 - 统计 selector/buffer 的静态不支持由 profile 在打开 session／任何 I/O 前拒绝；
-- FFT 或 cursor 的当前配置只有在有限状态 query 后才能识别；不支持时在任何 write/binary I/O
-  前 fail-closed，并保留已经发生的 stateful-read 审计；
+- FFT 或 cursor 的当前配置只有在有限状态 query 后才能识别；0007b 的 query failure 不得写成
+  unavailable，且不支持时在任何 write/binary I/O 前 fail-closed，并保留已经发生的 stateful-read 审计；
 - operation 不修改前面板配置来制造一个可读状态；
 - 若某个查询本身具有消费或状态副作用，必须在 `OperationSpec` 明确声明，不能作为普通 read
   隐藏。
@@ -376,7 +412,7 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 6. 新 capability 未声明时，旧 driver/fake/内建 descriptor 不需要新方法。
 7. 方法存在不产生 capability；缺方法的声明在 factory 后、第一次 I/O 前拒绝。
 8. JSON 保留 selector、source、unit 和 null，不回写到含义错误的旧字段。
-9. 0007a R1 不新增 V2 CLI、artifact 或 run plan step，也不改变旧命令路由；0007b/0007c Draft 亦不新增。
+9. 0007a/0007b R1 不新增 V2 CLI、artifact 或 run plan step，也不改变旧命令路由；0007c Draft 亦不新增。
 
 ## 验收矩阵
 
@@ -389,11 +425,11 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 - 非 finite 数值、waveform count 与解析失败；
 - 旧 slot API 回归。
 
-### FFT
+### FFT（0007b R1）
 
 - optional fields、有限值、start/stop 和 unavailable paths；
 - 不从全局 sample rate/span/points 推导；
-- configured precondition；
+- profile/readable-fields、configured precondition 与纯文本 query budget；
 - math metadata 不触发 FFT status 的隐式成功；
 - 旧 FFT API 回归。
 
@@ -410,17 +446,16 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 
 - capability/Protocol/construction barrier 零 I/O；
 - query/解析失败不转成 unavailable；
-- Service 追加式兼容，且 0007a R1 不改变 CLI；
+- Service 追加式兼容，且 0007a/0007b R1 不改变 CLI；
 - 至少两个不同仪器族或 fixture 证明不同 selector/optional/unit 组合。
 
 ## 接受与实施顺序
 
-RFC-0007a 已完成核心离线实现但尚未发布。以下仍是
-RFC-0007b/0007c 的后续接受门，不授权其代码、descriptor 字段或插件 opt-in：
+RFC-0007a 已完成核心离线实现但尚未发布；RFC-0007b 已进入 `Accepted`，只授权上一节列出的 FFT
+核心实现与离线验收。以下仍是 RFC-0007c 的后续接受门，不授权其代码、descriptor 字段或插件 opt-in：
 
-1. RFC-0007b：冻结 FFT configured precondition、optional-field availability 与 JSON 形状；
-2. RFC-0007c：冻结 cursor mode/function/source/unit、unavailable/not-applicable 与 JSON 形状；
-3. 每一项单独进入 `Accepted` 后，才分别评审 capability、factory latch、Service、CLI/artifact 和
+1. RFC-0007c：冻结 cursor mode/function/source/unit、unavailable/not-applicable 与 JSON 形状；
+2. 该项进入 `Accepted` 后，才评审 capability、factory latch、Service、CLI/artifact 和
    两个仪器族或 fixture 的离线验收。
 
 任何一项通过不改变另两项状态。具体插件只有在对应核心合同正式发布、离线 conformance 完成并获得

@@ -43,7 +43,7 @@ M0 冻结本组合说明和 legacy 黄金基线。本文本身不授权新的核
 | [RFC-0004](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | 追加保留未知值和字段作用域的 digital status V2 | `Implemented R1（未发布）` | 只处理状态；digital waveform 另行取证 |
 | [RFC-0005](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | 追加可组合、字段可缺失的 snapshot V2 | `Implemented R1（未发布）` | M3b 已完成核心模型/profile/Protocol/factory gate/Service；不修改完整 snapshot、partial summary 或旧 CLI |
 | [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Implemented R1（未发布；仅 0006a）` | M4 已完成 profile、纯文本预算、零 I/O gate 与 Service；0006b 等待通用 bounded transaction 前置裁决 |
-| [RFC-0007](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | 拆成统计 selector、FFT status 和 cursor quantity 三项 V2 | `Implemented R1（未发布；仅 0007a）` | M5a 已完成纯文本 statistics selector/profile、factory gate 与 Service；0007b/0007c 仍独立 Draft |
+| [RFC-0007](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | 拆成统计 selector、FFT status 和 cursor quantity 三项 V2 | `Accepted R1（0007a 已实现；仅 0007b）` | 0007b 只授权静态 FFT profile、纯文本 budget 与零 I/O gate；0007c 仍独立 Draft |
 | [RFC-0008](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | 使用 descriptor profile、`query_binary()` 和核心恢复编排 | `Implemented R1（未发布）` | P0～P3 已完成；插件 opt-in 与实机验收不在本分支 |
 
 ## 本轮文档冻结
@@ -54,9 +54,10 @@ M0 冻结本组合说明和 legacy 黄金基线。本文本身不授权新的核
 正式发行物。
 
 RFC-0005 和 RFC-0006a 的 R1 核心实现已完成但尚未发布，外部插件仍不得据此声明 capability；
-RFC-0007a 的 R1 核心实现也已完成但尚未发布，外部插件仍不得据此声明 capability；RFC-0006b、RFC-0007b
-和 RFC-0007c 仍是候选模型，在各自进入 `Accepted` 前不得创建 capability、Protocol、Service、CLI、
-descriptor profile 或插件 conformance 分支。RFC-0001、RFC-0003 的原始
+RFC-0007a 的 R1 核心实现也已完成但尚未发布，外部插件仍不得据此声明 capability；RFC-0006b 和
+RFC-0007c 仍是候选模型，在各自进入 `Accepted` 前不得创建 capability、Protocol、Service、CLI、
+descriptor profile 或插件 conformance 分支。RFC-0007b 已进入 `Accepted`，只授权静态 FFT profile、
+factory gate、OperationSpec 与 Service 的核心离线实现。RFC-0001、RFC-0003 的原始
 入口已经被取代，不重新实施。
 
 ## 共同术语
@@ -152,7 +153,7 @@ factory 语义；不能因为本编号系列中的输入／数字状态 V2 使�
 每项新 capability 至少需要公共模型、Protocol、operation registry、Service、序列化和
 capability explain 共同冻结。CLI 只能追加命令，不得让旧命令静默改走 V2。
 
-RFC-0005 R1、RFC-0006a R1、RFC-0007a R1，以及当前 `Draft` 阶段的 RFC-0006b、RFC-0007b/0007c 均不新增 V2 CLI 或
+RFC-0005 R1、RFC-0006a R1、RFC-0007a/0007b R1，以及当前 `Draft` 阶段的 RFC-0006b、RFC-0007c 均不新增 V2 CLI 或
 run plan step；旧 `scope status`、`acquisition-status`、`capture-average`、`measurement-statistics`、
 `fft-status` 和 `cursor-readout` 继续只路由到 legacy Service。若单项 RFC 要新增 CLI 或 artifact，
 必须先冻结新命令名、参数、JSON 成功形状和 artifact 版本，不能借用旧命令名或 R1.3 extension envelope。
@@ -203,7 +204,7 @@ RFC-0002 + RFC-0006a + RFC-0008
 4. M3：RFC-0004 和 RFC-0005 已完成核心离线实现；
 5. M4：RFC-0006a 已完成只读模型/profile、factory gate、纯文本 budget Service 与离线兼容回归；
 6. M5：0007a 已完成完整 statistics 成功值、selector/profile、纯文本 budget、factory gate 与 Service；
-   0007b/0007c 仍分别完成其接受门；
+   0007b 已冻结静态 FFT profile、configured、文本 budget 与无 CLI/artifact 边界；0007c 仍完成其接受门；
 7. M6：为 RFC-0006b 单独接受可复用的 bounded transaction 基础，随后才评审平均采集事务；
 8. M7：在每项已接受且已实现后，完成跨版本、发行产物和完整离线验收。
 
@@ -306,7 +307,7 @@ Service 只调用 V2 driver 方法一次，并在一个只允许 `query()` 的 `
 `scope measurement-statistics` CLI、slot API、nullable legacy result、artifact 和 run-plan 均保持原样。
 `tests/test_scope_measurement_statistics_v2.py` 覆盖模型、profile、factory、query budget、buffer 零 I/O 和
 legacy route；核心完整离线回归与外部 MSO8000 插件新 core source 回归均通过。内建 descriptor 和插件仍未
-声明 statistics V2，0007b/0007c 继续 Draft。
+声明 statistics V2；0007b 已单独进入 `Accepted`，0007c 继续 Draft。
 
 ## 后续 Draft 验证与接受门
 
@@ -315,13 +316,12 @@ availability 与独立返回边界；RFC-0006a 的 profile、文本预算、父�
 与 legacy 路由；RFC-0007a 的完整 statistics 成功值、selector/profile、R1 buffer 拒绝、纯文本 budget 和
 无 CLI/artifact 边界。
 
-RFC-0005、RFC-0006a 和 RFC-0007a 已分别完成 M3b/M4/M5a 核心离线矩阵；0006b、RFC-0007b 和
-RFC-0007c 进入 `Accepted` 前仍须完成：
+RFC-0005、RFC-0006a 和 RFC-0007a 已分别完成 M3b/M4/M5a 核心离线矩阵；0006b 和 RFC-0007c
+进入 `Accepted` 前仍须完成：
 
 - RFC-0006b：不修改 RFC-0008 标准 waveform profile 的前提下，另行接受可复用 bounded transaction
   限制、backend gate、ledger 与 construction barrier 的核心内部前置合同；
-- RFC-0007b/0007c：分别完成 FFT optional-field、cursor unit/path 的离线矩阵，并在需要 CLI/artifact
-  时先提交单项接受附录。
+- RFC-0007c：完成 cursor unit/path 的离线矩阵，并在需要 CLI/artifact 时先提交单项接受附录。
 
 本轮已完成 M5a 核心代码；M5b/M5c、M6～M7、外部插件 capability 与硬件验收仍不因上述文档冻结而启动。
 
