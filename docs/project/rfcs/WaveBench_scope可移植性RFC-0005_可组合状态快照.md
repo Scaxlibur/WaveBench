@@ -4,6 +4,7 @@
 > 核心基线：现有完整 `ScopeSnapshot` 与 `status_summary()`
 > 目标：允许设备返回可证明的类型化分区，不伪造缺失字段
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
+> 本轮范围：只冻结 R1 文档语义；不创建新 capability、CLI、artifact 或插件 opt-in
 
 ## 摘要
 
@@ -200,7 +201,8 @@ class ScopeSnapshotProfileV2:
 分区身份字段。`max_queries` 是有限正的非 bool 整数。首版
 `allowed_effect` 固定为 `"pure_read"`，不接受临时写入、binary query 或消费型 query。
 profile 追加到 `ScopeDescriptorExtensions.snapshot_profile_v2`；运行时结果必须遵守
-readable/conditional 的精确字段合同。
+readable/conditional 的精确字段合同。两个 availability tuple 均按
+`ScopeSnapshotFieldV2` 的声明顺序排序；snapshot V2 不使用父分区路径。
 
 channel、probe 和 waveform 分区存在时，其 `channel` 必须等于请求 channel；trigger 分区
 存在时 `trigger_type` 必须是非空 safe token。profile 只要声明某分区的其他字段，就必须同时
@@ -223,16 +225,40 @@ class ScopeSnapshotDriverV2(Protocol):
 scope.snapshot_v2 -> get_snapshot_v2
 ~~~
 
-候选 Service 名为 `snapshot_v2(channel)`。CLI 名称在进入 `Accepted` 前冻结；不得让旧
-`scope status` 静默改变返回 schema。首版调用方不选择 fields；核心把已验证 profile 的
-`readable_fields` 原样传给 driver，避免任意字段列表扩大 query 面。
+R1 的候选 Service 名为 `ScopeService.snapshot_v2(channel)`。当前 Draft 不定义 V2 CLI、run
+plan step 或 operation artifact，也不得让旧 `scope status` 静默改变返回 schema。调用方不选择
+fields；核心只把已验证 profile 的 `readable_fields` 原样传给 driver，避免任意字段列表扩大
+query 面。
+
+## R1 文档裁决
+
+### Identity 与文本查询预算
+
+`get_snapshot_v2()` 必须在自己的纯文本读取 phase 中读取当前连接代次的 identity，并在同一调用中
+构造完整 `ScopeIdentitySnapshot`。`manufacturer`、`model`、`serial_number` 和 `firmware` 必须是
+本次读取证明的非空文本；`options=()` 只有在本次读取明确证明没有选件时才有效。不得从
+descriptor、缓存、先前 Service 调用或型号常量补齐任何 identity 字段。
+
+`profile.max_queries` 的计数窗口恰好覆盖一次 `get_snapshot_v2()` 调用：从进入 driver 方法到返回
+或抛出为止，guarded transport 实际发送的每一次 `query()` 都计入，包括 identity、条件适用性
+判定和所有字段读取。schema 校验不计数；核心不得在该窗口外额外发送 IDN、错误队列、`*STB?`、
+`*ESR?` 或其他 preflight query。phase 的允许 I/O 精确为文本 `query`，不允许
+`query_float_list()`、binary query、write 或 acquisition。
+
+### 返回与诊断边界
+
+snapshot V2 是本系列的独立只读 operation，不复用 scope R1.3 `ScopeExtensionService`、
+`ScopeExtensionOperationResult` 或 `wavebench.scope.operation.v1` artifact。候选 Service 直接返回
+`ScopeSnapshotV2`；直接 JSON 序列化保留 `null` 与两个 availability tuple。若以后需要保存
+operation diagnostics，必须通过单独的已接受 artifact RFC 定义版本、脱敏和兼容 reader，不能把
+R1.3 envelope 当作通用容器。
 
 ## 可组合规则
 
 ### Identity
 
-`identity` 必须来自当前连接代次的新鲜查询或该 operation 已验证的 identity 证据。不得从
-descriptor 的型号字符串构造仪器身份。
+identity 的唯一有效来源和 query 预算以「R1 文档裁决」为准。不得从 descriptor 的型号字符串、
+缓存或旧 operation 构造仪器身份。
 
 ### 分区
 
@@ -276,8 +302,8 @@ probe、waveform metadata 或 trigger 分区。
 ## 状态读取边界
 
 snapshot V2 是 `stateful_read / exclusive`，R1 只允许纯文本状态 query。核心把 phase 的
-allowed I/O 固定为 text query，并将 guarded transport 的实际 query 增量与
-`profile.max_queries` 对账。
+allowed I/O 固定为 text query，并按「R1 文档裁决」中的单次 driver 调用窗口将 guarded transport
+的实际 query 增量与 `profile.max_queries` 对账。
 
 若某个 waveform metadata query 会改变 source、format、range 或其他仪器状态，该字段在 R1
 保持 unavailable。以后若确需可恢复读取，必须另行增加 profile、typed baseline、
@@ -308,26 +334,15 @@ restore/verification Protocol 和 changed/verification fields；不能把临时�
 5. 新 driver 可以同时声明完整旧 snapshot 和 V2；相同字段的值必须一致。
 6. V2 capability 不表示返回所有分区，只表示返回对象遵守本 RFC 的可用性语义。
 
-## Artifact 与序列化
+## 序列化与 artifact 边界
 
-Service 候选返回现有 `ScopeExtensionOperationResult`，value 为 `ScopeSnapshotV2`，
-diagnostics 保存下列字段。operation artifact 复用 `wavebench.scope.operation.v1` 的追加字段，
-不创建与 R1.3 平行的 envelope。
+Draft 阶段只定义 `ScopeSnapshotV2` 的直接 JSON 语义：可空字段序列化为 `null`，availability
+tuple 按封闭字段顺序序列化为字符串数组。它不定义 CLI 文本格式、operation artifact 或 run plan
+持久化。不得把 identity、原始 SCPI、真实 resource、序列号或完整设备响应写入诊断。
 
-成功结果至少记录：
-
-- schema/version；
-- requested channel；
-- available sections；
-- sorted `unavailable_fields`；
-- query count 摘要；
-- session epoch 的脱敏关联；
-- 是否执行了可恢复事务；
-- completion 与 failure diagnostics。
-
-artifact 不复制原始 SCPI、真实 resource、序列号或完整设备响应。`identity` 可以存在于
-直接成功值，但 artifact 只保存脱敏身份摘要，不复制 `serial_number`。JSON 保留 `null`，CLI
-使用「不可提供」或等价稳定文字，不显示成 `0`、`False` 或空字符串。
+若后续 Accepted RFC 需要持久化结果，artifact 必须另行定义 schema/version、requested channel、
+available sections、脱敏 identity 摘要、query-count 摘要、session-epoch 关联与 failure diagnostics；
+不能改变现有 `scope status` JSON，也不能复用 R1.3 extension artifact 作为未版本化的容器。
 
 ## 验收矩阵
 
@@ -340,9 +355,11 @@ artifact 不复制原始 SCPI、真实 resource、序列号或完整设备响应
 - legacy：完整 snapshot、partial summary、strict status、CLI 和 JSON 黄金基线；
 - cross-driver：至少两个不同仪器族的 fixture 能返回不同分区子集。
 
-## 开放问题
+## 进入 `Accepted` 的验证门
 
-进入 `Accepted` 前必须裁决：
+文档语义已经冻结为：候选 Service 使用 `ScopeService.snapshot_v2(channel)`、identity 在受计数的
+driver phase 内新鲜读取、Draft 不提供 V2 CLI／artifact。进入 `Accepted` 前仍需完成：
 
-1. V2 Service 和 CLI 的最终命名；
-2. identity 直接成功值和 CLI 的序列号显示策略。
+1. 至少两个不同仪器族或 fixture 的 profile/result 负向矩阵；
+2. identity、完整分区、条件字段、query overrun 和 transport failure 的离线验证设计；
+3. construction barrier 与 legacy `status()`／`status_summary()` 的零 I/O 兼容矩阵。
