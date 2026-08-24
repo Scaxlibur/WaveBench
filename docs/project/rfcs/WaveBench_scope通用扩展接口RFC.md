@@ -2156,9 +2156,10 @@ scope.error_drain_v1
 - 为没有错误队列的仪器返回空列表；
 - 超过 `max_bytes` 后在 healthy session 中留下未消费响应。
 
-## 十一、R1.3 暂定安全结论与待决问题
+## 十一、R1.3 已冻结安全结论与后续问题
 
-以下是 Draft 阶段暂定的安全不变量，不代表 schema、常量或核心实现已经接受：
+以下安全不变量已经随 R1.3 接受，并由第十二节的验收门限定。后续问题不得反向扩大已经注册
+capability 的语义，也不表示具体插件已经完成 opt-in 或实机验收：
 
 1. 采集 start、完成式 single、stop 是三个 action-specific operation；共享 capability 不改变
    各自 effect、postcondition、失败 cleanup 或最低 access。descriptor 的
@@ -2189,24 +2190,25 @@ scope.error_drain_v1
    有效 `state_transition` 联合时作为辅助证据，任何回绕、复位或非严格递增都必须转用
    `identity_delta`/`state_transition`。旧 `scope.errors` 不提供 R1.3 终止证明。
 
-剩余待决问题：
+后续独立问题：
 
-1. `OperationSpec` 的完整输入/输出序列化、取消、幂等性和并发字段仍未公开冻结；在这些字段
-   冻结前，核心只能实现第 12 节列出的内部 / feature-gated 骨架。
-2. 各 backend 是否能在固定 resynchronization 上限内安全 drain 仍需 fixture；超出上限时
-   close + `poisoned` 已是 R1.3 的统一默认，不再由 backend 自选。
-3. 哪些 PyVISA resource class 和 RsInstrument API 能稳定证明 message END。
+1. 更通用的 operation 输入/输出序列化、取消、幂等性和并发元数据若有需求，应由独立 RFC
+   追加；当前已注册 operation 的输入、结果和 artifact 形状保持不变。
+2. 当前批准的 backend/resource 已有固定 resynchronization fixture；其他 backend 只有补齐
+   同等 fixture 后才能 opt-in。超出上限时 close + `poisoned` 仍是统一默认。
+3. 当前只认可已验证的 PyVISA/RsInstrument VISA `INSTR` 路径；新增 resource class 或 API
+   的 message END 证明属于后续 backend 扩展。
 4. `READ_CONTINUATION_ONLY` 的 core-issued continuation token 和返回模型如何授权。
-5. 旧 screenshot adapter 的具体拒绝码和更多 profile variant 仍待 fixture；profile 来源已固定为
-   descriptor 或 descriptor/query 的 `combined` 交集。
+5. 更多 screenshot profile variant 仍待独立 fixture；旧 capture 与 V2 的拒绝/分流语义已经
+   冻结，profile 来源仍为 descriptor 或 descriptor/query 的 `combined` 交集。
 6. poisoned session 的 recovery/reopen API 仍属 transport 生命周期设计；在该 API 冻结前，
    新 capability 不得从 poisoned session 继续 I/O。
 7. 暂定的 completion state-transition 序列及 counter-epoch 联合条件能否通过第二个厂商
    fixture，是否需要进一步收紧；更丰富的计数器世代语义仍待单独 RFC。
 8. `spectrum` 是否作为独立 `ScopeTraceKind`，以及单位校验复用哪些现有核心模型；该项已
    明确排除在 R1.3 公共 fetch scope 外，移入后续 trace-extensions RFC。
-9. binary operation/profile 的连接项如何映射到不同 backend 仍需核心实现细节；R1.3 的
-   operation 常量、profile 收紧规则和超限 close/poison 默认已冻结。
+9. 当前批准 backend 的 binary operation/profile 映射已实现；其他 backend 必须复用相同
+   operation 常量、profile 收紧规则和超限 close/poison 默认。
 10. error queue 的未来 peek/clear operation 仍待独立设计；R1.3 timing 默认固定为
     `before_and_after`，未知能力不得增加 skip 分支。
 

@@ -6,10 +6,31 @@ RFC 使用以下状态：
 
 - `Draft`：提案仍可修改，不得据此宣称接口已经提供；
 - `Accepted`：关键合同已经冻结，可以按实施顺序修改代码；
+- `Implemented（未发布）`：开发线实现和离线验收已经完成，但尚未进入正式发行版，插件不得据此提高版本下限；
 - `Implemented`：合同已经进入正式版本，稳定用法已同步到 `reference/`；
 - `Superseded`：由后续 RFC 取代，并保留替代关系。
 
-## 当前 RFC
+## Scope 可移植性编号系列
+
+[scope 可移植性 RFC-0001～RFC-0008 组合说明](WaveBench_scope可移植性RFC组合说明.md)
+记录八份提案的规范优先级、共同 unknown/unavailable 语义、追加式兼容合同、版本组合和
+实施顺序。编号与外部插件提出的问题一一对应，但核心裁决不照搬已被否决的早期 API。
+
+| RFC | 状态 | 核心裁决 |
+| --- | --- | --- |
+| [RFC-0001：消费型文本查询与错误队列](WaveBench_scope可移植性RFC-0001_消费型文本查询.md) | `Superseded R1` | 使用 `ReplayPolicy.NO_REPLAY` 与 `scope.error_drain_v1`，不新增 `query_text_once()` |
+| [RFC-0002：通道输入状态 V2](WaveBench_scope可移植性RFC-0002_通道输入状态.md) | `Draft R1` | 追加 coupling/termination 分离模型，不修改旧 coupling 安全门 |
+| [RFC-0003：截图 framing 与菜单合同](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | `Superseded R1` | 使用 `query_binary()`、screenshot profile 和 `scope.screenshot_v2` |
+| [RFC-0004：数字通道状态 V2](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | `Draft R1` | 追加字段可缺失且保留作用域的 digital status；waveform 另行取证 |
+| [RFC-0005：可组合状态快照 V2](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | `Draft R1` | 追加分区和叶字段可缺失的 snapshot，不改变完整 snapshot/partial summary |
+| [RFC-0006：采集状态与平均采集 V2](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | `Draft R1` | 复用 R1.3 control，分开设计 status read 与 average transaction |
+| [RFC-0007：统计、FFT 与光标读取 V2](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | `Draft R1` | 拆成 selector、optional FFT 和 unit-aware cursor 三项 capability |
+| [RFC-0008：有界波形传输裁决](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | `Implemented R1（未发布）` | 采用 descriptor profile、`query_binary()`、四维预算和核心恢复编排 |
+
+本系列中的 `Draft` 不表示接口已经存在。`Superseded` 表示原提案入口已由更严格合同取代，
+不表示原始安全问题可以忽略。
+
+## 基础与专题 RFC
 
 - [Source V2 能力、状态与复合输出安全 RFC](WaveBench_source能力状态与复合输出安全RFC.md)：
   `Accepted R6`，核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2；

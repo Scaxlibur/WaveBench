@@ -1,10 +1,12 @@
 # WaveBench 标准波形有界二进制传输 RFC
 
 > 状态：`Implemented R1（未发布）`
-> 修订：`R2`
+> 修订：`R3`
 > 核心基线：WaveBench `0.8.24`，`master@dc7ce5b`
 > 相关规范：[scope 通用扩展接口 RFC](WaveBench_scope通用扩展接口RFC.md)、[transport 重放与 session 健康 RFC](WaveBench_transport重放与session健康RFC.md)
 > 证据来源：WaveBench Instrument Plugins 中的 MSO8000 `RFC-0008`
+> 外部验收：[MSO8104 受控实机验收记录](https://github.com/Scaxlibur/wavebench-instrument-plugins/blob/5a760c954f75dc69909bfde04cb5cd7837364ab3/packages/wavebench-rigol-mso8000/doc/MSO8104_HARDWARE_ACCEPTANCE.md)
+> 编号裁决：[scope 可移植性 RFC-0008](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md)
 > 目标版本：包含本实现的下一个 `0.8.x` 发布；外部插件在该版本发布前不得提高版本下限或声明新范围
 
 ## 摘要
@@ -30,15 +32,17 @@ MSO8104 在 WaveBench `0.8.24`、LAN/PyVISA、固件 `00.02.02` 上已返回有�
 `query_bin_block()` 中等待 PyVISA 默认终止语并超时。核心无法证明响应边界，因此
 把 session 标记为 `poisoned`，并在发送前拒绝 driver 后续的 transfer-state restore。
 
-该证据只支持以下结论：
+该次 legacy 超时只支持以下结论：
 
-- legacy 路径无法表达该型号、固件和 transport 组合的空 trailing；
+- legacy 路径无法表达该型号、固件和 transport 组合的精确 trailing；
+- 仅凭超时不能判断 payload 后是空、`LF`、其他字节或读取设置不匹配；
 - 增加 timeout 不能证明同步，也不能把失败查询变成可重放查询；
 - 全局关闭 termination 等待会改变其他 RIGOL 和 R&S driver 的已有行为；
 - capability 只能在新核心合同发布且该型号重新完成实机验收后恢复。
 
-该证据不证明 MSO8000 全系列、其他固件、USB/GPIB 或其他 backend 具有相同
-trailing 行为。核心 profile 必须保持精确声明，不能从型号名称或单次成功读取外推。
+后续受控 bounded 读取为同一明确组合提供了 `DEFINITE_BLOCK + LF` 证据。该结果不证明
+MSO8000 全系列、其他固件、USB/GPIB 或其他 backend 具有相同 trailing 行为。核心 profile
+必须保持精确声明，不能从型号名称或单次成功读取外推。
 
 ## 当前核心基线
 
@@ -475,5 +479,5 @@ P0–P3 不修改外部插件仓库；P4 不属于本核心分支的自动延伸
    `factory_construction_pending`；验证失败关闭 transport，且不发送仪器命令。
 7. `ScopeConfig.check_errors=true` 固定要求 `scope.error_drain_v1`，`false` 固定禁用 typed drain；
    该分流发生在 legacy `scope.errors` capability gate 前。
-8. P4 仍需由插件单独提高版本门、完成 conformance 和受控实机验收。MSO8000 的 empty trailing、
+8. P4 仍需由插件单独提高版本门、完成 conformance 和受控实机验收。MSO8000 的 `LF` trailing、
    分块预算、双通道和恢复证据不能由本核心离线实现替代。
