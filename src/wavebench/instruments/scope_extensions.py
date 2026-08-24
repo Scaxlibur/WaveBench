@@ -13,6 +13,7 @@ import numpy as np
 
 from wavebench.scope_extension_constants import (
     SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
+    SCOPE_FFT_STATUS_V2_MAX_QUERIES,
     SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES,
     SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
@@ -28,8 +29,11 @@ from wavebench.transport.contracts import BinaryResponseFraming
 from .contracts import InstrumentDriver
 from .models import (
     SCOPE_SNAPSHOT_V2_FIELD_ORDER,
+    SCOPE_FFT_STATUS_V2_FIELD_ORDER,
     ScopeMeasurementStatisticsRequestV2,
     ScopeMeasurementStatisticsV2,
+    ScopeFftStatusFieldV2,
+    ScopeFftStatusV2,
     ScopeSnapshotFieldV2,
     ScopeSnapshotV2,
     WaveformData,
@@ -1037,6 +1041,63 @@ class ScopeMeasurementStatisticsProfileV2:
             raise ValueError("measurement statistics V2 result selector does not match request")
         if result.buffered_values is not None:
             raise ValueError("measurement statistics V2 R1 result must not include a buffer")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFftStatusProfileV2:
+    """Descriptor-owned pure-text query contract for the current FFT status."""
+
+    readable_fields: tuple[ScopeFftStatusFieldV2, ...]
+    max_queries: int
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.readable_fields, tuple):
+            raise TypeError("FFT status readable_fields must be a tuple")
+        if not self.readable_fields:
+            raise ValueError("FFT status readable_fields must not be empty")
+        if len(set(self.readable_fields)) != len(self.readable_fields):
+            raise ValueError("FFT status readable_fields must not contain duplicates")
+        if not set(self.readable_fields) <= set(SCOPE_FFT_STATUS_V2_FIELD_ORDER):
+            raise ValueError("FFT status readable_fields contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_FFT_STATUS_V2_FIELD_ORDER
+            if field_name in self.readable_fields
+        )
+        if self.readable_fields != expected:
+            raise ValueError("FFT status readable_fields must use stable field order")
+        start_present = "frequency_start_hz" in self.readable_fields
+        stop_present = "frequency_stop_hz" in self.readable_fields
+        if start_present != stop_present:
+            raise ValueError(
+                "FFT status frequency range fields must be readable together"
+            )
+        _strict_int(
+            self.max_queries,
+            label="FFT status max_queries",
+            minimum=1,
+            maximum=SCOPE_FFT_STATUS_V2_MAX_QUERIES,
+        )
+        _literal(self.allowed_effect, {"pure_read"}, label="FFT status effect")
+
+    def validate_result(self, result: ScopeFftStatusV2, *, math_index: int) -> None:
+        """Reject results that expand or silently shrink this FFT profile."""
+
+        if not isinstance(result, ScopeFftStatusV2):
+            raise TypeError("FFT status V2 driver returned an invalid result")
+        if result.math_index != math_index:
+            raise ValueError("FFT status V2 driver returned the wrong math_index")
+        readable = set(self.readable_fields)
+        unavailable = set(result.unavailable_fields)
+        for field_name, value in result.field_values().items():
+            if field_name in readable:
+                if value is None or field_name in unavailable:
+                    raise ValueError("FFT status V2 readable fields must have a value")
+            elif value is not None or field_name not in unavailable:
+                raise ValueError(
+                    "FFT status V2 result provided a field outside the descriptor profile"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2077,6 +2138,7 @@ class ScopeDescriptorExtensions:
     snapshot_profile_v2: ScopeSnapshotProfileV2 | None = None
     acquisition_status_profile_v2: ScopeAcquisitionStatusProfileV2 | None = None
     measurement_statistics_profile_v2: ScopeMeasurementStatisticsProfileV2 | None = None
+    fft_status_profile_v2: ScopeFftStatusProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -2106,6 +2168,11 @@ class ScopeDescriptorExtensions:
                 "measurement_statistics_profile_v2",
                 self.measurement_statistics_profile_v2,
                 ScopeMeasurementStatisticsProfileV2,
+            ),
+            (
+                "fft_status_profile_v2",
+                self.fft_status_profile_v2,
+                ScopeFftStatusProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):
@@ -2316,5 +2383,8 @@ __all__ = [
         "DriverErrorRecord",
         "SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER",
         "SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES",
+        "SCOPE_FFT_STATUS_V2_FIELD_ORDER",
+        "SCOPE_FFT_STATUS_V2_MAX_QUERIES",
+        "SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES",
     }
 ]

@@ -34,6 +34,7 @@ from .models import (
     ScopeDigitalWaveform,
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
+    ScopeFftStatusV2,
     ScopeSnapshot,
     ScopeSnapshotFieldV2,
     ScopeSnapshotV2,
@@ -192,6 +193,16 @@ class ScopeMeasurementStatisticsDriverV2(InstrumentDriver, Protocol):
         self,
         request: ScopeMeasurementStatisticsRequestV2,
     ) -> ScopeMeasurementStatisticsV2: ...
+
+
+@runtime_checkable
+class ScopeFftStatusDriverV2(InstrumentDriver, Protocol):
+    def get_fft_status_v2(
+        self,
+        math_index: int,
+        *,
+        configured_fft: bool,
+    ) -> ScopeFftStatusV2: ...
 
 
 @runtime_checkable

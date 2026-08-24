@@ -158,6 +158,7 @@ def test_scope_descriptor_extension_is_append_only_for_positional_compatibility(
         "snapshot_profile_v2",
         "acquisition_status_profile_v2",
         "measurement_statistics_profile_v2",
+        "fft_status_profile_v2",
     ]
 
 

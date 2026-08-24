@@ -1233,6 +1233,118 @@ class ScopeFftStatus:
     sample_rate_hz: float
 
 
+ScopeFftStatusFieldV2 = Literal[
+    "source",
+    "window",
+    "vertical_unit",
+    "frequency_start_hz",
+    "frequency_stop_hz",
+    "average_complete",
+    "resolution_bandwidth_hz",
+    "sample_rate_hz",
+]
+SCOPE_FFT_STATUS_V2_FIELD_ORDER: tuple[ScopeFftStatusFieldV2, ...] = (
+    "source",
+    "window",
+    "vertical_unit",
+    "frequency_start_hz",
+    "frequency_stop_hz",
+    "average_complete",
+    "resolution_bandwidth_hz",
+    "sample_rate_hz",
+)
+_SCOPE_FFT_STATUS_V2_FIELDS = frozenset(SCOPE_FFT_STATUS_V2_FIELD_ORDER)
+_SCOPE_FFT_STATUS_V2_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFftStatusV2:
+    math_index: int
+    source: str | None = None
+    window: str | None = None
+    vertical_unit: str | None = None
+    frequency_start_hz: float | None = None
+    frequency_stop_hz: float | None = None
+    average_complete: bool | None = None
+    resolution_bandwidth_hz: float | None = None
+    sample_rate_hz: float | None = None
+    unavailable_fields: tuple[ScopeFftStatusFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.math_index, bool) or not isinstance(self.math_index, int) or self.math_index < 1:
+            raise ValueError("FFT status V2 math_index must be a positive integer")
+        for label, value in (
+            ("source", self.source),
+            ("window", self.window),
+            ("vertical_unit", self.vertical_unit),
+        ):
+            if value is not None and (
+                not isinstance(value, str)
+                or _SCOPE_FFT_STATUS_V2_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"FFT status V2 {label} must be a safe token")
+        for label, value in (
+            ("frequency_start_hz", self.frequency_start_hz),
+            ("frequency_stop_hz", self.frequency_stop_hz),
+            ("resolution_bandwidth_hz", self.resolution_bandwidth_hz),
+            ("sample_rate_hz", self.sample_rate_hz),
+        ):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+            ):
+                raise ValueError(f"FFT status V2 {label} must be finite")
+        if self.average_complete is not None and not isinstance(self.average_complete, bool):
+            raise ValueError("FFT status V2 average_complete must be bool when provided")
+        if (
+            self.frequency_start_hz is None
+        ) != (
+            self.frequency_stop_hz is None
+        ):
+            raise ValueError("FFT status V2 frequency range must be present or unavailable together")
+        if (
+            self.frequency_start_hz is not None
+            and self.frequency_stop_hz is not None
+            and self.frequency_start_hz >= self.frequency_stop_hz
+        ):
+            raise ValueError("FFT status V2 frequency_start_hz must be below frequency_stop_hz")
+        for label, value in (
+            ("resolution_bandwidth_hz", self.resolution_bandwidth_hz),
+            ("sample_rate_hz", self.sample_rate_hz),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"FFT status V2 {label} must be positive")
+        if not isinstance(self.unavailable_fields, tuple):
+            raise TypeError("FFT status V2 unavailable_fields must be a tuple")
+        if len(set(self.unavailable_fields)) != len(self.unavailable_fields):
+            raise ValueError("FFT status V2 unavailable_fields must not contain duplicates")
+        if not set(self.unavailable_fields) <= _SCOPE_FFT_STATUS_V2_FIELDS:
+            raise ValueError("FFT status V2 unavailable_fields contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_FFT_STATUS_V2_FIELD_ORDER
+            if self.field_values()[field_name] is None
+        )
+        if self.unavailable_fields != expected:
+            raise ValueError(
+                "FFT status V2 unavailable_fields must exactly describe missing fields "
+                "in stable order"
+            )
+
+    def field_values(self) -> dict[ScopeFftStatusFieldV2, object | None]:
+        return {
+            "source": self.source,
+            "window": self.window,
+            "vertical_unit": self.vertical_unit,
+            "frequency_start_hz": self.frequency_start_hz,
+            "frequency_stop_hz": self.frequency_stop_hz,
+            "average_complete": self.average_complete,
+            "resolution_bandwidth_hz": self.resolution_bandwidth_hz,
+            "sample_rate_hz": self.sample_rate_hz,
+        }
+
+
 @dataclass(frozen=True)
 class ScopeCursorReadout:
     cursor_index: int

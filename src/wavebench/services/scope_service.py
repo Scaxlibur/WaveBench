@@ -29,6 +29,7 @@ from wavebench.instruments.contracts import (
     ScopeDigitalStatusDriver,
     ScopeDigitalStatusDriverV2,
     ScopeDigitalWaveformDriver,
+    ScopeFftStatusDriverV2,
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
     ScopeMeasurementStatisticsDriverV2,
@@ -48,6 +49,7 @@ from wavebench.instruments.models import (
     ScopeDigitalWaveform,
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
+    ScopeFftStatusV2,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
     ScopeMeasurementStatisticsRequestV2,
@@ -63,6 +65,7 @@ from wavebench.instruments.scope_extensions import (
     ScopeAcquisitionStatusDriverV2,
     ScopeAcquisitionStatusProfileV2,
     ScopeAcquisitionStatusV2,
+    ScopeFftStatusProfileV2,
     ScopeMeasurementStatisticsProfileV2,
     ScopeScreenshotRequest,
     ScopeSnapshotProfileV2,
@@ -733,6 +736,72 @@ class ScopeService(SessionStateAliasMixin):
                 configured_fft=configured_fft,
             )
 
+    def fft_status_v2(
+        self,
+        math_index: int,
+        *,
+        configured_fft: bool,
+    ) -> ScopeFftStatusV2:
+        if isinstance(math_index, bool) or not isinstance(math_index, int) or math_index < 1:
+            raise ConfigError("FFT status V2 math_index must be a positive integer")
+        if configured_fft is not True:
+            raise ConfigError("FFT status V2 requires configured_fft=True")
+        spec = self._require("scope.fft_status_v2", "scope.fft_status_v2")
+        profile = self._fft_status_v2_profile()
+        if profile is None:
+            raise ConfigError("scope FFT status V2 requires scope_extensions.fft_status_profile_v2")
+        with self._scope_session() as scope:
+            return self._execute_fft_status_v2(
+                cast(ScopeFftStatusDriverV2, scope),
+                math_index=math_index,
+                configured_fft=configured_fft,
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_fft_status_v2(
+        self,
+        scope: ScopeFftStatusDriverV2,
+        *,
+        math_index: int,
+        configured_fft: bool,
+        profile: ScopeFftStatusProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeFftStatusV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_fft_status_v2(math_index, configured_fft=configured_fft)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.fft_status_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_fft_status_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_fft_status_v2(math_index, configured_fft=configured_fft)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError("scope FFT status V2 exceeded its descriptor query budget")
+        try:
+            profile.validate_result(result, math_index=math_index)
+        except (TypeError, ValueError) as exc:
+            raise DataError(f"scope FFT status V2 driver returned an invalid result: {exc}") from exc
+        return result
+
     def reference_waveform_metadata(
         self,
         reference_index: int,
@@ -1078,6 +1147,17 @@ class ScopeService(SessionStateAliasMixin):
         profile = getattr(extensions, "measurement_statistics_profile_v2", None)
         if profile is not None and not isinstance(profile, ScopeMeasurementStatisticsProfileV2):
             raise ConfigError("scope measurement statistics V2 descriptor profile has an invalid type")
+        return profile
+
+    def _fft_status_v2_profile(self) -> ScopeFftStatusProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "fft_status_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeFftStatusProfileV2):
+            raise ConfigError("scope FFT status V2 descriptor profile has an invalid type")
         return profile
 
     def _bounded_waveform_executor(self, scope: object) -> BoundedWaveformExecutor:
