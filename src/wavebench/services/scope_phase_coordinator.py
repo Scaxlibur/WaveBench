@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from wavebench.errors import ConfigError
 from wavebench.transport.binary import BinaryQueryBudget, BinaryQueryLedger
+from wavebench.transport.contracts import BinaryResponseFraming
 from wavebench.transport.session import (
     InstrumentSessionState,
     SessionAuthorization,
@@ -287,6 +288,7 @@ class ScopeOperationContextCoordinator:
         profile_binary_limits: ScopeBinaryLimits | None = None,
         connection_binary_limits: ScopeBinaryLimits | None = None,
         transport_trailing: bytes = b"",
+        required_binary_framing: BinaryResponseFraming | None = None,
         enabled: bool = False,
         now: float | None = None,
     ) -> None:
@@ -300,6 +302,8 @@ class ScopeOperationContextCoordinator:
             raise ValueError("connection_timeout_ms must be a positive integer")
         if session_state.health is not SessionHealth.HEALTHY:
             raise ValueError("new scope operations require a healthy session")
+        if required_binary_framing is not None:
+            required_binary_framing = BinaryResponseFraming(required_binary_framing)
         current = time.monotonic() if now is None else float(now)
         hard_deadline = current + (spec.operation_timeout_ms / 1000.0)
         if caller_deadline is not None:
@@ -357,6 +361,7 @@ class ScopeOperationContextCoordinator:
                 query_max_count=limits.query_max_count,
                 resynchronization_max_bytes=limits.resynchronization_max_bytes,
                 transport_trailing=transport_trailing,
+                required_framing=required_binary_framing,
             )
             self._binary_budget = self._binary_ledger.issue_budget()
 

@@ -11,6 +11,7 @@ from wavebench.plugins.api import PluginKind
 from wavebench.services.access_policy import AccessMode, normalize_access_mode
 from wavebench.services.resource_lease import ResourceLease, resource_fingerprint
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.binary import visa_binary_contract_supported
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.pyvisa_transport import PyVisaTransport
 from wavebench.transport.rsinstrument_transport import RsInstrumentTransport
@@ -64,6 +65,11 @@ def open_instrument_driver(
         driver_reference,
         expected_kind=expected_kind,
     )
+    waveform_binary_profile = (
+        descriptor.scope_extensions.waveform_binary_profile
+        if descriptor.scope_extensions is not None
+        else None
+    )
     backend = _select_backend(configured_backend, descriptor.backends)
     _validate_resource_scheme(resource, descriptor.resource_schemes)
     try:
@@ -71,7 +77,7 @@ def open_instrument_driver(
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"invalid options for instrument driver {descriptor.driver_id!r}: {exc}") from exc
 
-    opened_transports: list[InstrumentTransport] = []
+    opened_transports: list[GuardedAuditedTransport] = []
     opened_session_state: InstrumentSessionState | None = None
 
     def open_transport() -> InstrumentTransport:
@@ -104,6 +110,7 @@ def open_instrument_driver(
                 lease=lease,
                 release_lease_on_close=lease_acquired_here,
                 session_state=session_state,
+                construction_latched=waveform_binary_profile is not None,
             )
             opened_session_state = session_state
         except Exception:
@@ -134,6 +141,18 @@ def open_instrument_driver(
     try:
         driver = descriptor.factory(context)
         validate_declared_capabilities(descriptor, driver)
+        if waveform_binary_profile is not None:
+            if len(opened_transports) != 1:
+                raise ConfigError(
+                    f"instrument driver {descriptor.driver_id!r} waveform binary profile "
+                    "requires exactly one context transport"
+                )
+            _validate_waveform_binary_transport(
+                descriptor=descriptor,
+                transport=opened_transports[0],
+            )
+            opened_transports[0]._mark_bounded_waveform_backend_verified()
+            opened_transports[0]._release_construction_latch()
     except Exception as exc:
         _close_factory_failure(driver if "driver" in locals() else None, opened_transports)
         if isinstance(exc, ConfigError):
@@ -283,3 +302,28 @@ def _close_factory_failure(
             transport.close()
         except Exception:
             pass
+
+
+def _validate_waveform_binary_transport(
+    *,
+    descriptor: InstrumentDescriptor,
+    transport: GuardedAuditedTransport,
+) -> None:
+    """Accept only core-owned backends that prove the full bounded VISA path."""
+
+    inner = transport.inner
+    raw_session: object | None = None
+    if isinstance(inner, PyVisaTransport):
+        raw_session = inner.session
+    elif isinstance(inner, RsInstrumentTransport):
+        get_session_handle = getattr(inner.session, "get_session_handle", None)
+        if callable(get_session_handle):
+            try:
+                raw_session = get_session_handle()
+            except Exception:
+                raw_session = None
+    if raw_session is None or not visa_binary_contract_supported(raw_session):
+        raise ConfigError(
+            f"instrument driver {descriptor.driver_id!r} waveform binary profile requires "
+            "a bounded PyVISA or RsInstrument INSTR resource"
+        )
