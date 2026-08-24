@@ -24,7 +24,7 @@ RFC 使用以下状态：
 | [RFC-0004：数字通道状态 V2](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | `Implemented R1（未发布）` | 追加字段可缺失且保留作用域的 digital status；waveform 另行取证 |
 | [RFC-0005：可组合状态快照 V2](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | `Implemented R1（未发布）` | M3b 已完成核心模型、profile、Protocol、factory gate 与 Service；不改旧 CLI/artifact |
 | [RFC-0006：采集状态与平均采集 V2](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | `Implemented R1（未发布；仅 0006a）` | M4 已完成 profile、纯文本 status read 与零 I/O gate；0006b 等待 bounded transaction 前置裁决 |
-| [RFC-0007：统计、FFT 与光标读取 V2](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | `Implemented R1（未发布；0007a/0007b）；Accepted R1（0007c）` | M5a/M5b 已完成 statistics/FFT 的 profile、零 I/O gate 与 Service；0007c 已冻结核心实现合同 |
+| [RFC-0007：统计、FFT 与光标读取 V2](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | `Implemented R1（未发布；0007a/0007b/0007c）` | M5a/M5b/M5c 已完成 statistics/FFT/cursor 的 profile、零 I/O gate 与 Service；不改旧 CLI/artifact |
 | [RFC-0008：有界波形传输裁决](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | `Implemented R1（未发布）` | 采用 descriptor profile、`query_binary()`、四维预算和核心恢复编排 |
 
 本系列中的 `Draft` 不表示接口已经存在，也不授权开始代码、插件 capability 或硬件工作。`Superseded`

@@ -1,10 +1,10 @@
 # RFC-0007：可移植的统计、FFT 与光标读取 V2
 
-> 状态：`Implemented R1（未发布；0007a/0007b）；Accepted R1（0007c）`
+> 状态：`Implemented R1（未发布；0007a/0007b/0007c）`
 > 核心基线：现有 statistics、FFT status、math metadata 与 cursor readout
 > 范围：三个独立的只读 V2 capability
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0007a/0007b 已完成核心模型、profile、factory gate 与 Service；0007c 已接受核心合同，
+> 本轮范围：0007a/0007b/0007c 已完成核心模型、profile、factory gate 与 Service；
 > 仍不创建 V2 CLI、artifact、run plan step 或插件 opt-in
 
 ## 摘要
@@ -353,7 +353,7 @@ class ScopeCursorReadoutDriverV2(Protocol):
 ~~~
 
 三个 operation 都是独立的 `stateful_read / exclusive`，不形成 `scope.analysis_v2` 这样的捆绑能力。
-0007a 和 0007b R1 已分别注册 capability、OperationSpec 和 Service；0007c R1 已接受同样的核心实现边界：
+0007a、0007b 和 0007c R1 已分别注册 capability、OperationSpec 和 Service；0007c 使用同样的核心实现边界：
 60 秒 deadline、`stateful_read / exclusive`、`error_check_minimum="disabled"`、无 required verified fields、
 无 restore coverage，以及一次只允许 `query()` 的 profile budget phase。
 
@@ -397,7 +397,21 @@ FFT 配置证明和所有可读字段。禁止 write、binary query、`query_flo
 `scope.fft_status_v2`、strict factory construction barrier、portability-V2 `OperationSpec` 和
 `ScopeService.fft_status_v2()`。核心离线实现覆盖 model/profile、capability、factory、query budget、
 non-query I/O 拒绝、math metadata 隔离和 legacy route；主包内建 descriptor 和外部插件在独立 conformance、
-版本下限和硬件证据完成前不得声明 FFT V2。该实现不授权 0007c cursor。
+版本下限和硬件证据完成前不得声明 FFT V2；它不与 cursor V2 共享 capability、路由或状态 query。
+
+0007c R1 核心离线实现已提供 `ScopeCursorQuantity`、`ScopeCursorReadoutV2`、带 global/indexed
+addressing 的 append-only profile、独立 Protocol、`scope.cursor_readout_v2`、strict factory construction
+barrier、portability-V2 `OperationSpec` 和 `ScopeService.cursor_readout_v2()`。Service 在打开 session 前拒绝
+非法 index、非真 `configured_cursor` 和 profile/addressing 不匹配；在 factory-owned session 中只调用 V2 driver
+一次，并在只允许 `query()` 的 `1..32` budget phase 中验证 result。它不调用 legacy cursor、identity preflight、
+error drain、math metadata、binary 或 write；缺 shared session state 的 transport 同样发送前 fail-closed。
+全局 cursor 以 `cursor_index=None` 加 `not_applicable_fields=("cursor_index",)` 表示，indexed cursor 必须精确
+echo request。实现还限制 `source_unit` 为可见单位 token，拒绝 SCPI/resource 形态。
+
+`tests/test_scope_cursor_readout_v2.py` 覆盖五种 unit、global/indexed 与双 source、static unavailable／
+conditional not-applicable、profile/capability/factory、query budget、non-query I/O、missing shared state、legacy
+route 和两个离线 fixture。核心完整离线回归与外部 MSO8000 插件在新 core source 下的既有回归均通过。内建
+descriptor 和外部插件仍未声明 cursor V2；本实现不新增 V2 CLI、artifact、run plan step 或硬件工作。
 
 0007a R1 核心离线实现已覆盖 selector/profile 的发送前拒绝、完整结果和 selector echo、buffer result 拒绝、
 factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route。它本身不授权 0007b；后者只由本节
@@ -506,8 +520,7 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 
 ## 接受与实施顺序
 
-RFC-0007a/0007b 已完成核心离线实现但尚未发布。RFC-0007c 现以本文件冻结的 model/profile/addressing、
-availability、pure-text budget、strict factory barrier、Service 边界和无 CLI/artifact 决定进入 `Accepted`，
-授权核心离线实现及上述验收矩阵；它不授权 descriptor opt-in、插件 conformance 分支、版本下限升级或硬件
-验收。任何一项通过不改变另两项状态。具体插件只有在对应核心合同正式发布、离线 conformance 完成并获得
-设备证据后，才可以声明相应 capability。
+RFC-0007a/0007b/0007c 已完成核心离线实现但尚未发布。0007c 按本文件冻结的 model/profile/addressing、
+availability、pure-text budget、strict factory barrier、Service 边界和无 CLI/artifact 完成上述验收矩阵；它仍不
+授权 descriptor opt-in、插件 conformance 分支、版本下限升级或硬件验收。任何一项通过不改变另两项状态。具体
+插件只有在对应核心合同正式发布、离线 conformance 完成并获得设备证据后，才可以声明相应 capability。
