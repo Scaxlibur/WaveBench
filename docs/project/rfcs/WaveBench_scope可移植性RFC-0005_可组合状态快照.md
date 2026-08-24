@@ -1,10 +1,10 @@
 # RFC-0005：可组合的示波器状态快照 V2
 
-> 状态：`Draft R1`
+> 状态：`Accepted R1`
 > 核心基线：现有完整 `ScopeSnapshot` 与 `status_summary()`
 > 目标：允许设备返回可证明的类型化分区，不伪造缺失字段
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：只冻结 R1 文档语义；不创建新 capability、CLI、artifact 或插件 opt-in
+> R1 范围：允许追加核心模型、profile、Protocol、capability、factory gate 与 Service；不新增 CLI、artifact、run plan 或插件 opt-in
 
 ## 摘要
 
@@ -225,8 +225,8 @@ class ScopeSnapshotDriverV2(Protocol):
 scope.snapshot_v2 -> get_snapshot_v2
 ~~~
 
-R1 的候选 Service 名为 `ScopeService.snapshot_v2(channel)`。当前 Draft 不定义 V2 CLI、run
-plan step 或 operation artifact，也不得让旧 `scope status` 静默改变返回 schema。调用方不选择
+R1 的 Service 名为 `ScopeService.snapshot_v2(channel)`。R1 不定义 V2 CLI、run plan step 或
+operation artifact，也不得让旧 `scope status` 静默改变返回 schema。调用方不选择
 fields；核心只把已验证 profile 的 `readable_fields` 原样传给 driver，避免任意字段列表扩大
 query 面。
 
@@ -336,7 +336,7 @@ restore/verification Protocol 和 changed/verification fields；不能把临时�
 
 ## 序列化与 artifact 边界
 
-Draft 阶段只定义 `ScopeSnapshotV2` 的直接 JSON 语义：可空字段序列化为 `null`，availability
+R1 只定义 `ScopeSnapshotV2` 的直接 JSON 语义：可空字段序列化为 `null`，availability
 tuple 按封闭字段顺序序列化为字符串数组。它不定义 CLI 文本格式、operation artifact 或 run plan
 持久化。不得把 identity、原始 SCPI、真实 resource、序列号或完整设备响应写入诊断。
 
@@ -355,10 +355,10 @@ available sections、脱敏 identity 摘要、query-count 摘要、session-epoch
 - legacy：完整 snapshot、partial summary、strict status、CLI 和 JSON 黄金基线；
 - cross-driver：至少两个不同仪器族的 fixture 能返回不同分区子集。
 
-## 进入 `Accepted` 的验证门
+## R1 实现验证门
 
-文档语义已经冻结为：候选 Service 使用 `ScopeService.snapshot_v2(channel)`、identity 在受计数的
-driver phase 内新鲜读取、Draft 不提供 V2 CLI／artifact。进入 `Accepted` 前仍需完成：
+文档语义已经冻结为：Service 使用 `ScopeService.snapshot_v2(channel)`、identity 在受计数的 driver
+phase 内新鲜读取、R1 不提供 V2 CLI／artifact。实现必须完成：
 
 1. 至少两个不同仪器族或 fixture 的 profile/result 负向矩阵；
 2. identity、完整分区、条件字段、query overrun 和 transport failure 的离线验证设计；

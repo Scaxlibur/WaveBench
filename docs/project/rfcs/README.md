@@ -22,7 +22,7 @@ RFC 使用以下状态：
 | [RFC-0002：通道输入状态 V2](WaveBench_scope可移植性RFC-0002_通道输入状态.md) | `Implemented R1（未发布）` | 追加 coupling/termination 分离模型和 V2 安全判断，不修改旧 coupling 安全门 |
 | [RFC-0003：截图 framing 与菜单合同](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | `Superseded R1` | 使用 `query_binary()`、screenshot profile 和 `scope.screenshot_v2` |
 | [RFC-0004：数字通道状态 V2](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | `Implemented R1（未发布）` | 追加字段可缺失且保留作用域的 digital status；waveform 另行取证 |
-| [RFC-0005：可组合状态快照 V2](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | `Draft R1` | 追加分区和叶字段可缺失的 snapshot；先冻结 identity、预算和 availability 规则 |
+| [RFC-0005：可组合状态快照 V2](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | `Accepted R1` | 追加分区和叶字段可缺失的 snapshot；M3b 仅实现核心 Service，不改旧 CLI/artifact |
 | [RFC-0006：采集状态与平均采集 V2](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | `Draft R1` | 0006a 独立设计 status read；0006b 等待 bounded transaction 前置裁决 |
 | [RFC-0007：统计、FFT 与光标读取 V2](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | `Draft R1` | 拆成 selector、optional FFT 和 unit-aware cursor；Draft 阶段不新增 V2 CLI |
 | [RFC-0008：有界波形传输裁决](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | `Implemented R1（未发布）` | 采用 descriptor profile、`query_binary()`、四维预算和核心恢复编排 |
