@@ -4,7 +4,7 @@ import csv
 import json
 import os
 import traceback
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -51,6 +51,7 @@ from wavebench.instruments.scope_extensions import (
     ScopeContinuousAcquisitionRequest,
     ScopeScreenshotRequest,
     ScopeTraceRef,
+    ScopeWaveformBinaryProfile,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
@@ -61,7 +62,9 @@ from wavebench.services.scope_extension_service import (
     ScopeExtensionOperationResult,
     ScopeExtensionService,
 )
+from wavebench.services.scope_waveform_executor import BoundedWaveformExecutor
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import (
     InstrumentSessionState,
     SessionHealth,
@@ -678,11 +681,24 @@ class ScopeService(SessionStateAliasMixin):
             raise ConfigError("MVP-1 only supports waveform.format = 'real'")
         if self.config.waveform.byte_order.lower() != "lsbf":
             raise ConfigError("MVP-1 only supports waveform.byte_order = 'lsbf'")
+        bounded_profile = self._waveform_binary_profile()
         required = ["scope.fetch_waveform"]
-        if self.config.scope.check_errors:
+        if bounded_profile is not None:
+            required.append("scope.idn")
+            if self.config.scope.check_errors:
+                required.append("scope.error_drain_v1")
+        elif self.config.scope.check_errors:
             required.append("scope.errors")
         self._require("scope.fetch_waveform", *required)
         with self._scope_session() as scope:
+            if bounded_profile is not None:
+                result = self._bounded_waveform_executor(scope).fetch(
+                    channel=channel,
+                    points=self.config.waveform.points,
+                    check_errors=self.config.scope.check_errors,
+                )
+                assert isinstance(result.value, WaveformData)
+                return result.value
             self._session_preflight("scope.fetch_waveform", scope)
             return scope.fetch_waveform(
                 channel=channel,
@@ -753,6 +769,30 @@ class ScopeService(SessionStateAliasMixin):
             )
         return "scope.screenshot"
 
+    def _waveform_binary_profile(self) -> ScopeWaveformBinaryProfile | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        return getattr(extensions, "waveform_binary_profile", None)
+
+    def _bounded_waveform_executor(self, scope: object) -> BoundedWaveformExecutor:
+        if self.descriptor is None or self.session_state is None:
+            raise ConfigError(
+                "bounded waveform operations require a factory-owned descriptor and session"
+            )
+        return BoundedWaveformExecutor(
+            driver=scope,
+            descriptor=self.descriptor,
+            session_state=self.session_state,
+            connection_timeout_ms=self.config.connection.timeout_ms,
+            transport=self.transport if isinstance(self.transport, GuardedAuditedTransport) else None,
+        )
+
+    def _can_attempt_failure_screenshot(self) -> bool:
+        return self.session_state is None or self.session_state.health is not SessionHealth.POISONED
+
     def _waveform_metadata(self, waveform: WaveformData) -> dict[str, Any]:
         return {
             "header": {
@@ -801,6 +841,9 @@ class ScopeService(SessionStateAliasMixin):
             "error": {"type": type(exc).__name__, "message": str(exc)},
             "files": {"commands": str(failed_dir / "commands.log")} if commands_log_path is not None else {},
         }
+        diagnostics = getattr(exc, "scope_operation_diagnostics", None)
+        if isinstance(diagnostics, Mapping):
+            partial_metadata["scope_operation_diagnostics"] = dict(diagnostics)
         if partial is not None:
             partial_metadata.update(rewrite_failed_paths(partial))
         (failed_dir / "metadata.partial.json").write_text(
@@ -809,8 +852,11 @@ class ScopeService(SessionStateAliasMixin):
         )
 
     def capture_waveform(self, channel: int, label: str) -> CaptureResult:
+        bounded_profile = self._waveform_binary_profile()
         required = ["scope.idn", "scope.capture_waveform"]
-        if self.config.scope.check_errors:
+        if bounded_profile is not None and self.config.scope.check_errors:
+            required.append("scope.error_drain_v1")
+        elif self.config.scope.check_errors:
             required.append("scope.errors")
         if self.config.output.save_screenshot:
             required.append(self._legacy_capture_screenshot_capability())
@@ -837,17 +883,29 @@ class ScopeService(SessionStateAliasMixin):
         screenshot_error: dict[str, str] | None = None
         try:
             with self._scope_session() as scope:
-                evidence = self._session_preflight("scope.capture", scope)
-                instrument_idn = evidence.get("scope.identity") or scope.idn()
-                capture_kwargs = {
-                    "channel": channel,
-                    "points": self.config.waveform.points,
-                    "check_errors": self.config.scope.check_errors,
-                    "time_range_s": self.config.waveform.time_range_s,
-                }
-                if self.config.waveform.vertical_scale_v_per_div is not None:
-                    capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
-                waveform = scope.capture_waveform(**capture_kwargs)
+                if bounded_profile is not None:
+                    result = self._bounded_waveform_executor(scope).capture_single(
+                        channel=channel,
+                        points=self.config.waveform.points,
+                        time_range_s=self.config.waveform.time_range_s,
+                        vertical_scale_v_per_div=self.config.waveform.vertical_scale_v_per_div,
+                        check_errors=self.config.scope.check_errors,
+                    )
+                    assert isinstance(result.value, WaveformData)
+                    waveform = result.value
+                    instrument_idn = result.identity
+                else:
+                    evidence = self._session_preflight("scope.capture", scope)
+                    instrument_idn = evidence.get("scope.identity") or scope.idn()
+                    capture_kwargs = {
+                        "channel": channel,
+                        "points": self.config.waveform.points,
+                        "check_errors": self.config.scope.check_errors,
+                        "time_range_s": self.config.waveform.time_range_s,
+                    }
+                    if self.config.waveform.vertical_scale_v_per_div is not None:
+                        capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
+                    waveform = scope.capture_waveform(**capture_kwargs)
                 screenshot_path, screenshot_error = self._write_screenshot_file(package_dir, scope)
         except Exception as exc:
             self._failed_capture_package(
@@ -889,8 +947,11 @@ class ScopeService(SessionStateAliasMixin):
             raise ConfigError("at least one channel is required")
         if len(set(channels)) != len(channels):
             raise ConfigError("duplicate channels are not allowed")
+        bounded_profile = self._waveform_binary_profile()
         required = ["scope.idn", "scope.capture_waveforms"]
-        if self.config.scope.check_errors:
+        if bounded_profile is not None and self.config.scope.check_errors:
+            required.append("scope.error_drain_v1")
+        elif self.config.scope.check_errors:
             required.append("scope.errors")
         if self.config.output.save_screenshot:
             required.append(self._legacy_capture_screenshot_capability())
@@ -927,16 +988,6 @@ class ScopeService(SessionStateAliasMixin):
                 scope = opened_scope
                 try:
                     stage = "identify"
-                    evidence = self._session_preflight("scope.capture_multiple", scope)
-                    instrument_idn = evidence.get("scope.identity") or scope.idn()
-                    capture_kwargs: dict[str, Any] = {
-                        "channels": channels,
-                        "points": self.config.waveform.points,
-                        "check_errors": self.config.scope.check_errors,
-                        "time_range_s": self.config.waveform.time_range_s,
-                    }
-                    if self.config.waveform.vertical_scale_v_per_div is not None:
-                        capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
 
                     def start_channel(channel: int | None) -> None:
                         nonlocal failed_channel, stage
@@ -961,9 +1012,33 @@ class ScopeService(SessionStateAliasMixin):
 
                     stage = "acquire"
                     failed_channel = None
-                    capture_kwargs["on_channel_start"] = start_channel
-                    capture_kwargs["on_waveform"] = save_waveform
-                    returned_waveforms = scope.capture_waveforms(**capture_kwargs)
+                    if bounded_profile is not None:
+                        result = self._bounded_waveform_executor(scope).capture_multiple(
+                            channels=channels,
+                            points=self.config.waveform.points,
+                            time_range_s=self.config.waveform.time_range_s,
+                            vertical_scale_v_per_div=self.config.waveform.vertical_scale_v_per_div,
+                            check_errors=self.config.scope.check_errors,
+                            on_channel_start=start_channel,
+                            on_waveform=save_waveform,
+                        )
+                        assert isinstance(result.value, dict)
+                        returned_waveforms = result.value
+                        instrument_idn = result.identity
+                    else:
+                        evidence = self._session_preflight("scope.capture_multiple", scope)
+                        instrument_idn = evidence.get("scope.identity") or scope.idn()
+                        capture_kwargs: dict[str, Any] = {
+                            "channels": channels,
+                            "points": self.config.waveform.points,
+                            "check_errors": self.config.scope.check_errors,
+                            "time_range_s": self.config.waveform.time_range_s,
+                        }
+                        if self.config.waveform.vertical_scale_v_per_div is not None:
+                            capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
+                        capture_kwargs["on_channel_start"] = start_channel
+                        capture_kwargs["on_waveform"] = save_waveform
+                        returned_waveforms = scope.capture_waveforms(**capture_kwargs)
                     for channel in channels:
                         if channel not in waveforms:
                             save_waveform(channel, returned_waveforms[channel])
@@ -973,7 +1048,7 @@ class ScopeService(SessionStateAliasMixin):
                         package_dir, scope
                     )
                 except Exception:
-                    if self.config.output.save_screenshot:
+                    if self.config.output.save_screenshot and self._can_attempt_failure_screenshot():
                         screenshot_path, screenshot_error = self._write_screenshot_file(
                             package_dir, scope
                         )
