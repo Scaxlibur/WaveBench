@@ -10,8 +10,9 @@
 
 消费型文本 query 的问题成立，但原提案的平行 transport 方法不再采用。核心已经为
 `InstrumentTransport.query()` 增加显式 `ReplayPolicy`，默认值为
-`ReplayPolicy.NO_REPLAY`。错误队列则由受管的 `scope.error_drain_v1` capability 提供
-类型化、有限次、可对账的 drain。
+`ReplayPolicy.NO_REPLAY`。核心为错误队列提供受管的 `scope.error_drain_v1` 合同、phase executor
+和对账规则；具体逐条 SCPI query、结束 token 与严格解析仍由 opt-in driver 实现。主包内建 scope
+descriptor 当前没有声明该 capability。
 
 本 RFC 记录替代关系，不新增运行代码。
 
@@ -72,8 +73,8 @@ scope.error_drain_v1 -> drain_errors(max_records=...)
 
 ## 旧 `scope.errors` 兼容边界
 
-旧 `scope.errors(limit) -> list[str]` 保持原签名和成功值，只能记录
-`legacy_unstructured` artifact：
+旧 `scope.errors(limit) -> list[str]` 保持原签名和成功值。需要随 operation 保存兼容诊断时，
+核心可以生成 `legacy_unstructured` artifact：
 
 - `terminated=null`；
 - `query_count=null`；
@@ -81,6 +82,7 @@ scope.error_drain_v1 -> drain_errors(max_records=...)
 - 不作为 R1.3 `required` 或 `if_supported` 的能力证明；
 - 不与核心 `scope.error_drain_v1` 在同一次 operation 中双重 drain。
 
+旧 `ScopeService.errors()` 仍直接返回 `list[str]`，不因为调用它而自动产生 artifact。
 `ScopeConfig.check_errors=true` 在 bounded waveform 路径中固定要求
 `scope.error_drain_v1`；`false` 固定禁用错误队列读取。旧 `scope.errors` 不能替代该门。
 

@@ -23,7 +23,8 @@ construction barrier；缺方法、无效版本或 factory 内 I/O 都在第一�
 
 R1 冻结数字通道为零基非负整数，允许超过 15 以避免把单一厂商的通道数写成公共上限。标准
 `scope.digital_status`、`scope.digital_waveform`、旧模型、旧 CLI 和旧 capability 不改变。
-核心实现不表示任一具体设备已经具有 V2 或 digital waveform 能力。
+核心实现不表示任一具体设备已经具有 V2 或 digital waveform 能力；主包内建 descriptor 当前
+也没有声明 `scope.digital_status_v2`。
 
 ## 当前问题
 

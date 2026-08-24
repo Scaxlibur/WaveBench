@@ -17,9 +17,9 @@
 RFC-0007 仍需要追加式 V2 模型。被取代不表示问题不存在，而是表示不能再实现已否决的
 平行 API。
 
-M0 只冻结本组合说明和 legacy 黄金基线。M1 及后续里程碑可以在本分支按本文顺序修改核心
-代码；仍为 `Draft` 的单项 RFC 只授权其对应里程碑中的追加式实现，不授权插件提高版本下限或
-连接真实仪器。
+M0 冻结本组合说明和 legacy 黄金基线。本文本身不授权新的核心实现、插件 capability 声明或
+真实仪器操作；`Implemented R1（未发布）` 只记录已经提交并完成离线验证的核心代码。仍为
+`Draft` 的单项 RFC 必须先完成其列出的文档裁决并进入 `Accepted`，才可以另行安排追加式实现。
 
 ## 规范优先级
 
@@ -42,9 +42,20 @@ M0 只冻结本组合说明和 legacy 黄金基线。M1 及后续里程碑可以
 | [RFC-0003](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | 原 `query_raw_bytes_once()` 被 `query_binary()` 和 screenshot profile 取代 | `Superseded R1` | 核心合同已有；具体插件仍需 framing、菜单和恢复证据 |
 | [RFC-0004](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | 追加保留未知值和字段作用域的 digital status V2 | `Implemented R1（未发布）` | 只处理状态；digital waveform 另行取证 |
 | [RFC-0005](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | 追加可组合、字段可缺失的 snapshot V2 | `Draft R1` | 不修改现有完整 `ScopeSnapshot` 和 partial summary |
-| [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Draft R1` | 读取与平均事务分阶段实施 |
+| [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Draft R1` | 0006a 是独立只读候选；0006b 等待通用 bounded transaction 前置裁决 |
 | [RFC-0007](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | 拆成统计 selector、FFT status 和 cursor quantity 三项 V2 | `Draft R1` | 三项独立注册、独立验收 |
 | [RFC-0008](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | 使用 descriptor profile、`query_binary()` 和核心恢复编排 | `Implemented R1（未发布）` | P0～P3 已完成；插件 opt-in 与实机验收不在本分支 |
+
+## 本轮文档冻结
+
+本轮只完善核心侧 RFC，不新增 `src/`、`tests/`、CLI、run plan schema 或插件 descriptor 改动。
+已经标为 `Implemented R1（未发布）` 的 RFC-0002、RFC-0004 和 RFC-0008 仍不得被解释为主包
+内建 driver 或任一外部插件已经 opt-in；当前开发线版本 `0.8.24` 也不是可供插件声明最低版本的
+正式发行物。
+
+RFC-0005、RFC-0006 和 RFC-0007 的候选模型可以作为后续评审输入，但在各自文档进入
+`Accepted` 前不得创建 capability、Protocol、Service、CLI、descriptor profile 或插件 conformance
+分支。RFC-0001、RFC-0003 的原始入口已经被取代，不重新实施。
 
 ## 共同术语
 
@@ -68,9 +79,21 @@ V2 读取模型统一区分三类结果：
 - 某个完整分区不可提供时，按具体模型的封闭路径规范记录父路径或全部叶路径；同一模型只能
   选择一种规范表示，不能同时记录父路径和子路径，也不能制造虚假的叶字段默认值。
 
+除非具体 RFC 另有声明，路径的「排序」均指其封闭 `Literal` 声明顺序，而不是字典序。完整
+分区的表示由各模型自行冻结：RFC-0005 的 snapshot V2 只记录全部封闭叶路径；已经把父路径
+列入其封闭路径集的模型，例如 RFC-0004 的 `pod`／`shared` 或 RFC-0006 的 `average`／`segmented`，
+才可以使用父路径。不得把一种模型的表示规则套用到另一种模型。
+
 模型若允许当前 mode 下不适用的字段，必须另设封闭、稳定的 `not_applicable_fields` 或等价
 typed reason；它不能与 `unavailable_fields` 混用。没有该机制的模型中，`None` 只允许表示
 unavailable。
+
+### Safe token
+
+除非字段明确承载用户标签、身份文本或 source-defined unit，文档中的 safe token 均使用
+`^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$`。它不得包含空白、控制字符、引号、逗号、资源地址或
+原始 SCPI 响应片段。无法无损归一化到这一集合的已查询状态，应使用该模型定义的 `"unknown"`，
+或使 operation 失败；不得把原始响应写入 artifact。
 
 ### 状态作用域
 
@@ -110,18 +133,27 @@ profile 和设备证据明确建立等价关系，否则不能推出平均累积
 
 ### Construction barrier
 
-任何新 V2 capability 的 opt-in 都必须触发核心 construction barrier。latch 条件是
-descriptor capabilities 与核心登记的严格 V2 capability 集合存在交集，不能用某一个
+本编号系列中明确要求 strict V2 opt-in 的 capability 必须触发核心 construction barrier。latch
+条件是 descriptor capabilities 与核心登记的严格 V2 capability 集合存在交集，不能用某一个
 profile 是否非空代替。factory 可以打开
 transport，但在 factory 返回、capability/Protocol/profile/backend 校验完成前，guarded
 transport 必须拒绝全部仪器 I/O。验证失败后关闭 transport，不发送 IDN、探测 query 或恢复命令。
 
 该门只约束显式 opt-in descriptor。旧 descriptor 的 factory 行为不变。
 
+RFC-0003 的 `scope.screenshot_v2` 是既有 scope R1.3 profile 合同，遵循其专用 validator 和
+factory 语义；不能因为本编号系列中的输入／数字状态 V2 使用 strict latch，就把该 latch 规则
+反向推广到截图 V2。后续 Draft RFC 若需要 latch，必须在单项 RFC 中显式声明并注册。
+
 ### Service、CLI 与 run plan
 
 每项新 capability 至少需要公共模型、Protocol、operation registry、Service、序列化和
 capability explain 共同冻结。CLI 只能追加命令，不得让旧命令静默改走 V2。
+
+在当前 `Draft` 阶段，RFC-0005、RFC-0006 和 RFC-0007 不新增 V2 CLI 或 run plan step；旧
+`scope status`、`acquisition-status`、`capture-average`、`measurement-statistics`、`fft-status`
+和 `cursor-readout` 继续只路由到 legacy Service。单项 RFC 进入 `Accepted` 时，必须先冻结新
+命令名、参数、JSON 成功形状和 artifact 版本，不能借用旧命令名或 R1.3 extension envelope。
 
 本系列不自动增加 run plan step。只有在 operation 的持久化结果、恢复语义和旧 reader
 兼容性已经单独评审后，才允许扩展 run plan schema。
@@ -161,16 +193,17 @@ RFC-0002 + RFC-0006a + RFC-0008
   └─ RFC-0006b：average capture V2
 ~~~
 
-推荐里程碑：
+推荐里程碑如下。M0～M3a 是已完成的历史记录；M3b 及后续在本轮仅保留为文档和验收顺序，不是
+开始开发的授权：
 
 1. M0：冻结本组合说明和 legacy 黄金基线；
 2. M1：完成 RFC-0001、RFC-0003、RFC-0008 的结案回归；
 3. M2：实现 RFC-0002；
-4. M3：分别实现 RFC-0004 和 RFC-0005；
-5. M4：实现 RFC-0006a；
-6. M5：分别实现 RFC-0007 的三项 capability；
-7. M6：实现 RFC-0006b 的核心事务；
-8. M7：完成跨版本、发行产物和完整离线验收。
+4. M3：RFC-0004 已完成；RFC-0005 先完成 identity、预算、availability 和返回边界的接受门；
+5. M4：RFC-0006a 先完成 not-applicable、文本读取预算和 legacy 路由的接受门；
+6. M5：分别完成 RFC-0007 三项 capability 的成功形状、profile 和 CLI/artifact 接受门；
+7. M6：为 RFC-0006b 单独接受可复用的 bounded transaction 基础，随后才评审平均采集事务；
+8. M7：在每项已接受且已实现后，完成跨版本、发行产物和完整离线验收。
 
 每个里程碑应拆成可独立回滚的小提交，不把模型、factory、Service、CLI 和插件采用压入同一个
 提交。
@@ -230,6 +263,18 @@ RFC-0004 已完成核心离线实现：`ScopeDigitalChannelStatusV2` 明确分�
 `tests/test_scope_digital_status_v2.py` 覆盖模型、factory、Service、CLI 和 legacy dual-capability
 分流。R1 不创建 digital waveform decoder 或 payload 合同；MSO8000 当前没有数字 status/waveform
 driver、descriptor capability 或离线数字 fixture，仍不得 opt-in。
+
+## Draft 接受门
+
+后续实现前，以下问题必须先在文档中关闭：
+
+- RFC-0005：identity 的新鲜来源和五字段解析、text query 计数边界、封闭 availability 规范，及其
+  独立于 R1.3 extension service 的返回／诊断边界；
+- RFC-0006a：average／segmented 当前 mode 不适用的表示；RFC-0006b：不修改 RFC-0008 标准
+  waveform profile 的前提下，可复用的 bounded transaction 限制、backend gate 和 ledger 入口；
+- RFC-0007：statistics 成功值是否完整、三个 V2 操作的静态 profile 和后续 CLI／artifact 形状。
+
+在这些接受门关闭前，M3b～M7 不产生新的代码提交、插件 capability 或硬件验收任务。
 
 ## 共同验收门
 

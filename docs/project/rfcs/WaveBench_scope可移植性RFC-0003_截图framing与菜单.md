@@ -15,6 +15,10 @@
 本 RFC 记录替代关系。核心 API 已实现不表示任一现有内建 driver 或外部插件已经声明
 `scope.screenshot_v2`。
 
+截图 V2 使用 scope R1.3 自己的 profile/validator/factory 语义。它不是 RFC-0002、RFC-0004
+strict V2 construction latch 的实例，不能从这两项只读状态 capability 反推出 screenshot V2 的
+latch 行为。
+
 ## 核心裁决
 
 ### Framing

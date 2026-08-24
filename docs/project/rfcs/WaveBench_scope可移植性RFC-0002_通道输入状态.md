@@ -22,6 +22,10 @@ R1 同时提供 V2 termination 的纯判断规则：`high_z` 通过，已明确�
 `unknown` 始终拒绝。标准 fetch/capture 仍使用 legacy coupling gate，不会因为 descriptor
 同时声明 V2 而改变调用顺序。
 
+strict construction barrier 只由 descriptor 显式声明 `scope.channel_input_state_v2` 触发；driver
+仅额外实现同名方法不会获得 capability，也不会改变旧 factory 行为。主包内建 descriptor 当前
+没有声明该 V2 capability。
+
 本状态只表示核心离线实现完成。外部插件必须等待正式核心发行版本，再提高版本门或声明该
 capability。
 

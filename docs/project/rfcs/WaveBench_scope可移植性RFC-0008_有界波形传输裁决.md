@@ -142,6 +142,10 @@ profile 非空时 construction barrier 在 factory 完成后验证：
 - bounded executor、typed error policy 和 core-owned recovery；
 - 空/`LF`/`CRLF`、预算、分块、多通道、no-replay、poison 和 compatibility 回归。
 
+上述完成范围是核心 mock/fake 与离线回归，主包内建 scope descriptor 当前没有声明
+`waveform_binary_profile`。因此它既不表示 RTM2032／DS1104 已启用 bounded 路径，也不构成任何
+插件 wheel 可以满足的已发布版本门。
+
 仍属于 P4：
 
 - 插件 descriptor/driver opt-in；
