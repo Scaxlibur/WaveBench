@@ -13,7 +13,7 @@
 `Accepted`、实现通过离线验收并随正式版本发布后，外部插件才可以依赖新增合同。
 
 八份提案不能按原始草案逐项照搬。RFC-0001、RFC-0003 和 RFC-0008 的早期 transport
-入口已经被更严格的核心合同取代；RFC-0004、RFC-0005、RFC-0006 和
+入口已经被更严格的核心合同取代；RFC-0005、RFC-0006 和
 RFC-0007 仍需要追加式 V2 模型。被取代不表示问题不存在，而是表示不能再实现已否决的
 平行 API。
 
@@ -40,7 +40,7 @@ M0 只冻结本组合说明和 legacy 黄金基线。M1 及后续里程碑可以
 | [RFC-0001](WaveBench_scope可移植性RFC-0001_消费型文本查询.md) | 原 `query_text_once()` 被统一 replay 合同和 `scope.error_drain_v1` 取代 | `Superseded R1` | 只保留回归、迁移说明和插件采用条件 |
 | [RFC-0002](WaveBench_scope可移植性RFC-0002_通道输入状态.md) | 追加 coupling/termination 分离的输入状态 V2 | `Implemented R1（未发布）` | 纯读取、独立安全判断与 construction barrier；旧 coupling 路径不变 |
 | [RFC-0003](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | 原 `query_raw_bytes_once()` 被 `query_binary()` 和 screenshot profile 取代 | `Superseded R1` | 核心合同已有；具体插件仍需 framing、菜单和恢复证据 |
-| [RFC-0004](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | 追加保留未知值和字段作用域的 digital status V2 | `Draft R1` | 只处理状态；digital waveform 另行取证 |
+| [RFC-0004](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | 追加保留未知值和字段作用域的 digital status V2 | `Implemented R1（未发布）` | 只处理状态；digital waveform 另行取证 |
 | [RFC-0005](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | 追加可组合、字段可缺失的 snapshot V2 | `Draft R1` | 不修改现有完整 `ScopeSnapshot` 和 partial summary |
 | [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Draft R1` | 读取与平均事务分阶段实施 |
 | [RFC-0007](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | 拆成统计 selector、FFT status 和 cursor quantity 三项 V2 | `Draft R1` | 三项独立注册、独立验收 |
@@ -189,7 +189,7 @@ RFC-0002 + RFC-0006a + RFC-0008
   仪器 I/O 前由版本门拒绝；
 - 新 descriptor 只公开显式 capability/profile，不因额外方法或 profile 获得其他 capability。
 
-该冻结不把 RFC-0004、RFC-0005、RFC-0006 或 RFC-0007 从 `Draft` 升为已实现；每项
+该冻结不把 RFC-0005、RFC-0006 或 RFC-0007 从 `Draft` 升为已实现；每项
 仍须在其里程碑完成模型、Protocol、factory、Service、CLI 和兼容回归后更新状态。
 
 ## M1 完成记录
@@ -219,6 +219,17 @@ barrier、Service、CLI 和 capability explain 均已注册。
 `tests/test_scope_input_state_v2.py` 覆盖模型不变量、版本门、缺方法和额外方法、factory 零 I/O、
 V2 安全判断、Service/CLI JSON，以及同时声明 V2 时 legacy high-impedance gate 继续只读
 `channel_coupling()`。R1 不把 V2 自动接入标准 fetch/capture，也不授权插件或具体型号声明该能力。
+
+## M3a 完成记录
+
+RFC-0004 已完成核心离线实现：`ScopeDigitalChannelStatusV2` 明确分开逐通道、POD 和 shared
+状态；`"unknown"` 表示已成功查询但无法无损映射，`None` 只在精确的 `unavailable_fields` 路径中
+表示不可提供。独立 Protocol、capability、OperationSpec、factory construction barrier、Service、CLI
+和 capability explain 已注册。
+
+`tests/test_scope_digital_status_v2.py` 覆盖模型、factory、Service、CLI 和 legacy dual-capability
+分流。R1 不创建 digital waveform decoder 或 payload 合同；MSO8000 当前没有数字 status/waveform
+driver、descriptor capability 或离线数字 fixture，仍不得 opt-in。
 
 ## 共同验收门
 

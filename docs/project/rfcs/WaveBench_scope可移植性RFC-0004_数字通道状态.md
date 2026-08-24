@@ -1,6 +1,6 @@
 # RFC-0004：可移植的数字通道状态 V2
 
-> 状态：`Draft R1`
+> 状态：`Implemented R1（未发布）`
 > 核心基线：现有 `ScopeDigitalChannelStatus`
 > 目标：保留未知值、共享状态和字段作用域
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
@@ -11,8 +11,19 @@
 hysteresis、deskew、size、position、label 等字段。该模型适合能够查询完整状态的仪器，
 不能诚实表达只提供其中一部分状态的设备。
 
-本 RFC 提议追加 digital status V2。新模型不把不可查询字段填成默认枚举或零值，也不把
+本 RFC 已追加 digital status V2。新模型不把不可查询字段填成默认枚举或零值，也不把
 整机、POD 和逐通道状态混在同一作用域中。现有 digital waveform bitset 模型保持独立。
+
+## 核心实现状态
+
+核心开发线已经提供 `ScopeDigitalChannelStatusV2`、POD/shared 子模型、独立 Protocol、
+`scope.digital_status_v2`、`ScopeService.digital_status_v2()` 和
+`wavebench scope digital-status-v2`。该 capability 不需要 descriptor profile，但会触发 factory
+construction barrier；缺方法、无效版本或 factory 内 I/O 都在第一次仪器命令前失败。
+
+R1 冻结数字通道为零基非负整数，允许超过 15 以避免把单一厂商的通道数写成公共上限。标准
+`scope.digital_status`、`scope.digital_waveform`、旧模型、旧 CLI 和旧 capability 不改变。
+核心实现不表示任一具体设备已经具有 V2 或 digital waveform 能力。
 
 ## 当前问题
 
@@ -27,7 +38,7 @@ hysteresis、deskew、size、position、label 等字段。该模型适合能够�
 设备没有 activity、technology、hysteresis 或 label-enabled query 时，填入 `LOW`、
 `MANUAL`、`NORMAL`、`False` 或空字符串都会制造并不存在的设备状态。
 
-## 候选公共模型
+## 公共模型
 
 候选模型按作用域分层：
 
@@ -95,9 +106,9 @@ class ScopeDigitalChannelStatusV2:
     unavailable_fields: tuple[ScopeDigitalStatusFieldV2, ...] = ()
 ~~~
 
-以上名称仍为候选。V2 枚举显式增加 `"unknown"`，不修改旧 Literal。进入 `Accepted` 前需要
-确认 `timing_calibration_s` 是否应进一步拆成独立整机状态。无论最后采用平铺还是分层模型，
-字段作用域和 unknown/unavailable 区别都不得丢失。
+R1 冻结上述分层字段和 V2 枚举中的 `"unknown"`，不修改旧 Literal。`timing_calibration_s` 保持
+shared 状态；后续若需独立整机对象，必须追加新字段而不能改变本模型含义。字段作用域和
+unknown/unavailable 区别不得丢失。
 
 候选 Protocol 与 capability：
 
@@ -120,7 +131,7 @@ scope.digital_status_v2 -> get_digital_status_v2
 
 ### 通道与 POD
 
-- channel、POD 起止编号都是非负或正的非 bool 整数，最终编号基准在接受前冻结；
+- channel、POD 起止编号都是零基非负的非 bool 整数；
 - POD 范围必须包含当前 channel；
 - `start_channel <= stop_channel`；
 - POD 阈值不能伪装成逐通道独立阈值；
@@ -156,7 +167,7 @@ scope.digital_status_v2 -> get_digital_status_v2
 - 方法存在但 capability 未声明时不暴露 Service；
 - 参数错误在 I/O 前拒绝；
 - Service 返回 V2 模型，不适配成旧 `ScopeDigitalChannelStatus`；
-- CLI 若进入后续实施，只能追加 V2 入口，旧 `digital-status` 输出不改变；
+- CLI 使用追加的 `scope digital-status-v2 --channel <zero-based>` 入口，旧 `digital-status` 输出不改变；
 - capability explain 应明确显示「旧 digital status」与「V2 digital status」是两项独立能力。
 
 ## 与 digital waveform 的边界
@@ -180,6 +191,19 @@ digital status V2 通过不能替代这些证据，也不能自动产生 digital
 4. 新 driver 可以同时声明两项能力，但不得用 V2 的 `None` 填充旧必填模型。
 5. 内建 descriptor 没有声明 digital capability 时继续在 capability gate 拒绝，不新增探测。
 6. 序列化保留 `null` 和稳定 unavailable paths，不格式化成默认枚举。
+
+## 核心离线验收
+
+`tests/test_scope_digital_status_v2.py` 覆盖：
+
+- 嵌套 POD/shared 作用域、有限数值、unknown、空标签和完整／部分序列化；
+- 父／叶 unavailable path 的精确集合、稳定顺序、重复、遗漏和类型错误；
+- 独立 Protocol、capability、OperationSpec、版本门和额外方法不产生隐式 capability；
+- factory construction barrier、缺方法关闭、Service 仅调用 V2 方法、返回通道回显；
+- 追加 CLI 文本／JSON，以及双 capability descriptor 继续走旧 `digital-status`。
+
+`scope.digital_waveform` 不在本 RFC 的实现范围。R1 没有为它创建 profile、decoder、payload 编码或
+新的 descriptor 声明。
 
 ## 验收矩阵
 

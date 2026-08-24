@@ -261,6 +261,7 @@ capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader
 | `scope.screenshot` | `screenshot_png` |
 | `scope.channel_coupling` | `channel_coupling` |
 | `scope.channel_input_state_v2` | `get_channel_input_state_v2` |
+| `scope.digital_status_v2` | `get_digital_status_v2` |
 | `scope.snapshot` | `get_snapshot` |
 | `scope.acquisition_status` | `get_acquisition_status` |
 | `scope.capture_average` | `capture_average` |
@@ -339,6 +340,12 @@ profile 依赖如下：
 `unavailable_fields` 符合公共模型，并在 factory 内启用 construction barrier。它不设置输入终端，
 不替代旧 `scope.channel_coupling`，也不让标准 fetch/capture 改走 V2 安全门。当前开发线的静态
 下限为 `0.8.24`；正式发行前不得由插件提高 wheel 或 descriptor 版本门、声明该 capability。
+
+`scope.digital_status_v2` 同样是无 profile 的只读 capability。它要求
+`ScopeDigitalChannelStatusV2` 精确表达逐通道、POD 和 shared 状态，使用 `"unknown"` 保留已查询的
+未知 token，并以 `unavailable_fields` 解释每个缺席值。它不产生 `scope.digital_waveform`，不读取
+waveform payload，也不改变旧 `scope.digital_status`。当前开发线的静态下限为 `0.8.24`；正式发行前
+不得由插件提高 wheel 或 descriptor 版本门、声明该 capability。
 
 公共调用入口为 `ScopeService` 和以下 CLI：
 
