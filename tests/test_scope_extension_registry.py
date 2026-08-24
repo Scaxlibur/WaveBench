@@ -156,6 +156,7 @@ def test_scope_descriptor_extension_is_append_only_for_positional_compatibility(
         "trace_profile",
         "waveform_binary_profile",
         "snapshot_profile_v2",
+        "acquisition_status_profile_v2",
     ]
 
 

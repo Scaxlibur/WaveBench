@@ -12,6 +12,7 @@ import zlib
 import numpy as np
 
 from wavebench.scope_extension_constants import (
+    SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
     SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
@@ -453,6 +454,50 @@ ScopeAcquisitionRestoreField = Literal[
     "scope.acquisition",
 ]
 ScopeCompletionProof = Literal["count_delta_with_epoch", "identity_delta", "state_transition"]
+ScopeAcquisitionStatusFieldV2 = Literal[
+    "acquisition_type",
+    "run_state",
+    "sample_rate_hz",
+    "memory_depth",
+    "average",
+    "average.configured_count",
+    "average.complete",
+    "segmented",
+    "segmented.option_installed",
+    "segmented.enabled",
+    "segmented.maximum_enabled",
+    "segmented.capacity",
+    "segmented.available",
+]
+SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER: tuple[ScopeAcquisitionStatusFieldV2, ...] = (
+    "acquisition_type",
+    "run_state",
+    "sample_rate_hz",
+    "memory_depth",
+    "average",
+    "average.configured_count",
+    "average.complete",
+    "segmented",
+    "segmented.option_installed",
+    "segmented.enabled",
+    "segmented.maximum_enabled",
+    "segmented.capacity",
+    "segmented.available",
+)
+_ACQUISITION_STATUS_V2_FIELDS = frozenset(SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER)
+_ACQUISITION_STATUS_V2_PARTITION_FIELDS = {
+    "average": (
+        "average.configured_count",
+        "average.complete",
+    ),
+    "segmented": (
+        "segmented.option_installed",
+        "segmented.enabled",
+        "segmented.maximum_enabled",
+        "segmented.capacity",
+        "segmented.available",
+    ),
+}
 _ACQUISITION_SETTING_FIELDS = {"scope.trigger", "scope.acquisition"}
 _ACQUISITION_RESTORE_FIELDS = {"scope.run_state", *_ACQUISITION_SETTING_FIELDS}
 _ACQUISITION_PHASES = {
@@ -548,6 +593,333 @@ class ScopeAcquisitionRunState:
             _strict_int(self.acquisition_count, label="acquisition_count", minimum=0)
         _optional_safe_token(self.counter_epoch, label="counter_epoch")
         _optional_safe_token(self.acquisition_identity, label="acquisition_identity")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageStatusV2:
+    configured_count: int
+    complete: bool | None = None
+
+    def __post_init__(self) -> None:
+        _strict_int(
+            self.configured_count,
+            label="average configured_count",
+            minimum=1,
+        )
+        if self.complete is not None and not isinstance(self.complete, bool):
+            raise ValueError("average complete must be bool when provided")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeSegmentedStatusV2:
+    option_installed: bool | None = None
+    enabled: bool | None = None
+    maximum_enabled: bool | None = None
+    capacity: int | None = None
+    available: int | None = None
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("segmented option_installed", self.option_installed),
+            ("segmented enabled", self.enabled),
+            ("segmented maximum_enabled", self.maximum_enabled),
+        ):
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{label} must be bool when provided")
+        for label, value in (
+            ("segmented capacity", self.capacity),
+            ("segmented available", self.available),
+        ):
+            if value is not None:
+                _strict_int(value, label=label, minimum=0)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAcquisitionStatusV2:
+    """Portable acquisition state with explicit static and mode-dependent absence."""
+
+    acquisition_type: str | None = None
+    run_state: ScopeAcquisitionRunState | None = None
+    sample_rate_hz: float | None = None
+    memory_depth: int | None = None
+    average: ScopeAverageStatusV2 | None = None
+    segmented: ScopeSegmentedStatusV2 | None = None
+    unavailable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
+    not_applicable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.acquisition_type is not None:
+            _safe_token(self.acquisition_type, label="acquisition type")
+        if self.run_state is not None and not isinstance(
+            self.run_state,
+            ScopeAcquisitionRunState,
+        ):
+            raise TypeError("acquisition status V2 run_state has an invalid type")
+        if self.sample_rate_hz is not None:
+            sample_rate_hz = _finite(
+                self.sample_rate_hz,
+                label="acquisition status V2 sample_rate_hz",
+            )
+            if sample_rate_hz <= 0:
+                raise ValueError("acquisition status V2 sample_rate_hz must be positive")
+        if self.memory_depth is not None:
+            _strict_int(
+                self.memory_depth,
+                label="acquisition status V2 memory_depth",
+                minimum=1,
+            )
+        if self.average is not None and not isinstance(self.average, ScopeAverageStatusV2):
+            raise TypeError("acquisition status V2 average has an invalid type")
+        if self.segmented is not None and not isinstance(self.segmented, ScopeSegmentedStatusV2):
+            raise TypeError("acquisition status V2 segmented has an invalid type")
+
+        unavailable = self._availability_paths(
+            self.unavailable_fields,
+            label="unavailable_fields",
+        )
+        not_applicable = self._availability_paths(
+            self.not_applicable_fields,
+            label="not_applicable_fields",
+        )
+        if set(unavailable) & set(not_applicable):
+            raise ValueError("acquisition status V2 availability paths must be mutually exclusive")
+        all_paths = set(unavailable) | set(not_applicable)
+        for parent, children in _ACQUISITION_STATUS_V2_PARTITION_FIELDS.items():
+            if parent in all_paths and set(children) & all_paths:
+                raise ValueError(
+                    "acquisition status V2 availability paths cannot mix partition and leaf paths"
+                )
+        expected_missing = set(self._missing_paths())
+        if all_paths != expected_missing:
+            raise ValueError(
+                "acquisition status V2 availability paths must exactly describe missing fields"
+            )
+
+    @staticmethod
+    def _availability_paths(
+        paths: object,
+        *,
+        label: str,
+    ) -> tuple[ScopeAcquisitionStatusFieldV2, ...]:
+        if not isinstance(paths, tuple):
+            raise TypeError(f"acquisition status V2 {label} must be a tuple")
+        if len(set(paths)) != len(paths):
+            raise ValueError(f"acquisition status V2 {label} must not contain duplicates")
+        if not set(paths) <= _ACQUISITION_STATUS_V2_FIELDS:
+            raise ValueError(f"acquisition status V2 {label} contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER
+            if field_name in paths
+        )
+        if paths != expected:
+            raise ValueError(
+                f"acquisition status V2 {label} must use stable field order"
+            )
+        return paths
+
+    def _missing_paths(self) -> tuple[ScopeAcquisitionStatusFieldV2, ...]:
+        missing: set[ScopeAcquisitionStatusFieldV2] = set()
+        if self.acquisition_type is None:
+            missing.add("acquisition_type")
+        if self.run_state is None:
+            missing.add("run_state")
+        if self.sample_rate_hz is None:
+            missing.add("sample_rate_hz")
+        if self.memory_depth is None:
+            missing.add("memory_depth")
+        if self.average is None:
+            missing.add("average")
+        elif self.average.complete is None:
+            missing.add("average.complete")
+        if self.segmented is None:
+            missing.add("segmented")
+        else:
+            for field_name, value in (
+                ("segmented.option_installed", self.segmented.option_installed),
+                ("segmented.enabled", self.segmented.enabled),
+                ("segmented.maximum_enabled", self.segmented.maximum_enabled),
+                ("segmented.capacity", self.segmented.capacity),
+                ("segmented.available", self.segmented.available),
+            ):
+                if value is None:
+                    missing.add(field_name)  # type: ignore[arg-type]
+        return tuple(
+            field_name
+            for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER
+            if field_name in missing
+        )
+
+    def field_values(self) -> dict[ScopeAcquisitionStatusFieldV2, object | None]:
+        average = self.average
+        segmented = self.segmented
+        return {
+            "acquisition_type": self.acquisition_type,
+            "run_state": self.run_state,
+            "sample_rate_hz": self.sample_rate_hz,
+            "memory_depth": self.memory_depth,
+            "average": average,
+            "average.configured_count": (
+                None if average is None else average.configured_count
+            ),
+            "average.complete": None if average is None else average.complete,
+            "segmented": segmented,
+            "segmented.option_installed": (
+                None if segmented is None else segmented.option_installed
+            ),
+            "segmented.enabled": None if segmented is None else segmented.enabled,
+            "segmented.maximum_enabled": (
+                None if segmented is None else segmented.maximum_enabled
+            ),
+            "segmented.capacity": None if segmented is None else segmented.capacity,
+            "segmented.available": None if segmented is None else segmented.available,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAcquisitionStatusProfileV2:
+    """Descriptor-owned pure-text query contract for acquisition status V2."""
+
+    readable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...]
+    max_queries: int
+    conditionally_applicable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        readable = self._profile_paths(self.readable_fields, label="readable_fields")
+        if not readable:
+            raise ValueError("acquisition status V2 readable_fields must not be empty")
+        if "acquisition_type" not in readable:
+            raise ValueError(
+                "acquisition status V2 readable_fields must include acquisition_type"
+            )
+        conditional = self._profile_paths(
+            self.conditionally_applicable_fields,
+            label="conditionally_applicable_fields",
+        )
+        if not set(conditional) <= set(readable):
+            raise ValueError("acquisition status V2 conditional fields must be readable")
+        if "acquisition_type" in conditional:
+            raise ValueError("acquisition status V2 acquisition_type cannot be conditional")
+        _strict_int(
+            self.max_queries,
+            label="acquisition status V2 max_queries",
+            minimum=1,
+            maximum=SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
+        )
+        _literal(self.allowed_effect, {"pure_read"}, label="acquisition status V2 effect")
+        readable_set = set(readable)
+        for parent, children in _ACQUISITION_STATUS_V2_PARTITION_FIELDS.items():
+            readable_children = readable_set & set(children)
+            if readable_children and parent not in readable_set:
+                raise ValueError(
+                    f"acquisition status V2 {parent} fields require {parent!r}"
+                )
+            if parent not in readable_set:
+                continue
+            if parent == "average" and "average.configured_count" not in readable_set:
+                raise ValueError(
+                    "acquisition status V2 average requires average.configured_count"
+                )
+            if parent == "segmented" and not readable_children:
+                raise ValueError(
+                    "acquisition status V2 segmented requires a readable leaf field"
+                )
+
+    @staticmethod
+    def _profile_paths(
+        paths: object,
+        *,
+        label: str,
+    ) -> tuple[ScopeAcquisitionStatusFieldV2, ...]:
+        if not isinstance(paths, tuple):
+            raise TypeError(f"acquisition status V2 {label} must be a tuple")
+        if len(set(paths)) != len(paths):
+            raise ValueError(f"acquisition status V2 {label} must not contain duplicates")
+        if not set(paths) <= _ACQUISITION_STATUS_V2_FIELDS:
+            raise ValueError(f"acquisition status V2 {label} contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER
+            if field_name in paths
+        )
+        if paths != expected:
+            raise ValueError(
+                f"acquisition status V2 {label} must use stable field order"
+            )
+        return paths
+
+    def validate_result(self, result: ScopeAcquisitionStatusV2) -> None:
+        """Reject results that expand or silently shrink this descriptor profile."""
+
+        if not isinstance(result, ScopeAcquisitionStatusV2):
+            raise TypeError("acquisition status V2 driver returned an invalid result")
+        values = result.field_values()
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        unavailable = set(result.unavailable_fields)
+        not_applicable = set(result.not_applicable_fields)
+        for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER:
+            value = values[field_name]
+            unavailable_path = self._covering_availability_path(unavailable, field_name)
+            not_applicable_path = self._covering_availability_path(
+                not_applicable,
+                field_name,
+            )
+            parent = self._parent_path(field_name)
+            is_conditional = field_name in conditional or parent in conditional
+            if field_name not in readable:
+                if value is not None:
+                    raise ValueError(
+                        "acquisition status V2 result provided a field outside the descriptor profile"
+                    )
+                if unavailable_path is not None and not_applicable_path is None:
+                    continue
+                if not_applicable_path is not None and parent in conditional:
+                    continue
+                raise ValueError(
+                    "acquisition status V2 result provided a field outside the descriptor profile"
+                )
+            if is_conditional:
+                if value is None and (
+                    not_applicable_path is None or unavailable_path is not None
+                ):
+                    raise ValueError(
+                        "acquisition status V2 conditional fields must be marked not applicable"
+                    )
+                if value is not None and (
+                    unavailable_path is not None or not_applicable_path is not None
+                ):
+                    raise ValueError(
+                        "acquisition status V2 available conditional fields cannot have an availability path"
+                    )
+                continue
+            if value is None or unavailable_path is not None or not_applicable_path is not None:
+                raise ValueError(
+                    "acquisition status V2 non-conditional readable fields must have a value"
+                )
+
+    @staticmethod
+    def _parent_path(
+        field_name: ScopeAcquisitionStatusFieldV2,
+    ) -> ScopeAcquisitionStatusFieldV2 | None:
+        for parent, children in _ACQUISITION_STATUS_V2_PARTITION_FIELDS.items():
+            if field_name in children:
+                return parent  # type: ignore[return-value]
+        return None
+
+    @classmethod
+    def _covering_availability_path(
+        cls,
+        paths: set[ScopeAcquisitionStatusFieldV2],
+        field_name: ScopeAcquisitionStatusFieldV2,
+    ) -> ScopeAcquisitionStatusFieldV2 | None:
+        if field_name in paths:
+            return field_name
+        parent = cls._parent_path(field_name)
+        if parent is not None and parent in paths:
+            return parent
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1586,6 +1958,7 @@ class ScopeDescriptorExtensions:
     trace_profile: ScopeTraceProfile | None = None
     waveform_binary_profile: ScopeWaveformBinaryProfile | None = None
     snapshot_profile_v2: ScopeSnapshotProfileV2 | None = None
+    acquisition_status_profile_v2: ScopeAcquisitionStatusProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -1605,6 +1978,11 @@ class ScopeDescriptorExtensions:
                 "snapshot_profile_v2",
                 self.snapshot_profile_v2,
                 ScopeSnapshotProfileV2,
+            ),
+            (
+                "acquisition_status_profile_v2",
+                self.acquisition_status_profile_v2,
+                ScopeAcquisitionStatusProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):
@@ -1647,6 +2025,15 @@ class ScopeScreenshotDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class ScopeAcquisitionRunStateDriver(InstrumentDriver, Protocol):
     def get_acquisition_run_state(self) -> ScopeAcquisitionRunState: ...
+
+
+@runtime_checkable
+class ScopeAcquisitionStatusDriverV2(InstrumentDriver, Protocol):
+    def get_acquisition_status_v2(
+        self,
+        *,
+        fields: tuple[ScopeAcquisitionStatusFieldV2, ...],
+    ) -> ScopeAcquisitionStatusV2: ...
 
 
 @runtime_checkable
@@ -1799,5 +2186,12 @@ class ScopeErrorDrainDriver(InstrumentDriver, Protocol):
 __all__ = [
     name
     for name in globals()
-    if name.startswith("Scope") or name.startswith("Error") or name == "DriverErrorRecord"
+    if name.startswith("Scope")
+    or name.startswith("Error")
+    or name
+    in {
+        "DriverErrorRecord",
+        "SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER",
+        "SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES",
+    }
 ]

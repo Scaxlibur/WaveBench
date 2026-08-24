@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, Mapping
 from wavebench.errors import ConfigError
 from wavebench.scope_extension_constants import (
     SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS,
+    SCOPE_ACQUISITION_STATUS_V2_OPERATION_TIMEOUT_MS,
     SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
     SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_QUERY_MAX_COUNT,
@@ -1212,6 +1213,18 @@ _SCOPE_PORTABILITY_V2_SPECS = (
         restore_coverage="none-read-only",
         timeout_source="operation.timeout_ms",
         operation_timeout_ms=SCOPE_SNAPSHOT_V2_OPERATION_TIMEOUT_MS,
+        error_check_minimum="disabled",
+        risk_flags=("profile_query",),
+    ),
+    _spec(
+        "scope.acquisition_status_v2",
+        "scope",
+        required_capabilities=("scope.acquisition_status_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=SCOPE_ACQUISITION_STATUS_V2_OPERATION_TIMEOUT_MS,
         error_check_minimum="disabled",
         risk_flags=("profile_query",),
     ),

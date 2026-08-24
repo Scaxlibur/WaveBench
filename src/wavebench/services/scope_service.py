@@ -57,6 +57,9 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.instruments.scope_extensions import (
     ErrorCheckSpec,
     ScopeContinuousAcquisitionRequest,
+    ScopeAcquisitionStatusDriverV2,
+    ScopeAcquisitionStatusProfileV2,
+    ScopeAcquisitionStatusV2,
     ScopeScreenshotRequest,
     ScopeSnapshotProfileV2,
     ScopeTraceRef,
@@ -483,6 +486,69 @@ class ScopeService(SessionStateAliasMixin):
         with self._scope_session() as scope:
             return cast(ScopeAcquisitionStatusDriver, scope).get_acquisition_status()
 
+    def acquisition_status_v2(self) -> ScopeAcquisitionStatusV2:
+        spec = self._require(
+            "scope.acquisition_status_v2",
+            "scope.acquisition_status_v2",
+        )
+        profile = self._acquisition_status_v2_profile()
+        if profile is None:
+            raise ConfigError(
+                "scope acquisition status V2 requires "
+                "scope_extensions.acquisition_status_profile_v2"
+            )
+        with self._scope_session() as scope:
+            return self._execute_acquisition_status_v2(
+                cast(ScopeAcquisitionStatusDriverV2, scope),
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_acquisition_status_v2(
+        self,
+        scope: ScopeAcquisitionStatusDriverV2,
+        *,
+        profile: ScopeAcquisitionStatusProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeAcquisitionStatusV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_acquisition_status_v2(fields=profile.readable_fields)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.acquisition_status_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_acquisition_status_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_acquisition_status_v2(fields=profile.readable_fields)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError(
+                    "scope acquisition status V2 exceeded its descriptor query budget"
+                )
+        try:
+            profile.validate_result(result)
+        except (TypeError, ValueError) as exc:
+            raise DataError(
+                f"scope acquisition status V2 driver returned an invalid result: {exc}"
+            ) from exc
+        return result
+
     def capture_average(
         self,
         *,
@@ -901,6 +967,26 @@ class ScopeService(SessionStateAliasMixin):
         profile = getattr(extensions, "snapshot_profile_v2", None)
         if profile is not None and not isinstance(profile, ScopeSnapshotProfileV2):
             raise ConfigError("scope snapshot V2 descriptor profile has an invalid type")
+        return profile
+
+    def _acquisition_status_v2_profile(self) -> ScopeAcquisitionStatusProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "acquisition_status_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeAcquisitionStatusProfileV2):
+            raise ConfigError("scope acquisition status V2 descriptor profile has an invalid type")
+        if (
+            profile is not None
+            and "run_state" in profile.readable_fields
+            and "scope.acquisition_run_state" not in descriptor.capabilities
+        ):
+            raise ConfigError(
+                "scope acquisition status V2 profile reads run_state but the descriptor "
+                "does not declare scope.acquisition_run_state"
+            )
         return profile
 
     def _bounded_waveform_executor(self, scope: object) -> BoundedWaveformExecutor:

@@ -20,6 +20,7 @@ SCOPE_STRICT_V2_CAPABILITIES = frozenset(
         "scope.channel_input_state_v2",
         "scope.digital_status_v2",
         "scope.snapshot_v2",
+        "scope.acquisition_status_v2",
     }
 )
 
@@ -72,6 +73,7 @@ SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "scope.channel_input_state_v2": ("get_channel_input_state_v2",),
         "scope.digital_status_v2": ("get_digital_status_v2",),
         "scope.snapshot_v2": ("get_snapshot_v2",),
+        "scope.acquisition_status_v2": ("get_acquisition_status_v2",),
     }
 )
 
@@ -130,6 +132,7 @@ def validate_scope_descriptor(
         "scope.trace_metadata": "trace_profile",
         "scope.fetch_trace": "trace_profile",
         "scope.snapshot_v2": "snapshot_profile_v2",
+        "scope.acquisition_status_v2": "acquisition_status_profile_v2",
     }
     for capability in sorted(declared):
         profile_name = profile_requirements.get(capability)
@@ -152,6 +155,19 @@ def validate_scope_descriptor(
                 f"instrument {descriptor.driver_id!r} capability {capability!r} "
                 f"requires callable method(s): {', '.join(missing)}"
             )
+    acquisition_status_profile = (
+        extensions.acquisition_status_profile_v2 if extensions is not None else None
+    )
+    if (
+        "scope.acquisition_status_v2" in declared
+        and acquisition_status_profile is not None
+        and "run_state" in acquisition_status_profile.readable_fields
+        and "scope.acquisition_run_state" not in declared
+    ):
+        raise ConfigError(
+            f"instrument {descriptor.driver_id!r} capability 'scope.acquisition_status_v2' "
+            "requires scope.acquisition_run_state when its profile reads run_state"
+        )
     _validate_waveform_binary_profile(
         descriptor,
         driver=driver,
