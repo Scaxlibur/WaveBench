@@ -13,6 +13,7 @@ import numpy as np
 
 from wavebench.scope_extension_constants import (
     SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
+    SCOPE_CURSOR_READOUT_V2_MAX_QUERIES,
     SCOPE_FFT_STATUS_V2_MAX_QUERIES,
     SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES,
     SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
@@ -29,7 +30,10 @@ from wavebench.transport.contracts import BinaryResponseFraming
 from .contracts import InstrumentDriver
 from .models import (
     SCOPE_SNAPSHOT_V2_FIELD_ORDER,
+    SCOPE_CURSOR_READOUT_V2_FIELD_ORDER,
     SCOPE_FFT_STATUS_V2_FIELD_ORDER,
+    ScopeCursorReadoutFieldV2,
+    ScopeCursorReadoutV2,
     ScopeMeasurementStatisticsRequestV2,
     ScopeMeasurementStatisticsV2,
     ScopeFftStatusFieldV2,
@@ -1100,6 +1104,165 @@ class ScopeFftStatusProfileV2:
                 )
 
 
+ScopeCursorAddressing = Literal["global", "indexed"]
+_SCOPE_CURSOR_READOUT_V2_QUANTITY_FIELDS = frozenset(
+    {
+        "x_a",
+        "x_b",
+        "x_delta",
+        "inverse_x_delta",
+        "y_a",
+        "y_b",
+        "y_delta",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeCursorReadoutProfileV2:
+    """Descriptor-owned pure-text query contract for the current cursor readout."""
+
+    readable_fields: tuple[ScopeCursorReadoutFieldV2, ...]
+    conditionally_applicable_fields: tuple[ScopeCursorReadoutFieldV2, ...]
+    addressing: ScopeCursorAddressing
+    max_queries: int
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        self._validate_fields(self.readable_fields, label="cursor readout readable_fields")
+        if not self.readable_fields:
+            raise ValueError("cursor readout readable_fields must not be empty")
+        self._validate_fields(
+            self.conditionally_applicable_fields,
+            label="cursor readout conditionally_applicable_fields",
+        )
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        if not conditional <= readable:
+            raise ValueError(
+                "cursor readout conditionally_applicable_fields must be readable"
+            )
+        if not readable & _SCOPE_CURSOR_READOUT_V2_QUANTITY_FIELDS:
+            raise ValueError("cursor readout readable_fields must include a quantity")
+        self._validate_source_pair(readable, label="cursor readout readable_fields")
+        self._validate_source_pair(
+            conditional,
+            label="cursor readout conditionally_applicable_fields",
+        )
+        _literal(self.addressing, {"global", "indexed"}, label="cursor readout addressing")
+        cursor_readable = "cursor_index" in readable
+        cursor_conditional = "cursor_index" in conditional
+        if self.addressing == "global" and (cursor_readable or cursor_conditional):
+            raise ValueError("global cursor addressing must not make cursor_index readable")
+        if self.addressing == "indexed" and (
+            not cursor_readable or cursor_conditional
+        ):
+            raise ValueError(
+                "indexed cursor addressing requires a non-conditional cursor_index"
+            )
+        _strict_int(
+            self.max_queries,
+            label="cursor readout max_queries",
+            minimum=1,
+            maximum=SCOPE_CURSOR_READOUT_V2_MAX_QUERIES,
+        )
+        _literal(self.allowed_effect, {"pure_read"}, label="cursor readout effect")
+
+    @staticmethod
+    def _validate_fields(
+        fields: object,
+        *,
+        label: str,
+    ) -> None:
+        if not isinstance(fields, tuple):
+            raise TypeError(f"{label} must be a tuple")
+        if len(set(fields)) != len(fields):
+            raise ValueError(f"{label} must not contain duplicates")
+        if not set(fields) <= set(SCOPE_CURSOR_READOUT_V2_FIELD_ORDER):
+            raise ValueError(f"{label} contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_CURSOR_READOUT_V2_FIELD_ORDER
+            if field_name in fields
+        )
+        if fields != expected:
+            raise ValueError(f"{label} must use stable field order")
+
+    @staticmethod
+    def _validate_source_pair(fields: set[str], *, label: str) -> None:
+        if ("source_a" in fields) != ("source_b" in fields):
+            raise ValueError(f"{label} must include source_a and source_b together")
+
+    def validate_request(
+        self,
+        *,
+        cursor_index: int | None,
+        configured_cursor: bool,
+    ) -> None:
+        """Reject an incompatible cursor addressing request before instrument I/O."""
+
+        if configured_cursor is not True:
+            raise ValueError("cursor readout V2 requires configured_cursor=True")
+        if self.addressing == "global":
+            if cursor_index is not None:
+                raise ValueError("global cursor addressing requires cursor_index=None")
+            return
+        if (
+            isinstance(cursor_index, bool)
+            or not isinstance(cursor_index, int)
+            or cursor_index < 1
+        ):
+            raise ValueError("indexed cursor addressing requires a positive cursor_index")
+
+    def validate_result(
+        self,
+        result: ScopeCursorReadoutV2,
+        *,
+        cursor_index: int | None,
+    ) -> None:
+        """Reject results that expand or silently shrink this cursor profile."""
+
+        if not isinstance(result, ScopeCursorReadoutV2):
+            raise TypeError("cursor readout V2 driver returned an invalid result")
+        unavailable = set(result.unavailable_fields)
+        not_applicable = set(result.not_applicable_fields)
+        if self.addressing == "global":
+            if result.cursor_index is not None:
+                raise ValueError("global cursor readout V2 must return cursor_index=None")
+            if (
+                "cursor_index" not in not_applicable
+                or "cursor_index" in unavailable
+            ):
+                raise ValueError(
+                    "global cursor readout V2 must mark cursor_index not applicable"
+                )
+        elif result.cursor_index != cursor_index:
+            raise ValueError("indexed cursor readout V2 returned the wrong cursor_index")
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        for field_name, value in result.field_values().items():
+            if self.addressing == "global" and field_name == "cursor_index":
+                continue
+            if field_name not in readable:
+                if (
+                    value is not None
+                    or field_name not in unavailable
+                    or field_name in not_applicable
+                ):
+                    raise ValueError(
+                        "cursor readout V2 result provided a field outside the descriptor profile"
+                    )
+                continue
+            if field_name in conditional:
+                if value is None and field_name not in not_applicable:
+                    raise ValueError(
+                        "cursor readout V2 conditional fields must be present or not applicable"
+                    )
+                continue
+            if value is None or field_name in unavailable or field_name in not_applicable:
+                raise ValueError("cursor readout V2 readable fields must have a value")
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeAcquisitionControlSnapshot:
     run_state: ScopeAcquisitionRunState
@@ -2139,6 +2302,7 @@ class ScopeDescriptorExtensions:
     acquisition_status_profile_v2: ScopeAcquisitionStatusProfileV2 | None = None
     measurement_statistics_profile_v2: ScopeMeasurementStatisticsProfileV2 | None = None
     fft_status_profile_v2: ScopeFftStatusProfileV2 | None = None
+    cursor_readout_profile_v2: ScopeCursorReadoutProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -2173,6 +2337,11 @@ class ScopeDescriptorExtensions:
                 "fft_status_profile_v2",
                 self.fft_status_profile_v2,
                 ScopeFftStatusProfileV2,
+            ),
+            (
+                "cursor_readout_profile_v2",
+                self.cursor_readout_profile_v2,
+                ScopeCursorReadoutProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):
@@ -2383,6 +2552,8 @@ __all__ = [
         "DriverErrorRecord",
         "SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER",
         "SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES",
+        "SCOPE_CURSOR_READOUT_V2_FIELD_ORDER",
+        "SCOPE_CURSOR_READOUT_V2_MAX_QUERIES",
         "SCOPE_FFT_STATUS_V2_FIELD_ORDER",
         "SCOPE_FFT_STATUS_V2_MAX_QUERIES",
         "SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES",

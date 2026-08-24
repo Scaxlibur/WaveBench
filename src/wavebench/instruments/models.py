@@ -1345,6 +1345,181 @@ class ScopeFftStatusV2:
         }
 
 
+ScopeCursorUnit = Literal["s", "Hz", "degree", "percent", "source"]
+ScopeCursorReadoutFieldV2 = Literal[
+    "cursor_index",
+    "source_a",
+    "source_b",
+    "x_a",
+    "x_b",
+    "x_delta",
+    "inverse_x_delta",
+    "y_a",
+    "y_b",
+    "y_delta",
+]
+SCOPE_CURSOR_READOUT_V2_FIELD_ORDER: tuple[ScopeCursorReadoutFieldV2, ...] = (
+    "cursor_index",
+    "source_a",
+    "source_b",
+    "x_a",
+    "x_b",
+    "x_delta",
+    "inverse_x_delta",
+    "y_a",
+    "y_b",
+    "y_delta",
+)
+_SCOPE_CURSOR_READOUT_V2_FIELDS = frozenset(SCOPE_CURSOR_READOUT_V2_FIELD_ORDER)
+_SCOPE_CURSOR_READOUT_V2_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$")
+_SCOPE_CURSOR_SOURCE_UNIT = re.compile(r"^[A-Za-z][A-Za-z0-9._/%^/-]{0,31}$")
+_SCOPE_CURSOR_SOURCE_UNIT_RESOURCE_PREFIXES = (
+    "ASRL",
+    "GPIB",
+    "SOCKET",
+    "TCPIP",
+    "USB",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeCursorQuantity:
+    value: float
+    unit: ScopeCursorUnit
+    source_unit: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.value, bool)
+            or not isinstance(self.value, (int, float))
+            or not isfinite(self.value)
+        ):
+            raise ValueError("cursor quantity value must be finite")
+        if not isinstance(self.unit, str) or self.unit not in {
+            "s",
+            "Hz",
+            "degree",
+            "percent",
+            "source",
+        }:
+            raise ValueError("cursor quantity unit is unsupported")
+        if self.source_unit is not None:
+            if self.unit != "source":
+                raise ValueError("cursor quantity source_unit requires unit='source'")
+            if (
+                not isinstance(self.source_unit, str)
+                or _SCOPE_CURSOR_SOURCE_UNIT.fullmatch(self.source_unit) is None
+                or self.source_unit.upper().startswith(
+                    _SCOPE_CURSOR_SOURCE_UNIT_RESOURCE_PREFIXES
+                )
+            ):
+                raise ValueError("cursor quantity source_unit must be a visible unit token")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeCursorReadoutV2:
+    cursor_index: int | None
+    mode: str
+    function: str
+    source_a: str | None
+    source_b: str | None
+    x_a: ScopeCursorQuantity | None = None
+    x_b: ScopeCursorQuantity | None = None
+    x_delta: ScopeCursorQuantity | None = None
+    inverse_x_delta: ScopeCursorQuantity | None = None
+    y_a: ScopeCursorQuantity | None = None
+    y_b: ScopeCursorQuantity | None = None
+    y_delta: ScopeCursorQuantity | None = None
+    unavailable_fields: tuple[ScopeCursorReadoutFieldV2, ...] = ()
+    not_applicable_fields: tuple[ScopeCursorReadoutFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.cursor_index is not None and (
+            isinstance(self.cursor_index, bool)
+            or not isinstance(self.cursor_index, int)
+            or self.cursor_index < 1
+        ):
+            raise ValueError("cursor readout V2 cursor_index must be a positive integer or None")
+        for label, value in (("mode", self.mode), ("function", self.function)):
+            if (
+                not isinstance(value, str)
+                or _SCOPE_CURSOR_READOUT_V2_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"cursor readout V2 {label} must be a safe token")
+        if (self.source_a is None) != (self.source_b is None):
+            raise ValueError("cursor readout V2 sources must be present or unavailable together")
+        for label, value in (("source_a", self.source_a), ("source_b", self.source_b)):
+            if value is not None and (
+                not isinstance(value, str)
+                or _SCOPE_CURSOR_READOUT_V2_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"cursor readout V2 {label} must be a safe token")
+        for label, value in self.field_values().items():
+            if label in {"cursor_index", "source_a", "source_b"} or value is None:
+                continue
+            if not isinstance(value, ScopeCursorQuantity):
+                raise TypeError(f"cursor readout V2 {label} must be a ScopeCursorQuantity")
+        self._validate_availability_paths()
+
+    def _validate_availability_paths(self) -> None:
+        for label, fields in (
+            ("unavailable_fields", self.unavailable_fields),
+            ("not_applicable_fields", self.not_applicable_fields),
+        ):
+            if not isinstance(fields, tuple):
+                raise TypeError(f"cursor readout V2 {label} must be a tuple")
+            if len(set(fields)) != len(fields):
+                raise ValueError(f"cursor readout V2 {label} must not contain duplicates")
+            if not set(fields) <= _SCOPE_CURSOR_READOUT_V2_FIELDS:
+                raise ValueError(f"cursor readout V2 {label} contain unsupported paths")
+            expected = tuple(
+                field_name
+                for field_name in SCOPE_CURSOR_READOUT_V2_FIELD_ORDER
+                if field_name in fields
+            )
+            if fields != expected:
+                raise ValueError(
+                    f"cursor readout V2 {label} must use stable field order"
+                )
+        unavailable = set(self.unavailable_fields)
+        not_applicable = set(self.not_applicable_fields)
+        if unavailable & not_applicable:
+            raise ValueError("cursor readout V2 availability paths must be disjoint")
+        missing = {
+            field_name
+            for field_name, value in self.field_values().items()
+            if value is None
+        }
+        if unavailable | not_applicable != missing:
+            raise ValueError(
+                "cursor readout V2 availability paths must exactly describe missing fields"
+            )
+        source_unavailable = {
+            field_name in unavailable for field_name in ("source_a", "source_b")
+        }
+        source_not_applicable = {
+            field_name in not_applicable for field_name in ("source_a", "source_b")
+        }
+        if len(source_unavailable) != 1 or len(source_not_applicable) != 1:
+            raise ValueError(
+                "cursor readout V2 sources must use the same availability classification"
+            )
+
+    def field_values(self) -> dict[ScopeCursorReadoutFieldV2, object | None]:
+        return {
+            "cursor_index": self.cursor_index,
+            "source_a": self.source_a,
+            "source_b": self.source_b,
+            "x_a": self.x_a,
+            "x_b": self.x_b,
+            "x_delta": self.x_delta,
+            "inverse_x_delta": self.inverse_x_delta,
+            "y_a": self.y_a,
+            "y_b": self.y_b,
+            "y_delta": self.y_delta,
+        }
+
+
 @dataclass(frozen=True)
 class ScopeCursorReadout:
     cursor_index: int

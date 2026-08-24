@@ -28,6 +28,7 @@ from .models import (
     ScopeMeasurementStatisticsRequestV2,
     ScopeMeasurementStatisticsV2,
     ScopeCursorReadout,
+    ScopeCursorReadoutV2,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
     ScopeDigitalChannelStatusV2,
@@ -203,6 +204,16 @@ class ScopeFftStatusDriverV2(InstrumentDriver, Protocol):
         *,
         configured_fft: bool,
     ) -> ScopeFftStatusV2: ...
+
+
+@runtime_checkable
+class ScopeCursorReadoutDriverV2(InstrumentDriver, Protocol):
+    def get_cursor_readout_v2(
+        self,
+        cursor_index: int | None,
+        *,
+        configured_cursor: bool,
+    ) -> ScopeCursorReadoutV2: ...
 
 
 @runtime_checkable

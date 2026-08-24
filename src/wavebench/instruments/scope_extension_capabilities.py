@@ -23,6 +23,7 @@ SCOPE_STRICT_V2_CAPABILITIES = frozenset(
         "scope.acquisition_status_v2",
         "scope.measurement_statistics_v2",
         "scope.fft_status_v2",
+        "scope.cursor_readout_v2",
     }
 )
 
@@ -78,6 +79,7 @@ SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "scope.acquisition_status_v2": ("get_acquisition_status_v2",),
         "scope.measurement_statistics_v2": ("get_measurement_statistics_v2",),
         "scope.fft_status_v2": ("get_fft_status_v2",),
+        "scope.cursor_readout_v2": ("get_cursor_readout_v2",),
     }
 )
 
@@ -139,6 +141,7 @@ def validate_scope_descriptor(
         "scope.acquisition_status_v2": "acquisition_status_profile_v2",
         "scope.measurement_statistics_v2": "measurement_statistics_profile_v2",
         "scope.fft_status_v2": "fft_status_profile_v2",
+        "scope.cursor_readout_v2": "cursor_readout_profile_v2",
     }
     for capability in sorted(declared):
         profile_name = profile_requirements.get(capability)
