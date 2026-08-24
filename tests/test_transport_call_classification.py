@@ -5,7 +5,9 @@ from pathlib import Path
 
 
 _ROOT = Path(__file__).parents[1]
-_QUERY_METHODS = frozenset({"query", "query_opc", "query_bin_block", "query_float_list"})
+_QUERY_METHODS = frozenset(
+    {"query", "query_opc", "query_bin_block", "query_binary", "query_float_list"}
+)
 
 
 def _direct_transport_call(node: ast.Call, *, plugin: bool = False) -> bool:
