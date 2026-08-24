@@ -1,11 +1,11 @@
 # RFC-0007：可移植的统计、FFT 与光标读取 V2
 
-> 状态：`Accepted R1（0007a 已实现；仅 0007b）`
+> 状态：`Implemented R1（未发布；0007a/0007b）`
 > 核心基线：现有 statistics、FFT status、math metadata 与 cursor readout
 > 范围：三个独立的只读 V2 capability
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0007a 已完成核心实现；0007b 已冻结 profile、纯文本 budget、factory gate 与 Service 边界；
-> 0007c 仍为 Draft，不创建 V2 CLI、artifact、run plan step 或插件 opt-in
+> 本轮范围：0007a/0007b 已完成核心模型、profile、factory gate 与 Service；0007c 仍为 Draft，
+> 不创建 V2 CLI、artifact、run plan step 或插件 opt-in
 
 ## 摘要
 
@@ -346,6 +346,12 @@ FFT 配置证明和所有可读字段。禁止 write、binary query、`query_flo
 0007b R1 不新增 `fft-status-v2` CLI、artifact、run-plan step 或持久化 JSON schema。既有
 `wavebench scope fft-status`、legacy model、Protocol、capability 和 JSON 继续只走 legacy Service。
 
+核心开发线已实现 `ScopeFftStatusV2`、`ScopeFftStatusProfileV2`、独立 Protocol、
+`scope.fft_status_v2`、strict factory construction barrier、portability-V2 `OperationSpec` 和
+`ScopeService.fft_status_v2()`。核心离线实现覆盖 model/profile、capability、factory、query budget、
+non-query I/O 拒绝、math metadata 隔离和 legacy route；主包内建 descriptor 和外部插件在独立 conformance、
+版本下限和硬件证据完成前不得声明 FFT V2。该实现不授权 0007c cursor。
+
 0007a R1 核心离线实现已覆盖 selector/profile 的发送前拒绝、完整结果和 selector echo、buffer result 拒绝、
 factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route。它本身不授权 0007b；后者只由本节
 单独接受的 FFT 合同授权。主包内建 descriptor 和外部插件在独立 conformance、版本下限和硬件证据完成前不得
@@ -451,8 +457,8 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 
 ## 接受与实施顺序
 
-RFC-0007a 已完成核心离线实现但尚未发布；RFC-0007b 已进入 `Accepted`，只授权上一节列出的 FFT
-核心实现与离线验收。以下仍是 RFC-0007c 的后续接受门，不授权其代码、descriptor 字段或插件 opt-in：
+RFC-0007a/0007b 已完成核心离线实现但尚未发布。以下仍是 RFC-0007c 的后续接受门，不授权其代码、
+descriptor 字段或插件 opt-in：
 
 1. RFC-0007c：冻结 cursor mode/function/source/unit、unavailable/not-applicable 与 JSON 形状；
 2. 该项进入 `Accepted` 后，才评审 capability、factory latch、Service、CLI/artifact 和
