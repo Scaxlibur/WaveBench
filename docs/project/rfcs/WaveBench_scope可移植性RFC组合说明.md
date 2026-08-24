@@ -1,6 +1,6 @@
 # WaveBench scope 可移植性 RFC-0001～RFC-0008 组合说明
 
-> 状态：`Draft R1`
+> 状态：`Accepted R1`
 > 核心基线：WaveBench `0.8.24` 开发线
 > 范围：核心接口裁决、兼容边界与实施顺序
 > 证据来源：WaveBench Instrument Plugins 中的 MSO8000 提案
@@ -17,7 +17,8 @@
 RFC-0007 仍需要追加式 V2 模型。被取代不表示问题不存在，而是表示不能再实现已否决的
 平行 API。
 
-本系列当前只完善 RFC 文档，不授权修改运行代码、注册新 capability、提高插件版本下限或
+M0 只冻结本组合说明和 legacy 黄金基线。M1 及后续里程碑可以在本分支按本文顺序修改核心
+代码；仍为 `Draft` 的单项 RFC 只授权其对应里程碑中的追加式实现，不授权插件提高版本下限或
 连接真实仪器。
 
 ## 规范优先级
@@ -173,6 +174,23 @@ RFC-0002 + RFC-0006a + RFC-0008
 
 每个里程碑应拆成可独立回滚的小提交，不把模型、factory、Service、CLI 和插件采用压入同一个
 提交。
+
+## M0 冻结记录
+
+本组合说明以 `Accepted R1` 冻结以下共同边界：编号映射、替代关系、unknown/unavailable
+语义、legacy 不变量、construction barrier、四种核心／插件组合和 M1～M7 顺序。
+
+离线黄金基线位于 `tests/test_scope_portability_m0.py`，覆盖：
+
+- RTM2032 与 DS1104/DS1000Z 的 canonical ID、alias、完整 legacy capability tuple、版本范围、
+  extension 缺席和 capability explain；
+- 两个内建 descriptor 的 standard fetch/capture 继续调用 legacy driver 方法；
+- 旧／新核心与旧／新 descriptor 的四组合，其中旧核心强制加载新 descriptor 时在 factory 和
+  仪器 I/O 前由版本门拒绝；
+- 新 descriptor 只公开显式 capability/profile，不因额外方法或 profile 获得其他 capability。
+
+该冻结不把 RFC-0002、RFC-0004、RFC-0005、RFC-0006 或 RFC-0007 从 `Draft` 升为已实现；每项
+仍须在其里程碑完成模型、Protocol、factory、Service、CLI 和兼容回归后更新状态。
 
 ## 共同验收门
 
