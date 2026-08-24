@@ -290,11 +290,333 @@ duration_s = 0.5
         self.assertEqual(plan.steps[2].fields["duty_percent"], 25.0)
         self.assertEqual(plan.steps[3].fields["duration_s"], 0.5)
 
+    def test_source_v2_steps_validate_explicit_channels_and_closed_basic_patch(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 2
+waveform_kind = "SQUARE"
+frequency_hz = 1000
+amplitude_vpp = 0
+offset_v = -0.2
+square_duty_cycle_percent = 100
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 2
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 2
+
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 8
+preset = "ODD"
+
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 2
+depth_percent = 80
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 2
+phase_deviation_deg = 90
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_fm_configure_v2"
+channel = 2
+frequency_deviation_hz = 12500
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 2
+internal_frequency_hz = 25
+duty_deviation_percent = 25
+
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 2
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 101
+sweep_time_s = 1
+
+[[steps]]
+kind = "source.burst_configure_v2"
+channel = 2
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 2
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
+"""))
+
+        basic = plan.steps[0]
+        self.assertEqual(basic.fields["channel"], 2)
+        self.assertEqual(basic.fields["waveform_kind"], "square")
+        self.assertEqual(basic.fields["frequency_hz"], 1000.0)
+        self.assertEqual(basic.fields["amplitude_vpp"], 0.0)
+        self.assertEqual(basic.fields["offset_v"], -0.2)
+        self.assertEqual(basic.fields["square_duty_cycle_percent"], 100.0)
+        harmonic = plan.steps[3]
+        self.assertEqual(harmonic.fields, {"channel": 2, "order": 8, "preset": "odd"})
+        modulation = plan.steps[4]
+        self.assertEqual(
+            modulation.fields,
+            {"channel": 2, "depth_percent": 80.0, "internal_frequency_hz": 25.0},
+        )
+        pm = plan.steps[5]
+        self.assertEqual(
+            pm.fields,
+            {"channel": 2, "phase_deviation_deg": 90.0, "internal_frequency_hz": 25.0},
+        )
+        fm = plan.steps[6]
+        self.assertEqual(
+            fm.fields,
+            {
+                "channel": 2,
+                "frequency_deviation_hz": 12_500.0,
+                "internal_frequency_hz": 25.0,
+            },
+        )
+        pwm = plan.steps[7]
+        self.assertEqual(
+            pwm.fields,
+            {
+                "channel": 2,
+                "internal_frequency_hz": 25.0,
+                "duty_deviation_percent": 25.0,
+            },
+        )
+        sweep = plan.steps[8]
+        self.assertEqual(
+            sweep.fields,
+            {
+                "channel": 2,
+                "start_hz": 100.0,
+                "stop_hz": 1_000.0,
+                "spacing": "linear",
+                "steps": 101,
+                "sweep_time_s": 1.0,
+            },
+        )
+        burst = plan.steps[9]
+        self.assertEqual(
+            burst.fields,
+            {
+                "channel": 2,
+                "cycles": 12,
+                "phase_deg": 30.0,
+                "internal_period_s": 0.25,
+                "delay_s": 0.5,
+            },
+        )
+        pulse = plan.steps[10]
+        self.assertEqual(
+            pulse.fields,
+            {
+                "channel": 2,
+                "width_s": 1.0e-6,
+                "delay_s": 0.0,
+                "leading_transition_s": 1.0e-8,
+                "trailing_transition_s": 1.0e-8,
+            },
+        )
+
+        empty_patch = self._write_plan("""
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 2
+""")
+        with self.assertRaisesRegex(ConfigError, "requires at least one basic field"):
+            load_run_plan(empty_patch)
+
+        arbitrary = self._write_plan("""
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 2
+waveform_kind = "arbitrary"
+""")
+        with self.assertRaisesRegex(ConfigError, "waveform_kind must be one of"):
+            load_run_plan(arbitrary)
+
+        order_too_low = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 1
+preset = "odd"
+""")
+        with self.assertRaisesRegex(ConfigError, "order must be >= 2"):
+            load_run_plan(order_too_low)
+
+        fractional_order = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 2.5
+preset = "odd"
+""")
+        with self.assertRaisesRegex(ConfigError, "order must be an integer >= 2"):
+            load_run_plan(fractional_order)
+
+        unsupported_preset = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 2
+order = 8
+preset = "user"
+""")
+        with self.assertRaisesRegex(ConfigError, "preset must be one of"):
+            load_run_plan(unsupported_preset)
+
+        excessive_depth = self._write_plan("""
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 2
+depth_percent = 100.1
+internal_frequency_hz = 25
+""")
+        with self.assertRaisesRegex(ConfigError, "depth_percent must be in"):
+            load_run_plan(excessive_depth)
+
+        zero_internal_frequency = self._write_plan("""
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 2
+depth_percent = 80
+internal_frequency_hz = 0
+""")
+        with self.assertRaisesRegex(ConfigError, "internal_frequency_hz must be > 0"):
+            load_run_plan(zero_internal_frequency)
+
+        excessive_pm_deviation = self._write_plan("""
+[[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 2
+phase_deviation_deg = 360.1
+internal_frequency_hz = 25
+""")
+        with self.assertRaisesRegex(ConfigError, "phase_deviation_deg must be in"):
+            load_run_plan(excessive_pm_deviation)
+
+        zero_fm_deviation = self._write_plan("""
+[[steps]]
+kind = "source.modulation_fm_configure_v2"
+channel = 2
+frequency_deviation_hz = 0
+internal_frequency_hz = 25
+""")
+        with self.assertRaisesRegex(ConfigError, "frequency_deviation_hz must be > 0"):
+            load_run_plan(zero_fm_deviation)
+
+        invalid_pwm_branches = self._write_plan("""
+[[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 2
+internal_frequency_hz = 25
+duty_deviation_percent = 25
+width_deviation_s = 1e-6
+""")
+        with self.assertRaisesRegex(ConfigError, "exactly one deviation branch"):
+            load_run_plan(invalid_pwm_branches)
+
+        invalid_sweep_window = self._write_plan("""
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 2
+start_hz = 1000
+stop_hz = 100
+spacing = "linear"
+steps = 101
+sweep_time_s = 1
+""")
+        with self.assertRaisesRegex(ConfigError, "start_hz must not exceed"):
+            load_run_plan(invalid_sweep_window)
+
+        invalid_burst_cycles = self._write_plan("""
+[[steps]]
+kind = "source.burst_configure_v2"
+channel = 2
+cycles = 0
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+""")
+        with self.assertRaisesRegex(ConfigError, "cycles must be in"):
+            load_run_plan(invalid_burst_cycles)
+
+        short_width = self._write_plan("""
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 2
+width_s = 3e-9
+delay_s = 0
+leading_transition_s = 1e-9
+trailing_transition_s = 1e-9
+""")
+        with self.assertRaisesRegex(ConfigError, "width_s must be >="):
+            load_run_plan(short_width)
+
+        oversized_transition = self._write_plan("""
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 2
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 7e-7
+trailing_transition_s = 1e-8
+""")
+        with self.assertRaisesRegex(ConfigError, "leading_transition_s must be <="):
+            load_run_plan(oversized_transition)
+
+    def test_source_v2_harmonic_disable_step_accepts_only_channel(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 2
+"""))
+
+        self.assertEqual(plan.steps[0].fields, {"channel": 2})
+
+        extra_field = self._write_plan("""
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 2
+order = 8
+""")
+        with self.assertRaisesRegex(ConfigError, "unknown key"):
+            load_run_plan(extra_field)
 
     def test_format_run_plan_schema_lists_expect_and_power_output(self):
         text = format_run_plan_schema()
         self.assertIn("power.output", text)
         self.assertIn("source.arb_load", text)
+        self.assertIn("source.basic_configure_v2", text)
+        self.assertIn("source.output_enable_v2", text)
+        self.assertIn("source.harmonics_configure_v2", text)
+        self.assertIn("source.harmonics_disable_v2", text)
+        self.assertIn("source.modulation_configure_v2", text)
+        self.assertIn("source.modulation_pm_configure_v2", text)
+        self.assertIn("source.modulation_fm_configure_v2", text)
+        self.assertIn("source.modulation_pwm_configure_v2", text)
+        self.assertIn("source.sweep_configure_v2", text)
+        self.assertIn("source.burst_configure_v2", text)
+        self.assertIn("source.pulse_configure_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)
@@ -688,6 +1010,71 @@ value = { min = 0.34, max = 0.37 }
 """)
         plan = load_run_plan(path)
         self.assertEqual(plan.steps[0].fields["expect"]["value"], {"min": 0.34, "max": 0.37})
+
+    def test_source_v2_arbitrary_storage_and_selection_steps_are_typed(self):
+        digest = "sha256:" + "a" * 64
+        plan = load_run_plan(self._write_plan(f"""
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot_a"
+file = "payload.bin"
+write_mode = "replace_if_digest_matches"
+expected_previous_sha256 = "{digest}"
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+playback_frequency_hz = 1000
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "true_arb"
+sample_rate_hz = 10000
+"""))
+
+        self.assertEqual(
+            plan.steps[0].fields,
+            {
+                "channel": 1,
+                "slot_id": "slot_a",
+                "file": "payload.bin",
+                "write_mode": "replace_if_digest_matches",
+                "expected_previous_sha256": digest,
+            },
+        )
+        self.assertEqual(plan.steps[1].fields["playback_mode"], "dds")
+        self.assertEqual(plan.steps[1].fields["playback_frequency_hz"], 1000.0)
+        self.assertEqual(plan.steps[2].fields["playback_mode"], "true_arb")
+        self.assertEqual(plan.steps[2].fields["sample_rate_hz"], 10_000.0)
+        self.assertIn("source.arbitrary_storage_v2", format_run_plan_schema())
+        self.assertIn("source.arbitrary_select_v2", STEP_SCHEMAS)
+
+        invalid_storage = self._write_plan("""
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot a"
+file = "payload.bin"
+write_mode = "create_only"
+""")
+        with self.assertRaisesRegex(ConfigError, "slot_id"):
+            load_run_plan(invalid_storage)
+
+        invalid_select = self._write_plan("""
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+sample_rate_hz = 10000
+""")
+        with self.assertRaisesRegex(ConfigError, "playback_frequency_hz is required"):
+            load_run_plan(invalid_select)
 
 
 if __name__ == "__main__":

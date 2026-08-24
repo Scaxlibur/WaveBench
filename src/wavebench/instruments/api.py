@@ -10,6 +10,7 @@ from wavebench.services.access_policy import AccessMode, normalize_access_mode
 from wavebench.transport.base import InstrumentTransport
 
 from .scope_extensions import ScopeDescriptorExtensions
+from .source_extensions import SourceDescriptorExtensions
 
 EXECUTABLE_PLUGIN_API_VERSION = "wavebench.instrument.v2"
 ScopeCouplingPolicy = Literal["fixed-high-impedance", "switchable-termination", "unknown"]
@@ -90,6 +91,7 @@ class InstrumentDescriptor:
     resource_schemes: tuple[str, ...] = ()
     # Append-only to preserve the positional layout accepted by instrument API v2.
     scope_extensions: ScopeDescriptorExtensions | None = None
+    source_extensions: SourceDescriptorExtensions | None = None
 
     def __post_init__(self) -> None:
         if not self.driver_id or self.driver_id.strip() != self.driver_id:
@@ -122,6 +124,11 @@ class InstrumentDescriptor:
                 raise ValueError("scope_extensions can only be declared by scope descriptors")
             if not isinstance(self.scope_extensions, ScopeDescriptorExtensions):
                 raise TypeError("scope_extensions has an invalid type")
+        if self.source_extensions is not None:
+            if self.kind != "source":
+                raise ValueError("source_extensions can only be declared by source descriptors")
+            if not isinstance(self.source_extensions, SourceDescriptorExtensions):
+                raise TypeError("source_extensions has an invalid type")
 
     def with_distribution(
         self,

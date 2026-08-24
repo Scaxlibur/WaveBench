@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from math import inf, nan
 from unittest.mock import patch
@@ -190,8 +191,55 @@ class SafetyLimitsOutputTests(unittest.TestCase):
         self.assertEqual(fake.output_calls, [])
         self.assertTrue(fake.closed)
 
+    def test_source_output_on_rejects_invalid_or_non_vpp_amplitude_before_write(self):
+        cases = (
+            (replace(source_status(1.0), amplitude=None), "必须为有限数"),
+            (replace(source_status(1.0), amplitude="1.0"), "必须为有限数"),
+            (replace(source_status(1.0), amplitude=True), "必须为有限数"),
+            (replace(source_status(1.0), amplitude=nan), "必须为有限数"),
+            (replace(source_status(1.0), amplitude=inf), "必须为有限数"),
+            (replace(source_status(1.0), amplitude=-1.0), "必须为非负数"),
+            (replace(source_status(1.0), amplitude_unit="VRMS"), "可读的 VPP 幅度"),
+        )
+        for status, message in cases:
+            with self.subTest(status=status):
+                fake = FakeSource(status)
+                service = SourceService(config=make_config(), logger=CommandLogger())
+
+                with patch.object(service, "_open_source", return_value=fake):
+                    with self.assertRaisesRegex(ConfigError, message):
+                        service.set_output(channel=2, enabled=True)
+
+                self.assertEqual(fake.output_calls, [])
+                self.assertTrue(fake.closed)
+
+    def test_source_set_vpp_rejects_invalid_values_before_opening_source(self):
+        service = SourceService(config=make_config(), logger=CommandLogger())
+        for value, message in (
+            (None, "必须为有限数"),
+            ("1.0", "必须为有限数"),
+            (True, "必须为有限数"),
+            (nan, "必须为有限数"),
+            (inf, "必须为有限数"),
+            (-1.0, "必须为非负数"),
+        ):
+            with self.subTest(value=value):
+                with patch.object(service, "_open_source") as open_source:
+                    with self.assertRaisesRegex(ConfigError, message):
+                        service.set_amplitude_vpp(channel=2, value_vpp=value)  # type: ignore[arg-type]
+                open_source.assert_not_called()
+
     def test_source_output_off_does_not_check_amplitude(self):
         fake = FakeSource(source_status(5.0))
+        service = SourceService(config=make_config(), logger=CommandLogger())
+
+        with patch.object(service, "_open_source", return_value=fake):
+            service.set_output(channel=2, enabled=False)
+
+        self.assertEqual(fake.output_calls, [(2, False, True)])
+
+    def test_source_output_off_allows_missing_amplitude(self):
+        fake = FakeSource(replace(source_status(1.0), amplitude=None))
         service = SourceService(config=make_config(), logger=CommandLogger())
 
         with patch.object(service, "_open_source", return_value=fake):

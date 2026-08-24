@@ -27,6 +27,24 @@ EXECUTABLE_STEP_KINDS = {
     "source.set_vpp",
     "source.set_duty",
     "source.output",
+    "source.basic_configure_v2",
+    "source.output_enable_v2",
+    "source.output_disable_v2",
+    "source.harmonics_configure_v2",
+    "source.harmonics_disable_v2",
+    "source.modulation_configure_v2",
+    "source.modulation_pm_configure_v2",
+    "source.modulation_fm_configure_v2",
+    "source.modulation_pwm_configure_v2",
+    "source.sweep_configure_v2",
+    "source.burst_configure_v2",
+    "source.pulse_configure_v2",
+    "source.arbitrary_storage_v2",
+    "source.arbitrary_select_v2",
+    "source.combine_configure_v2",
+    "source.coupling_configure_v2",
+    "source.tracking_configure_v2",
+    "source.phase_relation_configure_v2",
     "dmm.read",
     "sleep",
 }
@@ -39,6 +57,17 @@ def check_run_plan_safety_limits(plan: RunPlan, limits: SafetyLimitsConfig) -> N
                 step.fields["value_vpp"],
                 limits.max_source_vpp,
                 field=f"run step {step.index} source amplitude / 运行步骤 {step.index} 信号源幅度",
+                config_key="max_source_vpp",
+                unit="Vpp",
+            )
+        elif step.kind == "source.basic_configure_v2" and "amplitude_vpp" in step.fields:
+            _check_limit(
+                step.fields["amplitude_vpp"],
+                limits.max_source_vpp,
+                field=(
+                    f"run step {step.index} Source V2 amplitude / "
+                    f"运行步骤 {step.index} Source V2 幅度"
+                ),
                 config_key="max_source_vpp",
                 unit="Vpp",
             )

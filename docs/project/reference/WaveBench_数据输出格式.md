@@ -823,3 +823,49 @@ CLI 仍会在请求的 artifact 路径写入 `status = "failed"`、安全错误 
 伪成功的 PNG/NPY。artifact 自身无法写入时，CLI 删除本轮刚生成的 PNG/NPY，并在错误结果中
 报告 `scope_artifact.reason_code = "write_failed"`；若部分输出无法删除，还会报告
 `scope_output.reason_code = "remove_failed"`。
+
+## Source V2 操作产物
+
+`wavebench source snapshot-v2`、`wavebench source basic-configure-v2`、`wavebench source output-v2`、
+`wavebench source harmonics-configure-v2`、`wavebench source modulation-configure-v2` 和
+`wavebench source pm-modulation-configure-v2`、`wavebench source fm-modulation-configure-v2`、`wavebench source pwm-modulation-configure-v2`、`wavebench source sweep-configure-v2`、`wavebench source burst-configure-v2`、`wavebench source pulse-configure-v2`、`wavebench source arbitrary-storage-v2` 和 `wavebench source arbitrary-select-v2` 都返回
+`wavebench.source.operation.v1`。使用 `--json` 时，该对象
+位于 `wavebench.cli.result.v1.result`；普通模式直接输出缩进后的 operation artifact。CLI 不写入持久化文件，也不产生 conformance manifest。
+
+operation artifact 固定包含：
+
+- `operation = "source.snapshot_v2"`、context、correlation 和 session epoch；
+- capability decision、`wavebench.source.v2` 合同版本和 descriptor SHA-256；
+- `wavebench.source.snapshot.v2` snapshot document；
+- pure-read query effect、plan SHA-256 和 query count；
+- 操作前后 session health、最终 consistency 和受限 evidence refs。
+
+snapshot 使用 typed `Observed` 表达 `value`、`unsupported`、`not_applicable`、`not_queried`、
+`unavailable` 和 `unknown`，不会以 `0` 或空字符串冒充缺值。artifact 不包含协议执行记录、SCPI、
+完整响应、resource、序列号或原始 device revision token；revision token 只以 SHA-256 摘要出现在
+consistency 中。该 operation artifact 与插件 conformance manifest 是不同 schema，不能互换。
+
+basic、output、Harmonic 配置／关闭、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内部 Triggered Burst 和 WIDTH Pulse 写 operation 还会记录 typed request、preflight／postcondition snapshot 摘要、
+mutation result、phase 摘要、最终 session state，以及仅在主写入后失败时存在的 recovery。Harmonic artifact 的
+`operation` 为 `source.harmonics_configure_v2` 或 `source.harmonics_disable_v2`；内部 AM artifact 的 `operation` 固定为
+`source.modulation_configure_v2`；内部 PM artifact 的 `operation` 固定为 `source.modulation_pm_configure_v2`；
+内部 FM artifact 的 `operation` 固定为 `source.modulation_fm_configure_v2`；内部 PWM artifact 的 `operation` 固定为
+`source.modulation_pwm_configure_v2`；内部 Sweep artifact 的 `operation` 固定为 `source.sweep_configure_v2`；内部 Triggered Burst artifact 的
+`operation` 固定为 `source.burst_configure_v2`；WIDTH Pulse artifact 的 `operation` 固定为
+`source.pulse_configure_v2`。八者的 `final_state.output_expected` 都固定为 `off`。
+
+ARB storage artifact 的 `operation` 固定为 `source.arbitrary_storage_v2`。它记录 typed request、preflight／
+postcondition snapshot 摘要、命名槽位的 exists／SHA-256／大小、mutation result、phase 与 session state；不记录
+payload bytes、本地文件路径或设备私有二进制命令。其 `final_state.output_expected` 与
+`selection_expected` 都为 `unchanged`。ARB selection artifact 的 `operation` 固定为
+`source.arbitrary_select_v2`，记录 typed request、snapshot 摘要、mutation result、phase、可选 recovery 和
+session state；其 `final_state.output_expected` 固定为 `off`。
+
+跨通道 relation artifact 的 `operation` 为 `source.combine_configure_v2`、`source.coupling_configure_v2`、
+`source.tracking_configure_v2` 或 `source.phase_relation_configure_v2`。它记录 typed channel set／enabled request、
+preflight 的 `affected_channels`、relation graph SHA-256、mutation result、snapshot 摘要与可选逐端口 OFF recovery。
+`final_state.affected_outputs_expected` 固定为 `off`。artifact 不保存 raw relation graph、SCPI、私有联动参数或授权 token。
+
+Source V2 写 step 成功或写后失败时，`run.json.source_operations` 保存同一 schema 的完整 artifact，
+`steps[].artifact.source_operation` 保存当前 step 的同一完整 artifact。没有实际 Source V2 step 的 V1 run 不写
+`source_operations`，旧 reader 可以继续忽略该 append-only 根键。

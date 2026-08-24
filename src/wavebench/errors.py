@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from wavebench.transport.contracts import (
     CommandTransmission,
@@ -115,6 +115,38 @@ class ExecutionIntentError(ConfigError):
 class AccessDeniedError(ConfigError):
     exit_code = 2
     code = "access_denied"
+
+
+class SourceSafetyLimitsRequiredError(ConfigError):
+    """A Source V2 energy operation lacks explicitly configured safety axes."""
+
+    code = "source_safety_limits_required"
+
+    def __init__(self, missing_fields: Iterable[str]) -> None:
+        normalized = tuple(sorted(set(missing_fields)))
+        allowed = {
+            "max_source_vpp",
+            "min_source_port_voltage_v",
+            "max_source_port_voltage_v",
+        }
+        if not normalized or not set(normalized) <= allowed:
+            raise ValueError("invalid missing Source safety limit fields")
+        super().__init__(
+            "Source V2 energy operations require explicit safety limits / "
+            "Source V2 能量操作要求显式安全限制"
+        )
+        self.missing_fields = normalized
+
+    def to_envelope(
+        self,
+        *,
+        operation: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: Mapping[str, Any] | BaseException | None = None,
+    ) -> ErrorEnvelope:
+        merged = dict(details or {})
+        merged["missing_fields"] = list(self.missing_fields)
+        return super().to_envelope(operation=operation, details=merged, cause=cause)
 
 class ConnectionError(WaveBenchError):
     exit_code = 3

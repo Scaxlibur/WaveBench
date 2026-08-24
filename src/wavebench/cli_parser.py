@@ -656,6 +656,214 @@ def build_parser() -> argparse.ArgumentParser:
     source_status.add_argument("--channel", type=int, default=None)
     add_runtime_options(source_status)
 
+    source_snapshot_v2 = source_sub.add_parser(
+        "snapshot-v2",
+        help="Query a typed, read-only Source V2 snapshot",
+    )
+    add_runtime_options(source_snapshot_v2)
+
+    source_basic_configure_v2 = source_sub.add_parser(
+        "basic-configure-v2",
+        help="Configure one OFF Source V2 channel with one or more basic fields",
+    )
+    source_basic_configure_v2.add_argument("--channel", type=int, required=True)
+    source_basic_configure_v2.add_argument(
+        "--waveform",
+        choices=("sine", "square", "ramp", "pulse", "noise", "dc"),
+        default=None,
+    )
+    source_basic_configure_v2.add_argument("--frequency-hz", type=float, default=None)
+    source_basic_configure_v2.add_argument("--amplitude-vpp", type=float, default=None)
+    source_basic_configure_v2.add_argument("--offset-v", type=float, default=None)
+    source_basic_configure_v2.add_argument(
+        "--square-duty-cycle-percent",
+        type=float,
+        default=None,
+    )
+    add_runtime_options(source_basic_configure_v2)
+
+    source_output_v2 = source_sub.add_parser(
+        "output-v2",
+        help="Turn one Source V2 channel output on or off",
+    )
+    source_output_v2.add_argument("--channel", type=int, required=True)
+    source_output_v2.add_argument("state", choices=("on", "off"))
+    add_runtime_options(source_output_v2)
+
+    source_harmonics_configure_v2 = source_sub.add_parser(
+        "harmonics-configure-v2",
+        help="Configure one OFF Source V2 channel with a declared Harmonic preset",
+    )
+    source_harmonics_configure_v2.add_argument("--channel", type=int, required=True)
+    source_harmonics_configure_v2.add_argument("--order", type=int, required=True)
+    source_harmonics_configure_v2.add_argument(
+        "--preset",
+        choices=("all", "even", "odd"),
+        required=True,
+    )
+    add_runtime_options(source_harmonics_configure_v2)
+
+    source_harmonics_disable_v2 = source_sub.add_parser(
+        "harmonics-disable-v2",
+        help="Disable Harmonic on one OFF Source V2 channel",
+    )
+    source_harmonics_disable_v2.add_argument("--channel", type=int, required=True)
+    add_runtime_options(source_harmonics_disable_v2)
+
+    source_modulation_configure_v2 = source_sub.add_parser(
+        "modulation-configure-v2",
+        help="Configure one OFF Source V2 channel with internal sine AM",
+    )
+    source_modulation_configure_v2.add_argument("--channel", type=int, required=True)
+    source_modulation_configure_v2.add_argument("--depth-percent", type=float, required=True)
+    source_modulation_configure_v2.add_argument("--internal-frequency-hz", type=float, required=True)
+    add_runtime_options(source_modulation_configure_v2)
+
+    source_pulse_configure_v2 = source_sub.add_parser(
+        "pulse-configure-v2",
+        help="Configure one OFF Source V2 channel with a WIDTH pulse shape",
+    )
+    source_pulse_configure_v2.add_argument("--channel", type=int, required=True)
+    source_pulse_configure_v2.add_argument("--width-s", type=float, required=True)
+    source_pulse_configure_v2.add_argument("--delay-s", type=float, required=True)
+    source_pulse_configure_v2.add_argument("--leading-transition-s", type=float, required=True)
+    source_pulse_configure_v2.add_argument("--trailing-transition-s", type=float, required=True)
+    add_runtime_options(source_pulse_configure_v2)
+
+    source_pm_modulation_configure_v2 = source_sub.add_parser(
+        "pm-modulation-configure-v2",
+        help="Configure one OFF Source V2 channel with internal sine PM",
+    )
+    source_pm_modulation_configure_v2.add_argument("--channel", type=int, required=True)
+    source_pm_modulation_configure_v2.add_argument(
+        "--phase-deviation-deg",
+        type=float,
+        required=True,
+    )
+    source_pm_modulation_configure_v2.add_argument(
+        "--internal-frequency-hz",
+        type=float,
+        required=True,
+    )
+    add_runtime_options(source_pm_modulation_configure_v2)
+
+    source_fm_modulation_configure_v2 = source_sub.add_parser(
+        "fm-modulation-configure-v2",
+        help="Configure one OFF Source V2 channel with internal sine FM",
+    )
+    source_fm_modulation_configure_v2.add_argument("--channel", type=int, required=True)
+    source_fm_modulation_configure_v2.add_argument(
+        "--frequency-deviation-hz",
+        type=float,
+        required=True,
+    )
+    source_fm_modulation_configure_v2.add_argument(
+        "--internal-frequency-hz",
+        type=float,
+        required=True,
+    )
+    add_runtime_options(source_fm_modulation_configure_v2)
+
+    source_pwm_modulation_configure_v2 = source_sub.add_parser(
+        "pwm-modulation-configure-v2",
+        help="Configure one OFF Source V2 channel with internal sine PWM",
+    )
+    source_pwm_modulation_configure_v2.add_argument("--channel", type=int, required=True)
+    source_pwm_modulation_configure_v2.add_argument(
+        "--internal-frequency-hz",
+        type=float,
+        required=True,
+    )
+    pwm_deviation = source_pwm_modulation_configure_v2.add_mutually_exclusive_group(
+        required=True
+    )
+    pwm_deviation.add_argument("--duty-deviation-percent", type=float)
+    pwm_deviation.add_argument("--width-deviation-s", type=float)
+    add_runtime_options(source_pwm_modulation_configure_v2)
+
+    source_sweep_configure_v2 = source_sub.add_parser(
+        "sweep-configure-v2",
+        help="Configure one OFF Source V2 channel with an internal sweep; it does not fire output",
+    )
+    source_sweep_configure_v2.add_argument("--channel", type=int, required=True)
+    source_sweep_configure_v2.add_argument("--start-hz", type=float, required=True)
+    source_sweep_configure_v2.add_argument("--stop-hz", type=float, required=True)
+    source_sweep_configure_v2.add_argument(
+        "--spacing",
+        choices=("linear", "logarithmic", "step"),
+        required=True,
+    )
+    source_sweep_configure_v2.add_argument("--steps", type=int, required=True)
+    source_sweep_configure_v2.add_argument("--sweep-time-s", type=float, required=True)
+    add_runtime_options(source_sweep_configure_v2)
+
+    source_burst_configure_v2 = source_sub.add_parser(
+        "burst-configure-v2",
+        help="Configure one OFF Source V2 channel with an internal Triggered Burst",
+    )
+    source_burst_configure_v2.add_argument("--channel", type=int, required=True)
+    source_burst_configure_v2.add_argument("--cycles", type=int, required=True)
+    source_burst_configure_v2.add_argument("--phase-deg", type=float, required=True)
+    source_burst_configure_v2.add_argument("--internal-period-s", type=float, required=True)
+    source_burst_configure_v2.add_argument("--delay-s", type=float, required=True)
+    add_runtime_options(source_burst_configure_v2)
+
+    for command, relation_name in (
+        ("combine-configure-v2", "Combine"),
+        ("coupling-configure-v2", "Coupling"),
+        ("tracking-configure-v2", "Tracking"),
+        ("phase-relation-configure-v2", "phase relation"),
+    ):
+        source_relation_configure_v2 = source_sub.add_parser(
+            command,
+            help=(
+                f"Enable or disable one declared Source V2 {relation_name} relation "
+                "while every affected output is OFF"
+            ),
+        )
+        source_relation_configure_v2.add_argument(
+            "--channel",
+            type=int,
+            action="append",
+            required=True,
+            help="Relation participant channel; repeat for every participant",
+        )
+        source_relation_configure_v2.add_argument("state", choices=("on", "off"))
+        add_runtime_options(source_relation_configure_v2)
+
+    source_arbitrary_storage_v2 = source_sub.add_parser(
+        "arbitrary-storage-v2",
+        help="Write one named Source V2 ARB storage slot without selecting or enabling output",
+    )
+    source_arbitrary_storage_v2.add_argument("--channel", type=int, required=True)
+    source_arbitrary_storage_v2.add_argument("--slot-id", required=True)
+    source_arbitrary_storage_v2.add_argument("--payload-file", required=True)
+    source_arbitrary_storage_v2.add_argument(
+        "--write-mode",
+        choices=("create-only", "replace-if-digest-matches"),
+        required=True,
+    )
+    source_arbitrary_storage_v2.add_argument("--expected-previous-sha256")
+    add_runtime_options(source_arbitrary_storage_v2)
+
+    source_arbitrary_select_v2 = source_sub.add_parser(
+        "arbitrary-select-v2",
+        help="Select one named Source V2 ARB waveform while the target output is OFF",
+    )
+    source_arbitrary_select_v2.add_argument("--channel", type=int, required=True)
+    source_arbitrary_select_v2.add_argument("--slot-id", required=True)
+    source_arbitrary_select_v2.add_argument(
+        "--playback-mode",
+        choices=("dds", "true-arb"),
+        required=True,
+    )
+    source_arbitrary_rate = source_arbitrary_select_v2.add_mutually_exclusive_group(
+        required=True
+    )
+    source_arbitrary_rate.add_argument("--playback-frequency-hz", type=float)
+    source_arbitrary_rate.add_argument("--sample-rate-hz", type=float)
+    add_runtime_options(source_arbitrary_select_v2)
+
     source_profile = source_sub.add_parser(
         "profile",
         help="Query the complete read-only source channel profile",

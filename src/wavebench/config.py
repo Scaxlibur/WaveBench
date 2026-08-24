@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from pathlib import Path
 import tomllib
 
@@ -97,6 +98,7 @@ class SourceConfig:
     settle_ms_after_set_frequency: int
     options: dict[str, object] = field(default_factory=dict)
     access: AccessMode = "read_write"
+    terminations: tuple["SourceTerminationConfig", ...] = ()
 
 @dataclass(frozen=True)
 class PowerConfig:
@@ -153,6 +155,18 @@ class SafetyLimitsConfig:
     max_source_vpp: float | None = None
     max_power_voltage_v: float | None = None
     max_power_current_limit_a: float | None = None
+    min_source_port_voltage_v: float | None = None
+    max_source_port_voltage_v: float | None = None
+
+
+@dataclass(frozen=True)
+class SourceTerminationConfig:
+    """Static, per-channel actual-termination evidence from the local config."""
+
+    channel: int
+    kind: str
+    minimum_ohm: float | None = None
+    maximum_ohm: float | None = None
 
 @dataclass(frozen=True)
 class TuiConfig:
@@ -160,13 +174,96 @@ class TuiConfig:
     log_keep_lines_after_trim: int = 1_000
 
 
-def _optional_positive_float(raw: dict, key: str) -> float | None:
+def _optional_positive_float(raw: dict[str, object], key: str) -> float | None:
     if key not in raw:
         return None
-    value = float(raw[key])
+    value = _finite_number(raw[key], path=f"safety_limits.{key}")
     if value <= 0:
         raise ConfigError(f"safety_limits.{key} must be > 0")
     return value
+
+
+def _finite_number(value: object, *, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+        raise ConfigError(f"{path} must be a finite number")
+    return float(value)
+
+
+def _optional_signed_finite_float(raw: dict[str, object], key: str) -> float | None:
+    if key not in raw:
+        return None
+    return _finite_number(raw[key], path=f"safety_limits.{key}")
+
+
+def _source_port_voltage_limits(
+    raw: dict[str, object],
+) -> tuple[float | None, float | None]:
+    minimum = _optional_signed_finite_float(raw, "min_source_port_voltage_v")
+    maximum = _optional_signed_finite_float(raw, "max_source_port_voltage_v")
+    if (minimum is None) != (maximum is None):
+        raise ConfigError(
+            "safety_limits.min_source_port_voltage_v and "
+            "safety_limits.max_source_port_voltage_v must be configured together"
+        )
+    if minimum is not None and maximum is not None and minimum >= maximum:
+        raise ConfigError(
+            "safety_limits.min_source_port_voltage_v must be < "
+            "safety_limits.max_source_port_voltage_v"
+        )
+    return minimum, maximum
+
+
+def _source_terminations(raw: dict[str, object]) -> tuple[SourceTerminationConfig, ...]:
+    values = raw.get("terminations", [])
+    if not isinstance(values, list):
+        raise ConfigError("source.terminations must be an array of TOML tables")
+    parsed: list[SourceTerminationConfig] = []
+    for index, value in enumerate(values):
+        path = f"source.terminations[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{path} must be a TOML table")
+        channel = value.get("channel")
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise ConfigError(f"{path}.channel must be a positive integer")
+        kind = value.get("kind")
+        if not isinstance(kind, str) or kind not in {"resistive", "high_impedance"}:
+            raise ConfigError(f"{path}.kind must be 'resistive' or 'high_impedance'")
+        minimum = (
+            None
+            if "minimum_ohm" not in value
+            else _finite_number(value["minimum_ohm"], path=f"{path}.minimum_ohm")
+        )
+        maximum = (
+            None
+            if "maximum_ohm" not in value
+            else _finite_number(value["maximum_ohm"], path=f"{path}.maximum_ohm")
+        )
+        if (minimum is None) != (maximum is None):
+            raise ConfigError(
+                f"{path}.minimum_ohm and {path}.maximum_ohm must be configured together"
+            )
+        if kind == "resistive" and minimum is None:
+            raise ConfigError(f"{path} resistive termination requires resistance bounds")
+        if minimum is not None and maximum is not None:
+            if minimum <= 0 or maximum <= 0:
+                raise ConfigError(f"{path} resistance bounds must be > 0")
+            if minimum > maximum:
+                raise ConfigError(
+                    f"{path}.minimum_ohm must be <= {path}.maximum_ohm"
+                )
+        parsed.append(
+            SourceTerminationConfig(
+                channel=channel,
+                kind=kind,
+                minimum_ohm=minimum,
+                maximum_ohm=maximum,
+            )
+        )
+    parsed.sort(key=lambda item: item.channel)
+    channels = tuple(item.channel for item in parsed)
+    if len(set(channels)) != len(channels):
+        raise ConfigError("source.terminations channels must be unique")
+    return tuple(parsed)
 
 
 def _instrument_options(raw: dict, section: str) -> dict[str, object]:
@@ -344,6 +441,7 @@ class WaveBenchConfig:
                 settle_ms_after_set_frequency=source.settle_ms_after_set_frequency,
                 options=source.options,
                 access=source.access,
+                terminations=source.terminations,
             ),
             power=self.power,
             dmm=self.dmm,
@@ -451,6 +549,11 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
         o = raw.get("output", {})
         q = raw.get("quality", {})
         sl = raw.get("safety_limits", {})
+        if not isinstance(sl, dict):
+            raise ConfigError("safety_limits must be a TOML table")
+        min_source_port_voltage_v, max_source_port_voltage_v = _source_port_voltage_limits(
+            sl
+        )
         tui_raw = raw.get("tui", {})
         src = raw.get("source")
         source = None
@@ -464,6 +567,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 settle_ms_after_set_frequency=int(src.get("settle_ms_after_set_frequency", 0)),
                 options=_instrument_options(src, "source"),
                 access=normalize_access_mode(src.get("access", "read_write"), "source.access"),
+                terminations=_source_terminations(src),
             )
         pwr = raw.get("power")
         power = None
@@ -566,6 +670,8 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 max_source_vpp=_optional_positive_float(sl, "max_source_vpp"),
                 max_power_voltage_v=_optional_positive_float(sl, "max_power_voltage_v"),
                 max_power_current_limit_a=_optional_positive_float(sl, "max_power_current_limit_a"),
+                min_source_port_voltage_v=min_source_port_voltage_v,
+                max_source_port_voltage_v=max_source_port_voltage_v,
             ),
             tui=TuiConfig(
                 log_max_lines=int(tui_raw.get("log_max_lines", 10_000)),

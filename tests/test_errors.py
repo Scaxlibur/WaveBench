@@ -9,6 +9,7 @@ from wavebench.errors import (
     InstrumentError,
     SessionCloseError,
     SessionHealthError,
+    SourceSafetyLimitsRequiredError,
     TransportIOError,
     error_envelope,
     ensure_error_envelope,
@@ -66,6 +67,19 @@ def test_error_envelope_is_json_compatible() -> None:
         error_type="CustomError",
     ).as_dict()
     assert payload["schema"] == ERROR_SCHEMA
+
+
+def test_source_safety_limits_required_error_has_stable_sorted_fields() -> None:
+    error = SourceSafetyLimitsRequiredError(
+        ("min_source_port_voltage_v", "max_source_vpp", "min_source_port_voltage_v")
+    )
+
+    payload = error.to_envelope(operation="source.output_v2").as_dict()
+
+    assert payload["code"] == "source_safety_limits_required"
+    assert payload["details"] == {
+        "missing_fields": ["max_source_vpp", "min_source_port_voltage_v"],
+    }
 
 
 def test_session_health_error_is_zero_io_and_does_not_serialize_reason_or_cause() -> None:

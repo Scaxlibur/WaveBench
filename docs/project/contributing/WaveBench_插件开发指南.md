@@ -147,6 +147,103 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 未采用新增 capability 的旧插件不需要提高核心版本下限。旧 `scope capture --screenshot` 不承载
 新 `scope.screenshot_v2`；新插件应使用独立截图 Service 或 `wavebench scope screenshot capture`。
 
+### 采用 Source V2 扩展
+
+准备提供完整信号源状态快照时，先阅读
+[Source V2 能力、状态与复合输出安全 RFC](../rfcs/WaveBench_source能力状态与复合输出安全RFC.md)。
+只读 snapshot 采用条件如下：
+
+- wheel 依赖和 descriptor 均要求 WaveBench `0.8.24` 或更高的 `0.8.x` 版本；
+- descriptor 追加 `source_extensions`，显式声明 topology、read feature profile 和 pure-read query contract；
+- driver 实现 `execute_source_query_plan_v2(plan)`，返回 `SourceQueryExecutionRecord`；
+- 插件负责具体协议、合法查询顺序和解析，核心负责 semantic plan、availability、runtime narrowing 和 consistency；
+- fake transport 覆盖组合响应、标量查询、activation、语义缺字段、query limit、deadline 和传输异常；
+- descriptor 导入、snapshot 和 capability 校验均不得写入仪器、触发、切换输出或消费状态。
+
+`source_extensions` 不能单独启用能力，必须同时声明 `source.snapshot_v2`。未声明该能力的旧插件
+继续走 Source V1。
+
+基础写能力使用 `source.basic_configure_v2` 与 `source.output_v2`；它们的写入 contract、fresh snapshot、
+回读与失败恢复都由核心 Service 组织。Harmonic 预设配置使用独立的
+`source.harmonics_configure_v2`，driver 必须实现 `configure_source_harmonics_v2(request)`，且 descriptor 必须
+声明 Harmonic `READ`／`CONFIGURE`、可配置 order 区间、允许预设，以及 configured order、preset 与输出状态
+可读。该 capability 只覆盖 `all`、`even`、`odd` 预设，不得借此支持 USER mask、逐分量幅度／相位或隐式输出 ON。
+
+Harmonic 关闭使用独立的 `source.harmonics_disable_v2`，driver 必须实现
+`disable_source_harmonics_v2(request)`。descriptor 必须声明同一通道的 Harmonic `READ`／`DISABLE` 与 output
+state readback；request 只有 channel，结果和独立回读都必须证明 Harmonic、输出均为 OFF。它不能作为隐式
+basic reset，也不要求 order 或 preset readback。
+
+内部 AM 使用独立的 `source.modulation_configure_v2`，driver 必须实现
+`configure_source_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`am`、
+`internal`、`depth_percent` 和 `configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的内部正弦 AM：深度为 `[0, 100]`，内部频率为有限正值；不得借此支持
+disable、外部调制源、内部波形选择、FM／PM／PWM 或隐式输出 ON。
+
+内部 PM 使用独立的 `source.modulation_pm_configure_v2`，driver 必须实现
+`configure_source_pm_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`pm`、
+`internal`、`phase_deviation_deg` 和 `configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的内部正弦 PM：相位偏差为 `[0, 360]`，内部频率为有限正值；不得借此支持
+disable、外部调制源、内部波形选择、AM／FM／PWM 或隐式输出 ON。
+
+内部 FM 使用独立的 `source.modulation_fm_configure_v2`，driver 必须实现
+`configure_source_fm_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`fm`、
+`internal`、`frequency_deviation_hz` 和 `configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的内部正弦 FM：frequency deviation 与内部频率均为有限正值；不得借此支持
+disable、外部调制源、内部波形选择、AM／PM／PWM 或隐式输出 ON。
+
+内部 PWM 使用独立的 `source.modulation_pwm_configure_v2`，driver 必须实现
+`configure_source_pwm_modulation_v2(request)`。descriptor 必须声明 Modulation `READ`／`CONFIGURE`、`pwm`、
+`internal`、`configuration_readable = true`，且 `parameter_kinds` 至少包含 `duty_deviation_percent` 或
+`width_deviation_s` 之一，并能回读同一 channel 的 output state。该 capability 只覆盖输出 OFF 时的内部正弦 PWM：
+request 包含有限正值的内部频率，以及恰好一个分支——`[0, 50]` 的 DUTY deviation 或 `[0, 500000]` 秒的 WIDTH
+deviation；不得借此支持 disable、外部调制源、内部波形选择、AM／FM／PM 或隐式输出 ON。
+
+内部 Sweep 使用独立的 `source.sweep_configure_v2`，driver 必须实现
+`configure_source_sweep_v2(request)`。descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、internal
+trigger、timing／marker 与 `configuration_readable = true`；同一 channel 的 Basic `READ` 必须声明 `sweep` frequency
+mode，Output `READ` 也必须能够回读 output state。该 capability 只覆盖输出 OFF 时的内建 Sweep：request 包含 start/stop、一个已声明的
+spacing、`[2, 2048]` 的 steps 和 `[0.001, 300]` 秒的 sweep time；不得借此支持 center/span、marker、外部／手动 trigger、
+arm、fire、输出 ON 或返回固定频率。
+
+内部 Triggered Burst 使用独立的 `source.burst_configure_v2`，driver 必须实现
+`configure_source_burst_v2(request)`。descriptor 必须声明 Burst `READ`／`CONFIGURE`、`triggered`、`internal`、
+`timing_readable = true` 和 `triggered_internal_configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的 enabled internal Triggered Burst：request 包含 cycles、phase、internal period 与 delay；
+不得借此支持 Gated、Infinity、外部／手动 trigger、arm、fire、输出 ON 或隐式恢复。
+
+WIDTH Pulse 使用独立的 `source.pulse_configure_v2`，driver 必须实现
+`configure_source_pulse_v2(request)`。descriptor 必须声明 Pulse `READ`／`CONFIGURE`、WIDTH hold、
+delay 与 transition 可读，以及 `width_configuration_readable = true`，并能回读同一 channel 的 output state。
+该 capability 只覆盖输出 OFF 时的完整 WIDTH 形状：width 不小于 `4 ns`，delay 为有限非负值，两个 transition
+为有限正值且各自不超过 width 的 `0.625` 倍；不得借此支持 DUTY hold、partial patch、trigger、输出 ON 或隐式波形切换。
+
+ARB storage 与 selection 分别使用 `source.arbitrary_storage_v2` 和 `source.arbitrary_select_v2`。storage driver
+必须同时实现 `read_source_arbitrary_storage_v2(channel, slot_id)` 与
+`mutate_source_arbitrary_storage_v2(request, payload)`；前者返回指定命名槽位的 exists、SHA-256 与大小，后者必须在
+设备侧以 create-only 或 compare-and-replace 语义执行单次 mutation。payload 只作为独立 `bytes` 参数传递，不能进入
+request、descriptor evidence 或 operation artifact。声明 storage capability 的 ARB profile 必须显式给出
+`storage_slot_metadata_readable`、`storage_write_modes` 与 `storage_max_payload_bytes`，并能回读 selection 与 output state。
+storage 不选择波形、不改变输出，也不要求其它独立端口关闭。
+
+selection driver 实现 `select_source_arbitrary_v2(request)`。descriptor 必须声明 ARB `READ`／`CONFIGURE`、可读的
+selection 与 storage digest、允许 playback mode；true-ARB 还要求 sample rate 可读，Basic 必须支持可读的
+`arbitrary` waveform，Output 必须能回读 state。DDS 只接受 playback frequency，true-ARB 只接受 sample rate；
+selection 只允许目标输出 OFF，完成后仍为 OFF，不会隐式 ON。声明任一 ARB V2 capability 后，V1
+`upload_arbitrary_waveform` 会在本地文件读取和仪器 I/O 前被拒绝，不能把混合 upload／selection／ON 的旧 route 部分映射。
+
+跨通道 Combine、Coupling、Tracking 和相位关系分别使用 `source.combine_configure_v2`、
+`source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2`。每项都使用
+独立 driver method，request 只包含递增且唯一的 channel set 与 enabled state。descriptor 必须为该 relation 的
+channel set 声明 `READ`／`CONFIGURE`，在 `SourceCrossChannelCapabilityProfile` 中列出 relation kind、支持的 channel set 和
+`configuration_readable = true`；同 feature 还必须有 instrument-scope 的纯读 relation graph facet。
+核心只要求 graph 展开后实际受影响的端口 OFF，未连通的独立端口可以继续 ON。driver result 必须回读 relation 与每个
+受影响端口的 OFF 状态；无法证明 graph、端口范围或 readback 时不得声明此 capability。声明 Coupling V2 后，V1
+`configure_coupling` 在 I/O 前拒绝；声明任一这四项 capability 后，V1 restore 也在 I/O 前拒绝。
+
+实际插件声明任一 Source V2 写 capability 前，至少完成该 capability 的 A0 离线 fixture；声明的方向、profile、
+方法与版本门必须同时通过核心校验。没有实机证据时，不得把核心合同注册描述为已完成设备写能力验收。
+
 ## 配置 options
 
 插件私有配置放在对应的 `[<kind>.options]` 表中，并为每个键定义 `OptionSpec`。适合 `OptionSpec` 的内容包括分块点数、插件专用超时和明确枚举；resource、backend、通用 timeout、安全限制和输出状态仍由核心配置管理。

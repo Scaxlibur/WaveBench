@@ -229,6 +229,33 @@ class RunReportTests(unittest.TestCase):
             self.assertNotIn("<h2>信号分析 / Signal analysis</h2>", html)
             self.assertIn("<th>截图 / Screenshot</th>", html)
 
+    def test_run_report_tolerates_additive_source_operation_namespace(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            source_operations = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.basic_configure_v2",
+                    "request": {"channel": 1},
+                }
+            ]
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "steps": [],
+                        "source_operations": source_operations,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            html = render_run_report_html(load_run_package(run_dir), output_dir=run_dir)
+
+            self.assertIn("<h2>摘要 / Summary</h2>", html)
+            self.assertNotIn("source.basic_configure_v2", html)
+
     def test_run_report_summary_counts_failed_expectations_and_warnings(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

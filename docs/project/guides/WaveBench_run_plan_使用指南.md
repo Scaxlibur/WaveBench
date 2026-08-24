@@ -361,6 +361,158 @@ state = "on"
 
 这看起来啰嗦，但它能避免现场调试时被隐藏动作吓到。
 
+### Source V2 基础、高级配置与 ARB 写 step
+
+声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用十七个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
+
+```toml
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+waveform_kind = "sine"
+frequency_hz = 1000
+amplitude_vpp = 1.0
+offset_v = 0.0
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 1
+order = 8
+preset = "odd"
+
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 1
+depth_percent = 80
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 1
+phase_deviation_deg = 90
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_fm_configure_v2"
+channel = 1
+frequency_deviation_hz = 12500
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 1
+internal_frequency_hz = 25
+duty_deviation_percent = 30
+
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 101
+sweep_time_s = 1
+
+[[steps]]
+kind = "source.burst_configure_v2"
+channel = 1
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 1
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
+
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot_a"
+file = "payload.bin"
+write_mode = "create_only"
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+playback_frequency_hz = 1000
+
+[[steps]]
+kind = "source.combine_configure_v2"
+channels = [1, 2]
+enabled = true
+```
+
+`source.basic_configure_v2` 的 `channel` 必填，五个 basic 字段中至少写一个；缺失字段保持当前值。
+`source.output_enable_v2`、`source.output_disable_v2` 和 `source.harmonics_disable_v2` 都只接受 `channel`。`source.harmonics_configure_v2`
+要求 `channel`、整数 `order >= 2` 与 `all`、`even`、`odd` 之一的 `preset`；核心还会在执行前检查运行时
+profile 是否支持该 order 和预设。`source.modulation_configure_v2` 要求 `channel`、位于 `[0, 100]` 的
+`depth_percent` 与有限正值 `internal_frequency_hz`；它只配置内部正弦 AM。
+`source.modulation_pm_configure_v2` 要求 `channel`、位于 `[0, 360]` 的 `phase_deviation_deg` 与有限正值
+`internal_frequency_hz`；它只配置内部正弦 PM。
+`source.modulation_fm_configure_v2` 要求 `channel`、有限正值 `frequency_deviation_hz` 与有限正值
+`internal_frequency_hz`；它只配置内部正弦 FM。
+`source.modulation_pwm_configure_v2` 要求 `channel`、有限正值 `internal_frequency_hz`，以及恰好一个显式单位分支：
+位于 `[0, 50]` 的 `duty_deviation_percent` 或位于 `[0, 500000]` 秒的 `width_deviation_s`；它只配置内部正弦 PWM。
+`source.sweep_configure_v2` 要求 `channel`、有限正值且 start 不大于 stop 的 `start_hz`／`stop_hz`、`linear`、
+`logarithmic`、`step` 之一的 `spacing`、位于 `[2, 2048]` 的整数 `steps` 与位于 `[0.001, 300]` 秒的 `sweep_time_s`；
+它只配置内建 Sweep，不会 fire 或开启输出。
+`source.burst_configure_v2` 要求 `channel`、位于 `[1, 500000]` 的整数 `cycles`、位于 `[0, 360]` 的
+`phase_deg`、有限正值 `internal_period_s` 与位于 `[0, 85]` 的 `delay_s`；它只配置内部 Triggered Burst，
+不会 trigger 或开启输出。
+`source.pulse_configure_v2` 要求 `channel`、不小于 `4 ns` 的 `width_s`、有限非负 `delay_s`，以及有限正值
+`leading_transition_s`／`trailing_transition_s`；两个 transition 都不能超过 width 的 `0.625` 倍，且它只配置 WIDTH 脉冲形状。
+
+`source.arbitrary_storage_v2` 要求 `channel`、安全 token 形式的 `slot_id`、相对或绝对的 `file`，以及
+`create_only` 或 `replace_if_digest_matches` 的 `write_mode`。replace mode 还必须给出
+`expected_previous_sha256`。执行时会从 plan 所在目录解析相对文件，计算 payload 的 SHA-256 和大小；这些字节不会
+写入执行意图或 Source operation artifact。storage 不选择波形、不改变输出，目标或其它独立端口不需要因上传被关闭。
+
+`source.arbitrary_select_v2` 要求 `channel`、`slot_id` 与 `dds`／`true_arb` 之一的 `playback_mode`。DDS 只接受
+正的 `playback_frequency_hz`；true-ARB 只接受正的 `sample_rate_hz`。该 step 必须在目标输出已关闭时执行，完成后仍关闭；
+它不包含 output ON。
+
+`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 和
+`source.phase_relation_configure_v2` 都要求递增且唯一的 `channels` 数组（至少两个通道）与布尔 `enabled`。核心按
+descriptor relation graph 展开实际受影响端口；只有展开后的端口必须 OFF，未连通端口可以继续 ON。它们不会开启输出、
+不会设置厂商私有关系参数，也不会为之后的 output ON 提供额外授权。
+
+Harmonic、内部 AM、内部 PM、内部 FM、内部 PWM、内部 Sweep、内部 Triggered Burst 与 WIDTH Pulse step 都必须在目标输出已关闭时执行，完成后仍保持关闭；它们不会隐式开启输出。现有
+`restore.source_state` 只恢复 basic 状态，不恢复 Harmonic、调制、Burst 或 Pulse 配置。双合同插件声明
+`source.harmonics_configure_v2` 或 `source.harmonics_disable_v2` 后，V1 `configure_harmonics` 会在仪器 I/O 前被拒绝；声明
+`source.modulation_configure_v2` 后，V1 `configure_am_modulation` 会在仪器 I/O 前被拒绝。未声明对应能力的
+旧插件继续使用 V1 路径。声明 `source.modulation_pm_configure_v2` 后，V1 `configure_pm_modulation` 也会在
+仪器 I/O 前被拒绝。声明 `source.modulation_fm_configure_v2` 后，V1 `configure_fm_modulation` 和 restore 也会在
+仪器 I/O 前被拒绝。声明 `source.modulation_pwm_configure_v2` 后，V1 `configure_pwm_modulation` 和 restore 也会在
+仪器 I/O 前被拒绝。声明 `source.sweep_configure_v2` 后，V1 `configure_sweep`、`trigger_sweep` 和 restore 也会在
+仪器 I/O 前被拒绝。声明 `source.burst_configure_v2` 后，V1 `configure_burst`、`trigger_burst` 和 restore 也会在
+仪器 I/O 前被拒绝。声明 `source.pulse_configure_v2` 后，V1 `configure_pulse` 也会在仪器 I/O 前被拒绝，
+因为 V1 route 还允许 DUTY hold。该 step 不会让 `source.output_enable_v2` 获得 Pulse 输出 ON 授权。
+
+声明 `source.coupling_configure_v2` 后，V1 `configure_coupling` 在仪器 I/O 前拒绝；声明任一跨通道 V2 capability
+后，V1 restore 也会在仪器 I/O 前拒绝，避免它在未知 relation state 下重开输出。
+
+执行意图会记录十八个 Source V2 operation，实际执行时的完整 Source V2 artifact 会写入
+`run.json.source_operations`；storage payload 只以文件名、SHA-256 与大小出现。没有声明 V2 capability 的旧插件继续使用 V1 step。
+
 ## 常见 `run check` 报错
 
 ### step kind 拼错
@@ -493,6 +645,7 @@ data/runs/YYYYMMDD_HHMMSS_<label>/
 | `restore` | source restore 的 snapshot / restore 状态；未启用时为空或简短状态。 |
 | `steps` | 每个 step 的执行记录。 |
 | `error` | run 级失败信息；例如 `code = "step_failed"` 或 `code = "safety_gate_failed"`。 |
+| `source_operations` | 实际执行的 Source V2 operation artifact；没有 Source V2 step 时不存在。 |
 
 `steps[]` 常见字段：
 

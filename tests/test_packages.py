@@ -89,6 +89,25 @@ class PackageReaderTests(unittest.TestCase):
             self.assertEqual(len(loaded.steps), 1)
             self.assertEqual(loaded.summary_rows[0]["kind"], "scope.capture")
 
+    def test_load_run_package_tolerates_additive_source_operation_namespace(self):
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            source_operations = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.future_v2",
+                }
+            ]
+            (run / "run.json").write_text(
+                json.dumps({"status": "ok", "steps": [], "source_operations": source_operations}),
+                encoding="utf-8",
+            )
+
+            loaded = load_run_package(run)
+
+            self.assertEqual(loaded.status, "ok")
+            self.assertEqual(loaded.run["source_operations"], source_operations)
+
     def test_load_run_package_reads_frequency_response_and_tolerates_bad_fit_json(self):
         with TemporaryDirectory() as tmp:
             run = Path(tmp)

@@ -1,6 +1,7 @@
 import csv
 from contextlib import contextmanager
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -440,6 +441,289 @@ screenshot = true
                     service.run(plan)
 
             open_services.assert_not_called()
+
+    def test_check_requires_source_v2_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+frequency_hz = 1000
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.basic_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_requires_source_v2_harmonic_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 1
+order = 8
+preset = "odd"
+
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 1
+depth_percent = 80
+internal_frequency_hz = 25
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.harmonics_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_requires_source_v2_harmonic_disable_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 1
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.harmonics_disable_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_requires_source_v2_modulation_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 1
+depth_percent = 80
+internal_frequency_hz = 25
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.modulation_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_requires_source_v2_pulse_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 1
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.pulse_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_requires_source_v2_pm_modulation_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 1
+phase_deviation_deg = 90
+internal_frequency_hz = 25
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.modulation_pm_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_accepts_source_v2_steps_without_v1_source_write_capabilities(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[safety]
+safety_gate = true
+off_source_channels = [1]
+
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+frequency_hz = 1000
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 1
+order = 8
+preset = "odd"
+
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 1
+depth_percent = 80
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 1
+phase_deviation_deg = 90
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_fm_configure_v2"
+channel = 1
+frequency_deviation_hz = 12500
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 1
+internal_frequency_hz = 25
+duty_deviation_percent = 25
+
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 101
+sweep_time_s = 1
+
+[[steps]]
+kind = "source.burst_configure_v2"
+channel = 1
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 1
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=(
+                    "source.snapshot_v2",
+                    "source.basic_configure_v2",
+                    "source.output_v2",
+                    "source.harmonics_configure_v2",
+                    "source.modulation_configure_v2",
+                    "source.modulation_pm_configure_v2",
+                    "source.modulation_fm_configure_v2",
+                    "source.modulation_pwm_configure_v2",
+                    "source.sweep_configure_v2",
+                    "source.burst_configure_v2",
+                    "source.pulse_configure_v2",
+                ),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ):
+                service.check(plan)
 
     def test_check_requires_protection_capability_for_power_output_on(self):
         with TemporaryDirectory() as tmp:
@@ -1252,6 +1536,302 @@ state = "on"
                 source.set_square_duty_cycle.assert_called_once_with(channel=2, duty_percent=25.0)
                 source.set_output.assert_called_once_with(channel=2, enabled=True)
                 self.assertEqual(len(result.steps), 6)
+                run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+                self.assertNotIn("source_operations", run_data)
+
+    def test_runs_source_v2_harmonic_disable_step_and_writes_operation_artifact(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.harmonics_disable_v2"
+channel = 1
+""",
+                )
+            )
+            artifact = {
+                "schema": "wavebench.source.operation.v1",
+                "operation": "source.harmonics_disable_v2",
+            }
+            source = Mock()
+            source.disable_harmonics_v2.return_value = (SimpleNamespace(), artifact)
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            request = source.disable_harmonics_v2.call_args.args[0]
+            self.assertEqual(request.channel, 1)
+            self.assertEqual(run_data["source_operations"], [artifact])
+            self.assertEqual(result.steps[0].artifact["source_operation"], artifact)
+
+    def test_runs_source_v2_steps_and_writes_operation_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+waveform_kind = "square"
+frequency_hz = 1000
+amplitude_vpp = 1.5
+
+[[steps]]
+kind = "source.harmonics_configure_v2"
+channel = 1
+order = 8
+preset = "odd"
+
+[[steps]]
+kind = "source.modulation_configure_v2"
+channel = 1
+depth_percent = 80
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pm_configure_v2"
+channel = 1
+phase_deviation_deg = 90
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_fm_configure_v2"
+channel = 1
+frequency_deviation_hz = 12500
+internal_frequency_hz = 25
+
+[[steps]]
+kind = "source.modulation_pwm_configure_v2"
+channel = 1
+internal_frequency_hz = 25
+width_deviation_s = 1e-6
+
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 101
+sweep_time_s = 1
+
+[[steps]]
+kind = "source.burst_configure_v2"
+channel = 1
+cycles = 12
+phase_deg = 30
+internal_period_s = 0.25
+delay_s = 0.5
+
+[[steps]]
+kind = "source.pulse_configure_v2"
+channel = 1
+width_s = 1e-6
+delay_s = 0
+leading_transition_s = 1e-8
+trailing_transition_s = 1e-8
+
+[[steps]]
+kind = "source.output_enable_v2"
+channel = 1
+
+[[steps]]
+kind = "source.output_disable_v2"
+channel = 1
+""",
+                )
+            )
+            artifacts = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.basic_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.harmonics_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.modulation_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.modulation_pm_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.modulation_fm_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.modulation_pwm_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.sweep_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.burst_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.pulse_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.output_enable_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.output_disable_v2",
+                },
+            ]
+            source = Mock()
+            source.configure_basic_v2.return_value = (SimpleNamespace(), artifacts[0])
+            source.configure_harmonics_v2.return_value = (SimpleNamespace(), artifacts[1])
+            source.configure_modulation_v2.return_value = (SimpleNamespace(), artifacts[2])
+            source.configure_pm_modulation_v2.return_value = (SimpleNamespace(), artifacts[3])
+            source.configure_fm_modulation_v2.return_value = (SimpleNamespace(), artifacts[4])
+            source.configure_pwm_modulation_v2.return_value = (SimpleNamespace(), artifacts[5])
+            source.configure_sweep_v2.return_value = (SimpleNamespace(), artifacts[6])
+            source.configure_burst_v2.return_value = (SimpleNamespace(), artifacts[7])
+            source.configure_pulse_v2.return_value = (SimpleNamespace(), artifacts[8])
+            source.set_output_v2.side_effect = [
+                (SimpleNamespace(), artifacts[9]),
+                (SimpleNamespace(), artifacts[10]),
+            ]
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            request = source.configure_basic_v2.call_args.args[0]
+            self.assertEqual(request.channel, 1)
+            self.assertEqual(request.patch.waveform_kind.value.value, "square")
+            self.assertEqual(request.patch.frequency_hz.value, 1000.0)
+            self.assertEqual(request.patch.amplitude_vpp.value, 1.5)
+            harmonic_request = source.configure_harmonics_v2.call_args.args[0]
+            self.assertEqual(harmonic_request.channel, 1)
+            self.assertEqual(harmonic_request.order, 8)
+            self.assertEqual(harmonic_request.preset.value, "odd")
+            modulation_request = source.configure_modulation_v2.call_args.args[0]
+            self.assertEqual(modulation_request.channel, 1)
+            self.assertEqual(modulation_request.depth_percent, 80.0)
+            self.assertEqual(modulation_request.internal_frequency_hz, 25.0)
+            pm_request = source.configure_pm_modulation_v2.call_args.args[0]
+            self.assertEqual(pm_request.channel, 1)
+            self.assertEqual(pm_request.phase_deviation_deg, 90.0)
+            self.assertEqual(pm_request.internal_frequency_hz, 25.0)
+            fm_request = source.configure_fm_modulation_v2.call_args.args[0]
+            self.assertEqual(fm_request.channel, 1)
+            self.assertEqual(fm_request.frequency_deviation_hz, 12_500.0)
+            self.assertEqual(fm_request.internal_frequency_hz, 25.0)
+            pwm_request = source.configure_pwm_modulation_v2.call_args.args[0]
+            self.assertEqual(pwm_request.channel, 1)
+            self.assertEqual(pwm_request.internal_frequency_hz, 25.0)
+            self.assertIsNone(pwm_request.duty_deviation_percent)
+            self.assertEqual(pwm_request.width_deviation_s, 1.0e-6)
+            sweep_request = source.configure_sweep_v2.call_args.args[0]
+            self.assertEqual(sweep_request.channel, 1)
+            self.assertEqual(sweep_request.start_hz, 100.0)
+            self.assertEqual(sweep_request.stop_hz, 1_000.0)
+            self.assertEqual(sweep_request.spacing.value, "linear")
+            self.assertEqual(sweep_request.steps, 101)
+            self.assertEqual(sweep_request.sweep_time_s, 1.0)
+            burst_request = source.configure_burst_v2.call_args.args[0]
+            self.assertEqual(burst_request.channel, 1)
+            self.assertEqual(burst_request.cycles, 12)
+            self.assertEqual(burst_request.phase_deg, 30.0)
+            self.assertEqual(burst_request.internal_period_s, 0.25)
+            self.assertEqual(burst_request.delay_s, 0.5)
+            pulse_request = source.configure_pulse_v2.call_args.args[0]
+            self.assertEqual(pulse_request.channel, 1)
+            self.assertEqual(pulse_request.width_s, 1.0e-6)
+            self.assertEqual(pulse_request.delay_s, 0.0)
+            self.assertEqual(pulse_request.leading_transition_s, 1.0e-8)
+            self.assertEqual(pulse_request.trailing_transition_s, 1.0e-8)
+            self.assertEqual(
+                [
+                    (item.args[0].channel, item.args[0].enabled)
+                    for item in source.set_output_v2.call_args_list
+                ],
+                [(1, True), (1, False)],
+            )
+            self.assertEqual(run_data["source_operations"], artifacts)
+            self.assertEqual(
+                [record.artifact["source_operation"] for record in result.steps],
+                artifacts,
+            )
+
+    def test_source_v2_failure_artifact_is_written_to_run_root(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_configure_v2"
+channel = 1
+frequency_hz = 1000
+""",
+                )
+            )
+            artifact = {
+                "schema": "wavebench.source.operation.v1",
+                "operation": "source.basic_configure_v2",
+                "recovery": {"status": "off_verified"},
+            }
+            failure = ConfigError("postcondition mismatch")
+            failure.source_operation_artifact = artifact
+            source = Mock()
+            source.configure_basic_v2.side_effect = failure
+            run_dir = Path(tmp) / "source-v2-failure"
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            with patch("wavebench.services.run_service.new_package_dir", return_value=run_dir):
+                with self.assertRaisesRegex(ConfigError, "postcondition mismatch"):
+                    OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+
+            run_data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_data["source_operations"], [artifact])
 
     def test_restores_source_state_after_success_when_enabled(self):
         with TemporaryDirectory() as tmp:
@@ -1860,6 +2440,79 @@ mode = "complex_transfer"
             self.assertTrue(all(row["gain_db"] for row in rows))
             self.assertTrue(all(row["gain_db_corrected"] for row in rows))
             self.assertTrue((result.run_dir / "frequency_response_baseline.json").exists())
+
+    def test_runs_source_v2_arbitrary_steps_without_putting_payload_in_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            payload = b"abc"
+            payload_path = Path(tmp) / "payload.bin"
+            payload_path.write_bytes(payload)
+            digest = "sha256:" + sha256(payload).hexdigest()
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.arbitrary_storage_v2"
+channel = 1
+slot_id = "slot_a"
+file = "payload.bin"
+write_mode = "create_only"
+
+[[steps]]
+kind = "source.arbitrary_select_v2"
+channel = 1
+slot_id = "slot_a"
+playback_mode = "dds"
+playback_frequency_hz = 1000
+""",
+                )
+            )
+            artifacts = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_storage_v2",
+                    "request": {"payload_sha256": digest},
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_select_v2",
+                },
+            ]
+            source = Mock()
+            source.mutate_arbitrary_storage_v2.return_value = (SimpleNamespace(), artifacts[0])
+            source.select_arbitrary_v2.return_value = (SimpleNamespace(), artifacts[1])
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            storage_request = source.mutate_arbitrary_storage_v2.call_args.args[0]
+            self.assertEqual(storage_request.channel, 1)
+            self.assertEqual(storage_request.slot_id, "slot_a")
+            self.assertEqual(storage_request.payload_sha256, digest)
+            self.assertEqual(storage_request.payload_size_bytes, len(payload))
+            self.assertEqual(
+                source.mutate_arbitrary_storage_v2.call_args.kwargs["payload"],
+                payload,
+            )
+            select_request = source.select_arbitrary_v2.call_args.args[0]
+            self.assertEqual(select_request.channel, 1)
+            self.assertEqual(select_request.slot_id, "slot_a")
+            self.assertEqual(select_request.playback_mode.value, "dds")
+            self.assertEqual(select_request.playback_frequency_hz, 1_000.0)
+            self.assertEqual(run_data["source_operations"], artifacts)
+            self.assertNotIn("abc", json.dumps(run_data, ensure_ascii=False))
 
 
 if __name__ == "__main__":

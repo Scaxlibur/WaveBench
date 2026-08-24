@@ -3,6 +3,23 @@ from __future__ import annotations
 import pytest
 
 from wavebench.errors import ConfigError
+from wavebench.instruments.source_extensions import (
+    SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT,
+    SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
+    SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT,
+    SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
+    SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
+    SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+    SourceEnergyEffect,
+)
 from wavebench.services.operation_specs import (
     OPERATION_REGISTRY,
     OperationRegistry,
@@ -24,6 +41,141 @@ def test_source_output_spec_describes_mutation_and_restore_boundary() -> None:
     assert spec.restore_coverage == "basic"
     assert "dangerous_output" in spec.risk_flags
     assert spec.as_dict()["required_capabilities"] == ["source.output"]
+
+
+def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
+    pairs = (
+        (
+            SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-basic",
+            ("source_v2", "output_must_be_off"),
+        ),
+        (
+            SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-harmonics",
+            ("source_v2", "output_must_be_off"),
+        ),
+        (
+            SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT,
+            "source-v2-harmonics",
+            ("source_v2", "output_must_be_off"),
+        ),
+        (
+            SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-modulation",
+            ("source_v2", "output_must_be_off", "am_internal_only"),
+        ),
+        (
+            SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-modulation-pm",
+            ("source_v2", "output_must_be_off", "pm_internal_only"),
+        ),
+        (
+            SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-modulation-fm",
+            ("source_v2", "output_must_be_off", "fm_internal_only"),
+        ),
+        (
+            SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-modulation-pwm",
+            ("source_v2", "output_must_be_off", "pwm_internal_only"),
+        ),
+        (
+            SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-sweep",
+            ("source_v2", "output_must_be_off", "sweep_internal_no_fire"),
+        ),
+        (
+            SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-burst",
+            ("source_v2", "output_must_be_off", "burst_internal_triggered_only"),
+        ),
+        (
+            SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
+            "source-v2-pulse",
+            ("source_v2", "output_must_be_off", "pulse_width_only"),
+        ),
+        (
+            SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
+            "source-v2-arbitrary-storage",
+            ("source_v2", "arbitrary_storage", "payload_not_artifact"),
+        ),
+        (
+            SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT,
+            "source-v2-arbitrary-selection",
+            ("source_v2", "output_must_be_off", "arbitrary_selection"),
+        ),
+        (
+            SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
+            "source-v2-output",
+            ("source_v2", "dangerous_output"),
+        ),
+        (
+            SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT,
+            "source-v2-output",
+            ("source_v2", "safe_output_off"),
+        ),
+    )
+
+    for contract, restore_coverage, risk_flags in pairs:
+        spec = require_operation_spec(contract.operation)
+        required_fields = {field.value for field in contract.required_fields}
+        changed_fields = {field.value for field in contract.changed_fields}
+        postcondition_fields = {field.value for field in contract.postcondition_fields}
+        cleanup_fields = {field.value for field in contract.cleanup_verification_fields}
+
+        assert spec.instrument_kind == "source"
+        assert spec.effect == "write"
+        assert spec.required_capabilities == (contract.capability,)
+        assert spec.lease_mode == "exclusive"
+        assert spec.timeout_source == "operation.timeout_ms"
+        assert spec.operation_timeout_ms == contract.operation_timeout_ms
+        assert required_fields <= set(spec.required_verified_fields)
+        assert required_fields <= set(spec.verification_fields)
+        assert changed_fields <= set(spec.changed_fields)
+        assert postcondition_fields == set(spec.postcondition_fields)
+        assert cleanup_fields == set(spec.cleanup_verification_fields)
+        assert spec.restore_coverage == restore_coverage
+        assert spec.risk_flags == risk_flags
+        assert spec.error_check_minimum == "disabled"
+
+    assert SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_PM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.NONE
+    )
+    assert SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT.energy_effect is SourceEnergyEffect.EMIT
+    assert SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.DECREASE_ONLY
+    )
 
 
 def test_registry_is_read_only_and_filters_by_instrument_kind() -> None:

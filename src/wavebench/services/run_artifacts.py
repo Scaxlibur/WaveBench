@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from wavebench.errors import ensure_error_envelope
+from wavebench.instruments.source_extensions import SOURCE_OPERATION_ARTIFACT_SCHEMA
 from wavebench.services.run_plan import RunPlan
 from wavebench.services.source_state import RestorableSourceState
 
@@ -38,6 +39,37 @@ def write_step_record(steps_dir: Path, record: RunStepRecord) -> None:
     )
 
 
+def _validated_source_operations(
+    source_operations: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Accept only real, schema-labelled Source V2 operation artifacts.
+
+    The namespace stays absent for all V1 runs.  Feature-specific V2 operation
+    code owns the rest of each artifact's shape, but it cannot accidentally
+    insert an arbitrary unlabelled dictionary at the run root.
+    """
+
+    if source_operations is None:
+        return None
+    if not isinstance(source_operations, list) or any(
+        not isinstance(item, dict) for item in source_operations
+    ):
+        raise TypeError("source_operations must be a list of operation artifact objects")
+    if not source_operations:
+        return None
+    for artifact in source_operations:
+        if artifact.get("schema") != SOURCE_OPERATION_ARTIFACT_SCHEMA:
+            raise ValueError("source operation artifact has an unsupported schema")
+        operation = artifact.get("operation")
+        if (
+            not isinstance(operation, str)
+            or not operation.startswith("source.")
+            or operation.strip() != operation
+        ):
+            raise ValueError("source operation artifact must have a trimmed source.* operation")
+    return source_operations
+
+
 def write_run_files(
     *,
     plan: RunPlan,
@@ -49,6 +81,7 @@ def write_run_files(
     restore_state: list[RestorableSourceState] | None = None,
     restore_error: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
+    source_operations: list[dict[str, Any]] | None = None,
 ) -> None:
     run_data: dict[str, Any] = {
         "status": status,
@@ -88,6 +121,12 @@ def write_run_files(
         run_data["error"] = ensure_error_envelope(error, default_exit_code=2)
     if provenance is not None:
         run_data["provenance"] = provenance
+    # Keep the V2 namespace absent until an actual Source V2 operation has a
+    # typed artifact to place in it.  In particular, this must not alter the
+    # byte representation of existing V1 run artifacts.
+    validated_source_operations = _validated_source_operations(source_operations)
+    if validated_source_operations is not None:
+        run_data["source_operations"] = validated_source_operations
     run_json_path.write_text(
         json.dumps(run_data, indent=2, ensure_ascii=False),
         encoding="utf-8",

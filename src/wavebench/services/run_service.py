@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import time
 import json
+from hashlib import sha256
 from math import isfinite
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
@@ -21,6 +22,33 @@ from wavebench.errors import (
 )
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.instruments.source_extensions import (
+    PatchAction,
+    PatchValue,
+    SourceArbitraryPlaybackMode,
+    SourceArbitrarySelectRequest,
+    SourceArbitraryStorageRequest,
+    SourceBasicConfigureRequest,
+    SourceBasicPatch,
+    SourceBurstConfigureRequest,
+    SourceCombineConfigureRequest,
+    SourceCouplingConfigureRequest,
+    SourceFmModulationConfigureRequest,
+    SourceHarmonicConfigureRequest,
+    SourceHarmonicDisableRequest,
+    SourceHarmonicPreset,
+    SourceModulationConfigureRequest,
+    SourceOutputRequest,
+    SourcePhaseRelationConfigureRequest,
+    SourcePmModulationConfigureRequest,
+    SourcePwmModulationConfigureRequest,
+    SourcePulseConfigureRequest,
+    SourceSweepConfigureRequest,
+    SourceSweepSpacing,
+    SourceTrackingConfigureRequest,
+    SourceWaveformKind,
+    SourceStorageWriteMode,
+)
 from wavebench.logging import CommandLogger
 from wavebench.services.power_service import PowerService
 from wavebench.services.dmm_service import DmmService
@@ -326,6 +354,20 @@ class RunService:
         def add(kind: str, *capabilities: str) -> None:
             required.setdefault(kind, set()).update(capabilities)
 
+        def add_source_output_gate_capability() -> None:
+            source = self.config.source
+            if source is None or not source.resource:
+                add("source", "source.output")
+                return
+            descriptor = resolve_instrument_descriptor(
+                source.driver,
+                expected_kind="source",
+            )
+            if "source.output_v2" in descriptor.capabilities:
+                add("source", "source.snapshot_v2", "source.output_v2")
+            else:
+                add("source", "source.output")
+
         for step in plan.steps:
             if step.kind == "scope.auto":
                 add("scope", "scope.autoscale")
@@ -378,6 +420,40 @@ class RunService:
                 add("source", "source.output")
                 if step.fields["state"] == "on":
                     add("source", "source.status")
+            elif step.kind == "source.basic_configure_v2":
+                add("source", "source.snapshot_v2", "source.basic_configure_v2")
+            elif step.kind in {"source.output_enable_v2", "source.output_disable_v2"}:
+                add("source", "source.snapshot_v2", "source.output_v2")
+            elif step.kind == "source.harmonics_configure_v2":
+                add("source", "source.snapshot_v2", "source.harmonics_configure_v2")
+            elif step.kind == "source.harmonics_disable_v2":
+                add("source", "source.snapshot_v2", "source.harmonics_disable_v2")
+            elif step.kind == "source.modulation_configure_v2":
+                add("source", "source.snapshot_v2", "source.modulation_configure_v2")
+            elif step.kind == "source.modulation_pm_configure_v2":
+                add("source", "source.snapshot_v2", "source.modulation_pm_configure_v2")
+            elif step.kind == "source.modulation_fm_configure_v2":
+                add("source", "source.snapshot_v2", "source.modulation_fm_configure_v2")
+            elif step.kind == "source.modulation_pwm_configure_v2":
+                add("source", "source.snapshot_v2", "source.modulation_pwm_configure_v2")
+            elif step.kind == "source.sweep_configure_v2":
+                add("source", "source.snapshot_v2", "source.sweep_configure_v2")
+            elif step.kind == "source.burst_configure_v2":
+                add("source", "source.snapshot_v2", "source.burst_configure_v2")
+            elif step.kind == "source.pulse_configure_v2":
+                add("source", "source.snapshot_v2", "source.pulse_configure_v2")
+            elif step.kind == "source.arbitrary_storage_v2":
+                add("source", "source.snapshot_v2", "source.arbitrary_storage_v2")
+            elif step.kind == "source.arbitrary_select_v2":
+                add("source", "source.snapshot_v2", "source.arbitrary_select_v2")
+            elif step.kind == "source.combine_configure_v2":
+                add("source", "source.snapshot_v2", "source.combine_configure_v2")
+            elif step.kind == "source.coupling_configure_v2":
+                add("source", "source.snapshot_v2", "source.coupling_configure_v2")
+            elif step.kind == "source.tracking_configure_v2":
+                add("source", "source.snapshot_v2", "source.tracking_configure_v2")
+            elif step.kind == "source.phase_relation_configure_v2":
+                add("source", "source.snapshot_v2", "source.phase_relation_configure_v2")
             elif step.kind == "power.status":
                 add("power", "power.status")
             elif step.kind == "power.set":
@@ -397,7 +473,7 @@ class RunService:
                     or step.kind == "sweep.frequency_response"
                     or plan.restore.source_state
                 ):
-                    add("source", "source.output")
+                    add_source_output_gate_capability()
                 if gate.get("power_channels") or step.kind.startswith("power."):
                     add("power", "power.output")
 
@@ -416,7 +492,7 @@ class RunService:
                 item.kind.startswith("source.") or item.kind == "sweep.frequency_response"
                 for item in plan.steps
             ):
-                add("source", "source.output")
+                add_source_output_gate_capability()
             if plan.safety.off_power_channels or any(
                 item.kind.startswith("power.") for item in plan.steps
             ):
@@ -490,6 +566,7 @@ class RunService:
                 shutil.copyfile(plan.path, run_dir / "plan.toml")
 
             records: list[RunStepRecord] = []
+            source_operations: list[dict[str, Any]] = []
             run_json_path = run_dir / "run.json"
             summary_csv_path = run_dir / "summary.csv"
             restore_state: list[RestorableSourceState] | None = None
@@ -507,6 +584,10 @@ class RunService:
                     "capture_sync_grade": CAPTURE_SYNC_GRADE,
                 },
             }
+
+            def append_source_operation_artifact(value: object) -> None:
+                if isinstance(value, dict):
+                    source_operations.append(value)
 
             def refresh_provenance() -> None:
                 instrument_io = services.audit_snapshot()
@@ -545,6 +626,7 @@ class RunService:
                     restore_state=restore_state,
                     restore_error=restore_error,
                     provenance=provenance,
+                    source_operations=source_operations,
                 )
 
             services.close_reporters.append(report_close_errors)
@@ -588,6 +670,13 @@ class RunService:
                                     operation=f"run.step.{step.kind}",
                                 )
                             },
+                        )
+                    append_source_operation_artifact(
+                        record.artifact.get("source_operation")
+                    )
+                    if step_failure is not None:
+                        append_source_operation_artifact(
+                            getattr(step_failure, "source_operation_artifact", None)
                         )
                     safety_gate = self._safety_gate_for_step(plan, step)
                     gate_triggered = safety_gate["enabled"] and record.status in {
@@ -686,6 +775,7 @@ class RunService:
                     restore_state=restore_state,
                     restore_error=restore_error,
                     provenance=provenance,
+                    source_operations=source_operations,
                 )
                 if restore_error is not None:
                     raise ConfigError(
@@ -700,6 +790,9 @@ class RunService:
                     write_step_record(steps_dir, exc.record)
                     self._update_frequency_responses_manifest(run_dir, exc.record)
                     failure = exc.cause
+                append_source_operation_artifact(
+                    getattr(failure, "source_operation_artifact", None)
+                )
                 restore_error = restore_source_state(
                     restore_state,
                     source_service_factory=lambda: self._source_service(services=services),
@@ -721,6 +814,7 @@ class RunService:
                     restore_state=restore_state,
                     restore_error=restore_error,
                     provenance=provenance,
+                    source_operations=source_operations,
                 )
                 if isinstance(exc, _FrequencyResponseExecutionError):
                     raise failure from None
@@ -774,6 +868,7 @@ class RunService:
                     restore_state=restore_state,
                     restore_error=restore_error,
                     provenance=provenance,
+                    source_operations=source_operations,
                 )
                 raise ConfigError("run plan source state restore failed: " + restore_error["message"])
 
@@ -790,6 +885,7 @@ class RunService:
                 restore_state=restore_state,
                 restore_error=None,
                 provenance=provenance,
+                source_operations=source_operations,
             )
             result = RunResult(
                 run_dir=run_dir,
@@ -1037,6 +1133,204 @@ class RunService:
         elif step.kind == "source.status":
             status = self._source_service(services=services).status(channel=step.fields.get("channel"))
             artifact = {"source_status": _status_payload(status)}
+        elif step.kind == "source.basic_configure_v2":
+            fields = step.fields
+            _, source_operation = self._source_service(services=services).configure_basic_v2(
+                SourceBasicConfigureRequest(
+                    channel=fields["channel"],
+                    patch=SourceBasicPatch(
+                        waveform_kind=(
+                            PatchValue(
+                                PatchAction.SET,
+                                SourceWaveformKind(fields["waveform_kind"]),
+                            )
+                            if "waveform_kind" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        frequency_hz=(
+                            PatchValue(PatchAction.SET, fields["frequency_hz"])
+                            if "frequency_hz" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        amplitude_vpp=(
+                            PatchValue(PatchAction.SET, fields["amplitude_vpp"])
+                            if "amplitude_vpp" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        offset_v=(
+                            PatchValue(PatchAction.SET, fields["offset_v"])
+                            if "offset_v" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        square_duty_cycle_percent=(
+                            PatchValue(PatchAction.SET, fields["square_duty_cycle_percent"])
+                            if "square_duty_cycle_percent" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                    ),
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.output_enable_v2":
+            _, source_operation = self._source_service(services=services).set_output_v2(
+                SourceOutputRequest(channel=step.fields["channel"], enabled=True)
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.output_disable_v2":
+            _, source_operation = self._source_service(services=services).set_output_v2(
+                SourceOutputRequest(channel=step.fields["channel"], enabled=False)
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.harmonics_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_harmonics_v2(
+                SourceHarmonicConfigureRequest(
+                    channel=step.fields["channel"],
+                    order=step.fields["order"],
+                    preset=SourceHarmonicPreset(step.fields["preset"]),
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.harmonics_disable_v2":
+            _, source_operation = self._source_service(services=services).disable_harmonics_v2(
+                SourceHarmonicDisableRequest(channel=step.fields["channel"])
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.modulation_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_modulation_v2(
+                SourceModulationConfigureRequest(
+                    channel=step.fields["channel"],
+                    depth_percent=step.fields["depth_percent"],
+                    internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.modulation_pm_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_pm_modulation_v2(
+                SourcePmModulationConfigureRequest(
+                    channel=step.fields["channel"],
+                    phase_deviation_deg=step.fields["phase_deviation_deg"],
+                    internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.modulation_fm_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_fm_modulation_v2(
+                SourceFmModulationConfigureRequest(
+                    channel=step.fields["channel"],
+                    frequency_deviation_hz=step.fields["frequency_deviation_hz"],
+                    internal_frequency_hz=step.fields["internal_frequency_hz"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.modulation_pwm_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_pwm_modulation_v2(
+                SourcePwmModulationConfigureRequest(
+                    channel=step.fields["channel"],
+                    internal_frequency_hz=step.fields["internal_frequency_hz"],
+                    duty_deviation_percent=step.fields.get("duty_deviation_percent"),
+                    width_deviation_s=step.fields.get("width_deviation_s"),
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.sweep_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_sweep_v2(
+                SourceSweepConfigureRequest(
+                    channel=step.fields["channel"],
+                    start_hz=step.fields["start_hz"],
+                    stop_hz=step.fields["stop_hz"],
+                    spacing=SourceSweepSpacing(step.fields["spacing"]),
+                    steps=step.fields["steps"],
+                    sweep_time_s=step.fields["sweep_time_s"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.burst_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_burst_v2(
+                SourceBurstConfigureRequest(
+                    channel=step.fields["channel"],
+                    cycles=step.fields["cycles"],
+                    phase_deg=step.fields["phase_deg"],
+                    internal_period_s=step.fields["internal_period_s"],
+                    delay_s=step.fields["delay_s"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.pulse_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_pulse_v2(
+                SourcePulseConfigureRequest(
+                    channel=step.fields["channel"],
+                    width_s=step.fields["width_s"],
+                    delay_s=step.fields["delay_s"],
+                    leading_transition_s=step.fields["leading_transition_s"],
+                    trailing_transition_s=step.fields["trailing_transition_s"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.arbitrary_storage_v2":
+            payload_path = Path(step.fields["file"])
+            if not payload_path.is_absolute():
+                payload_path = plan.path.parent / payload_path
+            try:
+                payload = payload_path.read_bytes()
+            except OSError as exc:
+                raise ConfigError(
+                    f"source.arbitrary_storage_v2 payload file is unreadable: {payload_path}"
+                ) from exc
+            _, source_operation = self._source_service(services=services).mutate_arbitrary_storage_v2(
+                SourceArbitraryStorageRequest(
+                    channel=step.fields["channel"],
+                    slot_id=step.fields["slot_id"],
+                    write_mode=SourceStorageWriteMode(step.fields["write_mode"]),
+                    payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                    payload_size_bytes=len(payload),
+                    expected_previous_sha256=step.fields.get("expected_previous_sha256"),
+                ),
+                payload=payload,
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.arbitrary_select_v2":
+            _, source_operation = self._source_service(services=services).select_arbitrary_v2(
+                SourceArbitrarySelectRequest(
+                    channel=step.fields["channel"],
+                    slot_id=step.fields["slot_id"],
+                    playback_mode=SourceArbitraryPlaybackMode(step.fields["playback_mode"]),
+                    playback_frequency_hz=step.fields.get("playback_frequency_hz"),
+                    sample_rate_hz=step.fields.get("sample_rate_hz"),
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.combine_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_combine_v2(
+                SourceCombineConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.coupling_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_coupling_v2(
+                SourceCouplingConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.tracking_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_tracking_v2(
+                SourceTrackingConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.phase_relation_configure_v2":
+            _, source_operation = self._source_service(services=services).configure_phase_relation_v2(
+                SourcePhaseRelationConfigureRequest(
+                    channels=step.fields["channels"],
+                    enabled=step.fields["enabled"],
+                )
+            )
+            artifact = {"source_operation": source_operation}
         elif step.kind == "source.set_freq":
             status = self._source_service(services=services).set_frequency(
                 channel=step.fields.get("channel"),

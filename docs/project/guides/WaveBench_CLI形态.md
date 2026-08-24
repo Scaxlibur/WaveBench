@@ -31,7 +31,7 @@ wavebench run --help
 | 类别 | 示例 | 行为 |
 |---|---|---|
 | 离线 | `run schema`、`run template`、`run check`、`run intent`、`run report`、`run compare`、`run resume`、`capability explain`、`lock status`、`capture inspect`、`tui --fake` | 不连接仪器；报告、比较、检查、能力解释、锁查询和意图生成只读取本地文件 |
-| 连接读取 | `doctor`、`net`、`scope idn`、`scope status`、`run verify` | 查询资源、身份或状态，不应修改实验设置 |
+| 连接读取 | `doctor`、`net`、`scope idn`、`scope status`、`source snapshot-v2`、`run verify` | 查询资源、身份或状态，不应修改实验设置 |
 | 显式写入或触发 | `scope auto`、`scope fetch/capture`、source / power setter、`run plan` | 可能改变设置、触发采集或切换输出 |
 
 执行硬件写入前，应先确认接线、输入阻抗、输出状态和安全限制。CLI 不会自动发送 `*RST`，也不会因为设置电压或幅度而自动打开输出。
@@ -67,6 +67,29 @@ wavebench capability explain source.output --candidates --json
 ```
 
 `--candidates` 只筛选当前本地 registry 中的驱动，不安装、不下载插件。
+
+完整的只读信号源状态使用：
+
+```bash
+wavebench source snapshot-v2 --config wavebench.toml
+wavebench --json source snapshot-v2 --config wavebench.toml
+```
+
+该命令要求插件声明 `source.snapshot_v2`，按 descriptor topology 查询全部通道、输入和跨通道
+关系，不接受单通道或 raw query 参数。普通模式输出缩进 JSON；`--json` 使用
+`wavebench.cli.result.v1` envelope。命令不授权任何 Source V2 写入。
+
+已声明对应写 capability 的插件还可以配置跨通道关系：
+
+```bash
+wavebench source combine-configure-v2 --channel 1 --channel 2 on --config wavebench.toml
+wavebench source coupling-configure-v2 --channel 1 --channel 2 off --config wavebench.toml
+wavebench source tracking-configure-v2 --channel 1 --channel 2 on --config wavebench.toml
+wavebench source phase-relation-configure-v2 --channel 1 --channel 2 on --config wavebench.toml
+```
+
+`--channel` 必须重复给出至少两个递增且唯一的参与端口。核心只要求 relation graph 展开后的受影响端口为 OFF；
+没有连通关系的其它端口可以继续 ON。命令不设置厂商私有联动参数，也不开启输出。
 
 `--json` 可以放在命令行任意位置。非交互命令输出 `wavebench.cli.result.v1`；错误输出
 `wavebench.error.v1`，诊断信息写入 stderr。TUI 和 HTTP MCP 不使用 one-shot JSON 包装。

@@ -11,6 +11,9 @@ RFC 使用以下状态：
 
 ## 当前 RFC
 
+- [Source V2 能力、状态与复合输出安全 RFC](WaveBench_source能力状态与复合输出安全RFC.md)：
+  `Accepted R6`，核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2；
+  M6-A、M6-B 与 M6-C 已完成核心离线合同；真实插件 opt-in、实机验收与发布门仍按里程碑逐阶段实施。
 - [transport 重放与 session 健康 RFC](WaveBench_transport重放与session健康RFC.md)：定义查询重放、结构化传输错误、共享 session 健康状态、恢复授权和版本迁移。
 - [scope 通用扩展接口 RFC](WaveBench_scope通用扩展接口RFC.md)：`Accepted R1.3`，定义 operation context、binary budget、截图、采集控制、trace、错误策略及恢复验证合同。公共合同已进入核心 `0.8.23` 开发线；插件按 capability 单独 opt-in。
 - [scope 通用扩展接口 RFC：R1.3 Acceptance Addendum A1](WaveBench_scope通用扩展接口RFC-R1.3-acceptance-addendum.md)：记录公共 capability 注册采用的 P0/P1 验收门和离线完成证据。

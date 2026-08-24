@@ -633,6 +633,204 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.channel, 2)
         self.assertEqual(args.value_hz, 1000.0)
 
+    def test_source_v2_commands_accept_explicit_channels(self):
+        basic = build_parser().parse_args(
+            [
+                "source",
+                "basic-configure-v2",
+                "--channel",
+                "2",
+                "--waveform",
+                "square",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "1.5",
+            ]
+        )
+        output = build_parser().parse_args(["source", "output-v2", "--channel", "2", "on"])
+        harmonics = build_parser().parse_args(
+            [
+                "source",
+                "harmonics-configure-v2",
+                "--channel",
+                "2",
+                "--order",
+                "8",
+                "--preset",
+                "odd",
+            ]
+        )
+        harmonic_disable = build_parser().parse_args(
+            ["source", "harmonics-disable-v2", "--channel", "2"]
+        )
+        modulation = build_parser().parse_args(
+            [
+                "source",
+                "modulation-configure-v2",
+                "--channel",
+                "2",
+                "--depth-percent",
+                "80",
+                "--internal-frequency-hz",
+                "25",
+            ]
+        )
+        pulse = build_parser().parse_args(
+            [
+                "source",
+                "pulse-configure-v2",
+                "--channel",
+                "2",
+                "--width-s",
+                "1e-6",
+                "--delay-s",
+                "0",
+                "--leading-transition-s",
+                "1e-8",
+                "--trailing-transition-s",
+                "1e-8",
+            ]
+        )
+        pm = build_parser().parse_args(
+            [
+                "source",
+                "pm-modulation-configure-v2",
+                "--channel",
+                "2",
+                "--phase-deviation-deg",
+                "90",
+                "--internal-frequency-hz",
+                "25",
+            ]
+        )
+        fm = build_parser().parse_args(
+            [
+                "source",
+                "fm-modulation-configure-v2",
+                "--channel",
+                "2",
+                "--frequency-deviation-hz",
+                "12500",
+                "--internal-frequency-hz",
+                "25",
+            ]
+        )
+        pwm = build_parser().parse_args(
+            [
+                "source",
+                "pwm-modulation-configure-v2",
+                "--channel",
+                "2",
+                "--internal-frequency-hz",
+                "25",
+                "--width-deviation-s",
+                "1e-6",
+            ]
+        )
+        sweep = build_parser().parse_args(
+            [
+                "source",
+                "sweep-configure-v2",
+                "--channel",
+                "2",
+                "--start-hz",
+                "100",
+                "--stop-hz",
+                "1000",
+                "--spacing",
+                "linear",
+                "--steps",
+                "101",
+                "--sweep-time-s",
+                "1",
+            ]
+        )
+        burst = build_parser().parse_args(
+            [
+                "source",
+                "burst-configure-v2",
+                "--channel",
+                "2",
+                "--cycles",
+                "12",
+                "--phase-deg",
+                "30",
+                "--internal-period-s",
+                "0.25",
+                "--delay-s",
+                "0.5",
+            ]
+        )
+
+        self.assertEqual(basic.command, "basic-configure-v2")
+        self.assertEqual(basic.channel, 2)
+        self.assertEqual(basic.waveform, "square")
+        self.assertEqual(basic.frequency_hz, 1000.0)
+        self.assertEqual(basic.amplitude_vpp, 1.5)
+        self.assertEqual(output.command, "output-v2")
+        self.assertEqual(output.channel, 2)
+        self.assertEqual(output.state, "on")
+        self.assertEqual(harmonics.command, "harmonics-configure-v2")
+        self.assertEqual(harmonics.channel, 2)
+        self.assertEqual(harmonics.order, 8)
+        self.assertEqual(harmonics.preset, "odd")
+        self.assertEqual(harmonic_disable.command, "harmonics-disable-v2")
+        self.assertEqual(harmonic_disable.channel, 2)
+        self.assertEqual(modulation.command, "modulation-configure-v2")
+        self.assertEqual(modulation.channel, 2)
+        self.assertEqual(modulation.depth_percent, 80.0)
+        self.assertEqual(modulation.internal_frequency_hz, 25.0)
+        self.assertEqual(pulse.command, "pulse-configure-v2")
+        self.assertEqual(pulse.channel, 2)
+        self.assertEqual(pulse.width_s, 1.0e-6)
+        self.assertEqual(pulse.delay_s, 0.0)
+        self.assertEqual(pulse.leading_transition_s, 1.0e-8)
+        self.assertEqual(pulse.trailing_transition_s, 1.0e-8)
+        self.assertEqual(pm.command, "pm-modulation-configure-v2")
+        self.assertEqual(pm.channel, 2)
+        self.assertEqual(pm.phase_deviation_deg, 90.0)
+        self.assertEqual(pm.internal_frequency_hz, 25.0)
+        self.assertEqual(fm.command, "fm-modulation-configure-v2")
+        self.assertEqual(fm.channel, 2)
+        self.assertEqual(fm.frequency_deviation_hz, 12_500.0)
+        self.assertEqual(fm.internal_frequency_hz, 25.0)
+        self.assertEqual(pwm.command, "pwm-modulation-configure-v2")
+        self.assertEqual(pwm.channel, 2)
+        self.assertEqual(pwm.internal_frequency_hz, 25.0)
+        self.assertIsNone(pwm.duty_deviation_percent)
+        self.assertEqual(pwm.width_deviation_s, 1.0e-6)
+        self.assertEqual(sweep.command, "sweep-configure-v2")
+        self.assertEqual(sweep.channel, 2)
+        self.assertEqual(sweep.start_hz, 100.0)
+        self.assertEqual(sweep.stop_hz, 1000.0)
+        self.assertEqual(sweep.spacing, "linear")
+        self.assertEqual(sweep.steps, 101)
+        self.assertEqual(sweep.sweep_time_s, 1.0)
+        self.assertEqual(burst.command, "burst-configure-v2")
+        self.assertEqual(burst.channel, 2)
+        self.assertEqual(burst.cycles, 12)
+        self.assertEqual(burst.phase_deg, 30.0)
+        self.assertEqual(burst.internal_period_s, 0.25)
+        self.assertEqual(burst.delay_s, 0.5)
+
+    def test_source_harmonics_disable_v2_dispatches_typed_request(self):
+        payload = {
+            "schema": "wavebench.source.operation.v1",
+            "operation": "source.harmonics_disable_v2",
+        }
+        service = Mock()
+        service.disable_harmonics_v2.return_value = (object(), payload)
+        stdout = io.StringIO()
+
+        with patch("wavebench.cli._load_source_service", return_value=service), redirect_stdout(stdout):
+            code = main(["source", "harmonics-disable-v2", "--channel", "2"])
+
+        self.assertEqual(code, 0)
+        request = service.disable_harmonics_v2.call_args.args[0]
+        self.assertEqual(request.channel, 2)
+        self.assertEqual(json.loads(stdout.getvalue()), payload)
+
     def test_fetch_accepts_points(self):
         args = build_parser().parse_args(["scope", "fetch", "--points", "dmax"])
         self.assertEqual(args.command, "fetch")

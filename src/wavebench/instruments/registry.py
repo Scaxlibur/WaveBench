@@ -20,6 +20,8 @@ from .api import (
 from .builtin import BUILTIN_INSTRUMENTS
 from .capabilities import CAPABILITY_METHODS
 from .scope_extension_capabilities import validate_scope_descriptor
+from .source_conformance import validate_source_conformance_distribution
+from .source_extension_capabilities import validate_source_descriptor
 from .migrations import BUILTIN_MIGRATION_DISTRIBUTIONS
 
 ENTRY_POINT_GROUP = "wavebench.instruments"
@@ -151,6 +153,10 @@ class InstrumentRegistry:
             source=f"entry_point:{entry_point.name}",
             origin="entry_point",
         )
+        validate_source_conformance_distribution(
+            descriptor,
+            getattr(entry_point, "dist", None),
+        )
         _assert_external_does_not_override_builtins(descriptor, self.builtins)
         return descriptor
 
@@ -204,6 +210,7 @@ def _validate_descriptor(
             f"{', '.join(unknown_capabilities)}"
         )
     validate_scope_descriptor(descriptor)
+    validate_source_descriptor(descriptor)
     current = _version_tuple(__version__)
     if current < _version_tuple(descriptor.wavebench_min_version) or current >= _version_tuple(
         descriptor.wavebench_max_version

@@ -40,6 +40,219 @@ def _target_venv(root: Path) -> Path:
     return python
 
 
+def _source_v2_descriptor_module(
+    *,
+    driver_id: str,
+    capabilities: tuple[str, ...],
+    minimum_version: str,
+    maximum_version: str,
+    source_v2_write: bool,
+) -> bytes:
+    basic_directions = (
+        "SourceFeatureDirection.CONFIGURE, SourceFeatureDirection.READ"
+        if source_v2_write
+        else "SourceFeatureDirection.READ,"
+    )
+    output_directions = (
+        "SourceFeatureDirection.DISABLE, SourceFeatureDirection.ENABLE, SourceFeatureDirection.READ"
+        if source_v2_write
+        else "SourceFeatureDirection.READ,"
+    )
+    write_methods = (
+        """
+    def configure_source_basic_v2(self, request):
+        raise RuntimeError(\"write fixture must not execute during postflight\")
+
+    def set_source_output_v2(self, request):
+        raise RuntimeError(\"write fixture must not execute during postflight\")
+"""
+        if source_v2_write
+        else ""
+    )
+    return f'''from wavebench.instruments.api import InstrumentDescriptor
+from wavebench.instruments.source_extensions import (
+    SOURCE_CONTRACT_VERSION,
+    SourceAmplitudeUnit,
+    SourceBasicCapabilityProfile,
+    SourceConstraintApplicability,
+    SourceDescriptorExtensions,
+    SourceFacetQueryContract,
+    SourceFacetScope,
+    SourceFeature,
+    SourceFeatureCapability,
+    SourceFeatureDirection,
+    SourceFieldId,
+    SourceFrequencyMode,
+    SourceOutputCapabilityProfile,
+    SourceQueryContract,
+    SourceQueryEffect,
+    SourceSafetyProfile,
+    SourceTopologyContract,
+    SourceWaveformKind,
+    SupportState,
+)
+
+
+class Driver:
+    def close(self):
+        pass
+
+    def execute_source_query_plan_v2(self, plan):
+        raise RuntimeError("query fixture must not execute during postflight")
+{write_methods}
+
+
+def descriptor():
+    applicability = SourceConstraintApplicability()
+    features = (
+        SourceFeatureCapability(
+            feature=SourceFeature.BASIC,
+            support=SupportState.SUPPORTED,
+            directions=({basic_directions}),
+            scope=SourceFacetScope.CHANNEL,
+            channels=(1,),
+            applicability=applicability,
+            profile=SourceBasicCapabilityProfile(
+                waveform_kinds=(SourceWaveformKind.SINE,),
+                frequency_modes=(SourceFrequencyMode.FIXED,),
+                amplitude_units=(SourceAmplitudeUnit.VPP,),
+                offset_readable=True,
+                phase_readable=True,
+                square_duty_readable=False,
+            ),
+        ),
+        SourceFeatureCapability(
+            feature=SourceFeature.OUTPUT,
+            support=SupportState.SUPPORTED,
+            directions=({output_directions}),
+            scope=SourceFacetScope.CHANNEL,
+            channels=(1,),
+            applicability=applicability,
+            profile=SourceOutputCapabilityProfile(
+                output_readable=True,
+                display_load_readable=False,
+                polarity_readable=True,
+            ),
+        ),
+    )
+    query_contract = SourceQueryContract(
+        anchor_fields=(
+            SourceFieldId.BASIC,
+            SourceFieldId.OUTPUT,
+            SourceFieldId.IDENTITY,
+        ),
+        facets=(
+            SourceFacetQueryContract(
+                feature=SourceFeature.BASIC,
+                scope=SourceFacetScope.CHANNEL,
+                fields=(SourceFieldId.BASIC,),
+                activation_any=(),
+                effect=SourceQueryEffect.PURE_READ,
+                max_queries=1,
+                required=True,
+            ),
+            SourceFacetQueryContract(
+                feature=SourceFeature.BASIC,
+                scope=SourceFacetScope.INSTRUMENT,
+                fields=(SourceFieldId.IDENTITY,),
+                activation_any=(),
+                effect=SourceQueryEffect.PURE_READ,
+                max_queries=1,
+                required=True,
+            ),
+            SourceFacetQueryContract(
+                feature=SourceFeature.OUTPUT,
+                scope=SourceFacetScope.CHANNEL,
+                fields=(SourceFieldId.OUTPUT,),
+                activation_any=(),
+                effect=SourceQueryEffect.PURE_READ,
+                max_queries=1,
+                required=True,
+            ),
+        ),
+        max_queries=3,
+        timeout_ms=1000,
+    )
+    return InstrumentDescriptor(
+        driver_id={driver_id!r},
+        kind="source",
+        display_name="Example Source V2",
+        manufacturer="Example",
+        models=("EX1",),
+        aliases=(),
+        capabilities={capabilities!r},
+        idn_patterns=("EXAMPLE,SOURCE",),
+        backends=("pyvisa",),
+        option_specs=(),
+        permissions=("instrument.io",),
+        factory=lambda context: Driver(),
+        wavebench_min_version={minimum_version!r},
+        wavebench_max_version={maximum_version!r},
+        source_extensions=SourceDescriptorExtensions(
+            contract_version=SOURCE_CONTRACT_VERSION,
+            topology=SourceTopologyContract((1,)),
+            features=features,
+            query_contract=query_contract,
+            safety_profile=SourceSafetyProfile(),
+        ),
+    )
+'''.encode()
+
+
+def _legacy_source_v1_descriptor_module(
+    *,
+    driver_id: str,
+    capabilities: tuple[str, ...],
+) -> bytes:
+    """A published-style V1 entry point deliberately free of Source V2 imports."""
+
+    return f'''from wavebench.instruments.api import InstrumentDescriptor
+
+
+factory_calls = 0
+
+
+class Driver:
+    def __init__(self):
+        self.frequency_calls = []
+        self.transport_calls = 0
+
+    def close(self):
+        pass
+
+    def set_frequency(self, channel, value_hz, *, ensure_fix_mode, check_errors):
+        self.frequency_calls.append((channel, value_hz, ensure_fix_mode, check_errors))
+
+
+def _factory(context):
+    del context
+    global factory_calls
+    factory_calls += 1
+    return Driver()
+
+
+def factory_call_count():
+    return factory_calls
+
+
+def descriptor():
+    return InstrumentDescriptor(
+        driver_id={driver_id!r},
+        kind="source",
+        display_name="Example Legacy Source",
+        manufacturer="Example",
+        models=("EX1",),
+        aliases=(),
+        capabilities={capabilities!r},
+        idn_patterns=("EXAMPLE,SOURCE",),
+        backends=("pyvisa",),
+        option_specs=(),
+        permissions=("instrument.io",),
+        factory=_factory,
+    )
+'''.encode()
+
+
 def _plugin_wheel(
     root: Path,
     *,
@@ -50,20 +263,45 @@ def _plugin_wheel(
     capabilities: tuple[str, ...] = ("scope.idn",),
     broken_descriptor: bool = False,
     include_entry_point: bool = True,
+    requires_dist: str | tuple[str, ...] = "wavebench>=0.8,<0.9",
+    source_v2: bool = False,
+    source_v2_write: bool = False,
+    legacy_source_v1: bool = False,
+    wavebench_min_version: str = "0.8.0",
+    wavebench_max_version: str = "0.9.0",
 ) -> Path:
+    if source_v2 and legacy_source_v1:
+        raise ValueError("a fixture wheel cannot be both Source V1-only and Source V2")
     filename_name = distribution.replace("-", "_")
     dist_info = f"{filename_name}-{version}.dist-info"
     package_name = "wavebench_example_scope"
     path = root / f"{filename_name}-{version}-py3-none-any.whl"
+    dependency_lines = "".join(
+        f"Requires-Dist: {dependency}\n"
+        for dependency in ((requires_dist,) if isinstance(requires_dist, str) else requires_dist)
+    )
     metadata = (
         "Metadata-Version: 2.1\n"
         f"Name: {distribution}\n"
         f"Version: {version}\n"
         "Requires-Python: >=3.11\n"
-        "Requires-Dist: wavebench>=0.8,<0.9\n\n"
+        f"{dependency_lines}\n"
     ).encode()
     if broken_descriptor:
         package = b"def descriptor():\n    raise RuntimeError('broken descriptor')\n"
+    elif legacy_source_v1:
+        package = _legacy_source_v1_descriptor_module(
+            driver_id=driver_id,
+            capabilities=capabilities,
+        )
+    elif source_v2:
+        package = _source_v2_descriptor_module(
+            driver_id=driver_id,
+            capabilities=capabilities,
+            minimum_version=wavebench_min_version,
+            maximum_version=wavebench_max_version,
+            source_v2_write=source_v2_write,
+        )
     else:
         package = f'''from wavebench.instruments.api import InstrumentDescriptor
 
@@ -213,6 +451,118 @@ def test_lifecycle_preserves_venv_launcher_path(tmp_path):
 
     assert environment.prefix == str(python.parents[1])
     assert Path(environment.python) == launcher
+
+
+def test_lifecycle_cross_checks_source_v2_wheel_and_descriptor_versions(tmp_path):
+    python = _target_venv(tmp_path)
+    good = _plugin_wheel(
+        tmp_path,
+        version="0.1.0",
+        driver_id="example.source-v2",
+        distribution="wavebench-example-source-v2",
+        kind="source",
+        capabilities=("source.snapshot_v2", "source.basic_configure_v2", "source.output_v2"),
+        source_v2=True,
+        source_v2_write=True,
+        wavebench_min_version="0.8.24",
+        wavebench_max_version="0.9.0",
+        requires_dist="wavebench>=0.8.24,<0.9",
+    )
+    bad_floor = _plugin_wheel(
+        tmp_path,
+        version="0.1.1",
+        driver_id="example.source-v2",
+        distribution="wavebench-example-source-v2",
+        kind="source",
+        capabilities=("source.snapshot_v2", "source.basic_configure_v2", "source.output_v2"),
+        source_v2=True,
+        source_v2_write=True,
+        wavebench_min_version="0.8.24",
+        wavebench_max_version="0.9.0",
+        requires_dist="wavebench>=0.8,<0.9",
+    )
+    lifecycle = PluginLifecycle(python_executable=python)
+
+    assert lifecycle.install(good).status == "installed"
+    assert lifecycle.info("example.source-v2").status == "healthy"
+    assert lifecycle.remove("example.source-v2").status == "removed"
+
+    with pytest.raises(ConfigError, match="explicitly include >=0.8.24,<0.9.0"):
+        lifecycle.install(bad_floor)
+
+    assert lifecycle.installed() == ()
+    assert not lifecycle.journal_path.exists()
+
+
+def test_lifecycle_keeps_a_v1_source_entry_point_on_v1_and_rejects_v2_before_io(tmp_path):
+    python = _target_venv(tmp_path)
+    wheel = _plugin_wheel(
+        tmp_path,
+        version="0.1.0",
+        driver_id="example.legacy-source",
+        distribution="wavebench-example-legacy-source",
+        kind="source",
+        capabilities=("source.set_frequency",),
+        legacy_source_v1=True,
+    )
+    lifecycle = PluginLifecycle(python_executable=python)
+
+    with ZipFile(wheel) as archive:
+        module_source = archive.read("wavebench_example_scope/__init__.py").decode("utf-8")
+    assert "source_extensions" not in module_source
+
+    assert lifecycle.install(wheel).status == "installed"
+    script = '''
+from types import SimpleNamespace
+
+from wavebench.errors import ConfigError
+from wavebench.instruments.registry import build_instrument_registry
+from wavebench.logging import CommandLogger
+from wavebench.services.source_service import SourceService
+import wavebench_example_scope
+
+descriptor = build_instrument_registry().resolve("example.legacy-source", expected_kind="source")
+source_config = SimpleNamespace(
+    resource="TCPIP::legacy-source::INSTR",
+    driver="example.legacy-source",
+    access="read_write",
+    default_channel=1,
+    settle_ms_after_set_frequency=0,
+    check_errors=False,
+    ensure_fix_mode_on_set_frequency=False,
+)
+config = SimpleNamespace(source=source_config)
+unopened = SourceService(config=config, logger=CommandLogger(), descriptor=descriptor)
+try:
+    unopened.snapshot_v2()
+except ConfigError as exc:
+    assert "source.snapshot_v2" in str(exc)
+else:
+    raise AssertionError("V1-only descriptor unexpectedly admitted Source V2")
+assert wavebench_example_scope.factory_call_count() == 0
+
+driver = descriptor.factory(None)
+service = SourceService(
+    config=config,
+    logger=CommandLogger(),
+    session=driver,
+    descriptor=descriptor,
+)
+service.set_frequency(channel=1, value_hz=1000.0)
+assert driver.frequency_calls == [(1, 1000.0, False, False)]
+try:
+    service.snapshot_v2()
+except ConfigError as exc:
+    assert "source.snapshot_v2" in str(exc)
+else:
+    raise AssertionError("V1-only descriptor unexpectedly admitted Source V2")
+assert wavebench_example_scope.factory_call_count() == 1
+assert driver.transport_calls == 0
+print("v1-source-compatible")
+'''
+
+    assert _run([str(python), "-I", "-c", script]).stdout.strip() == "v1-source-compatible"
+    assert lifecycle.remove("example.legacy-source").status == "removed"
 
 
 def test_dry_run_does_not_modify_target_venv(tmp_path):

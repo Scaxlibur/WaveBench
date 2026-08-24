@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, is_dataclass
+from hashlib import sha256
 import io
 import json
 from pathlib import Path
@@ -256,6 +257,219 @@ def _json_payload(value: object) -> object:
     return value
 
 
+def _source_basic_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        PatchAction,
+        PatchValue,
+        SourceBasicConfigureRequest,
+        SourceBasicPatch,
+        SourceWaveformKind,
+    )
+
+    values = {
+        "waveform_kind": args.waveform,
+        "frequency_hz": args.frequency_hz,
+        "amplitude_vpp": args.amplitude_vpp,
+        "offset_v": args.offset_v,
+        "square_duty_cycle_percent": args.square_duty_cycle_percent,
+    }
+    if all(value is None for value in values.values()):
+        raise ConfigError("source basic-configure-v2 requires at least one basic field")
+
+    waveform = (
+        PatchValue(PatchAction.SET, SourceWaveformKind(args.waveform))
+        if args.waveform is not None
+        else PatchValue(PatchAction.KEEP)
+    )
+
+    def patch_value(value: object):
+        return (
+            PatchValue(PatchAction.SET, value)
+            if value is not None
+            else PatchValue(PatchAction.KEEP)
+        )
+
+    return SourceBasicConfigureRequest(
+        channel=args.channel,
+        patch=SourceBasicPatch(
+            waveform_kind=waveform,
+            frequency_hz=patch_value(args.frequency_hz),
+            amplitude_vpp=patch_value(args.amplitude_vpp),
+            offset_v=patch_value(args.offset_v),
+            square_duty_cycle_percent=patch_value(args.square_duty_cycle_percent),
+        ),
+    )
+
+
+def _source_cross_channel_configure_v2_request(
+    args: argparse.Namespace,
+    request_type: type[object],
+) -> object:
+    try:
+        return request_type(channels=tuple(args.channel), enabled=args.state == "on")  # type: ignore[operator]
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_modulation_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourceModulationConfigureRequest
+
+    try:
+        return SourceModulationConfigureRequest(
+            channel=args.channel,
+            depth_percent=args.depth_percent,
+            internal_frequency_hz=args.internal_frequency_hz,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_pulse_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourcePulseConfigureRequest
+
+    try:
+        return SourcePulseConfigureRequest(
+            channel=args.channel,
+            width_s=args.width_s,
+            delay_s=args.delay_s,
+            leading_transition_s=args.leading_transition_s,
+            trailing_transition_s=args.trailing_transition_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_pm_modulation_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourcePmModulationConfigureRequest
+
+    try:
+        return SourcePmModulationConfigureRequest(
+            channel=args.channel,
+            phase_deviation_deg=args.phase_deviation_deg,
+            internal_frequency_hz=args.internal_frequency_hz,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_fm_modulation_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourceFmModulationConfigureRequest
+
+    try:
+        return SourceFmModulationConfigureRequest(
+            channel=args.channel,
+            frequency_deviation_hz=args.frequency_deviation_hz,
+            internal_frequency_hz=args.internal_frequency_hz,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_pwm_modulation_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourcePwmModulationConfigureRequest
+
+    try:
+        return SourcePwmModulationConfigureRequest(
+            channel=args.channel,
+            internal_frequency_hz=args.internal_frequency_hz,
+            duty_deviation_percent=args.duty_deviation_percent,
+            width_deviation_s=args.width_deviation_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_sweep_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        SourceSweepConfigureRequest,
+        SourceSweepSpacing,
+    )
+
+    try:
+        return SourceSweepConfigureRequest(
+            channel=args.channel,
+            start_hz=args.start_hz,
+            stop_hz=args.stop_hz,
+            spacing=SourceSweepSpacing(args.spacing),
+            steps=args.steps,
+            sweep_time_s=args.sweep_time_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_arbitrary_storage_v2_request(
+    args: argparse.Namespace,
+) -> tuple[object, bytes]:
+    from .instruments.source_extensions import (
+        SourceArbitraryStorageRequest,
+        SourceStorageWriteMode,
+    )
+
+    payload_path = Path(args.payload_file)
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(
+            f"source.arbitrary_storage_v2 payload file is unreadable: {payload_path}"
+        ) from exc
+    write_mode = {
+        "create-only": SourceStorageWriteMode.CREATE_ONLY,
+        "replace-if-digest-matches": SourceStorageWriteMode.REPLACE_IF_DIGEST_MATCHES,
+    }[args.write_mode]
+    try:
+        return (
+            SourceArbitraryStorageRequest(
+                channel=args.channel,
+                slot_id=args.slot_id,
+                write_mode=write_mode,
+                payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                payload_size_bytes=len(payload),
+                expected_previous_sha256=args.expected_previous_sha256,
+            ),
+            payload,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_arbitrary_select_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        SourceArbitraryPlaybackMode,
+        SourceArbitrarySelectRequest,
+    )
+
+    playback_mode = {
+        "dds": SourceArbitraryPlaybackMode.DDS,
+        "true-arb": SourceArbitraryPlaybackMode.TRUE_ARB,
+    }[args.playback_mode]
+    try:
+        return SourceArbitrarySelectRequest(
+            channel=args.channel,
+            slot_id=args.slot_id,
+            playback_mode=playback_mode,
+            playback_frequency_hz=args.playback_frequency_hz,
+            sample_rate_hz=args.sample_rate_hz,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_burst_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import SourceBurstConfigureRequest
+
+    try:
+        return SourceBurstConfigureRequest(
+            channel=args.channel,
+            cycles=args.cycles,
+            phase_deg=args.phase_deg,
+            internal_period_s=args.internal_period_s,
+            delay_s=args.delay_s,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
     policy = getattr(args, "error_policy", None)
     if policy is None:
@@ -334,6 +548,11 @@ def _scope_error_payload(exc: BaseException) -> dict[str, object]:
             "status": "partial_cleanup_failed",
             "reason_code": "remove_failed",
         }
+    source_operation_artifact = getattr(exc, "source_operation_artifact", None)
+    if isinstance(source_operation_artifact, Mapping):
+        payload["source_operation_artifact"] = _json_payload(
+            dict(source_operation_artifact)
+        )
     return payload
 
 
@@ -1040,6 +1259,18 @@ def _main(argv: list[str] | None = None) -> int:
                 print("upload=ok")
                 _print_source_status(status)
                 return 0
+            if args.command == "arbitrary-storage-v2":
+                request, storage_payload = _source_arbitrary_storage_v2_request(args)
+                service = _load_source_service(args)
+                _, payload = service.mutate_arbitrary_storage_v2(
+                    request,
+                    payload=storage_payload,
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
             service = _load_source_service(args)
             if args.command == "idn":
                 print(service.idn())
@@ -1057,6 +1288,205 @@ def _main(argv: list[str] | None = None) -> int:
                     _emit_json_result(_json_payload(result))
                 else:
                     _print_source_status(result)
+                return 0
+            if args.command == "snapshot-v2":
+                from wavebench.instruments.source_extensions import (
+                    source_snapshot_v2_operation_artifact,
+                )
+
+                payload = source_snapshot_v2_operation_artifact(service.snapshot_v2())
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "arbitrary-select-v2":
+                _, payload = service.select_arbitrary_v2(
+                    _source_arbitrary_select_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "combine-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceCombineConfigureRequest,
+                )
+
+                _, payload = service.configure_combine_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourceCombineConfigureRequest,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "coupling-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceCouplingConfigureRequest,
+                )
+
+                _, payload = service.configure_coupling_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourceCouplingConfigureRequest,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "tracking-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceTrackingConfigureRequest,
+                )
+
+                _, payload = service.configure_tracking_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourceTrackingConfigureRequest,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "phase-relation-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourcePhaseRelationConfigureRequest,
+                )
+
+                _, payload = service.configure_phase_relation_v2(
+                    _source_cross_channel_configure_v2_request(
+                        args,
+                        SourcePhaseRelationConfigureRequest,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "basic-configure-v2":
+                _, payload = service.configure_basic_v2(
+                    _source_basic_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "output-v2":
+                from wavebench.instruments.source_extensions import SourceOutputRequest
+
+                _, payload = service.set_output_v2(
+                    SourceOutputRequest(
+                        channel=args.channel,
+                        enabled=args.state == "on",
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "harmonics-configure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceHarmonicConfigureRequest,
+                    SourceHarmonicPreset,
+                )
+
+                _, payload = service.configure_harmonics_v2(
+                    SourceHarmonicConfigureRequest(
+                        channel=args.channel,
+                        order=args.order,
+                        preset=SourceHarmonicPreset(args.preset),
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "harmonics-disable-v2":
+                from wavebench.instruments.source_extensions import SourceHarmonicDisableRequest
+
+                _, payload = service.disable_harmonics_v2(
+                    SourceHarmonicDisableRequest(channel=args.channel)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "modulation-configure-v2":
+                _, payload = service.configure_modulation_v2(
+                    _source_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pulse-configure-v2":
+                _, payload = service.configure_pulse_v2(
+                    _source_pulse_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pm-modulation-configure-v2":
+                _, payload = service.configure_pm_modulation_v2(
+                    _source_pm_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "fm-modulation-configure-v2":
+                _, payload = service.configure_fm_modulation_v2(
+                    _source_fm_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pwm-modulation-configure-v2":
+                _, payload = service.configure_pwm_modulation_v2(
+                    _source_pwm_modulation_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "sweep-configure-v2":
+                _, payload = service.configure_sweep_v2(
+                    _source_sweep_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "burst-configure-v2":
+                _, payload = service.configure_burst_v2(
+                    _source_burst_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
                 return 0
             if args.command == "profile":
                 _print_source_channel_profile(service.channel_profile(channel=args.channel))
