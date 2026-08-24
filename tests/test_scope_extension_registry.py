@@ -17,6 +17,8 @@ from wavebench.instruments.scope_extensions import (
     ScopeScreenshotProfile,
     ScopeScreenshotRequest,
     ScopeScreenshotVariant,
+    ScopeWaveformBinaryOperationProfile,
+    ScopeWaveformBinaryProfile,
 )
 from wavebench.services.operation_specs import OperationSpec, get_operation_spec
 from wavebench.services.scope_error_policy import legacy_scope_error_artifact
@@ -47,7 +49,49 @@ def _profile() -> ScopeScreenshotProfile:
     )
 
 
-def _descriptor(*, capabilities: tuple[str, ...], extensions=True) -> InstrumentDescriptor:
+def _waveform_profile(*, operation_kind: str = "fetch") -> ScopeWaveformBinaryProfile:
+    fields = (
+        ("scope.waveform_source",)
+        if operation_kind == "fetch"
+        else (
+            "scope.run_state",
+            "scope.acquisition",
+            "scope.trigger",
+            "scope.timebase",
+            "scope.channel_display",
+            "scope.channel_vertical",
+            "scope.waveform_source",
+            "scope.waveform_mode",
+            "scope.query_response_header",
+            "scope.waveform_format",
+            "scope.waveform_byte_order",
+            "scope.waveform_points",
+            "scope.waveform_transfer_window",
+        )
+    )
+    return ScopeWaveformBinaryProfile(
+        operations=(
+            ScopeWaveformBinaryOperationProfile(
+                operation_kind=operation_kind,  # type: ignore[arg-type]
+                response_max_bytes=1_024,
+                operation_max_bytes=4_096,
+                query_max_count=4,
+                resynchronization_max_bytes=0,
+                restore_order=fields,
+                snapshot_max_steps=len(fields),
+                restore_max_steps=len(fields),
+                verify_max_steps=len(fields),
+            ),
+        )
+    )
+
+
+def _descriptor(
+    *,
+    capabilities: tuple[str, ...],
+    extensions=True,
+    wavebench_min_version: str = "0.8.23",
+) -> InstrumentDescriptor:
     return InstrumentDescriptor(
         driver_id="example.scope",
         kind="scope",
@@ -61,7 +105,7 @@ def _descriptor(*, capabilities: tuple[str, ...], extensions=True) -> Instrument
         option_specs=(),
         permissions=("instrument.io",),
         factory=lambda context: object(),
-        wavebench_min_version="0.8.23",
+        wavebench_min_version=wavebench_min_version,
         scope_extensions=(
             ScopeDescriptorExtensions(screenshot_profile=_profile()) if extensions else None
         ),
@@ -106,6 +150,12 @@ def test_scope_descriptor_extension_is_append_only_for_positional_compatibility(
         "scope_extensions",
         "source_extensions",
     ]
+    assert [field.name for field in fields(ScopeDescriptorExtensions)] == [
+        "screenshot_profile",
+        "acquisition_control_profile",
+        "trace_profile",
+        "waveform_binary_profile",
+    ]
 
 
 def test_new_old_core_plugin_capability_matrix_is_fail_closed() -> None:
@@ -134,6 +184,108 @@ def test_extra_scope_methods_do_not_create_an_implicit_capability() -> None:
 
     validate_declared_capabilities(descriptor, Driver())
     assert "scope.screenshot_profile" not in descriptor.capabilities
+
+
+def test_waveform_binary_profile_selects_bounded_v2_methods_without_creating_capabilities() -> None:
+    descriptor = _descriptor(
+        capabilities=("scope.idn", "scope.fetch_waveform"),
+        extensions=False,
+        wavebench_min_version="0.8.24",
+    )
+    descriptor = replace(
+        descriptor,
+        scope_extensions=ScopeDescriptorExtensions(
+            waveform_binary_profile=_waveform_profile()
+        ),
+    )
+
+    class Driver:
+        def close(self) -> None:
+            pass
+
+        def idn(self) -> str:
+            return "EXAMPLE,EX1"
+
+        def snapshot_waveform_transfer_state(self, fields):
+            return object()
+
+        def restore_waveform_transfer_state(self, baseline):
+            return object()
+
+        def verify_waveform_transfer_state_restored(self, baseline):
+            return object()
+
+        def fetch_waveform_bounded(self, channel, points="dmax", *, baseline):
+            return object()
+
+    validate_declared_capabilities(descriptor, Driver())
+    assert "scope.fetch_waveform_bounded" not in descriptor.capabilities
+
+
+def test_waveform_binary_profile_must_match_capabilities_and_bounded_methods() -> None:
+    descriptor = _descriptor(
+        capabilities=("scope.idn", "scope.capture_waveform"),
+        extensions=False,
+        wavebench_min_version="0.8.24",
+    )
+    descriptor = replace(
+        descriptor,
+        scope_extensions=ScopeDescriptorExtensions(
+            waveform_binary_profile=_waveform_profile(operation_kind="fetch")
+        ),
+    )
+    with pytest.raises(ConfigError, match="operations must match"):
+        validate_scope_descriptor(descriptor)
+
+    descriptor = _descriptor(
+        capabilities=("scope.idn", "scope.fetch_waveform"),
+        extensions=False,
+        wavebench_min_version="0.8.24",
+    )
+    descriptor = replace(
+        descriptor,
+        scope_extensions=ScopeDescriptorExtensions(
+            waveform_binary_profile=_waveform_profile()
+        ),
+    )
+
+    class MissingBoundedMethod:
+        def close(self) -> None:
+            pass
+
+        def idn(self) -> str:
+            return "EXAMPLE,EX1"
+
+        def snapshot_waveform_transfer_state(self, fields):
+            return object()
+
+        def restore_waveform_transfer_state(self, baseline):
+            return object()
+
+        def verify_waveform_transfer_state_restored(self, baseline):
+            return object()
+
+        def fetch_waveform(self, channel, points="dmax", check_errors=True):
+            return object()
+
+    with pytest.raises(ConfigError, match="fetch_waveform_bounded"):
+        validate_declared_capabilities(descriptor, MissingBoundedMethod())
+
+
+def test_waveform_binary_profile_requires_its_own_core_version_floor() -> None:
+    descriptor = _descriptor(
+        capabilities=("scope.idn", "scope.fetch_waveform"),
+        extensions=False,
+    )
+    descriptor = replace(
+        descriptor,
+        scope_extensions=ScopeDescriptorExtensions(
+            waveform_binary_profile=_waveform_profile()
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="0.8.24"):
+        validate_scope_descriptor(descriptor)
 
 
 def test_private_descriptor_gate_requires_explicit_enable_profile_and_methods() -> None:
