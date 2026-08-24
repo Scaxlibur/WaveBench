@@ -1,11 +1,11 @@
 # RFC-0006：可移植的采集状态与平均采集 V2
 
-> 状态：`Accepted R1（仅 RFC-0006a）`
+> 状态：`Implemented R1（未发布；仅 RFC-0006a）`
 > 核心基线：legacy acquisition/average API 与 R1.3 acquisition control
 > 范围：普通采集状态 V2、平均配置和平均采集事务
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0006a 已冻结只读模型、profile 与 Service 边界；0006b 仍等待独立的 bounded transaction
-> 前置裁决，不创建代码或插件 opt-in
+> 本轮范围：0006a 已完成核心只读模型、profile、factory gate 与 Service；0006b 仍等待独立的
+> bounded transaction 前置裁决，不创建代码或插件 opt-in
 
 ## 摘要
 
@@ -115,7 +115,7 @@ class ScopeAcquisitionStatusProfileV2:
 去重，必须包含非条件的 `"acquisition_type"`。`"average"`／`"segmented"` 是分区路径：任何子路径
 出现时，父路径必须出现；`"average"` 还要求 `"average.configured_count"`，`"segmented"` 至少要求一个
 segmented 叶路径。`conditionally_applicable_fields` 是 `readable_fields` 的子集，不能包含
-`"acquisition_type"`；条件父路径可在当前 mode 下覆盖其全部已声明子路径。
+`"acquisition_type"`；条件父路径可在当前 mode 下覆盖其全部子路径，包括 profile 未声明的静态叶字段。
 
 `max_queries` 是 `1..32` 的非 bool 整数。它计数从进入 `get_acquisition_status_v2()` 到返回或抛出期间的
 全部受 guard 计数的文本 `query()`，包括 acquisition type、适用性、run state 和所有叶字段的判定。
@@ -190,7 +190,11 @@ run-state capability 不强制 profile 返回该字段。
 
 所有 R1 dataclass 必须在 `__post_init__` 中执行上述验证，不能只依赖 Service 文本约定。
 
-### RFC-0006a R1 接受合同
+### RFC-0006a R1 核心实现状态
+
+核心开发线已实现 `ScopeAcquisitionStatusV2`、average/segmented 分区模型、append-only
+`ScopeAcquisitionStatusProfileV2`、独立 Protocol、`scope.acquisition_status_v2`、strict factory
+construction barrier、portability-V2 `OperationSpec` 和 `ScopeService.acquisition_status_v2()`。
 
 `scope.acquisition_status_v2` 与 profile、`ScopeAcquisitionStatusDriverV2.get_acquisition_status_v2()` 一一对应。
 factory 在首次仪器 I/O 前必须同时校验 capability、append-only profile、严格核心版本门、可调用方法，以及
@@ -209,9 +213,9 @@ R1 不新增 V2 CLI、run-plan step、artifact 或持久化 JSON schema。现有
 `scope.acquisition_status -> get_acquisition_status()` 均保持不变；即使 descriptor 同时声明 V1 和 V2，旧命令
 也只走 legacy 路由。V2 Service 不得 fallback 到 V1 status、`capture_average()` 或 R1.3 control。
 
-R1 只接受核心模型、profile、Protocol、factory gate、OperationSpec 与 Service 的离线实现。主包内建
-descriptor 和外部插件在独立 conformance、版本下限和硬件证据完成前不得声明该 capability；status V2 的发布
-也不授权 RFC-0006b average capture V2。
+R1 的核心离线实现已通过模型/profile、capability、factory、纯文本 query budget、legacy route 和
+MSO8000 未 opt-in 兼容回归。主包内建 descriptor 和外部插件在独立 conformance、版本下限和硬件证据完成前
+不得声明该 capability；status V2 的核心实现或发布也不授权 RFC-0006b average capture V2。
 
 ## RFC-0006b：平均采集 V2
 
@@ -659,7 +663,7 @@ average capture 是 `acquire` operation，只允许
 
 ## 接受与实施顺序
 
-RFC-0006a 已进入 `Accepted`，只授权上一节列出的只读核心实现与离线验收。以下仍是 RFC-0006b
+RFC-0006a 已完成核心离线实现但尚未发布。以下仍是 RFC-0006b
 的后续接受门，不授权其代码、descriptor 字段或插件 opt-in：
 
 1. 冻结 completion evidence、平均次数核心硬上限和 generic bounded transaction 前置合同；

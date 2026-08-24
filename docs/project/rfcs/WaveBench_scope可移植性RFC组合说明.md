@@ -42,7 +42,7 @@ M0 冻结本组合说明和 legacy 黄金基线。本文本身不授权新的核
 | [RFC-0003](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | 原 `query_raw_bytes_once()` 被 `query_binary()` 和 screenshot profile 取代 | `Superseded R1` | 核心合同已有；具体插件仍需 framing、菜单和恢复证据 |
 | [RFC-0004](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | 追加保留未知值和字段作用域的 digital status V2 | `Implemented R1（未发布）` | 只处理状态；digital waveform 另行取证 |
 | [RFC-0005](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | 追加可组合、字段可缺失的 snapshot V2 | `Implemented R1（未发布）` | M3b 已完成核心模型/profile/Protocol/factory gate/Service；不修改完整 snapshot、partial summary 或旧 CLI |
-| [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Accepted R1（仅 0006a）` | 0006a 追加 profile、纯文本预算和零 I/O gate；0006b 等待通用 bounded transaction 前置裁决 |
+| [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Implemented R1（未发布；仅 0006a）` | M4 已完成 profile、纯文本预算、零 I/O gate 与 Service；0006b 等待通用 bounded transaction 前置裁决 |
 | [RFC-0007](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | 拆成统计 selector、FFT status 和 cursor quantity 三项 V2 | `Draft R1` | 三项独立注册、独立验收 |
 | [RFC-0008](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | 使用 descriptor profile、`query_binary()` 和核心恢复编排 | `Implemented R1（未发布）` | P0～P3 已完成；插件 opt-in 与实机验收不在本分支 |
 
@@ -53,8 +53,7 @@ M0 冻结本组合说明和 legacy 黄金基线。本文本身不授权新的核
 内建 driver 或任一外部插件已经 opt-in；当前开发线版本 `0.8.24` 也不是可供插件声明最低版本的
 正式发行物。
 
-RFC-0005 的 R1 核心实现已完成但尚未发布，外部插件仍不得据此声明 capability；RFC-0006a 已进入
-`Accepted`，只授权其 profile、Protocol、factory gate、OperationSpec 与 Service 的核心离线实现；
+RFC-0005 和 RFC-0006a 的 R1 核心实现已完成但尚未发布，外部插件仍不得据此声明 capability；
 RFC-0006b 和 RFC-0007 仍是候选模型，在各自进入 `Accepted` 前不得创建 capability、Protocol、Service、
 CLI、descriptor profile 或插件 conformance 分支。RFC-0001、RFC-0003 的原始
 入口已经被取代，不重新实施。
@@ -195,13 +194,13 @@ RFC-0002 + RFC-0006a + RFC-0008
   └─ RFC-0006b：average capture V2
 ~~~
 
-推荐里程碑如下。M0～M3b 是已完成的历史记录；M4 及后续仍只保留为文档和验收顺序：
+推荐里程碑如下。M0～M4 是已完成的历史记录；M5 及后续仍只保留为文档和验收顺序：
 
 1. M0：冻结本组合说明和 legacy 黄金基线；
 2. M1：完成 RFC-0001、RFC-0003、RFC-0008 的结案回归；
 3. M2：实现 RFC-0002；
 4. M3：RFC-0004 和 RFC-0005 已完成核心离线实现；
-5. M4：RFC-0006a 已冻结 not-applicable、文本读取预算、profile、factory gate 和 legacy 路由，实施只读核心合同；
+5. M4：RFC-0006a 已完成只读模型/profile、factory gate、纯文本 budget Service 与离线兼容回归；
 6. M5：分别完成 RFC-0007 三项 capability 的成功形状、profile 和 CLI/artifact 接受门；
 7. M6：为 RFC-0006b 单独接受可复用的 bounded transaction 基础，随后才评审平均采集事务；
 8. M7：在每项已接受且已实现后，完成跨版本、发行产物和完整离线验收。
@@ -224,7 +223,7 @@ RFC-0002 + RFC-0006a + RFC-0008
 - 新 descriptor 只公开显式 capability/profile，不因额外方法或 profile 获得其他 capability。
 
 M0 冻结本身不把后续 RFC 自动升为已实现；每项仍须在其里程碑完成所接受的模型、Protocol、factory、
-Service 和兼容回归后更新状态。RFC-0006a 已在 M4 前单独进入 `Accepted`，其 R1 明确不包含 CLI。
+Service 和兼容回归后更新状态。RFC-0006a 已在 M4 完成核心离线实现，其 R1 明确不包含 CLI。
 
 ## M1 完成记录
 
@@ -277,21 +276,35 @@ extension service 或旧 `scope status` 路由。
 拒绝和 legacy route。核心完整离线回归通过；外部 MSO8000 插件在新 core source 下的离线测试通过，
 其 descriptor 仍未声明 snapshot V2。R1 不新增 CLI、artifact、run plan 或任何主包／插件 opt-in。
 
+## M4 完成记录
+
+RFC-0006a 已完成核心离线实现：`ScopeAcquisitionStatusV2` 的 average／segmented 父子 availability
+路径精确区分 static unavailable 与当前 mode 的 not applicable；`ScopeAcquisitionStatusProfileV2` 强制
+`acquisition_type`、`1..32` 的纯文本 query budget、条件分区和 run-state capability 依赖。独立 Protocol、
+capability、strict factory construction barrier、portability-V2 `OperationSpec` 和
+`ScopeService.acquisition_status_v2()` 均已注册。
+
+Service 只调用 V2 driver 方法一次，传递 profile 的 `readable_fields`，并在一个只允许 `query()` 的受预算
+phase 中验证返回值；它不执行 legacy identity preflight、R1.3 acquisition-control Service、error drain、
+`*STB?`、`*ESR?`、binary 或 write。旧 `scope acquisition-status`、legacy status 模型、CLI、artifact 和
+run-plan 均不变。`tests/test_scope_acquisition_status_v2.py` 覆盖模型、profile、factory、query budget、
+non-query I/O 拒绝和 legacy route；核心完整离线回归与外部 MSO8000 插件新 core source 回归均通过。内建
+descriptor 和插件仍未声明 status V2，0006b 继续 blocked。
+
 ## 后续 Draft 验证与接受门
 
 本轮已在单项 RFC 中冻结以下文档语义：RFC-0005 的 identity 新鲜来源、text query 计数、封闭
 availability 与独立返回边界；RFC-0006a 的 profile、文本预算、父／子 availability、run-state 条件依赖
 与 legacy 路由；RFC-0007a 的完整 statistics 成功值和三项 Draft 不新增 CLI/artifact 的边界。
 
-RFC-0005 已完成上述 M3b 核心离线矩阵；RFC-0006a 已完成接受文档冻结，0006b 和 RFC-0007 进入
-`Accepted` 前仍须完成：
+RFC-0005 和 RFC-0006a 已分别完成 M3b/M4 核心离线矩阵；0006b 和 RFC-0007 进入 `Accepted` 前仍须完成：
 
 - RFC-0006b：不修改 RFC-0008 标准 waveform profile 的前提下，另行接受可复用 bounded transaction
   限制、backend gate、ledger 与 construction barrier 的核心内部前置合同；
 - RFC-0007：分别完成 selector/profile、FFT optional-field、cursor unit/path 的离线矩阵，并在需要
   CLI/artifact 时先提交单项接受附录。
 
-本轮已完成 M3b 核心代码；M4～M7、外部插件 capability 与硬件验收仍不因上述文档冻结而启动。
+本轮已完成 M4 核心代码；M5～M7、外部插件 capability 与硬件验收仍不因上述文档冻结而启动。
 
 ## 共同验收门
 
