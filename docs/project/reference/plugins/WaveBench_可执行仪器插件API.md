@@ -317,6 +317,11 @@ R1.3 的 Protocol 和 model 从 `wavebench.instruments` 导出。声明任一新
 `waveform_binary_profile` 与 bounded waveform Protocol 首次提供于核心 `0.8.24`，因此采用它们的
 插件必须把 wheel 依赖和 descriptor 下限同时提高到 `0.8.24` 或更高的 `0.8.x` 版本。
 
+上述 `0.8.23`／`0.8.24` 是核心开发线的静态合同下限，不是外部插件的发布授权。正式发行物尚未
+包含对应合同前，插件可以针对开发树做离线 conformance，但不得据此发布提高后的
+`Requires-Dist`、`wavebench_min_version` 或新增 capability。核心发布后，应把两处版本门同时改为
+第一个实际包含完整合同的发行版本；若同一版本号已有不含合同的 artifact，必须使用可区分的更高版本。
+
 profile 依赖如下：
 
 | capability | 必需 descriptor profile |

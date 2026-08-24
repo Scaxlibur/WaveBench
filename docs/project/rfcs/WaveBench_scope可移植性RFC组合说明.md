@@ -192,6 +192,24 @@ RFC-0002 + RFC-0006a + RFC-0008
 该冻结不把 RFC-0002、RFC-0004、RFC-0005、RFC-0006 或 RFC-0007 从 `Draft` 升为已实现；每项
 仍须在其里程碑完成模型、Protocol、factory、Service、CLI 和兼容回归后更新状态。
 
+## M1 完成记录
+
+RFC-0001、RFC-0003 与 RFC-0008 的核心替代合同已完成离线回归，不新增
+`query_text_once()`、`query_raw_bytes_once()` 或扩展 legacy `query_bin_block()`。
+
+- `tests/test_transport_call_classification.py` 将 `query_binary()` 纳入核心 driver 的显式 replay
+  静态检查；
+- `tests/test_transport_replay_matrix.py` 固定 PyVISA、RsInstrument 与 Serial 的文本／legacy binary
+  query 在 `no_replay`、已证明安全的 replay 和 continuation 三种策略下的发送次数；
+- `tests/test_scope_binary_contract.py` 固定 PyVISA/RsInstrument bounded binary 的单次发送，以及
+  guarded bounded phase 对 replay／continuation 的发送前拒绝，且不调用后端；
+- `tests/test_scope_portability_m0.py` 继续覆盖内建 RTM2032、DS1104/DS1000Z 的 legacy 路由，确保
+  新 profile 不改变其 fetch/capture 行为。
+
+`scope.error_drain_v1`、screenshot V2 和标准 waveform bounded profile 仍是开发线中
+`Implemented（未发布）` 的核心合同。外部插件采用必须等待第一个实际包含完整合同的正式发行版本；
+开发树中的 `0.8.23`／`0.8.24` 只作为静态校验下限，不能单独证明可发布的版本门。
+
 ## 共同验收门
 
 每项新合同至少覆盖：

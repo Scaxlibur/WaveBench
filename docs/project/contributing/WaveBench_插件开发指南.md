@@ -144,6 +144,11 @@ capability 名必须与 `kind` 同前缀。例如 scope 只能声明 `scope.*`�
 - binary framing 与具体 resource/backend 的 EOM 能力一致，不能用短读、换行或 timeout 猜测边界；
 - fake conformance、包检查和实机验收分别通过后，再修改正式 descriptor。
 
+本段的 `0.8.23`／`0.8.24` 只表示开发线中的静态合同下限。正式核心发行物出现前，插件可在
+开发树进行离线验证，但不得发布提高后的 wheel 依赖、`wavebench_min_version` 或新增 scope
+capability。发布时必须使用第一个实际包含完整合同的核心版本；同一版本号若存在不含合同的既有
+artifact，应改用可区分的更高版本。
+
 未采用新增 capability 的旧插件不需要提高核心版本下限。旧 `scope capture --screenshot` 不承载
 新 `scope.screenshot_v2`；新插件应使用独立截图 Service 或 `wavebench scope screenshot capture`。
 
