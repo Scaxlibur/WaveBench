@@ -12,7 +12,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=cwd, check=True, capture_output=True, text=True)
+    completed = subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"command failed with exit code {completed.returncode}: {command!r}\n"
+            f"stdout:\n{completed.stdout}\n"
+            f"stderr:\n{completed.stderr}"
+        )
+    return completed
 
 
 def _build_artifact(*, target: str, output_dir: Path) -> Path:
