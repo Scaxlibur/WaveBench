@@ -32,6 +32,8 @@
   `Accepted R6`；核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2，
   M6-A、M6-B 与 M6-C 已完成核心离线合同；真实插件验收与发布审计仍按里程碑推进。
 - [transport 重放与 session 健康 RFC](rfcs/WaveBench_transport重放与session健康RFC.md)
+- [scope 通用扩展接口 RFC](rfcs/WaveBench_scope通用扩展接口RFC.md)：`Accepted R1.3`，定义 operation context、binary budget、截图、采集控制、trace、错误策略及恢复验证合同。
+- [标准波形有界二进制传输 RFC](rfcs/WaveBench_标准波形有界二进制传输RFC.md)：`Implemented R1（未发布）`，标准 waveform/capture 已具备对 R1.3 bounded binary context 的 descriptor opt-in 接入、恢复边界和新旧核心／插件兼容矩阵；外部插件仍需单独验收。
 
 ## contributing：开发和接入
 

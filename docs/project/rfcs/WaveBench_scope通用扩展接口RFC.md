@@ -164,7 +164,8 @@ R1.3 暂定四个独立 binary 限制：`binary_response_max_bytes` 限制每次
 短生命周期的
 `BinaryQueryBudget`。transport 每次 binary query 都必须验证 budget 与 operation context、phase、
 correlation 和 session epoch 匹配；插件只能进一步收紧单次上限，不能提高或重置累计额度。没有 budget 的新
-`query_binary()` 调用在发送前拒绝；旧 `query_bin_block()` 兼容入口使用核心固定有限上限。
+`query_binary()` 调用在发送前拒绝；旧 `query_bin_block()` 兼容入口只保留给 legacy operation，
+在 active binary budget phase 中必须在发送前拒绝。
 
 现有 `verification_fields` 只表示按 `restore_coverage` 恢复到 baseline 后必须闭合的字段，
 不用于表示读操作的观察结果，也不用于证明有意保留的控制状态。
@@ -653,11 +654,10 @@ profile 或 connection 没有对应限制时只是不进一步收紧，不能取
 Service 在第一个阶段授权前向 operation context 安装与 context/operation/correlation/epoch
 绑定的 opaque budget ledger。没有 ledger 或 active phase 不允许 binary I/O 的新
 `query_binary()` 调用必须在 `BEFORE_SEND` 以 `NOT_SENT` 拒绝。现有 `query_bin_block()` 保留
-为 definite block 兼容入口。它在 legacy operation 中使用核心固定的有限兼容上限；在已安装
-R1.3 budget 的新 operation 中必须消耗同一个 response/operation/query/resync budget，不得建立第二套
-兼容额度。新 operation 若无 R1.3 budget，通过 `query_bin_block()` 也必须在发送前拒绝。
-核心冻结 legacy 兼容上限时必须覆盖现有已接受 operation 的合法 payload，或给旧 operation 保留
-独立的有限 spec；不能在没有迁移说明的情况下静默降低既有波形读取上限。
+为 definite block 兼容入口，只允许没有 active binary budget 的 legacy operation。在已安装 R1.3
+budget 的新 operation 中，它必须以 `binary_legacy_entry_unsupported` 在发送前拒绝，不得消耗、
+重建或模拟 response/operation/query/resync budget。新 operation 若没有 R1.3 budget，
+`query_binary()` 同样在发送前拒绝。
 
 如果 operation 使用 binary profile，则每个参与的 variant 必须提供有限正整数的 response、
 operation-total 和 query-count，以及有限非负整数的 resynchronization 限制；没有 profile 层的 operation 直接使用

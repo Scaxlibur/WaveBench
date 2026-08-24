@@ -139,7 +139,7 @@ def descriptor() -> InstrumentDescriptor:
 | `distribution`、`version`、`source`、`origin` | entry point 加载后由 registry 按已安装分发覆盖 | 不得用于插件内部授权、信任或功能分支 |
 | `scope_coupling_policy` | 值由类型约定为三种策略 | scope 必须准确声明；无法证明时使用 `unknown`，核心会默认拒绝无法确认高阻的采集 |
 | `config_fields` | 当前只展示；为空时由 `option_specs` 推导 `options.<name>` | 只列出用户实际可配置的字段，不代表核心会按此字段授权 |
-| `scope_extensions` | 仅允许 scope descriptor 使用，类型必须为 `ScopeDescriptorExtensions` | 为 R1.3 capability 提供静态截图、采集控制和 trace profile；旧插件保持 `None` |
+| `scope_extensions` | 仅允许 scope descriptor 使用，类型必须为 `ScopeDescriptorExtensions` | 为 R1.3 capability 提供静态截图、采集控制、trace 和标准 waveform bounded profile；旧插件保持 `None` |
 | `source_extensions` | 仅允许 source descriptor 使用，类型必须为 `SourceDescriptorExtensions` | 为 `source.snapshot_v2` 及各已声明的 Source V2 写 capability 提供 topology、feature profile 和查询合同；旧插件保持 `None` |
 
 ### `scope_coupling_policy`
@@ -232,6 +232,11 @@ factory 返回 driver 后，transport 的所有权转移给 driver。`close()` �
 
 factory 必须同步返回，不得返回 coroutine、context manager 或 `(driver, transport)` tuple。factory 也不得启动无法由 `close()` 停止的线程或子进程。
 
+当 `scope_extensions.waveform_binary_profile` 非空时，`open_transport()` 返回的 guard 在 factory 返回、profile、
+Protocol 和 backend/resource 校验完成前拒绝全部仪器 I/O，并返回发送前错误
+`factory_construction_pending`。factory 必须把初始化中的仪器查询移到后续 Service 操作；验证失败时核心关闭
+已经打开的 transport。该门禁只覆盖 `DriverContext.open_transport()` 返回的 guard，不把可信 Python 插件当作沙箱。
+
 ## Capability 契约
 
 核心在执行操作前检查所需 capability，缺失时不会打开 transport。driver 创建后，核心只检查对应属性是否可调用，不检查参数签名、返回类型、异常类型或操作语义。这些内容由 Protocol、model 和插件测试保证。
@@ -250,9 +255,9 @@ capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader
 | `scope.idn` | `idn` |
 | `scope.errors` | `errors` |
 | `scope.autoscale` | `autoscale` |
-| `scope.fetch_waveform` | `fetch_waveform` |
-| `scope.capture_waveform` | `capture_waveform` |
-| `scope.capture_waveforms` | `capture_waveforms` |
+| `scope.fetch_waveform` | profile 为 `None` 时为 `fetch_waveform`；有 `waveform_binary_profile` 时为 `fetch_waveform_bounded` 和 waveform transfer recovery 方法 |
+| `scope.capture_waveform` | profile 为 `None` 时为 `capture_waveform`；有 `waveform_binary_profile` 时为 `capture_waveform_bounded` 和 waveform transfer recovery 方法 |
+| `scope.capture_waveforms` | profile 为 `None` 时为 `capture_waveforms`；有 `waveform_binary_profile` 时为 `capture_waveforms_bounded` 和 waveform transfer recovery 方法 |
 | `scope.screenshot` | `screenshot_png` |
 | `scope.channel_coupling` | `channel_coupling` |
 | `scope.snapshot` | `get_snapshot` |
@@ -276,10 +281,41 @@ capability 必须与 descriptor 的 `kind` 使用相同前缀。当前 V2 loader
 
 `scope.capture_waveforms` 的固定语义是：先配置全部目标通道，只执行一次 acquisition 和 OPC 等待，再逐通道读取。不得静默退回逐通道重复触发。回调、失败时部分结果和返回字典的签名以 `MultiChannelScopeDriver` 为准。
 
+### 标准 waveform bounded profile
+
+`ScopeWaveformBinaryProfile` 是 `wavebench.instrument.v2` 的 additive descriptor extension，不新增
+capability。profile 为 `None` 时，三个标准 waveform capability 保持原有方法签名和调用顺序；profile
+非空时，operations 必须与声明的 `scope.fetch_waveform`、`scope.capture_waveform`、
+`scope.capture_waveforms` 精确对应。
+
+每个 `ScopeWaveformBinaryOperationProfile` 声明 response、operation-total、query-count、
+resynchronization 预算，以及 transfer-state 的 snapshot、restore、verify 步数和字段顺序。首版只接受
+IEEE definite block；`transport_trailing_hex` 是最多 16 bytes 的小写偶数字符十六进制序列，空字符串表示
+已验证的空 trailing，不表示忽略 trailing。
+
+核心上限为单响应 8 MiB、单操作 64 MiB、256 次 binary query 和 64 KiB resynchronization。profile
+只能收紧这些值。标准 bounded waveform 只接受核心 PyVISA 或 RsInstrument 的可证明 VISA `INSTR` 读取路径；
+Serial、SocketIO 和第三方 duck transport 即使存在 `query_binary()` 也不会被视为已支持。
+
+bounded driver 必须实现 `ScopeWaveformTransferRecoveryDriver`，以及对应的
+`ScopeBoundedWaveformFetchDriver`、`ScopeBoundedWaveformCaptureDriver` 或
+`ScopeBoundedMultiWaveformCaptureDriver`。`ScopeWaveformTransfer*` 是独立于已发布
+`ScopeTraceTransfer*` 的恢复模型；capture profile 必须覆盖采集、触发、时基、通道和 waveform
+transfer 的完整恢复闭包。主读取必须使用受 core ledger 授权的
+`query_binary(..., framing=DEFINITE_BLOCK, replay=NO_REPLAY)`；不得调用 `query_bin_block()`、自行传递
+trailing/resynchronization 参数、重放或继续已发送的 binary query。
+core 会把 descriptor 的 framing 绑定到 ledger；请求 `MESSAGE` 或其他不匹配 framing 时会在发送前拒绝。
+
+标准 `ScopeConfig.check_errors=true` 在 bounded 路径固定要求 `scope.error_drain_v1`；`false` 固定禁用
+typed drain。核心不使用 `scope.errors` 代替 typed drain。多通道 bounded 方法必须保留
+`on_channel_start` 和 `on_waveform` 的既有回调与部分结果语义。
+
 ### Scope R1.3 扩展
 
 R1.3 的 Protocol 和 model 从 `wavebench.instruments` 导出。声明任一新增 capability 时，wheel
 依赖和 descriptor 的 `wavebench_min_version` 都必须为 `0.8.23` 或更高的 `0.8.x` 版本。
+`waveform_binary_profile` 与 bounded waveform Protocol 首次提供于核心 `0.8.24`，因此采用它们的
+插件必须把 wheel 依赖和 descriptor 下限同时提高到 `0.8.24` 或更高的 `0.8.x` 版本。
 
 profile 依赖如下：
 
@@ -613,7 +649,10 @@ capability 的高级配置保持 V1。插件不得把 capability 注册视为
 - 更换 canonical `driver_id` 指向的设备族；
 - 缩小已发布 model 的有效输入范围，导致旧插件对象无法构造。
 
-新增独立 capability、model 的可选字段或 descriptor 展示字段，通常可以保持现有插件兼容。每次提高最低 WaveBench 版本时，应同步修改 wheel 依赖、descriptor 区间和插件测试矩阵。
+新增独立 capability、model 的可选字段或 descriptor 展示字段，通常可以保持现有插件兼容。标准 waveform
+的 `waveform_binary_profile` 和对应 bounded Protocol 组是已冻结的 V2 additive 例外：只有 profile 非空的
+descriptor 改用新方法集，旧 `ScopeDriver` 方法不变。每次提高最低 WaveBench 版本时，应同步修改 wheel
+依赖、descriptor 区间和插件测试矩阵。
 
 ## 最小验证矩阵
 
