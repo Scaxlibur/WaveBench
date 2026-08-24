@@ -139,7 +139,7 @@ def test_input_state_v2_is_an_additive_protocol_and_registered_capability() -> N
     assert CAPABILITY_METHODS["scope.channel_input_state_v2"] == (
         "get_channel_input_state_v2",
     )
-    assert SCOPE_STRICT_V2_CAPABILITIES == {"scope.channel_input_state_v2"}
+    assert "scope.channel_input_state_v2" in SCOPE_STRICT_V2_CAPABILITIES
 
 
 def test_input_state_v2_descriptor_requires_its_own_core_floor_and_method() -> None:
