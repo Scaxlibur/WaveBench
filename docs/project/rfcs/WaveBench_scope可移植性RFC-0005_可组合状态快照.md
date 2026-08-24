@@ -1,6 +1,6 @@
 # RFC-0005：可组合的示波器状态快照 V2
 
-> 状态：`Accepted R1`
+> 状态：`Implemented R1（未发布）`
 > 核心基线：现有完整 `ScopeSnapshot` 与 `status_summary()`
 > 目标：允许设备返回可证明的类型化分区，不伪造缺失字段
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
@@ -14,6 +14,18 @@
 
 本 RFC 提议追加 snapshot V2。身份仍是必需基线，其他分区和设备相关叶字段可以明确
 unavailable。现有完整 snapshot 和 partial summary 均保持原样。
+
+## 核心实现状态
+
+核心开发线已经提供 `ScopeSnapshotV2` 与六个可空分区模型、`ScopeSnapshotProfileV2`、
+`ScopeSnapshotDriverV2`、`scope.snapshot_v2`、strict factory construction barrier 和
+`ScopeService.snapshot_v2(channel)`。Service 只把验证后的 `readable_fields` 原样交给 driver，
+在单个受预算的文本 `query()` phase 中执行，不调用 legacy identity preflight、error drain、
+`*STB?`、`*ESR?`、binary query、write 或 acquisition。
+
+R1 不新增 V2 CLI、artifact 或 run plan step，也不修改 `ScopeSnapshot`、`scope.snapshot`、
+`status()`、`status_summary()` 或旧 `scope status`。主包内建 descriptor 和外部 MSO8000 插件均未
+声明 `scope.snapshot_v2`；核心实现不表示任何具体仪器已经 opt-in。
 
 ## 当前边界
 
@@ -355,11 +367,16 @@ available sections、脱敏 identity 摘要、query-count 摘要、session-epoch
 - legacy：完整 snapshot、partial summary、strict status、CLI 和 JSON 黄金基线；
 - cross-driver：至少两个不同仪器族的 fixture 能返回不同分区子集。
 
-## R1 实现验证门
+## 核心离线验收
 
-文档语义已经冻结为：Service 使用 `ScopeService.snapshot_v2(channel)`、identity 在受计数的 driver
-phase 内新鲜读取、R1 不提供 V2 CLI／artifact。实现必须完成：
+R1 已验证：Service 使用 `ScopeService.snapshot_v2(channel)`、identity 在受计数的 driver phase 内
+新鲜读取，且不提供 V2 CLI／artifact。`tests/test_scope_snapshot_v2.py`、
+`tests/test_scope_extension_registry.py`、`tests/test_scope_snapshot.py` 和
+`tests/test_scope_portability_m0.py` 覆盖：
 
-1. 至少两个不同仪器族或 fixture 的 profile/result 负向矩阵；
-2. identity、完整分区、条件字段、query overrun 和 transport failure 的离线验证设计；
-3. construction barrier 与 legacy `status()`／`status_summary()` 的零 I/O 兼容矩阵。
+1. profile/result 的完整、部分、条件字段和负向矩阵；
+2. identity、text query budget、query overrun 与非 query I/O 的发送前拒绝；
+3. construction barrier、缺方法关闭、旧 `status()`／`status_summary()` 和 legacy factory 的零 I/O
+   兼容矩阵；
+4. 内建 legacy descriptor 不含 V2 capability，外部 MSO8000 descriptor 仍可离线加载且未声明
+   snapshot V2。
