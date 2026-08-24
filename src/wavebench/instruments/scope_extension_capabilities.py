@@ -21,6 +21,7 @@ SCOPE_STRICT_V2_CAPABILITIES = frozenset(
         "scope.digital_status_v2",
         "scope.snapshot_v2",
         "scope.acquisition_status_v2",
+        "scope.measurement_statistics_v2",
     }
 )
 
@@ -74,6 +75,7 @@ SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "scope.digital_status_v2": ("get_digital_status_v2",),
         "scope.snapshot_v2": ("get_snapshot_v2",),
         "scope.acquisition_status_v2": ("get_acquisition_status_v2",),
+        "scope.measurement_statistics_v2": ("get_measurement_statistics_v2",),
     }
 )
 
@@ -133,6 +135,7 @@ def validate_scope_descriptor(
         "scope.fetch_trace": "trace_profile",
         "scope.snapshot_v2": "snapshot_profile_v2",
         "scope.acquisition_status_v2": "acquisition_status_profile_v2",
+        "scope.measurement_statistics_v2": "measurement_statistics_profile_v2",
     }
     for capability in sorted(declared):
         profile_name = profile_requirements.get(capability)

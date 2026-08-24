@@ -1097,6 +1097,118 @@ class ScopeMeasurementStatistics:
     buffered_values: tuple[float, ...] | None = None
 
 
+ScopeMeasurementSelectorMode = Literal["slot", "item_sources"]
+_SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementSelector:
+    slot: int | None = None
+    item: str | None = None
+    sources: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sources, tuple):
+            raise TypeError("measurement selector sources must be a tuple")
+        if self.slot is not None:
+            if isinstance(self.slot, bool) or not isinstance(self.slot, int) or self.slot < 1:
+                raise ValueError("measurement selector slot must be a positive integer")
+            if self.item is not None or self.sources:
+                raise ValueError("slot measurement selector cannot include item or sources")
+            return
+        if (
+            not isinstance(self.item, str)
+            or _SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN.fullmatch(self.item) is None
+        ):
+            raise ValueError("item measurement selector requires a safe item token")
+        if not self.sources:
+            raise ValueError("item measurement selector requires at least one source")
+        if len(set(self.sources)) != len(self.sources):
+            raise ValueError("item measurement selector sources must be unique")
+        for source in self.sources:
+            if (
+                not isinstance(source, str)
+                or _SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN.fullmatch(source) is None
+            ):
+                raise ValueError("item measurement selector sources must be safe tokens")
+
+    @property
+    def mode(self) -> ScopeMeasurementSelectorMode:
+        return "slot" if self.slot is not None else "item_sources"
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementStatisticsRequestV2:
+    selector: ScopeMeasurementSelector
+    configured: bool
+    include_buffer: bool = False
+    acquisition_stopped: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.selector, ScopeMeasurementSelector):
+            raise TypeError("measurement statistics V2 selector has an invalid type")
+        if self.configured is not True:
+            raise ValueError("measurement statistics V2 requires configured=True")
+        if not isinstance(self.include_buffer, bool):
+            raise TypeError("measurement statistics V2 include_buffer must be bool")
+        if not isinstance(self.acquisition_stopped, bool):
+            raise TypeError("measurement statistics V2 acquisition_stopped must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementStatisticsV2:
+    selector: ScopeMeasurementSelector
+    category: str
+    actual: float
+    average: float
+    standard_deviation: float
+    minimum: float
+    maximum: float
+    waveform_count: int
+    buffered_values: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.selector, ScopeMeasurementSelector):
+            raise TypeError("measurement statistics V2 selector has an invalid type")
+        if (
+            not isinstance(self.category, str)
+            or _SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN.fullmatch(self.category) is None
+        ):
+            raise ValueError("measurement statistics V2 category must be a safe token")
+        for label, value in (
+            ("actual", self.actual),
+            ("average", self.average),
+            ("standard_deviation", self.standard_deviation),
+            ("minimum", self.minimum),
+            ("maximum", self.maximum),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+            ):
+                raise ValueError(f"measurement statistics V2 {label} must be finite")
+        if (
+            isinstance(self.waveform_count, bool)
+            or not isinstance(self.waveform_count, int)
+            or self.waveform_count < 0
+        ):
+            raise ValueError("measurement statistics V2 waveform_count must be non-negative")
+        if self.buffered_values is None:
+            return
+        if not isinstance(self.buffered_values, tuple):
+            raise TypeError("measurement statistics V2 buffered_values must be a tuple")
+        for value in self.buffered_values:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+            ):
+                raise ValueError("measurement statistics V2 buffered_values must be finite")
+
+
 @dataclass(frozen=True)
 class ScopeDerivedWaveformMetadata:
     source_kind: Literal["math", "reference"]

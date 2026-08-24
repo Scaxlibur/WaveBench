@@ -25,6 +25,8 @@ from .models import (
     ScopeChannelInputStateV2,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
+    ScopeMeasurementStatisticsRequestV2,
+    ScopeMeasurementStatisticsV2,
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
@@ -182,6 +184,14 @@ class ScopeMeasurementStatisticsDriver(InstrumentDriver, Protocol):
         include_buffer: bool = False,
         acquisition_stopped: bool = False,
     ) -> ScopeMeasurementStatistics: ...
+
+
+@runtime_checkable
+class ScopeMeasurementStatisticsDriverV2(InstrumentDriver, Protocol):
+    def get_measurement_statistics_v2(
+        self,
+        request: ScopeMeasurementStatisticsRequestV2,
+    ) -> ScopeMeasurementStatisticsV2: ...
 
 
 @runtime_checkable

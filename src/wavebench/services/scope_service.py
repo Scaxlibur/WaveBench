@@ -31,6 +31,7 @@ from wavebench.instruments.contracts import (
     ScopeDigitalWaveformDriver,
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
+    ScopeMeasurementStatisticsDriverV2,
     ScopeSnapshotDriver,
     ScopeSnapshotDriverV2,
 )
@@ -49,6 +50,8 @@ from wavebench.instruments.models import (
     ScopeFftStatus,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
+    ScopeMeasurementStatisticsRequestV2,
+    ScopeMeasurementStatisticsV2,
     ScopeSnapshot,
     ScopeSnapshotV2,
     WaveformData,
@@ -60,6 +63,7 @@ from wavebench.instruments.scope_extensions import (
     ScopeAcquisitionStatusDriverV2,
     ScopeAcquisitionStatusProfileV2,
     ScopeAcquisitionStatusV2,
+    ScopeMeasurementStatisticsProfileV2,
     ScopeScreenshotRequest,
     ScopeSnapshotProfileV2,
     ScopeTraceRef,
@@ -640,6 +644,80 @@ class ScopeService(SessionStateAliasMixin):
                 acquisition_stopped=acquisition_stopped,
             )
 
+    def measurement_statistics_v2(
+        self,
+        request: ScopeMeasurementStatisticsRequestV2,
+    ) -> ScopeMeasurementStatisticsV2:
+        if not isinstance(request, ScopeMeasurementStatisticsRequestV2):
+            raise ConfigError("measurement statistics V2 request has an invalid type")
+        spec = self._require(
+            "scope.measurement_statistics_v2",
+            "scope.measurement_statistics_v2",
+        )
+        profile = self._measurement_statistics_v2_profile()
+        if profile is None:
+            raise ConfigError(
+                "scope measurement statistics V2 requires "
+                "scope_extensions.measurement_statistics_profile_v2"
+            )
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"invalid measurement statistics V2 request: {exc}") from exc
+        with self._scope_session() as scope:
+            return self._execute_measurement_statistics_v2(
+                cast(ScopeMeasurementStatisticsDriverV2, scope),
+                request=request,
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_measurement_statistics_v2(
+        self,
+        scope: ScopeMeasurementStatisticsDriverV2,
+        *,
+        request: ScopeMeasurementStatisticsRequestV2,
+        profile: ScopeMeasurementStatisticsProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeMeasurementStatisticsV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_measurement_statistics_v2(request)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.measurement_statistics_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_measurement_statistics_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_measurement_statistics_v2(request)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError(
+                    "scope measurement statistics V2 exceeded its descriptor query budget"
+                )
+        try:
+            profile.validate_result(result, request=request)
+        except (TypeError, ValueError) as exc:
+            raise DataError(
+                f"scope measurement statistics V2 driver returned an invalid result: {exc}"
+            ) from exc
+        return result
+
     def math_waveform_metadata(self, math_index: int) -> ScopeDerivedWaveformMetadata:
         self._require("scope.math_metadata", "scope.math_metadata")
         with self._scope_session() as scope:
@@ -987,6 +1065,19 @@ class ScopeService(SessionStateAliasMixin):
                 "scope acquisition status V2 profile reads run_state but the descriptor "
                 "does not declare scope.acquisition_run_state"
             )
+        return profile
+
+    def _measurement_statistics_v2_profile(
+        self,
+    ) -> ScopeMeasurementStatisticsProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "measurement_statistics_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeMeasurementStatisticsProfileV2):
+            raise ConfigError("scope measurement statistics V2 descriptor profile has an invalid type")
         return profile
 
     def _bounded_waveform_executor(self, scope: object) -> BoundedWaveformExecutor:

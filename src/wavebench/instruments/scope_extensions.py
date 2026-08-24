@@ -13,6 +13,7 @@ import numpy as np
 
 from wavebench.scope_extension_constants import (
     SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
+    SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES,
     SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
@@ -27,6 +28,8 @@ from wavebench.transport.contracts import BinaryResponseFraming
 from .contracts import InstrumentDriver
 from .models import (
     SCOPE_SNAPSHOT_V2_FIELD_ORDER,
+    ScopeMeasurementStatisticsRequestV2,
+    ScopeMeasurementStatisticsV2,
     ScopeSnapshotFieldV2,
     ScopeSnapshotV2,
     WaveformData,
@@ -920,6 +923,120 @@ class ScopeAcquisitionStatusProfileV2:
         if parent is not None and parent in paths:
             return parent
         return None
+
+
+_MEASUREMENT_STATISTICS_V2_SELECTOR_MODE_ORDER = ("slot", "item_sources")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementStatisticsProfileV2:
+    """Descriptor-owned pure-text query contract for complete statistics V2."""
+
+    selector_modes: tuple[Literal["slot", "item_sources"], ...]
+    max_queries: int
+    supports_buffer: Literal[False] = False
+    slot_range: tuple[int, int] | None = None
+    supported_items: tuple[str, ...] = ()
+    item_source_count_range: tuple[int, int] | None = None
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        modes = _unique_tuple(self.selector_modes, label="statistics selector_modes")
+        if not modes or not set(modes) <= set(_MEASUREMENT_STATISTICS_V2_SELECTOR_MODE_ORDER):
+            raise ValueError("statistics selector_modes are invalid")
+        expected_modes = tuple(
+            mode
+            for mode in _MEASUREMENT_STATISTICS_V2_SELECTOR_MODE_ORDER
+            if mode in modes
+        )
+        if modes != expected_modes:
+            raise ValueError("statistics selector_modes must use stable mode order")
+        _strict_int(
+            self.max_queries,
+            label="statistics max_queries",
+            minimum=1,
+            maximum=SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES,
+        )
+        if not isinstance(self.supports_buffer, bool):
+            raise TypeError("statistics supports_buffer must be bool")
+        if self.supports_buffer is not False:
+            raise ValueError("statistics V2 R1 does not support statistics buffers")
+        _literal(self.allowed_effect, {"pure_read"}, label="statistics effect")
+
+        if "slot" in modes:
+            self._validate_range(self.slot_range, label="statistics slot_range")
+        elif self.slot_range is not None:
+            raise ValueError("statistics slot_range requires the slot selector mode")
+
+        if "item_sources" in modes:
+            items = _unique_tuple(self.supported_items, label="statistics supported_items")
+            if not items:
+                raise ValueError("statistics item_sources mode requires supported_items")
+            for item in items:
+                _safe_token(item, label="statistics supported item")
+            self._validate_range(
+                self.item_source_count_range,
+                label="statistics item_source_count_range",
+            )
+        elif self.supported_items or self.item_source_count_range is not None:
+            raise ValueError(
+                "statistics supported_items and item_source_count_range require item_sources"
+            )
+
+    @staticmethod
+    def _validate_range(value: object, *, label: str) -> tuple[int, int]:
+        if not isinstance(value, tuple) or len(value) != 2:
+            raise ValueError(f"{label} must be a two-integer tuple")
+        lower, upper = value
+        _strict_int(lower, label=f"{label} lower", minimum=1)
+        _strict_int(upper, label=f"{label} upper", minimum=1)
+        if lower > upper:
+            raise ValueError(f"{label} lower bound must not exceed upper bound")
+        return lower, upper
+
+    def validate_request(self, request: ScopeMeasurementStatisticsRequestV2) -> None:
+        """Reject unsupported statistics requests before opening an instrument session."""
+
+        if not isinstance(request, ScopeMeasurementStatisticsRequestV2):
+            raise TypeError("measurement statistics V2 request has an invalid type")
+        if request.configured is not True:
+            raise ValueError("measurement statistics V2 requires configured=True")
+        selector = request.selector
+        if selector.mode not in self.selector_modes:
+            raise ValueError("measurement statistics V2 selector mode is not supported")
+        if selector.mode == "slot":
+            if self.slot_range is None or selector.slot is None:
+                raise ValueError("measurement statistics V2 slot selector is not supported")
+            lower, upper = self.slot_range
+            if not lower <= selector.slot <= upper:
+                raise ValueError("measurement statistics V2 slot is outside the descriptor profile")
+        else:
+            if selector.item not in self.supported_items:
+                raise ValueError("measurement statistics V2 item is outside the descriptor profile")
+            if self.item_source_count_range is None:
+                raise ValueError("measurement statistics V2 item selector is not supported")
+            lower, upper = self.item_source_count_range
+            if not lower <= len(selector.sources) <= upper:
+                raise ValueError(
+                    "measurement statistics V2 source count is outside the descriptor profile"
+                )
+        if request.include_buffer:
+            raise ValueError("measurement statistics V2 R1 does not support statistics buffers")
+
+    def validate_result(
+        self,
+        result: ScopeMeasurementStatisticsV2,
+        *,
+        request: ScopeMeasurementStatisticsRequestV2,
+    ) -> None:
+        """Reject result selectors and buffer values outside the R1 contract."""
+
+        if not isinstance(result, ScopeMeasurementStatisticsV2):
+            raise TypeError("measurement statistics V2 driver returned an invalid result")
+        if result.selector != request.selector:
+            raise ValueError("measurement statistics V2 result selector does not match request")
+        if result.buffered_values is not None:
+            raise ValueError("measurement statistics V2 R1 result must not include a buffer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1959,6 +2076,7 @@ class ScopeDescriptorExtensions:
     waveform_binary_profile: ScopeWaveformBinaryProfile | None = None
     snapshot_profile_v2: ScopeSnapshotProfileV2 | None = None
     acquisition_status_profile_v2: ScopeAcquisitionStatusProfileV2 | None = None
+    measurement_statistics_profile_v2: ScopeMeasurementStatisticsProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -1983,6 +2101,11 @@ class ScopeDescriptorExtensions:
                 "acquisition_status_profile_v2",
                 self.acquisition_status_profile_v2,
                 ScopeAcquisitionStatusProfileV2,
+            ),
+            (
+                "measurement_statistics_profile_v2",
+                self.measurement_statistics_profile_v2,
+                ScopeMeasurementStatisticsProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):
