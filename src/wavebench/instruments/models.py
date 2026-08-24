@@ -198,6 +198,213 @@ class ScopeDigitalChannelStatus:
     label_enabled: bool
 
 
+ScopeDigitalThresholdScope = Literal["channel", "pod", "unknown"]
+ScopeDigitalActivityV2 = Literal["LOW", "HIGH", "TOGGLE", "unknown"]
+ScopeDigitalTechnologyV2 = Literal["TTL", "ECL", "CMOS", "MANUAL", "unknown"]
+ScopeDigitalHysteresisV2 = Literal["MAXIMUM", "ROBUST", "NORMAL", "unknown"]
+ScopeDigitalSizeV2 = Literal[
+    "SMALL",
+    "MEDIUM",
+    "LARGE",
+    "DIV1",
+    "DIV2",
+    "DIV4",
+    "DIV8",
+    "unknown",
+]
+ScopeDigitalStatusFieldV2 = Literal[
+    "displayed",
+    "position_div",
+    "label",
+    "label_enabled",
+    "activity",
+    "technology",
+    "hysteresis",
+    "pod",
+    "pod.threshold_v",
+    "pod.threshold_scope",
+    "shared",
+    "shared.module_present",
+    "shared.timing_calibration_s",
+    "shared.size",
+]
+
+_SCOPE_DIGITAL_STATUS_V2_FIELD_ORDER: tuple[ScopeDigitalStatusFieldV2, ...] = (
+    "displayed",
+    "position_div",
+    "label",
+    "label_enabled",
+    "activity",
+    "technology",
+    "hysteresis",
+    "pod",
+    "pod.threshold_v",
+    "pod.threshold_scope",
+    "shared",
+    "shared.module_present",
+    "shared.timing_calibration_s",
+    "shared.size",
+)
+_SCOPE_DIGITAL_STATUS_V2_FIELDS = frozenset(_SCOPE_DIGITAL_STATUS_V2_FIELD_ORDER)
+
+
+def _scope_v2_nonnegative_int(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return value
+
+
+def _scope_v2_optional_finite(value: object, *, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+        raise ValueError(f"{label} must be finite when provided")
+    return float(value)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDigitalPodStatusV2:
+    start_channel: int
+    stop_channel: int
+    threshold_v: float | None = None
+    threshold_scope: ScopeDigitalThresholdScope | None = None
+
+    def __post_init__(self) -> None:
+        _scope_v2_nonnegative_int(self.start_channel, label="digital pod start_channel")
+        _scope_v2_nonnegative_int(self.stop_channel, label="digital pod stop_channel")
+        if self.start_channel > self.stop_channel:
+            raise ValueError("digital pod start_channel must not exceed stop_channel")
+        _scope_v2_optional_finite(self.threshold_v, label="digital pod threshold_v")
+        if self.threshold_scope is not None and self.threshold_scope not in {
+            "channel",
+            "pod",
+            "unknown",
+        }:
+            raise ValueError("digital pod threshold_scope is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDigitalSharedStatusV2:
+    module_present: bool | None = None
+    timing_calibration_s: float | None = None
+    size: ScopeDigitalSizeV2 | None = None
+
+    def __post_init__(self) -> None:
+        if self.module_present is not None and not isinstance(self.module_present, bool):
+            raise ValueError("digital shared module_present must be bool when provided")
+        _scope_v2_optional_finite(
+            self.timing_calibration_s,
+            label="digital shared timing_calibration_s",
+        )
+        if self.size is not None and self.size not in {
+            "SMALL",
+            "MEDIUM",
+            "LARGE",
+            "DIV1",
+            "DIV2",
+            "DIV4",
+            "DIV8",
+            "unknown",
+        }:
+            raise ValueError("digital shared size is invalid")
+        if self.module_present is None and self.timing_calibration_s is None and self.size is None:
+            raise ValueError("digital shared status must contain at least one available field")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDigitalChannelStatusV2:
+    """Portable digital channel state that does not invent unavailable device fields."""
+
+    channel: int
+    displayed: bool | None = None
+    position_div: float | None = None
+    label: str | None = None
+    label_enabled: bool | None = None
+    activity: ScopeDigitalActivityV2 | None = None
+    technology: ScopeDigitalTechnologyV2 | None = None
+    hysteresis: ScopeDigitalHysteresisV2 | None = None
+    pod: ScopeDigitalPodStatusV2 | None = None
+    shared: ScopeDigitalSharedStatusV2 | None = None
+    unavailable_fields: tuple[ScopeDigitalStatusFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        _scope_v2_nonnegative_int(self.channel, label="digital status channel")
+        if self.displayed is not None and not isinstance(self.displayed, bool):
+            raise ValueError("digital status displayed must be bool when provided")
+        _scope_v2_optional_finite(self.position_div, label="digital status position_div")
+        if self.label is not None and not isinstance(self.label, str):
+            raise ValueError("digital status label must be str when provided")
+        if self.label_enabled is not None and not isinstance(self.label_enabled, bool):
+            raise ValueError("digital status label_enabled must be bool when provided")
+        if self.activity is not None and self.activity not in {"LOW", "HIGH", "TOGGLE", "unknown"}:
+            raise ValueError("digital status activity is invalid")
+        if self.technology is not None and self.technology not in {
+            "TTL",
+            "ECL",
+            "CMOS",
+            "MANUAL",
+            "unknown",
+        }:
+            raise ValueError("digital status technology is invalid")
+        if self.hysteresis is not None and self.hysteresis not in {
+            "MAXIMUM",
+            "ROBUST",
+            "NORMAL",
+            "unknown",
+        }:
+            raise ValueError("digital status hysteresis is invalid")
+        if self.pod is not None:
+            if not isinstance(self.pod, ScopeDigitalPodStatusV2):
+                raise TypeError("digital status pod has an invalid type")
+            if not self.pod.start_channel <= self.channel <= self.pod.stop_channel:
+                raise ValueError("digital pod range must include the requested channel")
+        if self.shared is not None and not isinstance(self.shared, ScopeDigitalSharedStatusV2):
+            raise TypeError("digital status shared has an invalid type")
+        if not isinstance(self.unavailable_fields, tuple):
+            raise TypeError("digital status unavailable_fields must be a tuple")
+        if len(set(self.unavailable_fields)) != len(self.unavailable_fields):
+            raise ValueError("digital status unavailable_fields must not contain duplicates")
+        if not set(self.unavailable_fields) <= _SCOPE_DIGITAL_STATUS_V2_FIELDS:
+            raise ValueError("digital status unavailable_fields contain unsupported paths")
+
+        expected_unavailable: set[ScopeDigitalStatusFieldV2] = set()
+        for field_name, value in (
+            ("displayed", self.displayed),
+            ("position_div", self.position_div),
+            ("label", self.label),
+            ("label_enabled", self.label_enabled),
+            ("activity", self.activity),
+            ("technology", self.technology),
+            ("hysteresis", self.hysteresis),
+        ):
+            if value is None:
+                expected_unavailable.add(field_name)  # type: ignore[arg-type]
+        if self.pod is None:
+            expected_unavailable.add("pod")
+        else:
+            if self.pod.threshold_v is None:
+                expected_unavailable.add("pod.threshold_v")
+            if self.pod.threshold_scope is None:
+                expected_unavailable.add("pod.threshold_scope")
+        if self.shared is None:
+            expected_unavailable.add("shared")
+        else:
+            if self.shared.module_present is None:
+                expected_unavailable.add("shared.module_present")
+            if self.shared.timing_calibration_s is None:
+                expected_unavailable.add("shared.timing_calibration_s")
+            if self.shared.size is None:
+                expected_unavailable.add("shared.size")
+        expected = tuple(
+            field for field in _SCOPE_DIGITAL_STATUS_V2_FIELD_ORDER if field in expected_unavailable
+        )
+        if self.unavailable_fields != expected:
+            raise ValueError(
+                "digital status unavailable_fields must exactly describe missing fields "
+                "in stable order"
+            )
+
+
 @dataclass(frozen=True)
 class ScopeDigitalWaveformRequest:
     channels: tuple[int, ...]

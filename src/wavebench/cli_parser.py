@@ -1042,6 +1042,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(digital_status)
 
+    digital_status_v2 = scope_sub.add_parser(
+        "digital-status-v2",
+        help="Query a portable, field-aware state for one MSO digital channel",
+    )
+    digital_status_v2.add_argument(
+        "--channel",
+        type=int,
+        required=True,
+        help="Zero-based digital channel number (for example, 0 for D0)",
+    )
+    add_runtime_options(digital_status_v2)
+
     digital_waveform = scope_sub.add_parser(
         "digital-waveform",
         help="Read existing MSO digital waveforms and merge Dn into uint16 bit n",

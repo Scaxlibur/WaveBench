@@ -34,6 +34,7 @@ from .instruments.models import (
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalChannelStatusV2,
     ScopeDigitalWaveform,
     ScopeFftStatus,
     ScopeSnapshot,
@@ -487,6 +488,46 @@ def _print_scope_digital_status(status: ScopeDigitalChannelStatus) -> None:
     print(f"digital.position_div={status.position_div:.12g}")
     print(f"digital.label={status.label}")
     print(f"digital.label_enabled={'true' if status.label_enabled else 'false'}")
+
+
+def _print_scope_digital_status_v2(status: ScopeDigitalChannelStatusV2) -> None:
+    def scalar(value: object) -> str:
+        if value is None:
+            return "n/a"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float):
+            return f"{value:.12g}"
+        return str(value)
+
+    print(f"digital_v2.channel={status.channel}")
+    print(f"digital_v2.displayed={scalar(status.displayed)}")
+    print(f"digital_v2.position_div={scalar(status.position_div)}")
+    print(f"digital_v2.label={scalar(status.label)}")
+    print(f"digital_v2.label_enabled={scalar(status.label_enabled)}")
+    print(f"digital_v2.activity={scalar(status.activity)}")
+    print(f"digital_v2.technology={scalar(status.technology)}")
+    print(f"digital_v2.hysteresis={scalar(status.hysteresis)}")
+    if status.pod is None:
+        print("digital_v2.pod=n/a")
+    else:
+        print(f"digital_v2.pod.start_channel={status.pod.start_channel}")
+        print(f"digital_v2.pod.stop_channel={status.pod.stop_channel}")
+        print(f"digital_v2.pod.threshold_v={scalar(status.pod.threshold_v)}")
+        print(f"digital_v2.pod.threshold_scope={scalar(status.pod.threshold_scope)}")
+    if status.shared is None:
+        print("digital_v2.shared=n/a")
+    else:
+        print(f"digital_v2.shared.module_present={scalar(status.shared.module_present)}")
+        print(
+            "digital_v2.shared.timing_calibration_s="
+            + scalar(status.shared.timing_calibration_s)
+        )
+        print(f"digital_v2.shared.size={scalar(status.shared.size)}")
+    print(
+        "digital_v2.unavailable_fields="
+        + (",".join(status.unavailable_fields) or "none")
+    )
 
 
 def _print_scope_digital_waveform(

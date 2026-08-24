@@ -25,6 +25,7 @@ from wavebench.instruments.contracts import (
     ScopeChannelInputStateDriverV2,
     ScopeDriver,
     ScopeDigitalStatusDriver,
+    ScopeDigitalStatusDriverV2,
     ScopeDigitalWaveformDriver,
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
@@ -39,6 +40,7 @@ from wavebench.instruments.models import (
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalChannelStatusV2,
     ScopeDigitalWaveform,
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
@@ -461,6 +463,18 @@ class ScopeService(SessionStateAliasMixin):
         self._require("scope.digital_status", "scope.digital_status")
         with self._scope_session() as scope:
             return cast(ScopeDigitalStatusDriver, scope).get_digital_status(channel)
+
+    def digital_status_v2(self, channel: int) -> ScopeDigitalChannelStatusV2:
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+            raise ConfigError("digital status V2 channel must be a non-negative integer")
+        self._require("scope.digital_status_v2", "scope.digital_status_v2")
+        with self._scope_session() as scope:
+            result = cast(ScopeDigitalStatusDriverV2, scope).get_digital_status_v2(channel)
+        if not isinstance(result, ScopeDigitalChannelStatusV2):
+            raise DataError("digital status V2 driver returned an invalid result")
+        if result.channel != channel:
+            raise DataError("digital status V2 driver returned the wrong channel")
+        return result
 
     def digital_waveform(
         self,

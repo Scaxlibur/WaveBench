@@ -61,6 +61,7 @@ from .cli_output import (
     _print_scope_channel_input_state,
     _print_scope_history_timestamps,
     _print_scope_digital_status,
+    _print_scope_digital_status_v2,
     _print_scope_digital_waveform,
     _print_scope_measurement_statistics,
     _print_scope_cursor_readout,
@@ -1728,6 +1729,13 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "digital-status":
                 _print_scope_digital_status(service.digital_status(channel=args.channel))
+                return 0
+            if args.command == "digital-status-v2":
+                result = service.digital_status_v2(channel=args.channel)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    _print_scope_digital_status_v2(result)
                 return 0
             if args.command == "digital-waveform":
                 output_path = None

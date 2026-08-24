@@ -400,6 +400,13 @@ _BUILTIN_SPECS = (
     _spec("scope.fetch_waveform", "scope", required_capabilities=("scope.fetch_waveform",), effect="acquire", changed_fields=_SCOPE_CAPTURE_CHANGED_FIELDS, restore_coverage="capture-baseline-only", required_verified_fields=("scope.identity",), verification_fields=_SCOPE_CAPTURE_VERIFICATION_FIELDS, risk_flags=("acquisition_state", "temporary_transfer_setup")),
     _spec("scope.capture_average", "scope", required_capabilities=("scope.capture_average",), effect="acquire", changed_fields=("acquisition", "waveform_package"), risk_flags=("trigger", "acquisition_state")),
     _spec("scope.digital_status", "scope", required_capabilities=("scope.digital_status",), effect="stateful_read"),
+    _spec(
+        "scope.digital_status_v2",
+        "scope",
+        required_capabilities=("scope.digital_status_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+    ),
     _spec("scope.digital_waveform", "scope", required_capabilities=("scope.digital_waveform",), effect="acquire", changed_fields=("acquisition", "waveform_package"), risk_flags=("trigger", "acquisition_state")),
     _spec("scope.history_timestamps", "scope", required_capabilities=("scope.history_timestamps",), effect="stateful_read"),
     _spec("scope.measurement_statistics", "scope", required_capabilities=("scope.measurement_statistics",), effect="stateful_read"),
