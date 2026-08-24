@@ -58,6 +58,7 @@ from .cli_output import (
     _print_run_preflight,
     _print_scope_acquisition_status,
     _print_scope_average_capture,
+    _print_scope_channel_input_state,
     _print_scope_history_timestamps,
     _print_scope_digital_status,
     _print_scope_digital_waveform,
@@ -1699,6 +1700,14 @@ def _main(argv: list[str] | None = None) -> int:
                     _emit_json_result(_json_payload(result))
                 else:
                     _print_scope_snapshot(result)
+                return 0
+            if args.command == "channel-input-state":
+                channel = args.channel or service.config.scope.default_channel
+                result = service.channel_input_state_v2(channel)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    _print_scope_channel_input_state(result)
                 return 0
             if args.command == "acquisition-status":
                 _print_scope_acquisition_status(service.acquisition_status())

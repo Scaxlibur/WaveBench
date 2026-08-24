@@ -22,6 +22,7 @@ from wavebench.instruments.contracts import (
     ScopeAcquisitionStatusDriver,
     ScopeAverageCaptureDriver,
     ScopeAnalysisReadDriver,
+    ScopeChannelInputStateDriverV2,
     ScopeDriver,
     ScopeDigitalStatusDriver,
     ScopeDigitalWaveformDriver,
@@ -34,6 +35,7 @@ from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
     ScopeAverageCaptureRequest,
     ScopeAverageCaptureResult,
+    ScopeChannelInputStateV2,
     ScopeCursorReadout,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
@@ -650,6 +652,20 @@ class ScopeService(SessionStateAliasMixin):
         self._require("scope.channel_coupling", "scope.channel_coupling")
         with self._scope_session() as scope:
             return scope.channel_coupling(channel)
+
+    def channel_input_state_v2(self, channel: int) -> ScopeChannelInputStateV2:
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise ConfigError("scope input-state channel must be a positive integer")
+        self._require("scope.channel_input_state_v2", "scope.channel_input_state_v2")
+        with self._scope_session() as scope:
+            result = cast(ScopeChannelInputStateDriverV2, scope).get_channel_input_state_v2(
+                channel
+            )
+        if not isinstance(result, ScopeChannelInputStateV2):
+            raise DataError("scope input-state V2 driver returned an invalid result")
+        if result.channel != channel:
+            raise DataError("scope input-state V2 driver returned the wrong channel")
+        return result
 
     def require_high_impedance(self, channel: int, *, allow_50ohm: bool = False) -> str:
         coupling = self.channel_coupling(channel)

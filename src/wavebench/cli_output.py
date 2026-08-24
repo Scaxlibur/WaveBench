@@ -28,6 +28,7 @@ from .instruments.models import (
     PowerStatus,
     ScopeAcquisitionStatus,
     ScopeAverageCaptureResult,
+    ScopeChannelInputStateV2,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
     ScopeCursorReadout,
@@ -441,6 +442,15 @@ def _print_scope_acquisition_status(status: ScopeAcquisitionStatus) -> None:
     print(f"segmented.maximum_enabled={scalar(status.segmented_maximum_enabled)}")
     print(f"segmented.capacity={scalar(status.segment_capacity)}")
     print(f"segmented.available={scalar(status.segments_available)}")
+
+
+def _print_scope_channel_input_state(state: ScopeChannelInputStateV2) -> None:
+    impedance = "n/a" if state.impedance_ohm is None else f"{state.impedance_ohm:.12g}"
+    print(f"input.channel={state.channel}")
+    print(f"input.coupling={state.coupling}")
+    print(f"input.termination={state.termination}")
+    print(f"input.impedance_ohm={impedance}")
+    print("input.unavailable_fields=" + (",".join(state.unavailable_fields) or "none"))
 
 
 def _print_scope_average_capture(result: ScopeAverageCaptureResult) -> None:

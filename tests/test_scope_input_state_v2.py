@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+import io
+import json
+from contextlib import redirect_stdout
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
-from wavebench.errors import ConfigError, TransportIOError
+from wavebench.cli import main
+from wavebench.errors import ConfigError, DataError, TransportIOError
 from wavebench.instruments import (
     InstrumentDescriptor,
     ScopeChannelInputStateDriverV2,
@@ -13,12 +19,15 @@ from wavebench.instruments import (
 from wavebench.instruments.capabilities import CAPABILITY_METHODS, validate_declared_capabilities
 from wavebench.instruments.contracts import ScopeDriver
 from wavebench.instruments.factory import open_instrument_driver
+from wavebench.instruments.registry import build_instrument_registry
 from wavebench.instruments.scope_extension_capabilities import (
     SCOPE_CAPABILITY_METHODS,
     SCOPE_STRICT_V2_CAPABILITIES,
     validate_scope_descriptor,
 )
 from wavebench.services.operation_specs import require_operation_spec
+from wavebench.services.capability_explain import explain_operation
+from wavebench.services.scope_service import ScopeService
 from wavebench.logging import CommandLogger
 from wavebench.transport.contracts import ReplayPolicy
 
@@ -170,6 +179,144 @@ def test_input_state_v2_operation_is_a_stateful_exclusive_read() -> None:
     assert spec.required_capabilities == ("scope.channel_input_state_v2",)
     assert spec.effect == "stateful_read"
     assert spec.lease_mode == "exclusive"
+
+
+def test_input_state_v2_service_reads_only_the_v2_driver_method() -> None:
+    expected = ScopeChannelInputStateV2(
+        channel=2,
+        coupling="dc",
+        termination="high_z",
+        impedance_ohm=1_000_000.0,
+    )
+    calls: list[tuple[str, int]] = []
+    driver = SimpleNamespace(
+        get_channel_input_state_v2=lambda channel: calls.append(("v2", channel)) or expected,
+        channel_coupling=lambda channel: (_ for _ in ()).throw(
+            AssertionError(f"legacy coupling was called for CH{channel}")
+        ),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="example.input-state")),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=SimpleNamespace(
+            driver_id="example.input-state",
+            capabilities=("scope.channel_input_state_v2",),
+        ),
+    )
+
+    assert service.channel_input_state_v2(2) == expected
+    assert calls == [("v2", 2)]
+
+
+def test_input_state_v2_service_rejects_invalid_or_wrong_channel_before_legacy_fallback() -> None:
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="example.input-state")),
+        logger=SimpleNamespace(),
+        descriptor=SimpleNamespace(
+            driver_id="example.input-state",
+            capabilities=("scope.channel_input_state_v2",),
+        ),
+    )
+
+    with patch.object(service, "_open_scope") as open_scope:
+        with pytest.raises(ConfigError, match="positive integer"):
+            service.channel_input_state_v2(0)
+    open_scope.assert_not_called()
+
+    service.session = SimpleNamespace(
+        get_channel_input_state_v2=lambda _channel: ScopeChannelInputStateV2(
+            channel=2,
+            coupling="dc",
+            termination="high_z",
+            impedance_ohm=1_000_000.0,
+        )
+    )
+    with pytest.raises(DataError, match="wrong channel"):
+        service.channel_input_state_v2(1)
+
+
+def test_input_state_v2_does_not_change_legacy_high_impedance_gate() -> None:
+    legacy = build_instrument_registry(include_entry_points=False).resolve(
+        "rtm2032",
+        expected_kind="scope",
+    )
+    descriptor = replace(
+        legacy,
+        capabilities=(*legacy.capabilities, "scope.channel_input_state_v2"),
+    )
+    calls: list[tuple[str, int]] = []
+    driver = SimpleNamespace(
+        channel_coupling=lambda channel: calls.append(("legacy", channel)) or "DCL",
+        get_channel_input_state_v2=lambda channel: calls.append(("v2", channel))
+        or ScopeChannelInputStateV2(
+            channel=channel,
+            coupling="dc",
+            termination="high_z",
+            impedance_ohm=1_000_000.0,
+        ),
+    )
+    service = ScopeService(
+        config=SimpleNamespace(scope=SimpleNamespace(driver="rtm2032")),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=descriptor,
+    )
+
+    assert service.require_high_impedance(1) == "DCL"
+    assert calls == [("legacy", 1)]
+
+
+def test_input_state_v2_capability_explain_and_cli_output_are_additive() -> None:
+    descriptor = SimpleNamespace(
+        driver_id="example.input-state",
+        kind="scope",
+        capabilities=("scope.channel_input_state_v2",),
+    )
+    explanation = explain_operation("scope.channel_input_state_v2", descriptor=descriptor)
+    assert explanation.status == "supported"
+    assert explanation.spec is not None
+    assert explanation.spec.effect == "stateful_read"
+
+    expected = ScopeChannelInputStateV2(
+        channel=2,
+        coupling="gnd",
+        termination="unknown",
+        impedance_ohm=None,
+        unavailable_fields=("impedance_ohm",),
+    )
+    calls: list[int] = []
+    service = SimpleNamespace(
+        channel_input_state_v2=lambda channel: calls.append(channel) or expected,
+    )
+    stdout = io.StringIO()
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(["scope", "channel-input-state", "--channel", "2"])
+
+    assert code == 0
+    assert calls == [2]
+    assert stdout.getvalue().splitlines() == [
+        "input.channel=2",
+        "input.coupling=gnd",
+        "input.termination=unknown",
+        "input.impedance_ohm=n/a",
+        "input.unavailable_fields=impedance_ohm",
+    ]
+
+    stdout = io.StringIO()
+    with patch("wavebench.cli._load_service", return_value=service), redirect_stdout(stdout):
+        code = main(["scope", "channel-input-state", "--channel", "2", "--json"])
+
+    assert code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema"] == "wavebench.cli.result.v1"
+    assert payload["result"] == {
+        "channel": 2,
+        "coupling": "gnd",
+        "termination": "unknown",
+        "impedance_ohm": None,
+        "unavailable_fields": ["impedance_ohm"],
+    }
 
 
 class _FactoryTransport:
