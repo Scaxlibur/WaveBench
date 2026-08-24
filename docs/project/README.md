@@ -32,7 +32,8 @@
   将八份外部插件提案转换为核心裁决；RFC-0001 和 RFC-0003 的早期入口由现有更严格合同取代，
   RFC-0008 在 R1.3 基础上增加标准 waveform bounded opt-in，RFC-0002、RFC-0004 和 RFC-0005 已完成
   核心只读状态 V2；snapshot V2 仍未发布，主包和插件均未 opt-in，也不修改 legacy API、CLI 或 artifact；
-  RFC-0006～RFC-0007 仍为追加式 V2 草案，当前不新增插件 capability 或硬件工作。
+  RFC-0006a 已接受为带 profile 的只读 acquisition status V2，0006b average capture 与 RFC-0007 仍为追加式
+  V2 草案；当前不新增插件 capability 或硬件工作。
 - [Source V2 能力、状态与复合输出安全 RFC](rfcs/WaveBench_source能力状态与复合输出安全RFC.md)：
   `Accepted R6`；核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2，
   M6-A、M6-B 与 M6-C 已完成核心离线合同；真实插件验收与发布审计仍按里程碑推进。
