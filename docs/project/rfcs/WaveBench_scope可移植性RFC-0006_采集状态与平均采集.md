@@ -4,6 +4,7 @@
 > 核心基线：legacy acquisition/average API 与 R1.3 acquisition control
 > 范围：普通采集状态 V2、平均配置和平均采集事务
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
+> 本轮范围：0006a 只冻结只读模型；0006b 等待独立的 bounded transaction 前置裁决，不创建代码或插件 opt-in
 
 ## 摘要
 
@@ -90,6 +91,7 @@ class ScopeAcquisitionStatusV2:
     average: ScopeAverageStatusV2 | None = None
     segmented: ScopeSegmentedStatusV2 | None = None
     unavailable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
+    not_applicable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
 ~~~
 
 `run_state` 应直接复用 R1.3 类型，不再定义含义重叠的字符串。若设备没有声明
@@ -124,12 +126,20 @@ scope.acquisition_status_v2 -> get_acquisition_status_v2
 `unavailable_fields` 只接受 `ScopeAcquisitionStatusFieldV2`。路径必须合法、唯一、排序，
 并满足：
 
-- 分区整体为 `None` 时记录 `"average"`、`"segmented"` 或 `"run_state"`，不再同时记录
-  其子路径；
-- 分区存在但叶字段不可提供时只记录叶路径，例如 `"average.complete"`；
-- 路径对应字段必须为 `None`；
-- 非空字段不得列入 unavailable；
-- 同一结果不得同时包含父路径和其子路径。
+- `unavailable_fields` 只表示 descriptor 静态无法提供的字段；
+- `not_applicable_fields` 只表示当前已读取 mode 下没有语义的字段；
+- 两个 tuple 都按 `ScopeAcquisitionStatusFieldV2` 声明顺序排序、去重且彼此互斥；
+- 分区整体为 `None` 时，在其中恰好一组记录 `"average"`、`"segmented"` 或 `"run_state"`，
+  不再同时记录其子路径；
+- 分区存在但叶字段不可提供或当前不适用时，只记录相应叶路径，例如
+  `"average.complete"`；
+- 路径对应字段必须为 `None`；非空字段不得列入任一 tuple；
+- 同一结果不得在任一 tuple 内或两者之间同时包含父路径和其子路径。
+
+当前 acquisition mode 不是 average 时，整个 `average` 分区或只在该 mode 下无意义的叶字段必须
+进入 `not_applicable_fields`，不能伪装成静态 unavailable。当前 mode 是 average 但设备没有完成
+位时，才将 `"average.complete"` 记录为静态 unavailable；`complete=True` 只能来自文档化的完成位。
+segmented 分区也按相同规则区分「设备没有查询合同」和「当前配置下没有语义」。
 
 所有候选 dataclass 必须在 `__post_init__` 中执行上述验证，不能只依赖 Service 文本约定。
 
@@ -291,6 +301,24 @@ class ScopeAverageCaptureProfile:
 - capability、profile 和 required Protocol 必须一一对应；
 - 运行时设备 query 只能收紧 profile，不能扩大 descriptor 声明。
 
+### 与 RFC-0008 的二进制边界
+
+`ScopeAverageCaptureBinaryProfile` 是 average capture 自己的候选 profile，不是
+`ScopeWaveformBinaryProfile.operations` 的新 operation kind，也不复用标准 waveform 的
+`fetch`／`capture_single`／`capture_multiple` profile。它自己的 `supported_points` 是 average
+points 的唯一发送前依据；不得要求或推断 `scope.fetch_waveform` capability，不能把 average
+读取伪装成标准 fetch。
+
+两条路径只应共享已经冻结的 transport 安全语义：`query_binary()`、精确 trailing、四维限制的
+逐项取最小值、可信 backend gate、no-replay 与 poisoned session。RFC-0008 的 profile schema、
+capability 映射和标准 waveform 恢复闭包保持不变。
+
+在实现 0006b 前，必须另行接受一个核心内部的通用 bounded transaction 前置合同，明确平均 profile
+如何复用四维 limit validator、connection-limit merge、backend gate、ledger 安装和 construction
+barrier，而不复制或绕过 RFC-0008 的安全逻辑。在该前置合同进入 `Accepted` 前，0006b 保持 blocked：
+不得创建 `ScopeAverageCaptureBinaryProfile`、`scope.capture_average_v2`、相关 Protocol、CLI 或
+descriptor 字段的运行代码。
+
 ### Baseline 与恢复 Protocol
 
 R1.3 acquisition baseline 只覆盖 run state、trigger 和 acquisition token，不能覆盖平均、
@@ -379,10 +407,11 @@ class ScopeAverageCaptureDriverV2(Protocol):
     ) -> ScopeAverageCaptureStateSnapshot: ...
 ~~~
 
-核心在同一 parent context 中复用 R1.3 acquisition control driver facet取得
-`ScopeAcquisitionCompletion`，但不调用公开 `ScopeService.acquire_single()`，也不创建嵌套
-operation。核心从 average baseline 派生绑定同一 context/epoch 的 acquisition 子 baseline；
-该子 baseline 有独立一次性 nonce，但不能重置 deadline、error phase 或 binary ledger。
+核心只能在同一 parent context 中通过一个 average 专用内部 adapter 复用 R1.3 acquisition control
+driver facet 取得 `ScopeAcquisitionCompletion`。它不得调用公开的 `ScopeService.acquire_single()` 或
+`ScopeExtensionService.acquire_single()`，也不得创建嵌套 operation/context、独立 deadline、error
+phase 或 binary ledger。核心从 average baseline 派生绑定同一 context/epoch 的 acquisition 子
+baseline；该子 baseline 有独立一次性 nonce，但不能重置 parent 的任何预算或错误阶段。
 
 average operation 无论主流程成功还是失败，都恢复完整
 `ScopeAverageCaptureBaseline`。这与 R1.3 独立 SINGLE 成功后有意保留停止记录的语义不同，
@@ -409,6 +438,9 @@ average capture 使用自己的 `ScopeAverageCaptureBinaryProfile` 和
 另一个 public operation，也不要求 descriptor 声明 `scope.fetch_waveform`。两条路径只共享
 `query_binary()`、四维 ledger、backend gate、no-replay 和 poison 合同；方法存在不产生标准
 fetch capability。插件可以复用私有 preamble/decoder 代码，但两个 profile 分别校验。
+
+本节只冻结候选依赖图。直到「与 RFC-0008 的二进制边界」列出的前置合同进入 `Accepted`，
+上述 capability、profile、Protocol 和 `OperationSpec` 均不得实现或在 descriptor 中声明。
 
 `scope.channel_input_state_v2` 是 switchable-termination descriptor 的条件依赖；
 `scope.error_drain_v1` 是有效 error policy 非 disabled 时的条件依赖。factory 必须将静态依赖、
@@ -525,7 +557,7 @@ average capture 是 `acquire` operation，只允许
 2. 旧 `scope.acquisition_status` 和 `scope.capture_average` 不改 capability 映射。
 3. R1.3 acquisition control 不改名、不扩成 average completion。
 4. 新 capability 使用独立 V2 模型和 profile。
-5. 旧 CLI 命令继续走 legacy Service；V2 CLI 只能追加。
+5. 旧 CLI 命令继续走 legacy Service；Draft 不新增 V2 CLI、run plan step 或 artifact。
 6. 内建 driver 没有 opt-in 时继续在 capability gate 拒绝，不做探测。
 7. status V2 发布不自动授权 average capture V2。
 8. average core 合同发布不自动授权某个型号的 completion evidence。
@@ -535,7 +567,7 @@ average capture 是 `acquire` operation，只允许
 
 ### Status V2
 
-- average/segmented 分区分别可用或 unavailable；
+- average/segmented 分区分别可用、unavailable 或当前 mode 下 not applicable；
 - STOP、OPC、configured count 和 elapsed time 都不能伪造 complete；
 - 数值、safe token、unavailable paths 和 query failure；
 - capability/Protocol/factory 零 I/O；
@@ -554,14 +586,17 @@ average capture 是 `acquire` operation，只允许
 - before/after typed error drain；
 - legacy average、standard capture、CLI 和 artifact reader 回归。
 
-## 实施顺序
+## 接受与实施顺序
 
-1. 先实现 RFC-0006a 的纯读取模型。
-2. 冻结 completion evidence 与平均次数核心硬上限。
-3. 实现 average profile、snapshot/restore/verify 模型。
-4. 接入 RFC-0002 输入安全和 RFC-0008 bounded waveform。
-5. 实现单通道，再实现同次多通道。
-6. 完成发行兼容矩阵后，插件才能单独 opt-in。
+当前顺序只定义后续接受门，不授权开始代码：
 
-具体设备缺少平均完成证据时，可以采用 status V2 并返回 `complete=None`，但不能声明
-average capture V2。
+1. 先将 RFC-0006a 的 pure-read query 预算、`not_applicable_fields` 和 legacy 路由进入
+   `Accepted`；
+2. 冻结 completion evidence、平均次数核心硬上限和 generic bounded transaction 前置合同；
+3. 该前置合同进入 `Accepted` 后，才评审 average profile、snapshot/restore/verify 模型；
+4. 再评审 RFC-0002 输入安全、average binary profile 与 RFC-0008 transport 基础的接入；
+5. 只有前述各项均已实现并完成单通道离线验收后，才评审同次多通道；
+6. 发行兼容矩阵完成后，插件才能单独 opt-in。
+
+具体设备在 average mode 下缺少平均完成证据时，可以采用 status V2 并将
+`average.complete=None` 记录为 unavailable，但不能声明 average capture V2。

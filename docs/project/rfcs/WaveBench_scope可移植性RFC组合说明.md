@@ -264,17 +264,23 @@ RFC-0004 已完成核心离线实现：`ScopeDigitalChannelStatusV2` 明确分�
 分流。R1 不创建 digital waveform decoder 或 payload 合同；MSO8000 当前没有数字 status/waveform
 driver、descriptor capability 或离线数字 fixture，仍不得 opt-in。
 
-## Draft 接受门
+## Draft 验证与接受门
 
-后续实现前，以下问题必须先在文档中关闭：
+本轮已在单项 RFC 中冻结以下文档语义：RFC-0005 的 identity 新鲜来源、text query 计数、封闭
+availability 与独立返回边界；RFC-0006a 的 not-applicable 语义；RFC-0007a 的完整 statistics
+成功值和三项 Draft 不新增 CLI/artifact 的边界。
 
-- RFC-0005：identity 的新鲜来源和五字段解析、text query 计数边界、封闭 availability 规范，及其
-  独立于 R1.3 extension service 的返回／诊断边界；
-- RFC-0006a：average／segmented 当前 mode 不适用的表示；RFC-0006b：不修改 RFC-0008 标准
-  waveform profile 的前提下，可复用的 bounded transaction 限制、backend gate 和 ledger 入口；
-- RFC-0007：statistics 成功值是否完整、三个 V2 操作的静态 profile 和后续 CLI／artifact 形状。
+进入 `Accepted` 前仍须完成：
 
-在这些接受门关闭前，M3b～M7 不产生新的代码提交、插件 capability 或硬件验收任务。
+- RFC-0005：两个仪器族或 fixture 的 profile/result 负向矩阵，以及 construction barrier 与旧
+  `status()`／`status_summary()` 的零 I/O 矩阵；
+- RFC-0006a：pure-read query 预算、availability 组合和旧 acquisition 路由的离线验证设计；
+  RFC-0006b：不修改 RFC-0008 标准 waveform profile 的前提下，另行接受可复用 bounded transaction
+  限制、backend gate、ledger 与 construction barrier 的核心内部前置合同；
+- RFC-0007：分别完成 selector/profile、FFT optional-field、cursor unit/path 的离线矩阵，并在需要
+  CLI/artifact 时先提交单项接受附录。
+
+本轮不因上述文档冻结而启动 M3b～M7 的代码、插件 capability 或硬件验收任务。
 
 ## 共同验收门
 

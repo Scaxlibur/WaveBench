@@ -4,6 +4,7 @@
 > 核心基线：现有 statistics、FFT status、math metadata 与 cursor readout
 > 范围：三个独立的只读 V2 capability
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
+> 本轮范围：只冻结模型与接受门；不创建 V2 CLI、artifact、run plan step 或插件 opt-in
 
 ## 摘要
 
@@ -63,6 +64,11 @@ class ScopeMeasurementStatisticsV2:
     waveform_count: int
     buffered_values: tuple[float, ...] | None = None
 ~~~
+
+R1 选择「完整统计成功值」：`actual`、`average`、`standard_deviation`、`minimum`、`maximum` 与
+`waveform_count` 必须在成功结果中全部存在并通过有限数／范围校验。设备对任一聚合项返回空值、
+未支持或无法解析时，operation 失败；不为 statistics V2 新增 availability path，也不把空值、
+零值或旧缓存伪装成结果。这个保守边界允许旧 statistics API 继续保留其既有可空语义。
 
 selector 必须且只能采用一种模式：
 
@@ -261,8 +267,13 @@ class ScopeCursorReadoutDriverV2(Protocol):
     ) -> ScopeCursorReadoutV2: ...
 ~~~
 
-三个 operation 都是 `stateful_read / exclusive`。它们分别注册 capability、OperationSpec、
+三个候选 operation 都是 `stateful_read / exclusive`。它们后续分别注册 capability、OperationSpec、
 Service 和序列化，不形成 `scope.analysis_v2` 这样的捆绑能力。
+
+当前 Draft 只定义候选 Service/JSON 模型，不新增 `measurement-statistics-v2`、`fft-status-v2` 或
+`cursor-readout-v2` CLI，也不定义 operation artifact 或 run plan step。已有
+`measurement-statistics`、`fft-status` 和 `cursor-readout` 继续只调用 legacy Service；后续 CLI
+只有在单项 capability 进入 `Accepted` 并冻结参数、JSON 成功形状和 artifact 版本后才能追加。
 
 `scope.measurement_statistics_v2` 声明要求
 `ScopeDescriptorExtensions.measurement_statistics_profile_v2` 非空。FFT 和 cursor 首版没有
@@ -281,6 +292,8 @@ Service 和序列化，不形成 `scope.analysis_v2` 这样的捆绑能力。
 - waveform count 为非负的非 bool 整数；
 - statistics result selector 必须等于请求 selector；`include_buffer=False` 时
   `buffered_values is None`，为 true 时必须返回真实设备 buffer；
+- statistics V2 不允许部分聚合成功：五个数值统计项和 `waveform_count` 缺失、空值或非有限值均为
+  operation failure，不进入 unavailable/not-applicable；
 - FFT start/stop、RBW/sample rate 和 unavailable paths 相互一致；
 - cursor unit/source-unit 配对；
 - cursor unavailable/not-applicable 路径封闭、互斥并与 `None` 精确对应。
@@ -330,6 +343,7 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 6. 新 capability 未声明时，旧 driver/fake/内建 descriptor 不需要新方法。
 7. 方法存在不产生 capability；缺方法的声明在 factory 后、第一次 I/O 前拒绝。
 8. JSON 保留 selector、source、unit 和 null，不回写到含义错误的旧字段。
+9. Draft 不新增 V2 CLI、artifact 或 run plan step，也不改变旧命令路由。
 
 ## 验收矩阵
 
@@ -363,15 +377,18 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 
 - capability/Protocol/construction barrier 零 I/O；
 - query/解析失败不转成 unavailable；
-- Service/CLI/JSON 追加式兼容；
+- Service/JSON 追加式兼容，且 Draft 不改变 CLI；
 - 至少两个不同仪器族或 fixture 证明不同 selector/optional/unit 组合。
 
-## 实施顺序
+## 接受与实施顺序
 
-三个子项分别提交：
+当前顺序只安排文档接受门，不授权开始代码：
 
-1. RFC-0007a：statistics selector；
-2. RFC-0007b：FFT optional status；
-3. RFC-0007c：cursor source/unit quantities。
+1. RFC-0007a：冻结完整 statistics 成功值、selector/profile 负向矩阵与 JSON 形状；
+2. RFC-0007b：冻结 FFT configured precondition、optional-field availability 与 JSON 形状；
+3. RFC-0007c：冻结 cursor mode/function/source/unit、unavailable/not-applicable 与 JSON 形状；
+4. 每一项单独进入 `Accepted` 后，才分别评审 capability、factory latch、Service、CLI/artifact 和
+   两个仪器族或 fixture 的离线验收。
 
-任何一项通过不改变另两项状态。具体插件只声明已完成离线 conformance 和实机验证的子项。
+任何一项通过不改变另两项状态。具体插件只有在对应核心合同正式发布、离线 conformance 完成并获得
+设备证据后，才可以声明相应 capability。
