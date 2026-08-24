@@ -1,11 +1,11 @@
 # RFC-0007：可移植的统计、FFT 与光标读取 V2
 
-> 状态：`Accepted R1（仅 RFC-0007a）`
+> 状态：`Implemented R1（未发布；仅 RFC-0007a）`
 > 核心基线：现有 statistics、FFT status、math metadata 与 cursor readout
 > 范围：三个独立的只读 V2 capability
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0007a 已冻结 selector/profile、纯文本预算与 Service 边界；0007b/0007c 仍为 Draft，
-> 不创建 V2 CLI、artifact、run plan step 或插件 opt-in
+> 本轮范围：0007a 已完成 selector/profile、纯文本 budget、factory gate 与 Service；0007b/0007c 仍为
+> Draft，不创建 V2 CLI、artifact、run plan step 或插件 opt-in
 
 ## 摘要
 
@@ -292,8 +292,8 @@ class ScopeCursorReadoutDriverV2(Protocol):
 三个 operation 都是独立的 `stateful_read / exclusive`，不形成 `scope.analysis_v2` 这样的捆绑能力。
 0007a R1 按本节注册 capability、OperationSpec 和 Service；0007b/0007c 仍待各自接受后再实施。
 
-R1 只授权 `scope.measurement_statistics_v2` 的模型、profile、Protocol、factory gate、OperationSpec 和
-Service，不新增 `measurement-statistics-v2` CLI、artifact、run plan step 或持久化 JSON schema。已有
+核心开发线已实现 `scope.measurement_statistics_v2` 的模型、profile、Protocol、factory gate、OperationSpec
+和 Service，不新增 `measurement-statistics-v2` CLI、artifact、run plan step 或持久化 JSON schema。已有
 `measurement-statistics`、`fft-status` 和 `cursor-readout` 继续只调用 legacy Service；后续 CLI
 只有在单项 capability 另行冻结参数、JSON 成功形状和 artifact 版本后才能追加。
 
@@ -310,6 +310,10 @@ FFT 和 cursor 首版没有
 statistics capability 声明触发 strict construction barrier：factory 返回、profile/Protocol/capability 校验完成前，
 所有仪器 I/O 都以 `factory_construction_pending` 发送前拒绝；required method/profile 缺失时关闭已开的
 transport。0007b/0007c 仍须在各自 Accepted 合同中独立决定其 factory 语义。
+
+R1 核心离线实现已覆盖 selector/profile 的发送前拒绝、完整结果和 selector echo、buffer result 拒绝、
+factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route。主包内建 descriptor 和外部插件在
+独立 conformance、版本下限和硬件证据完成前不得声明 statistics V2；该实现不授权 0007b FFT 或 0007c cursor。
 
 ## 模型校验
 
@@ -411,7 +415,7 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 
 ## 接受与实施顺序
 
-RFC-0007a 已进入 `Accepted`，只授权上一节列出的 statistics 核心实现与离线验收。以下仍是
+RFC-0007a 已完成核心离线实现但尚未发布。以下仍是
 RFC-0007b/0007c 的后续接受门，不授权其代码、descriptor 字段或插件 opt-in：
 
 1. RFC-0007b：冻结 FFT configured precondition、optional-field availability 与 JSON 形状；
