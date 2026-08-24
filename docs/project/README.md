@@ -34,8 +34,8 @@
   核心只读状态 V2；snapshot V2 仍未发布，主包和插件均未 opt-in，也不修改 legacy API、CLI 或 artifact；
   RFC-0006a、RFC-0007a 和 RFC-0007b 已完成核心实现但尚未发布；后两者分别提供纯文本 statistics
   selector/profile 与静态 FFT status profile。0007c cursor 已完成 global/indexed addressing、双 source、单位、
-  availability、纯文本 budget 与无 CLI/artifact 的核心实现；0006b average capture 仍为追加式 V2 草案。当前不新增
-  插件 capability 或硬件工作。
+  availability、纯文本 budget 与无 CLI/artifact 的核心实现；0006b-0 已接受 core-only bounded transaction
+  前置合同，average capture public surface 仍为追加式 V2 草案。当前不新增插件 capability 或硬件工作。
 - [Source V2 能力、状态与复合输出安全 RFC](rfcs/WaveBench_source能力状态与复合输出安全RFC.md)：
   `Accepted R6`；核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2，
   M6-A、M6-B 与 M6-C 已完成核心离线合同；真实插件验收与发布审计仍按里程碑推进。

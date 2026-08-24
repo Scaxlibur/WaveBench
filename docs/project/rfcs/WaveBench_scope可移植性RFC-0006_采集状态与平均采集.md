@@ -1,11 +1,11 @@
 # RFC-0006：可移植的采集状态与平均采集 V2
 
-> 状态：`Implemented R1（未发布；仅 RFC-0006a）`
+> 状态：`Implemented R1（未发布；仅 RFC-0006a）；Accepted R1（0006b-0 内部 bounded transaction）`
 > 核心基线：legacy acquisition/average API 与 R1.3 acquisition control
 > 范围：普通采集状态 V2、平均配置和平均采集事务
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0006a 已完成核心只读模型、profile、factory gate 与 Service；0006b 仍等待独立的
-> bounded transaction 前置裁决，不创建代码或插件 opt-in
+> 本轮范围：0006a 已完成核心只读模型、profile、factory gate 与 Service；0006b-0 已接受内部
+> bounded transaction 前置合同；average capture 的公共模型、capability 与插件 opt-in 仍为 Draft
 
 ## 摘要
 
@@ -387,11 +387,66 @@ points 的唯一发送前依据；不得要求或推断 `scope.fetch_waveform` c
 逐项取最小值、可信 backend gate、no-replay 与 poisoned session。RFC-0008 的 profile schema、
 capability 映射和标准 waveform 恢复闭包保持不变。
 
-在实现 0006b 前，必须另行接受一个核心内部的通用 bounded transaction 前置合同，明确平均 profile
-如何复用四维 limit validator、connection-limit merge、backend gate、ledger 安装和 construction
-barrier，而不复制或绕过 RFC-0008 的安全逻辑。在该前置合同进入 `Accepted` 前，0006b 保持 blocked：
-不得创建 `ScopeAverageCaptureBinaryProfile`、`scope.capture_average_v2`、相关 Protocol、CLI 或
-descriptor 字段的运行代码。
+average 不得复制或绕过 RFC-0008 的安全逻辑；它只可接入已由下节 0006b-0 冻结的通用 bounded
+transaction 内核。0006b-0 本身不创建 `ScopeAverageCaptureBinaryProfile`、`scope.capture_average_v2`、
+相关 Protocol、CLI 或 descriptor 字段的运行代码。
+
+### RFC-0006b-0：通用 bounded transaction 前置合同
+
+本节是 core-only 的 `Accepted R1` 内部合同。它把 RFC-0008 已有的 `ScopeBinaryLimits`、
+`BinaryQueryLedger`、`ScopeOperationContextCoordinator`、guarded `query_binary()` 和可信 backend
+检查明确为可被未来 scope acquire/write operation 复用的最小内核；它不改变标准 waveform profile、
+capability、baseline 或 executor，也不向插件暴露新入口。
+
+#### 有效 binary 限制
+
+任何 bounded operation 必须在创建 context 前同时得到完整的 operation-spec、descriptor-profile，以及完整或
+未配置（视为 `+∞`）的 connection 四维限制。有效限制逐项计算为：
+
+~~~text
+effective_response_max = min(spec response, profile response, connection response)
+effective_operation_max = min(spec total, profile total, connection total)
+effective_query_max_count = min(spec query count, profile query count, connection query count)
+effective_resynchronization_max = min(spec resync, profile resync, connection resync)
+~~~
+
+前三项是正的非 bool 整数，resynchronization 是非负的非 bool 整数，且 total 不小于 response。
+profile 和 spec 缺任一项时在任何 I/O 前拒绝。connection 限制只能由核心配置／Service 传入；未配置某一
+connection 层时，该层在内部交集计算中视为 `+∞`，不能由 driver、descriptor 或调用方构造、扩张或重置。
+结果被 opaque ledger 固定，driver 只能把单次 `max_bytes` 进一步收紧。
+
+#### factory backend 与 construction barrier
+
+可信 binary backend 是 factory-only、operation-agnostic 的验证结论：仅核心验证过的 PyVISA 或
+RsInstrument VISA message-based `INSTR` 路径可获得该标记。Serial、SocketIO、duck transport 或仅实现
+公开 `query_binary()` 的对象都不通过。该标记绑定 factory 创建的 `GuardedAuditedTransport` 和同一 session
+epoch，不可由 driver、profile 或 Service 设置；它不蕴含标准 waveform capability。
+
+未来声明任何 bounded-binary V2 capability 时，该 capability 必须进入 strict construction latch 集合。
+factory 可以打开 transport，但必须在 factory 返回、capability/profile/required-method/backend 通过全部静态
+验证后才释放 latch；此前任何 I/O 均以 `factory_construction_pending` 发送前拒绝。profile 或方法缺失、
+backend 不可信、transport 数量不是预期值时，关闭已开的 transport 且零仪器 I/O。标准 waveform 继续使用
+同一 generic 验证结论，不改变其 descriptor profile/capability 映射。
+
+#### context、ledger 与失败收敛
+
+每个 bounded operation 只创建一个 core-owned context、absolute deadline 和 binary ledger；phase 严格顺序且
+不可嵌套，binary I/O 仅在 main phase。ledger 不跨 context／epoch 复用，不退款、不重建，也不允许 replay、
+continuation 或 legacy `query_bin_block()` fallback。进入 cleanup 后 ledger 立即失效。
+
+同步已证明的 application/data failure 可以在同一 deadline 的静态 recovery/verification phase 中恢复；同步未知、
+framing/termination 恢复失败或 resynchronization 超限立即 poisoned，之后禁止所有 backend I/O。cleanup 未完成、
+restore/verify 失败或不能证明恢复，也必须以 poisoned 收敛且不得返回成功值。主异常保持 primary cause；
+artifact 只记录现有 scope operation schema 中的 phase history、budget 摘要、session health、baseline nonce digest、
+restore/verification outcome 和脱敏 cleanup diagnostics，不保存命令、payload 或 nonce 原文。
+
+#### 0006b 接入条件
+
+0006b 后续的 average profile、baseline、Protocol 和 executor 必须分别拥有自己的字段闭包、restore owner 和
+OperationSpec；只能向本内核提交 limits、framing、phase specs 与 recovery/verification 闭包。它不得复用
+`ScopeWaveformBinaryProfile.operations`、标准 waveform capability、`ScopeWaveformTransfer*` 类型或
+`BoundedWaveformExecutor` 的业务编排。average 公共代码仍须另行进入 `Accepted`，并同时冻结 completion
+evidence、composite baseline 精确覆盖、error policy 和无 CLI/artifact 边界。
 
 ### Baseline 与恢复 Protocol
 
@@ -513,8 +568,8 @@ average capture 使用自己的 `ScopeAverageCaptureBinaryProfile` 和
 `query_binary()`、四维 ledger、backend gate、no-replay 和 poison 合同；方法存在不产生标准
 fetch capability。插件可以复用私有 preamble/decoder 代码，但两个 profile 分别校验。
 
-本节只冻结候选依赖图。直到「与 RFC-0008 的二进制边界」列出的前置合同进入 `Accepted`，
-上述 capability、profile、Protocol 和 `OperationSpec` 均不得实现或在 descriptor 中声明。
+0006b-0 只冻结内部前置合同。直到 average 专属的 model/profile/baseline/Protocol/OperationSpec 进入
+独立 `Accepted`，上述 capability、profile、Protocol 和 `OperationSpec` 均不得实现或在 descriptor 中声明。
 
 `scope.channel_input_state_v2` 是 switchable-termination descriptor 的条件依赖；
 `scope.error_drain_v1` 是有效 error policy 非 disabled 时的条件依赖。factory 必须将静态依赖、
@@ -663,13 +718,15 @@ average capture 是 `acquire` operation，只允许
 
 ## 接受与实施顺序
 
-RFC-0006a 已完成核心离线实现但尚未发布。以下仍是 RFC-0006b
-的后续接受门，不授权其代码、descriptor 字段或插件 opt-in：
+RFC-0006a 已完成核心离线实现但尚未发布。0006b-0 已接受 generic bounded transaction 前置合同，
+仅授权该内部内核的重命名／复用与离线回归；它不授权 average 的 public capability、descriptor profile、
+Protocol、CLI 或插件 opt-in。average 仍须依次完成：
 
-1. 冻结 completion evidence、平均次数核心硬上限和 generic bounded transaction 前置合同；
-2. 该前置合同进入 `Accepted` 后，才评审 average profile、snapshot/restore/verify 模型；
-3. 再评审 RFC-0002 输入安全、average binary profile 与 RFC-0008 transport 基础的接入；
-4. 只有前述各项均已实现并完成单通道离线验收后，才评审同次多通道；
+1. 冻结 completion evidence、平均次数核心硬上限、average profile 与 composite baseline 的精确覆盖；
+2. 接受并实现 snapshot/configure/readback/completion/bounded-fetch/restore/verify 的独立模型、Protocol 和
+   executor；
+3. 完成 RFC-0002 输入安全、typed error drain、average binary profile 与 generic transaction 的接入；
+4. 只有单通道离线验收完成后，才评审同次多通道；
 5. 发行兼容矩阵完成后，插件才能单独 opt-in。
 
 具体设备在 average mode 下缺少平均完成证据时，可以采用 status V2 并将
