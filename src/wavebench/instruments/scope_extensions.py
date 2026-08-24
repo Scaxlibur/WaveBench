@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite
 import re
@@ -15,10 +16,15 @@ from wavebench.scope_extension_constants import (
     SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
     SCOPE_TRACE_MAX_POINTS,
+    SCOPE_WAVEFORM_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_WAVEFORM_BINARY_QUERY_MAX_COUNT,
+    SCOPE_WAVEFORM_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_WAVEFORM_BINARY_RESYNCHRONIZATION_MAX_BYTES,
 )
 from wavebench.transport.contracts import BinaryResponseFraming
 
 from .contracts import InstrumentDriver
+from .models import WaveformData
 
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -1073,6 +1079,259 @@ class ScopeTraceTransferVerification:
             raise ValueError("unavailable transfer verification cannot claim fields")
 
 
+# Standard waveform capture is broader than trace fetch: a standard capture
+# may configure acquisition, trigger, timebase and channel state before it
+# performs the temporary waveform-transfer setup.  Keep its recovery proof
+# separate from the frozen trace model so the capture closure is explicit.
+ScopeWaveformTransferField = Literal[
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+]
+_WAVEFORM_TRANSFER_FIELDS = {
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+}
+_WAVEFORM_TOKEN_ATTRS = {
+    "scope.run_state": "run_state_token",
+    "scope.acquisition": "acquisition_token",
+    "scope.trigger": "trigger_token",
+    "scope.timebase": "timebase_token",
+    "scope.channel_display": "channel_display_token",
+    "scope.channel_vertical": "channel_vertical_token",
+    "scope.waveform_source": "waveform_source_token",
+    "scope.waveform_mode": "waveform_mode_token",
+    "scope.query_response_header": "query_response_header_token",
+    "scope.waveform_format": "waveform_format_token",
+    "scope.waveform_byte_order": "waveform_byte_order_token",
+    "scope.waveform_points": "waveform_points_token",
+    "scope.waveform_transfer_window": "waveform_transfer_window_token",
+}
+_WAVEFORM_CAPTURE_RECOVERY_FIELDS = frozenset(_WAVEFORM_TRANSFER_FIELDS)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferStateSnapshot:
+    captured_fields: tuple[ScopeWaveformTransferField, ...]
+    run_state_token: str | None = None
+    acquisition_token: str | None = None
+    trigger_token: str | None = None
+    timebase_token: str | None = None
+    channel_display_token: str | None = None
+    channel_vertical_token: str | None = None
+    waveform_source_token: str | None = None
+    waveform_mode_token: str | None = None
+    query_response_header_token: str | None = None
+    waveform_format_token: str | None = None
+    waveform_byte_order_token: str | None = None
+    waveform_points_token: str | None = None
+    waveform_transfer_window_token: str | None = None
+
+    def __post_init__(self) -> None:
+        fields = _unique_tuple(self.captured_fields, label="captured_fields")
+        if not set(fields) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform transfer snapshot contains unsupported fields")
+        for field_name, attr_name in _WAVEFORM_TOKEN_ATTRS.items():
+            token = _optional_safe_token(getattr(self, attr_name), label=attr_name)
+            if (field_name in fields) != (token is not None):
+                raise ValueError(f"{attr_name} presence must match captured fields")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferBaseline:
+    context_id: str
+    session_epoch: str
+    baseline_nonce: str
+    snapshot: ScopeWaveformTransferStateSnapshot
+    restore_order: tuple[ScopeWaveformTransferField, ...]
+
+    def __post_init__(self) -> None:
+        _safe_token(self.context_id, label="context_id")
+        _safe_token(self.session_epoch, label="session_epoch")
+        _safe_token(self.baseline_nonce, label="baseline_nonce")
+        if not isinstance(self.snapshot, ScopeWaveformTransferStateSnapshot):
+            raise TypeError("waveform transfer baseline snapshot has an invalid type")
+        order = _unique_tuple(self.restore_order, label="restore_order")
+        if set(order) != set(self.snapshot.captured_fields):
+            raise ValueError("waveform transfer restore order must cover captured fields exactly")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferRestoreResult:
+    status: Literal["completed", "failed", "not_attempted"]
+    attempted_fields: tuple[ScopeWaveformTransferField, ...]
+    restored_fields: tuple[ScopeWaveformTransferField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        attempted = _unique_tuple(self.attempted_fields, label="attempted_fields")
+        restored = _unique_tuple(self.restored_fields, label="restored_fields")
+        if not set(attempted + restored) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform transfer restore fields are invalid")
+        _optional_safe_token(self.error_code, label="error_code")
+
+    def validate_for(self, baseline: ScopeWaveformTransferBaseline) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        _optional_safe_token(self.error_code, label="error_code")
+        _validate_prefix_and_subsequence(
+            expected=baseline.restore_order,
+            attempted=self.attempted_fields,
+            completed=self.restored_fields,
+            status=self.status,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferVerification:
+    status: Literal["verified", "mismatch", "unavailable"]
+    verified_fields: tuple[ScopeWaveformTransferField, ...]
+    mismatched_fields: tuple[ScopeWaveformTransferField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"verified", "mismatch", "unavailable"}, label="verification status")
+        verified = _unique_tuple(self.verified_fields, label="verified_fields")
+        mismatched = _unique_tuple(self.mismatched_fields, label="mismatched_fields")
+        if set(verified) & set(mismatched) or not set(
+            verified + mismatched
+        ) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform transfer verification fields are inconsistent")
+        _optional_safe_token(self.error_code, label="error_code")
+        if self.status == "verified" and mismatched:
+            raise ValueError("verified transfer state cannot contain mismatches")
+        if self.status == "mismatch" and not mismatched:
+            raise ValueError("mismatched transfer verification requires mismatched fields")
+        if self.status == "unavailable" and (verified or mismatched):
+            raise ValueError("unavailable transfer verification cannot claim fields")
+
+ScopeWaveformBinaryOperationKind = Literal["fetch", "capture_single", "capture_multiple"]
+_WAVEFORM_BINARY_OPERATION_KINDS = {"fetch", "capture_single", "capture_multiple"}
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformBinaryOperationProfile:
+    """Per-standard-operation limits and recovery closure for bounded waveform I/O."""
+
+    operation_kind: ScopeWaveformBinaryOperationKind
+    response_max_bytes: int
+    operation_max_bytes: int
+    query_max_count: int
+    resynchronization_max_bytes: int
+    restore_order: tuple[ScopeWaveformTransferField, ...]
+    snapshot_max_steps: int
+    restore_max_steps: int
+    verify_max_steps: int
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.operation_kind,
+            _WAVEFORM_BINARY_OPERATION_KINDS,
+            label="waveform binary operation kind",
+        )
+        _strict_int(
+            self.response_max_bytes,
+            label="response_max_bytes",
+            minimum=1,
+            maximum=SCOPE_WAVEFORM_BINARY_RESPONSE_MAX_BYTES,
+        )
+        _strict_int(
+            self.operation_max_bytes,
+            label="operation_max_bytes",
+            minimum=1,
+            maximum=SCOPE_WAVEFORM_BINARY_OPERATION_MAX_BYTES,
+        )
+        if self.operation_max_bytes < self.response_max_bytes:
+            raise ValueError("waveform operation limit cannot be smaller than response limit")
+        _strict_int(
+            self.query_max_count,
+            label="query_max_count",
+            minimum=1,
+            maximum=SCOPE_WAVEFORM_BINARY_QUERY_MAX_COUNT,
+        )
+        _strict_int(
+            self.resynchronization_max_bytes,
+            label="resynchronization_max_bytes",
+            minimum=0,
+            maximum=SCOPE_WAVEFORM_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        )
+        restore = _unique_tuple(self.restore_order, label="restore_order")
+        if not restore or not set(restore) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform restore order must contain supported transfer fields")
+        for field_name in restore:
+            if not isinstance(field_name, str):
+                raise TypeError("waveform restore fields must be strings")
+        if self.operation_kind in {"capture_single", "capture_multiple"} and not (
+            _WAVEFORM_CAPTURE_RECOVERY_FIELDS <= set(restore)
+        ):
+            raise ValueError(
+                "waveform capture restore order must cover acquisition and transfer recovery fields"
+            )
+        steps = (self.snapshot_max_steps, self.restore_max_steps, self.verify_max_steps)
+        for label, value in zip(
+            ("snapshot_max_steps", "restore_max_steps", "verify_max_steps"),
+            steps,
+            strict=True,
+        ):
+            _strict_int(value, label=label, minimum=len(restore), maximum=64)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformBinaryProfile:
+    """Descriptor-owned bounded definite-block contract for standard waveform operations."""
+
+    operations: tuple[ScopeWaveformBinaryOperationProfile, ...]
+    framing: BinaryResponseFraming = BinaryResponseFraming.DEFINITE_BLOCK
+    transport_trailing_hex: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "framing", BinaryResponseFraming(self.framing))
+        if self.framing is not BinaryResponseFraming.DEFINITE_BLOCK:
+            raise ValueError("waveform binary profiles only support definite-block framing")
+        if not isinstance(self.operations, tuple) or not self.operations:
+            raise ValueError("waveform binary profile operations must be a non-empty tuple")
+        if any(not isinstance(item, ScopeWaveformBinaryOperationProfile) for item in self.operations):
+            raise TypeError("waveform binary profile operations have an invalid type")
+        kinds = tuple(item.operation_kind for item in self.operations)
+        if len(set(kinds)) != len(kinds):
+            raise ValueError("waveform binary profile operation kinds must be unique")
+        _hex_bytes(self.transport_trailing_hex, label="transport_trailing_hex")
+
+    @property
+    def transport_trailing(self) -> bytes:
+        return bytes.fromhex(self.transport_trailing_hex)
+
+    def operation_for(
+        self,
+        operation_kind: ScopeWaveformBinaryOperationKind,
+    ) -> ScopeWaveformBinaryOperationProfile:
+        for operation in self.operations:
+            if operation.operation_kind == operation_kind:
+                return operation
+        raise ValueError(f"waveform binary profile has no {operation_kind!r} operation")
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeTraceProfile:
     fetchable_kinds: tuple[Literal["analog", "digital", "reference"], ...]
@@ -1225,6 +1484,7 @@ class ScopeDescriptorExtensions:
     screenshot_profile: ScopeScreenshotProfile | None = None
     acquisition_control_profile: ScopeAcquisitionControlProfile | None = None
     trace_profile: ScopeTraceProfile | None = None
+    waveform_binary_profile: ScopeWaveformBinaryProfile | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -1235,6 +1495,11 @@ class ScopeDescriptorExtensions:
                 ScopeAcquisitionControlProfile,
             ),
             ("trace_profile", self.trace_profile, ScopeTraceProfile),
+            (
+                "waveform_binary_profile",
+                self.waveform_binary_profile,
+                ScopeWaveformBinaryProfile,
+            ),
         ):
             if value is not None and not isinstance(value, expected):
                 raise TypeError(f"{label} has an invalid type")
@@ -1352,6 +1617,72 @@ class ScopeTraceDriver(
         points: str | int = "dmax",
         baseline: ScopeTraceTransferBaseline | None,
     ) -> ScopeTraceData: ...
+
+
+@runtime_checkable
+class ScopeWaveformTransferRecoveryDriver(InstrumentDriver, Protocol):
+    def snapshot_waveform_transfer_state(
+        self,
+        fields: tuple[ScopeWaveformTransferField, ...],
+    ) -> ScopeWaveformTransferStateSnapshot: ...
+
+    def restore_waveform_transfer_state(
+        self,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> ScopeWaveformTransferRestoreResult: ...
+
+    def verify_waveform_transfer_state_restored(
+        self,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> ScopeWaveformTransferStateSnapshot: ...
+
+
+@runtime_checkable
+class ScopeBoundedWaveformFetchDriver(
+    ScopeWaveformTransferRecoveryDriver,
+    Protocol,
+):
+    def fetch_waveform_bounded(
+        self,
+        channel: int,
+        points: str = "dmax",
+        *,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> WaveformData: ...
+
+
+@runtime_checkable
+class ScopeBoundedWaveformCaptureDriver(
+    ScopeWaveformTransferRecoveryDriver,
+    Protocol,
+):
+    def capture_waveform_bounded(
+        self,
+        channel: int,
+        points: str = "dmax",
+        *,
+        time_range_s: float | None = None,
+        vertical_scale_v_per_div: float | None = None,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> WaveformData: ...
+
+
+@runtime_checkable
+class ScopeBoundedMultiWaveformCaptureDriver(
+    ScopeWaveformTransferRecoveryDriver,
+    Protocol,
+):
+    def capture_waveforms_bounded(
+        self,
+        channels: list[int],
+        points: str = "dmax",
+        *,
+        time_range_s: float | None = None,
+        vertical_scale_v_per_div: float | None = None,
+        on_channel_start: Callable[[int | None], None] | None = None,
+        on_waveform: Callable[[int, WaveformData], None] | None = None,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> dict[int, WaveformData]: ...
 
 
 @runtime_checkable

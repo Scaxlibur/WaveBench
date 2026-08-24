@@ -25,6 +25,9 @@ from wavebench.instruments.scope_extensions import (
     ScopeTraceProfile,
     ScopeTraceRef,
     ScopeTraceTransferStateSnapshot,
+    ScopeWaveformBinaryOperationProfile,
+    ScopeWaveformBinaryProfile,
+    ScopeWaveformTransferStateSnapshot,
     validate_acquisition_completion,
 )
 from wavebench.transport.contracts import BinaryResponseFraming
@@ -255,6 +258,71 @@ def test_trace_profile_and_snapshot_close_each_transfer_field() -> None:
             captured_fields=fields,
             query_response_header_token="HEADER_OFF",
             waveform_byte_order_token="LSB",
+        )
+
+
+def test_waveform_binary_profile_is_bounded_and_uses_capture_complete_transfer_models() -> None:
+    fields = ("scope.waveform_source", "scope.waveform_format")
+    operation = ScopeWaveformBinaryOperationProfile(
+        operation_kind="fetch",
+        response_max_bytes=8_388_608,
+        operation_max_bytes=67_108_864,
+        query_max_count=256,
+        resynchronization_max_bytes=65_536,
+        restore_order=fields,
+        snapshot_max_steps=2,
+        restore_max_steps=2,
+        verify_max_steps=2,
+    )
+    profile = ScopeWaveformBinaryProfile(
+        operations=(operation,),
+        transport_trailing_hex="0d0a",
+    )
+
+    assert profile.transport_trailing == b"\r\n"
+    assert profile.operation_for("fetch") is operation
+    assert ScopeWaveformTransferStateSnapshot is not ScopeTraceTransferStateSnapshot
+    ScopeWaveformTransferStateSnapshot(
+        captured_fields=("scope.timebase", "scope.channel_vertical"),
+        timebase_token="TIMEBASE",
+        channel_vertical_token="CHANNEL_VERTICAL",
+    )
+    assert public_instruments.ScopeWaveformBinaryProfile is ScopeWaveformBinaryProfile
+    assert ScopeWaveformBinaryProfile(operations=(operation,)).transport_trailing == b""
+    assert ScopeWaveformBinaryProfile(
+        operations=(operation,), transport_trailing_hex="0a"
+    ).transport_trailing == b"\n"
+
+    with pytest.raises(ValueError, match="definite-block"):
+        ScopeWaveformBinaryProfile(
+            operations=(operation,),
+            framing=BinaryResponseFraming.MESSAGE,
+        )
+    with pytest.raises(ValueError, match="lowercase"):
+        ScopeWaveformBinaryProfile(operations=(operation,), transport_trailing_hex="0A")
+    with pytest.raises(ValueError, match="operation limit"):
+        ScopeWaveformBinaryOperationProfile(
+            operation_kind="fetch",
+            response_max_bytes=2,
+            operation_max_bytes=1,
+            query_max_count=1,
+            resynchronization_max_bytes=0,
+            restore_order=("scope.waveform_source",),
+            snapshot_max_steps=1,
+            restore_max_steps=1,
+            verify_max_steps=1,
+        )
+    with pytest.raises(ValueError, match="capture restore order"):
+        ScopeWaveformBinaryOperationProfile(
+            operation_kind="capture_single",
+            response_max_bytes=1,
+            operation_max_bytes=1,
+            query_max_count=1,
+            resynchronization_max_bytes=0,
+            restore_order=("scope.waveform_source",),
+            snapshot_max_steps=1,
+            restore_max_steps=1,
+            verify_max_steps=1,
         )
 
 
