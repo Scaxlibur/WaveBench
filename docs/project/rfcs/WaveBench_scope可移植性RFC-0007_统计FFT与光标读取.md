@@ -1,11 +1,11 @@
 # RFC-0007：可移植的统计、FFT 与光标读取 V2
 
-> 状态：`Implemented R1（未发布；0007a/0007b）`
+> 状态：`Implemented R1（未发布；0007a/0007b）；Accepted R1（0007c）`
 > 核心基线：现有 statistics、FFT status、math metadata 与 cursor readout
 > 范围：三个独立的只读 V2 capability
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0007a/0007b 已完成核心模型、profile、factory gate 与 Service；0007c 仍为 Draft，
-> 不创建 V2 CLI、artifact、run plan step 或插件 opt-in
+> 本轮范围：0007a/0007b 已完成核心模型、profile、factory gate 与 Service；0007c 已接受核心合同，
+> 仍不创建 V2 CLI、artifact、run plan step 或插件 opt-in
 
 ## 摘要
 
@@ -209,7 +209,7 @@ scope.fft_status_v2 -> get_fft_status_v2
 旧 `ScopeCursorReadout` 只有一个 source，并把水平差固定为秒和倒数赫兹。双 source、
 tracking、角度、百分比和 source-defined vertical unit 无法无损映射。
 
-### 候选模型
+### R1 模型
 
 ~~~python
 ScopeCursorUnit = Literal["s", "Hz", "degree", "percent", "source"]
@@ -252,6 +252,19 @@ class ScopeCursorReadoutV2:
     not_applicable_fields: tuple[ScopeCursorReadoutFieldV2, ...] = ()
 ~~~
 
+~~~python
+ScopeCursorAddressing = Literal["global", "indexed"]
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeCursorReadoutProfileV2:
+    readable_fields: tuple[ScopeCursorReadoutFieldV2, ...]
+    conditionally_applicable_fields: tuple[ScopeCursorReadoutFieldV2, ...]
+    addressing: ScopeCursorAddressing
+    max_queries: int
+    allowed_effect: Literal["pure_read"] = "pure_read"
+~~~
+
 `ScopeCursorQuantity` 不变量：
 
 - value 为有限数值；
@@ -266,14 +279,44 @@ readout 不变量：
 - 缺少某个 quantity 时为 `None`；
 - Hz、degree 和 percent 不能放入旧 `x_delta_s`；
 - mode/function/source query 失败时 operation 失败；
-- cursor index 为 `None` 只表示设备采用全局 cursor，不伪造公共 index。
+- mode/function 必须是非空、规范化且长度受限的 safe token；它们不是 availability 字段；
+- cursor index 为 `None` 只表示设备采用全局 cursor，不伪造公共 index；它不能表示未知 index、
+  query 失败或解析失败；
+- `source_a` 和 `source_b` 必须同时有值或同时为 `None`，不得只保留其中一个；两者为 `None` 时也必须
+  使用同一 availability 分类。
 
 `unavailable_fields` 表示设备没有可证明的 query；`not_applicable_fields` 表示字段在当前
 已查询 mode/function 下没有语义。两组路径来自包含 cursor index、A/B source 和各 quantity
 名称的封闭集合，分别排序、去重、互斥。每个值为 `None` 的字段必须恰好由其中一组解释，
 非空字段不得出现在任一组。query/parse failure 不能进入这两组。
 
-候选能力：
+`ScopeCursorReadoutProfileV2` 是 descriptor append-only 的
+`ScopeDescriptorExtensions.cursor_readout_profile_v2`。它不是请求 variant profile：它只约束该设备的
+寻址方式、静态可读字段、当前 mode/function 可条件适用字段和纯文本 query 预算。
+
+- `readable_fields` 非空、唯一，并按 `ScopeCursorReadoutFieldV2` 声明顺序排列；至少包含一个 quantity
+  字段。`source_a` 和 `source_b` 必须同时出现或同时不出现；
+- `conditionally_applicable_fields` 唯一、按同一顺序排列，是 `readable_fields` 的子集；source A/B
+  也必须同时出现或同时不出现；
+- `addressing="global"` 时，request 必须为 `cursor_index=None`，result 也必须为 `None`，并且
+  `cursor_index` 必须进入 `not_applicable_fields`；它不得进入 profile 的 readable/conditional 字段；
+- `addressing="indexed"` 时，request 必须是正的非 bool 整数，result 必须精确回显该 index，且
+  `cursor_index` 必须是 readable、非 conditional 字段；
+- 除上述 global index 特例外，未列入 `readable_fields` 的字段必须为 `None` 且进入
+  `unavailable_fields`；列入但不 conditional 的字段必须有值；列入 conditional 的字段必须有值，或仅因本次
+  已新鲜查询的 mode/function 没有语义而进入 `not_applicable_fields`。任何 query/parse failure 都不能用
+  unavailable/not-applicable 隐藏；
+- `max_queries` 必须是 `1..32` 的非 bool 整数，`allowed_effect` 固定为 `"pure_read"`。
+
+`configured_cursor is True` 是调用方的明确意图确认；`False` 或 truthy 非 bool 必须在打开 session／发送任何
+I/O 前拒绝。driver 仍须在同一预算内新鲜证明目标寻址、当前配置、mode/function/source 和读取期间稳定性；
+未配置、地址错配、状态模糊或漂移是 operation failure，而不是 availability。计数窗口覆盖一次
+`get_cursor_readout_v2()` 从进入至返回/抛出期间全部受 guard 计数的文本 `query()`，包括寻址、当前 cursor
+配置、mode/function、A/B source、适用性和 quantity。该 phase 只允许 `query()`；禁止 write、binary query、
+`query_float_list()`、legacy `idn()`、`*STB?`、`*ESR?`、error drain、math metadata、legacy cursor 和任何
+额外 Service preflight。超额、重放或续读均为 failure。
+
+R1 capability：
 
 ~~~text
 scope.cursor_readout_v2 -> get_cursor_readout_v2
@@ -310,7 +353,9 @@ class ScopeCursorReadoutDriverV2(Protocol):
 ~~~
 
 三个 operation 都是独立的 `stateful_read / exclusive`，不形成 `scope.analysis_v2` 这样的捆绑能力。
-0007a 和 0007b R1 分别注册 capability、OperationSpec 和 Service；0007c 仍待接受后再实施。
+0007a 和 0007b R1 已分别注册 capability、OperationSpec 和 Service；0007c R1 已接受同样的核心实现边界：
+60 秒 deadline、`stateful_read / exclusive`、`error_check_minimum="disabled"`、无 required verified fields、
+无 restore coverage，以及一次只允许 `query()` 的 profile budget phase。
 
 核心开发线已实现 `scope.measurement_statistics_v2` 的模型、profile、Protocol、factory gate、OperationSpec
 和 Service，不新增 `measurement-statistics-v2` CLI、artifact、run plan step 或持久化 JSON schema。已有
@@ -327,10 +372,12 @@ phase；不得调用 legacy statistics、legacy identity preflight、error drain
 
 FFT 和 cursor 首版没有请求 variant profile：它们读取当前已配置状态，是否支持该状态只能在有限状态 query 后判断。
 0007b 的静态 FFT status profile 不改变这一点；它不选择 request variant，只约束已经证明为 FFT 的字段闭包和
-query budget。statistics 和 FFT capability 声明都触发 strict construction barrier：factory 返回、
+query budget。statistics、FFT 和 cursor capability 声明都触发 strict construction barrier：factory 返回、
 profile/Protocol/capability 校验完成前，
 所有仪器 I/O 都以 `factory_construction_pending` 发送前拒绝；required method/profile 缺失时关闭已开的
-transport。0007c 仍须在其 Accepted 合同中独立决定 factory 语义。
+transport。0007c 采用同一 barrier：`scope.cursor_readout_v2` 与 profile、Protocol 和
+`get_cursor_readout_v2()` 一一对应；缺 profile/方法在 factory 后、首次 I/O 前失败并关闭已开的 transport；
+方法存在但 capability 未声明不触发 latch。
 
 0007b 使用独立 portability-V2 `OperationSpec`：60 秒 deadline、`stateful_read / exclusive`、
 `error_check_minimum="disabled"`、无 required verified fields、无 restore coverage。Service 在 session 外拒绝
@@ -355,11 +402,11 @@ non-query I/O 拒绝、math metadata 隔离和 legacy route；主包内建 descr
 0007a R1 核心离线实现已覆盖 selector/profile 的发送前拒绝、完整结果和 selector echo、buffer result 拒绝、
 factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route。它本身不授权 0007b；后者只由本节
 单独接受的 FFT 合同授权。主包内建 descriptor 和外部插件在独立 conformance、版本下限和硬件证据完成前不得
-声明 statistics 或 FFT V2；0007a/0007b 均不授权 0007c cursor。
+声明 statistics、FFT 或 cursor V2；0007a/0007b/0007c 都不授权其他项的插件 opt-in。
 
 ## 模型校验
 
-0007a/0007b R1 dataclass 与 0007c 候选 dataclass 必须以 `__post_init__` 实现本 RFC 的不变量：
+0007a/0007b/0007c R1 dataclass 必须以 `__post_init__` 实现本 RFC 的不变量：
 
 - selector 精确 XOR，slot/index/count 均拒绝 bool；
 - item/source/mode/function/unit 使用长度受限的 safe token；
@@ -378,10 +425,10 @@ factory zero-I/O、受预算文本 query、non-query I/O 拒绝和 legacy route�
 
 ## 前置条件
 
-- `configured`、`configured_fft` 和 `configured_cursor` 必须是真正的 bool；0007a R1 要求
-  `configured is True`，0007b R1 要求 `configured_fft is True`；调用方确认不能替代 driver 的新鲜状态解析；
+- `configured`、`configured_fft` 和 `configured_cursor` 必须分别为真正的 `True`；调用方确认不能替代
+  driver 的新鲜状态解析；
 - 统计 selector/buffer 的静态不支持由 profile 在打开 session／任何 I/O 前拒绝；
-- FFT 或 cursor 的当前配置只有在有限状态 query 后才能识别；0007b 的 query failure 不得写成
+- FFT 或 cursor 的当前配置只有在有限状态 query 后才能识别；0007b/0007c 的 query failure 不得写成
   unavailable，且不支持时在任何 write/binary I/O 前 fail-closed，并保留已经发生的 stateful-read 审计；
 - operation 不修改前面板配置来制造一个可读状态；
 - 若某个查询本身具有消费或状态副作用，必须在 `OperationSpec` 明确声明，不能作为普通 read
@@ -418,7 +465,9 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 6. 新 capability 未声明时，旧 driver/fake/内建 descriptor 不需要新方法。
 7. 方法存在不产生 capability；缺方法的声明在 factory 后、第一次 I/O 前拒绝。
 8. JSON 保留 selector、source、unit 和 null，不回写到含义错误的旧字段。
-9. 0007a/0007b R1 不新增 V2 CLI、artifact 或 run plan step，也不改变旧命令路由；0007c Draft 亦不新增。
+9. 0007a/0007b/0007c R1 不新增 V2 CLI、artifact 或 run plan step，也不改变旧命令路由。`cursor_readout_v2()`
+   仅返回 dataclass；若未来需要 CLI/artifact，必须先通过独立 Accepted 附录冻结 global/index 参数、成功 JSON
+   的字段/null/path 顺序和版本化 artifact schema。
 
 ## 验收矩阵
 
@@ -441,12 +490,12 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 
 ### Cursor
 
-- A/B 同源与双源；
-- 秒、赫兹、角度、百分比和 source unit；
-- source/source_unit 配对；
-- optional quantity、global cursor 与 invalid index；
-- unavailable 与 not-applicable 路径；
-- legacy 窄子集继续成功，无法无损映射的配置继续拒绝。
+- global/indexed profile、正的非 bool index 和 `configured_cursor=True` 的零 I/O preflight；
+- A/B 同源与双源、source 成对约束，以及秒、赫兹、角度、百分比和 source/source-unit 配对；
+- static unavailable、conditional not-applicable、global index 特例与每个 `None` 的精确 path；
+- mode/function/source/quantity 错配、parse failure、超 budget 和 non-query I/O 不得伪装成 availability；
+- capability/profile/method 一一对应、strict factory latch、legacy route 完全隔离；
+- legacy 窄子集继续成功，无法无损映射的配置继续拒绝；至少两种仪器族或 fixture 覆盖不同 unit/optional 组合。
 
 ### 共同
 
@@ -457,12 +506,8 @@ V2 以扩展双源和多单位；不得要求旧 capability 自动升级。
 
 ## 接受与实施顺序
 
-RFC-0007a/0007b 已完成核心离线实现但尚未发布。以下仍是 RFC-0007c 的后续接受门，不授权其代码、
-descriptor 字段或插件 opt-in：
-
-1. RFC-0007c：冻结 cursor mode/function/source/unit、unavailable/not-applicable 与 JSON 形状；
-2. 该项进入 `Accepted` 后，才评审 capability、factory latch、Service、CLI/artifact 和
-   两个仪器族或 fixture 的离线验收。
-
-任何一项通过不改变另两项状态。具体插件只有在对应核心合同正式发布、离线 conformance 完成并获得
+RFC-0007a/0007b 已完成核心离线实现但尚未发布。RFC-0007c 现以本文件冻结的 model/profile/addressing、
+availability、pure-text budget、strict factory barrier、Service 边界和无 CLI/artifact 决定进入 `Accepted`，
+授权核心离线实现及上述验收矩阵；它不授权 descriptor opt-in、插件 conformance 分支、版本下限升级或硬件
+验收。任何一项通过不改变另两项状态。具体插件只有在对应核心合同正式发布、离线 conformance 完成并获得
 设备证据后，才可以声明相应 capability。
