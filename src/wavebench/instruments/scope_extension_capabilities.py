@@ -16,7 +16,11 @@ SCOPE_EXTENSIONS_MIN_CORE_VERSION = "0.8.23"
 SCOPE_WAVEFORM_BINARY_MIN_CORE_VERSION = "0.8.24"
 SCOPE_PORTABILITY_V2_MIN_CORE_VERSION = "0.8.24"
 SCOPE_STRICT_V2_CAPABILITIES = frozenset(
-    {"scope.channel_input_state_v2", "scope.digital_status_v2"}
+    {
+        "scope.channel_input_state_v2",
+        "scope.digital_status_v2",
+        "scope.snapshot_v2",
+    }
 )
 
 _WAVEFORM_BINARY_CAPABILITY_BY_OPERATION = {
@@ -67,6 +71,7 @@ SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "scope.error_drain_v1": ("drain_errors",),
         "scope.channel_input_state_v2": ("get_channel_input_state_v2",),
         "scope.digital_status_v2": ("get_digital_status_v2",),
+        "scope.snapshot_v2": ("get_snapshot_v2",),
     }
 )
 
@@ -124,6 +129,7 @@ def validate_scope_descriptor(
         "scope.acquisition_control": "acquisition_control_profile",
         "scope.trace_metadata": "trace_profile",
         "scope.fetch_trace": "trace_profile",
+        "scope.snapshot_v2": "snapshot_profile_v2",
     }
     for capability in sorted(declared):
         profile_name = profile_requirements.get(capability)

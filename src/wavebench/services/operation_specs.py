@@ -21,6 +21,7 @@ from wavebench.scope_extension_constants import (
     SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
     SCOPE_SCREENSHOT_OPERATION_TIMEOUT_MS,
+    SCOPE_SNAPSHOT_V2_OPERATION_TIMEOUT_MS,
     SCOPE_TRACE_BINARY_OPERATION_MAX_BYTES,
     SCOPE_TRACE_BINARY_QUERY_MAX_COUNT,
     SCOPE_TRACE_BINARY_RESPONSE_MAX_BYTES,
@@ -1201,10 +1202,30 @@ SCOPE_OPERATION_SPECS: Mapping[str, OperationSpec] = MappingProxyType(
     {spec.operation: spec for spec in _SCOPE_EXTENSION_SPECS}
 )
 
+_SCOPE_PORTABILITY_V2_SPECS = (
+    _spec(
+        "scope.snapshot_v2",
+        "scope",
+        required_capabilities=("scope.snapshot_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=SCOPE_SNAPSHOT_V2_OPERATION_TIMEOUT_MS,
+        error_check_minimum="disabled",
+        risk_flags=("profile_query",),
+    ),
+)
+
+SCOPE_PORTABILITY_V2_OPERATION_SPECS: Mapping[str, OperationSpec] = MappingProxyType(
+    {spec.operation: spec for spec in _SCOPE_PORTABILITY_V2_SPECS}
+)
+
 OPERATION_REGISTRY = OperationRegistry(
     {
         **{spec.operation: spec for spec in _BUILTIN_SPECS},
         **SCOPE_OPERATION_SPECS,
+        **SCOPE_PORTABILITY_V2_OPERATION_SPECS,
     }
 )
 

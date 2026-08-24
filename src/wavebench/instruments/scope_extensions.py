@@ -24,7 +24,12 @@ from wavebench.scope_extension_constants import (
 from wavebench.transport.contracts import BinaryResponseFraming
 
 from .contracts import InstrumentDriver
-from .models import WaveformData
+from .models import (
+    SCOPE_SNAPSHOT_V2_FIELD_ORDER,
+    ScopeSnapshotFieldV2,
+    ScopeSnapshotV2,
+    WaveformData,
+)
 
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -1332,6 +1337,101 @@ class ScopeWaveformBinaryProfile:
         raise ValueError(f"waveform binary profile has no {operation_kind!r} operation")
 
 
+_SCOPE_SNAPSHOT_V2_IDENTITY_FIELDS = frozenset(
+    {
+        "identity.manufacturer",
+        "identity.model",
+        "identity.serial_number",
+        "identity.firmware",
+        "identity.options",
+    }
+)
+_SCOPE_SNAPSHOT_V2_PARTITION_IDENTITIES = {
+    "channel": "channel.channel",
+    "probe": "probe.channel",
+    "waveform": "waveform.channel",
+    "trigger": "trigger.trigger_type",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeSnapshotProfileV2:
+    """Descriptor-owned pure-text query contract for a composable scope snapshot."""
+
+    readable_fields: tuple[ScopeSnapshotFieldV2, ...]
+    max_queries: int
+    conditionally_applicable_fields: tuple[ScopeSnapshotFieldV2, ...] = ()
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        readable = _unique_tuple(self.readable_fields, label="snapshot readable_fields")
+        if not readable or not set(readable) <= set(SCOPE_SNAPSHOT_V2_FIELD_ORDER):
+            raise ValueError("snapshot readable_fields must contain supported unique fields")
+        if not _SCOPE_SNAPSHOT_V2_IDENTITY_FIELDS <= set(readable):
+            raise ValueError("snapshot readable_fields must include all identity fields")
+        conditional = _unique_tuple(
+            self.conditionally_applicable_fields,
+            label="snapshot conditionally_applicable_fields",
+        )
+        if not set(conditional) <= set(readable):
+            raise ValueError("snapshot conditional fields must be readable")
+        prohibited_conditional = _SCOPE_SNAPSHOT_V2_IDENTITY_FIELDS | set(
+            _SCOPE_SNAPSHOT_V2_PARTITION_IDENTITIES.values()
+        )
+        if set(conditional) & prohibited_conditional:
+            raise ValueError("snapshot identity fields cannot be conditional")
+        _strict_int(self.max_queries, label="snapshot max_queries", minimum=1)
+        _literal(self.allowed_effect, {"pure_read"}, label="snapshot allowed_effect")
+        readable_set = set(readable)
+        for partition, identity_field in _SCOPE_SNAPSHOT_V2_PARTITION_IDENTITIES.items():
+            prefix = f"{partition}."
+            if any(field_name.startswith(prefix) and field_name != identity_field for field_name in readable):
+                if identity_field not in readable_set:
+                    raise ValueError(
+                        f"snapshot {partition} fields require {identity_field!r}"
+                    )
+
+    def validate_result(self, result: ScopeSnapshotV2, *, channel: int) -> None:
+        """Reject results that expand or silently shrink this descriptor's profile."""
+
+        if not isinstance(result, ScopeSnapshotV2):
+            raise TypeError("snapshot V2 driver returned an invalid result")
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise ValueError("snapshot V2 channel must be a positive integer")
+        for section_name in ("channel", "probe", "waveform"):
+            section = getattr(result, section_name)
+            if section is not None and section.channel != channel:
+                raise ValueError(f"snapshot V2 {section_name} returned the wrong channel")
+        values = result.field_values()
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        unavailable = set(result.unavailable_fields)
+        not_applicable = set(result.not_applicable_fields)
+        for field_name in SCOPE_SNAPSHOT_V2_FIELD_ORDER:
+            value = values[field_name]
+            has_value = value is not None
+            if field_name not in readable:
+                if has_value or field_name not in unavailable:
+                    raise ValueError(
+                        "snapshot V2 result provided a field outside the descriptor profile"
+                    )
+                continue
+            if field_name in conditional:
+                if not has_value and field_name not in not_applicable:
+                    raise ValueError(
+                        "snapshot V2 conditional fields must be marked not applicable"
+                    )
+                if has_value and (field_name in unavailable or field_name in not_applicable):
+                    raise ValueError(
+                        "snapshot V2 available conditional fields cannot have an availability path"
+                    )
+                continue
+            if not has_value or field_name in unavailable or field_name in not_applicable:
+                raise ValueError(
+                    "snapshot V2 non-conditional readable fields must have a value"
+                )
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeTraceProfile:
     fetchable_kinds: tuple[Literal["analog", "digital", "reference"], ...]
@@ -1485,6 +1585,7 @@ class ScopeDescriptorExtensions:
     acquisition_control_profile: ScopeAcquisitionControlProfile | None = None
     trace_profile: ScopeTraceProfile | None = None
     waveform_binary_profile: ScopeWaveformBinaryProfile | None = None
+    snapshot_profile_v2: ScopeSnapshotProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -1499,6 +1600,11 @@ class ScopeDescriptorExtensions:
                 "waveform_binary_profile",
                 self.waveform_binary_profile,
                 ScopeWaveformBinaryProfile,
+            ),
+            (
+                "snapshot_profile_v2",
+                self.snapshot_profile_v2,
+                ScopeSnapshotProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):

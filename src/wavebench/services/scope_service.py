@@ -3,12 +3,14 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 import traceback
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import numpy as np
 
@@ -30,6 +32,7 @@ from wavebench.instruments.contracts import (
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
     ScopeSnapshotDriver,
+    ScopeSnapshotDriverV2,
 )
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
@@ -47,6 +50,7 @@ from wavebench.instruments.models import (
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
     ScopeSnapshot,
+    ScopeSnapshotV2,
     WaveformData,
 )
 from wavebench.instruments.registry import resolve_instrument_descriptor
@@ -54,6 +58,7 @@ from wavebench.instruments.scope_extensions import (
     ErrorCheckSpec,
     ScopeContinuousAcquisitionRequest,
     ScopeScreenshotRequest,
+    ScopeSnapshotProfileV2,
     ScopeTraceRef,
     ScopeWaveformBinaryProfile,
 )
@@ -380,6 +385,63 @@ class ScopeService(SessionStateAliasMixin):
         self._require("scope.status", "scope.snapshot")
         with self._scope_session() as scope:
             return cast(ScopeSnapshotDriver, scope).get_snapshot(channel)
+
+    def snapshot_v2(self, channel: int) -> ScopeSnapshotV2:
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise ConfigError("scope snapshot V2 channel must be a positive integer")
+        spec = self._require("scope.snapshot_v2", "scope.snapshot_v2")
+        profile = self._snapshot_v2_profile()
+        if profile is None:
+            raise ConfigError("scope snapshot V2 requires scope_extensions.snapshot_profile_v2")
+        with self._scope_session() as scope:
+            return self._execute_snapshot_v2(
+                cast(ScopeSnapshotDriverV2, scope),
+                channel=channel,
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_snapshot_v2(
+        self,
+        scope: ScopeSnapshotDriverV2,
+        *,
+        channel: int,
+        profile: ScopeSnapshotProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeSnapshotV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_snapshot_v2(channel, fields=profile.readable_fields)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.snapshot_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_snapshot_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_snapshot_v2(channel, fields=profile.readable_fields)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError("scope snapshot V2 exceeded its descriptor query budget")
+        try:
+            profile.validate_result(result, channel=channel)
+        except (TypeError, ValueError) as exc:
+            raise DataError(f"scope snapshot V2 driver returned an invalid result: {exc}") from exc
+        return result
 
     def status_summary(self, channel: int, *, strict: bool = False) -> ScopeStatusSummary:
         """Return a complete snapshot when available, otherwise a read-only partial summary."""
@@ -829,6 +891,17 @@ class ScopeService(SessionStateAliasMixin):
         )
         extensions = getattr(descriptor, "scope_extensions", None)
         return getattr(extensions, "waveform_binary_profile", None)
+
+    def _snapshot_v2_profile(self) -> ScopeSnapshotProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "snapshot_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeSnapshotProfileV2):
+            raise ConfigError("scope snapshot V2 descriptor profile has an invalid type")
+        return profile
 
     def _bounded_waveform_executor(self, scope: object) -> BoundedWaveformExecutor:
         if self.descriptor is None or self.session_state is None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from math import isclose, isfinite
+import re
 from typing import Literal
 
 import numpy as np
@@ -119,6 +120,506 @@ class ScopeSnapshot:
     probe: ScopeProbeSnapshot
     waveform: ScopeWaveformMetadataSnapshot
     trigger: ScopeEdgeTriggerSnapshot
+
+
+ScopeSnapshotFieldV2 = Literal[
+    "identity.manufacturer",
+    "identity.model",
+    "identity.serial_number",
+    "identity.firmware",
+    "identity.options",
+    "health.status_byte",
+    "health.operation_condition",
+    "health.questionable_condition",
+    "health.acquisition_available",
+    "health.acquisition_count",
+    "health.sample_rate_hz",
+    "health.error_queue_nonempty",
+    "health.waiting_for_trigger",
+    "channel.channel",
+    "channel.enabled",
+    "channel.coupling",
+    "channel.range_v",
+    "channel.scale_v_per_div",
+    "channel.offset_v",
+    "channel.position_div",
+    "channel.bandwidth_hz",
+    "channel.polarity",
+    "channel.skew_s",
+    "channel.label",
+    "channel.label_enabled",
+    "channel.overloaded",
+    "channel.acquisition_type",
+    "timebase.acquisition_time_s",
+    "timebase.divisions",
+    "timebase.position_s",
+    "timebase.range_s",
+    "timebase.reference_percent",
+    "timebase.scale_s_per_div",
+    "timebase.roll_enabled",
+    "probe.channel",
+    "probe.attenuation_factor",
+    "probe.bandwidth_hz",
+    "probe.capacitance_f",
+    "probe.impedance_ohm",
+    "probe.name",
+    "probe.probe_type",
+    "waveform.channel",
+    "waveform.x_start_s",
+    "waveform.x_stop_s",
+    "waveform.points",
+    "waveform.values_per_sample",
+    "waveform.x_increment_s",
+    "waveform.x_origin_s",
+    "waveform.y_increment_v",
+    "waveform.y_origin_v",
+    "waveform.y_resolution_bits",
+    "trigger.trigger_type",
+    "trigger.source_channel",
+    "trigger.mode",
+    "trigger.slope",
+    "trigger.coupling",
+    "trigger.level_v",
+    "trigger.hysteresis_mode",
+    "trigger.holdoff_mode",
+    "trigger.holdoff_time_s",
+]
+
+SCOPE_SNAPSHOT_V2_FIELD_ORDER: tuple[ScopeSnapshotFieldV2, ...] = (
+    "identity.manufacturer",
+    "identity.model",
+    "identity.serial_number",
+    "identity.firmware",
+    "identity.options",
+    "health.status_byte",
+    "health.operation_condition",
+    "health.questionable_condition",
+    "health.acquisition_available",
+    "health.acquisition_count",
+    "health.sample_rate_hz",
+    "health.error_queue_nonempty",
+    "health.waiting_for_trigger",
+    "channel.channel",
+    "channel.enabled",
+    "channel.coupling",
+    "channel.range_v",
+    "channel.scale_v_per_div",
+    "channel.offset_v",
+    "channel.position_div",
+    "channel.bandwidth_hz",
+    "channel.polarity",
+    "channel.skew_s",
+    "channel.label",
+    "channel.label_enabled",
+    "channel.overloaded",
+    "channel.acquisition_type",
+    "timebase.acquisition_time_s",
+    "timebase.divisions",
+    "timebase.position_s",
+    "timebase.range_s",
+    "timebase.reference_percent",
+    "timebase.scale_s_per_div",
+    "timebase.roll_enabled",
+    "probe.channel",
+    "probe.attenuation_factor",
+    "probe.bandwidth_hz",
+    "probe.capacitance_f",
+    "probe.impedance_ohm",
+    "probe.name",
+    "probe.probe_type",
+    "waveform.channel",
+    "waveform.x_start_s",
+    "waveform.x_stop_s",
+    "waveform.points",
+    "waveform.values_per_sample",
+    "waveform.x_increment_s",
+    "waveform.x_origin_s",
+    "waveform.y_increment_v",
+    "waveform.y_origin_v",
+    "waveform.y_resolution_bits",
+    "trigger.trigger_type",
+    "trigger.source_channel",
+    "trigger.mode",
+    "trigger.slope",
+    "trigger.coupling",
+    "trigger.level_v",
+    "trigger.hysteresis_mode",
+    "trigger.holdoff_mode",
+    "trigger.holdoff_time_s",
+)
+SCOPE_SNAPSHOT_V2_FIELDS = frozenset(SCOPE_SNAPSHOT_V2_FIELD_ORDER)
+_SCOPE_SNAPSHOT_V2_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$")
+
+
+def _scope_snapshot_v2_required_channel(value: object, *, label: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{label} must be a positive integer")
+
+
+def _scope_snapshot_v2_optional_int(value: object, *, label: str) -> None:
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+        raise ValueError(f"{label} must be an integer when provided")
+
+
+def _scope_snapshot_v2_optional_float(value: object, *, label: str) -> None:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value)
+    ):
+        raise ValueError(f"{label} must be finite when provided")
+
+
+def _scope_snapshot_v2_optional_bool(value: object, *, label: str) -> None:
+    if value is not None and not isinstance(value, bool):
+        raise ValueError(f"{label} must be bool when provided")
+
+
+def _scope_snapshot_v2_optional_str(value: object, *, label: str) -> None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{label} must be str when provided")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeHealthSnapshotV2:
+    status_byte: int | None = None
+    operation_condition: int | None = None
+    questionable_condition: int | None = None
+    acquisition_available: int | None = None
+    acquisition_count: int | None = None
+    sample_rate_hz: float | None = None
+    error_queue_nonempty: bool | None = None
+    waiting_for_trigger: bool | None = None
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("health status_byte", self.status_byte),
+            ("health operation_condition", self.operation_condition),
+            ("health questionable_condition", self.questionable_condition),
+            ("health acquisition_available", self.acquisition_available),
+            ("health acquisition_count", self.acquisition_count),
+        ):
+            _scope_snapshot_v2_optional_int(value, label=label)
+        _scope_snapshot_v2_optional_float(self.sample_rate_hz, label="health sample_rate_hz")
+        _scope_snapshot_v2_optional_bool(
+            self.error_queue_nonempty,
+            label="health error_queue_nonempty",
+        )
+        _scope_snapshot_v2_optional_bool(
+            self.waiting_for_trigger,
+            label="health waiting_for_trigger",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAnalogChannelSnapshotV2:
+    channel: int
+    enabled: bool | None = None
+    coupling: str | None = None
+    range_v: float | None = None
+    scale_v_per_div: float | None = None
+    offset_v: float | None = None
+    position_div: float | None = None
+    bandwidth_hz: float | None = None
+    polarity: str | None = None
+    skew_s: float | None = None
+    label: str | None = None
+    label_enabled: bool | None = None
+    overloaded: bool | None = None
+    acquisition_type: str | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_required_channel(self.channel, label="snapshot channel")
+        _scope_snapshot_v2_optional_bool(self.enabled, label="snapshot channel enabled")
+        for label, value in (
+            ("snapshot channel coupling", self.coupling),
+            ("snapshot channel polarity", self.polarity),
+            ("snapshot channel label", self.label),
+            ("snapshot channel acquisition_type", self.acquisition_type),
+        ):
+            _scope_snapshot_v2_optional_str(value, label=label)
+        for label, value in (
+            ("snapshot channel range_v", self.range_v),
+            ("snapshot channel scale_v_per_div", self.scale_v_per_div),
+            ("snapshot channel offset_v", self.offset_v),
+            ("snapshot channel position_div", self.position_div),
+            ("snapshot channel bandwidth_hz", self.bandwidth_hz),
+            ("snapshot channel skew_s", self.skew_s),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_bool(
+            self.label_enabled,
+            label="snapshot channel label_enabled",
+        )
+        _scope_snapshot_v2_optional_bool(self.overloaded, label="snapshot channel overloaded")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeTimebaseSnapshotV2:
+    acquisition_time_s: float | None = None
+    divisions: int | None = None
+    position_s: float | None = None
+    range_s: float | None = None
+    reference_percent: float | None = None
+    scale_s_per_div: float | None = None
+    roll_enabled: bool | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_optional_float(
+            self.acquisition_time_s,
+            label="snapshot timebase acquisition_time_s",
+        )
+        _scope_snapshot_v2_optional_int(self.divisions, label="snapshot timebase divisions")
+        for label, value in (
+            ("snapshot timebase position_s", self.position_s),
+            ("snapshot timebase range_s", self.range_s),
+            ("snapshot timebase reference_percent", self.reference_percent),
+            ("snapshot timebase scale_s_per_div", self.scale_s_per_div),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_bool(
+            self.roll_enabled,
+            label="snapshot timebase roll_enabled",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeProbeSnapshotV2:
+    channel: int
+    attenuation_factor: float | None = None
+    bandwidth_hz: float | None = None
+    capacitance_f: float | None = None
+    impedance_ohm: float | None = None
+    name: str | None = None
+    probe_type: str | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_required_channel(self.channel, label="snapshot probe channel")
+        for label, value in (
+            ("snapshot probe attenuation_factor", self.attenuation_factor),
+            ("snapshot probe bandwidth_hz", self.bandwidth_hz),
+            ("snapshot probe capacitance_f", self.capacitance_f),
+            ("snapshot probe impedance_ohm", self.impedance_ohm),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_str(self.name, label="snapshot probe name")
+        _scope_snapshot_v2_optional_str(self.probe_type, label="snapshot probe probe_type")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformMetadataSnapshotV2:
+    channel: int
+    x_start_s: float | None = None
+    x_stop_s: float | None = None
+    points: int | None = None
+    values_per_sample: int | None = None
+    x_increment_s: float | None = None
+    x_origin_s: float | None = None
+    y_increment_v: float | None = None
+    y_origin_v: float | None = None
+    y_resolution_bits: int | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_required_channel(self.channel, label="snapshot waveform channel")
+        for label, value in (
+            ("snapshot waveform x_start_s", self.x_start_s),
+            ("snapshot waveform x_stop_s", self.x_stop_s),
+            ("snapshot waveform x_increment_s", self.x_increment_s),
+            ("snapshot waveform x_origin_s", self.x_origin_s),
+            ("snapshot waveform y_increment_v", self.y_increment_v),
+            ("snapshot waveform y_origin_v", self.y_origin_v),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_int(self.points, label="snapshot waveform points")
+        _scope_snapshot_v2_optional_int(
+            self.values_per_sample,
+            label="snapshot waveform values_per_sample",
+        )
+        _scope_snapshot_v2_optional_int(
+            self.y_resolution_bits,
+            label="snapshot waveform y_resolution_bits",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeTriggerSnapshotV2:
+    trigger_type: str
+    source_channel: int | None = None
+    mode: str | None = None
+    slope: str | None = None
+    coupling: str | None = None
+    level_v: float | None = None
+    hysteresis_mode: str | None = None
+    holdoff_mode: str | None = None
+    holdoff_time_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.trigger_type, str) or _SCOPE_SNAPSHOT_V2_TOKEN.fullmatch(
+            self.trigger_type
+        ) is None:
+            raise ValueError("snapshot trigger_type must be a safe token")
+        _scope_snapshot_v2_optional_int(
+            self.source_channel,
+            label="snapshot trigger source_channel",
+        )
+        for label, value in (
+            ("snapshot trigger mode", self.mode),
+            ("snapshot trigger slope", self.slope),
+            ("snapshot trigger coupling", self.coupling),
+            ("snapshot trigger hysteresis_mode", self.hysteresis_mode),
+            ("snapshot trigger holdoff_mode", self.holdoff_mode),
+        ):
+            _scope_snapshot_v2_optional_str(value, label=label)
+        _scope_snapshot_v2_optional_float(self.level_v, label="snapshot trigger level_v")
+        _scope_snapshot_v2_optional_float(
+            self.holdoff_time_s,
+            label="snapshot trigger holdoff_time_s",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeSnapshotV2:
+    """Portable scope snapshot with explicit availability for every optional leaf."""
+
+    identity: ScopeIdentitySnapshot
+    health: ScopeHealthSnapshotV2 | None = None
+    channel: ScopeAnalogChannelSnapshotV2 | None = None
+    timebase: ScopeTimebaseSnapshotV2 | None = None
+    probe: ScopeProbeSnapshotV2 | None = None
+    waveform: ScopeWaveformMetadataSnapshotV2 | None = None
+    trigger: ScopeTriggerSnapshotV2 | None = None
+    unavailable_fields: tuple[ScopeSnapshotFieldV2, ...] = ()
+    not_applicable_fields: tuple[ScopeSnapshotFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, ScopeIdentitySnapshot):
+            raise TypeError("snapshot V2 identity has an invalid type")
+        identity_values = (
+            self.identity.manufacturer,
+            self.identity.model,
+            self.identity.serial_number,
+            self.identity.firmware,
+        )
+        if any(not isinstance(value, str) or not value.strip() for value in identity_values):
+            raise ValueError("snapshot V2 identity fields must be non-empty strings")
+        if not isinstance(self.identity.options, tuple) or any(
+            not isinstance(value, str) or not value.strip() for value in self.identity.options
+        ):
+            raise ValueError("snapshot V2 identity options must be a tuple of non-empty strings")
+        for label, value, expected in (
+            ("health", self.health, ScopeHealthSnapshotV2),
+            ("channel", self.channel, ScopeAnalogChannelSnapshotV2),
+            ("timebase", self.timebase, ScopeTimebaseSnapshotV2),
+            ("probe", self.probe, ScopeProbeSnapshotV2),
+            ("waveform", self.waveform, ScopeWaveformMetadataSnapshotV2),
+            ("trigger", self.trigger, ScopeTriggerSnapshotV2),
+        ):
+            if value is not None and not isinstance(value, expected):
+                raise TypeError(f"snapshot V2 {label} has an invalid type")
+        unavailable = self._availability_paths(
+            self.unavailable_fields,
+            label="unavailable_fields",
+        )
+        not_applicable = self._availability_paths(
+            self.not_applicable_fields,
+            label="not_applicable_fields",
+        )
+        if set(unavailable) & set(not_applicable):
+            raise ValueError("snapshot V2 availability paths must be mutually exclusive")
+        missing = {
+            field_name
+            for field_name, value in self.field_values().items()
+            if value is None
+        }
+        if set(unavailable) | set(not_applicable) != missing:
+            raise ValueError(
+                "snapshot V2 availability paths must exactly describe missing fields"
+            )
+
+    @staticmethod
+    def _availability_paths(
+        paths: object,
+        *,
+        label: str,
+    ) -> tuple[ScopeSnapshotFieldV2, ...]:
+        if not isinstance(paths, tuple):
+            raise TypeError(f"snapshot V2 {label} must be a tuple")
+        if len(set(paths)) != len(paths):
+            raise ValueError(f"snapshot V2 {label} must not contain duplicates")
+        if not set(paths) <= SCOPE_SNAPSHOT_V2_FIELDS:
+            raise ValueError(f"snapshot V2 {label} contain unsupported paths")
+        expected = tuple(field for field in SCOPE_SNAPSHOT_V2_FIELD_ORDER if field in paths)
+        if paths != expected:
+            raise ValueError(f"snapshot V2 {label} must use stable field order")
+        return paths
+
+    def field_values(self) -> dict[ScopeSnapshotFieldV2, object | None]:
+        health = self.health
+        channel = self.channel
+        timebase = self.timebase
+        probe = self.probe
+        waveform = self.waveform
+        trigger = self.trigger
+        return {
+            "identity.manufacturer": self.identity.manufacturer,
+            "identity.model": self.identity.model,
+            "identity.serial_number": self.identity.serial_number,
+            "identity.firmware": self.identity.firmware,
+            "identity.options": self.identity.options,
+            "health.status_byte": None if health is None else health.status_byte,
+            "health.operation_condition": None if health is None else health.operation_condition,
+            "health.questionable_condition": None if health is None else health.questionable_condition,
+            "health.acquisition_available": None if health is None else health.acquisition_available,
+            "health.acquisition_count": None if health is None else health.acquisition_count,
+            "health.sample_rate_hz": None if health is None else health.sample_rate_hz,
+            "health.error_queue_nonempty": None if health is None else health.error_queue_nonempty,
+            "health.waiting_for_trigger": None if health is None else health.waiting_for_trigger,
+            "channel.channel": None if channel is None else channel.channel,
+            "channel.enabled": None if channel is None else channel.enabled,
+            "channel.coupling": None if channel is None else channel.coupling,
+            "channel.range_v": None if channel is None else channel.range_v,
+            "channel.scale_v_per_div": None if channel is None else channel.scale_v_per_div,
+            "channel.offset_v": None if channel is None else channel.offset_v,
+            "channel.position_div": None if channel is None else channel.position_div,
+            "channel.bandwidth_hz": None if channel is None else channel.bandwidth_hz,
+            "channel.polarity": None if channel is None else channel.polarity,
+            "channel.skew_s": None if channel is None else channel.skew_s,
+            "channel.label": None if channel is None else channel.label,
+            "channel.label_enabled": None if channel is None else channel.label_enabled,
+            "channel.overloaded": None if channel is None else channel.overloaded,
+            "channel.acquisition_type": None if channel is None else channel.acquisition_type,
+            "timebase.acquisition_time_s": None if timebase is None else timebase.acquisition_time_s,
+            "timebase.divisions": None if timebase is None else timebase.divisions,
+            "timebase.position_s": None if timebase is None else timebase.position_s,
+            "timebase.range_s": None if timebase is None else timebase.range_s,
+            "timebase.reference_percent": None if timebase is None else timebase.reference_percent,
+            "timebase.scale_s_per_div": None if timebase is None else timebase.scale_s_per_div,
+            "timebase.roll_enabled": None if timebase is None else timebase.roll_enabled,
+            "probe.channel": None if probe is None else probe.channel,
+            "probe.attenuation_factor": None if probe is None else probe.attenuation_factor,
+            "probe.bandwidth_hz": None if probe is None else probe.bandwidth_hz,
+            "probe.capacitance_f": None if probe is None else probe.capacitance_f,
+            "probe.impedance_ohm": None if probe is None else probe.impedance_ohm,
+            "probe.name": None if probe is None else probe.name,
+            "probe.probe_type": None if probe is None else probe.probe_type,
+            "waveform.channel": None if waveform is None else waveform.channel,
+            "waveform.x_start_s": None if waveform is None else waveform.x_start_s,
+            "waveform.x_stop_s": None if waveform is None else waveform.x_stop_s,
+            "waveform.points": None if waveform is None else waveform.points,
+            "waveform.values_per_sample": None if waveform is None else waveform.values_per_sample,
+            "waveform.x_increment_s": None if waveform is None else waveform.x_increment_s,
+            "waveform.x_origin_s": None if waveform is None else waveform.x_origin_s,
+            "waveform.y_increment_v": None if waveform is None else waveform.y_increment_v,
+            "waveform.y_origin_v": None if waveform is None else waveform.y_origin_v,
+            "waveform.y_resolution_bits": None if waveform is None else waveform.y_resolution_bits,
+            "trigger.trigger_type": None if trigger is None else trigger.trigger_type,
+            "trigger.source_channel": None if trigger is None else trigger.source_channel,
+            "trigger.mode": None if trigger is None else trigger.mode,
+            "trigger.slope": None if trigger is None else trigger.slope,
+            "trigger.coupling": None if trigger is None else trigger.coupling,
+            "trigger.level_v": None if trigger is None else trigger.level_v,
+            "trigger.hysteresis_mode": None if trigger is None else trigger.hysteresis_mode,
+            "trigger.holdoff_mode": None if trigger is None else trigger.holdoff_mode,
+            "trigger.holdoff_time_s": None if trigger is None else trigger.holdoff_time_s,
+        }
 
 
 @dataclass(frozen=True)

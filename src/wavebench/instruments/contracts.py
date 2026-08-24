@@ -33,6 +33,8 @@ from .models import (
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
     ScopeSnapshot,
+    ScopeSnapshotFieldV2,
+    ScopeSnapshotV2,
     SourceAmModulationConfiguration,
     SourceAmModulationProfile,
     SourceBurstConfiguration,
@@ -117,6 +119,16 @@ class MultiChannelScopeDriver(ScopeDriver, Protocol):
 @runtime_checkable
 class ScopeSnapshotDriver(InstrumentDriver, Protocol):
     def get_snapshot(self, channel: int) -> ScopeSnapshot: ...
+
+
+@runtime_checkable
+class ScopeSnapshotDriverV2(InstrumentDriver, Protocol):
+    def get_snapshot_v2(
+        self,
+        channel: int,
+        *,
+        fields: tuple[ScopeSnapshotFieldV2, ...],
+    ) -> ScopeSnapshotV2: ...
 
 
 @runtime_checkable
