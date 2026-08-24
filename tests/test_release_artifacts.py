@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ISOLATED_UTF8_FLAGS = ("-I", "-X", "utf8")
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -41,7 +42,14 @@ def _venv_python(root: Path) -> Path:
 
 def _venv_purelib(python: Path) -> Path:
     return Path(
-        _run([str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"])
+        _run(
+            [
+                str(python),
+                *ISOLATED_UTF8_FLAGS,
+                "-c",
+                "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+            ]
+        )
         .stdout.strip()
     )
 
@@ -69,7 +77,7 @@ def _install_artifact(python: Path, artifact: Path) -> None:
     _run(
         [
             str(python),
-            "-I",
+            *ISOLATED_UTF8_FLAGS,
             "-m",
             "pip",
             "install",
@@ -88,7 +96,7 @@ def _assert_offline_artifact_smoke(python: Path, purelib: Path) -> None:
         _run(
             [
                 str(python),
-                "-I",
+                *ISOLATED_UTF8_FLAGS,
                 "-c",
                 "import pathlib, wavebench; print(pathlib.Path(wavebench.__file__).resolve())",
             ]
@@ -102,7 +110,7 @@ def _assert_offline_artifact_smoke(python: Path, purelib: Path) -> None:
         ("run", "template", "--list"),
         ("lock", "status", "TCPIP::192.0.2.10::INSTR"),
     ):
-        _run([str(python), "-I", "-m", "wavebench", *command])
+        _run([str(python), *ISOLATED_UTF8_FLAGS, "-m", "wavebench", *command])
 
 
 def test_sdist_excludes_runtime_data_and_vendor_manuals(tmp_path: Path) -> None:

@@ -447,7 +447,7 @@ def _storage_request(
 
 def test_arbitrary_storage_v2_writes_once_without_selecting_or_disabling_output() -> None:
     service, driver = _service(output_enabled=True)
-    payload = b"abc"
+    payload = b"raw-arbitrary-storage-payload-must-not-leak"
     request = _storage_request(payload)
 
     result, artifact = service.mutate_arbitrary_storage_v2(
@@ -469,7 +469,7 @@ def test_arbitrary_storage_v2_writes_once_without_selecting_or_disabling_output(
         "slot_id": "slot_a",
         "write_mode": "create_only",
         "payload_sha256": _digest(payload),
-        "payload_size_bytes": 3,
+        "payload_size_bytes": len(payload),
         "expected_previous_sha256": None,
     }
     assert artifact["final_state"] == {
@@ -478,7 +478,7 @@ def test_arbitrary_storage_v2_writes_once_without_selecting_or_disabling_output(
         "selection_expected": "unchanged",
         "storage_readback_verified": True,
     }
-    assert "abc" not in repr(artifact)
+    assert payload.decode("ascii") not in repr(artifact)
     assert [item["phase"] for item in artifact["phases"]] == [
         "preflight",
         "main",
