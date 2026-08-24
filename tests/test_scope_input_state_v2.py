@@ -27,7 +27,7 @@ from wavebench.instruments.scope_extension_capabilities import (
 )
 from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.capability_explain import explain_operation
-from wavebench.services.scope_service import ScopeService
+from wavebench.services.scope_service import ScopeService, assert_scope_input_state_safe
 from wavebench.logging import CommandLogger
 from wavebench.transport.contracts import ReplayPolicy
 
@@ -207,6 +207,37 @@ def test_input_state_v2_service_reads_only_the_v2_driver_method() -> None:
 
     assert service.channel_input_state_v2(2) == expected
     assert calls == [("v2", 2)]
+
+
+@pytest.mark.parametrize(
+    ("termination", "allow_50ohm", "allowed"),
+    (
+        ("high_z", False, True),
+        ("high_z", True, True),
+        ("50_ohm", False, False),
+        ("50_ohm", True, True),
+        ("unknown", False, False),
+        ("unknown", True, False),
+    ),
+)
+def test_input_state_v2_safety_policy_is_strict_and_separate_from_legacy_capture(
+    termination: str,
+    allow_50ohm: bool,
+    allowed: bool,
+) -> None:
+    state = ScopeChannelInputStateV2(
+        channel=1,
+        coupling="dc",
+        termination=termination,  # type: ignore[arg-type]
+        impedance_ohm=None,
+        unavailable_fields=("impedance_ohm",),
+    )
+
+    if allowed:
+        assert assert_scope_input_state_safe(state, allow_50ohm=allow_50ohm) is state
+    else:
+        with pytest.raises(ConfigError, match="50 ohm|unknown"):
+            assert_scope_input_state_safe(state, allow_50ohm=allow_50ohm)
 
 
 def test_input_state_v2_service_rejects_invalid_or_wrong_channel_before_legacy_fallback() -> None:

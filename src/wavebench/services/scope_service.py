@@ -149,6 +149,29 @@ def assert_scope_high_impedance(
     )
 
 
+def assert_scope_input_state_safe(
+    state: ScopeChannelInputStateV2,
+    *,
+    allow_50ohm: bool = False,
+) -> ScopeChannelInputStateV2:
+    """Apply the V2 termination policy without changing any legacy capture route."""
+
+    if state.termination == "high_z":
+        return state
+    if state.termination == "50_ohm" and allow_50ohm is True:
+        return state
+    if state.termination == "50_ohm":
+        raise ConfigError(
+            f"scope CH{state.channel} input termination is 50 ohm; default use requires "
+            "high impedance. Pass --allow-50ohm only when the test setup explicitly "
+            "accepts the measured 50 ohm input."
+        )
+    raise ConfigError(
+        f"scope CH{state.channel} input termination is unknown; refusing use even when "
+        "--allow-50ohm was requested."
+    )
+
+
 @dataclass(frozen=True)
 class CaptureResult:
     package_dir: Path
