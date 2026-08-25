@@ -12,6 +12,11 @@ import zlib
 import numpy as np
 
 from wavebench.scope_extension_constants import (
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+    SCOPE_AVERAGE_COUNT_MAX_V2,
     SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
     SCOPE_CURSOR_READOUT_V2_MAX_QUERIES,
     SCOPE_FFT_STATUS_V2_MAX_QUERIES,
@@ -1472,6 +1477,536 @@ def validate_acquisition_completion(
         raise ValueError("completion proof has an invalid terminal phase")
 
 
+ScopeAverageMechanism = Literal["global_acquisition"]
+ScopeAverageCompletionEvidence = Literal["device_average_complete"]
+ScopeAverageCaptureField = Literal[
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+]
+SCOPE_AVERAGE_CAPTURE_FIELD_ORDER: tuple[ScopeAverageCaptureField, ...] = (
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+)
+_AVERAGE_CAPTURE_FIELDS = frozenset(SCOPE_AVERAGE_CAPTURE_FIELD_ORDER)
+_AVERAGE_CAPTURE_TOKEN_ATTRS = {
+    "scope.run_state": "run_state_token",
+    "scope.acquisition": "acquisition_token",
+    "scope.trigger": "trigger_token",
+    "scope.timebase": "timebase_token",
+    "scope.channel_display": "channel_display_token",
+    "scope.channel_vertical": "channel_vertical_token",
+    "scope.waveform_source": "waveform_source_token",
+    "scope.waveform_mode": "waveform_mode_token",
+    "scope.query_response_header": "query_response_header_token",
+    "scope.waveform_format": "waveform_format_token",
+    "scope.waveform_byte_order": "waveform_byte_order_token",
+    "scope.waveform_points": "waveform_points_token",
+    "scope.waveform_transfer_window": "waveform_transfer_window_token",
+}
+_AVERAGE_CAPTURE_POINTS = ("def", "max", "dmax")
+
+
+def _average_capture_field_tuple(
+    values: object,
+    *,
+    label: str,
+    allow_empty: bool = False,
+) -> tuple[ScopeAverageCaptureField, ...]:
+    if not isinstance(values, tuple):
+        raise TypeError(f"{label} must be a tuple")
+    if not values and not allow_empty:
+        raise ValueError(f"{label} must not be empty")
+    if len(set(values)) != len(values) or not set(values) <= _AVERAGE_CAPTURE_FIELDS:
+        raise ValueError(f"{label} must contain supported unique average capture fields")
+    expected = tuple(
+        field_name for field_name in SCOPE_AVERAGE_CAPTURE_FIELD_ORDER if field_name in values
+    )
+    if values != expected:
+        raise ValueError(f"{label} must use stable average capture field order")
+    return values
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureRequestV2:
+    channels: tuple[int, ...]
+    average_count: int
+    mechanism: ScopeAverageMechanism
+    acquisition_stopped: Literal[True]
+    points: str = "dmax"
+    allow_50ohm: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.channels, tuple) or len(self.channels) != 1:
+            raise ValueError("average capture V2 requires exactly one channel")
+        channel = self.channels[0]
+        _strict_int(channel, label="average capture V2 channel", minimum=1)
+        _strict_int(
+            self.average_count,
+            label="average capture V2 average_count",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        _literal(
+            self.mechanism,
+            {"global_acquisition"},
+            label="average capture V2 mechanism",
+        )
+        if self.acquisition_stopped is not True:
+            raise ValueError("average capture V2 requires acquisition_stopped=True")
+        _literal(
+            self.points,
+            set(_AVERAGE_CAPTURE_POINTS),
+            label="average capture V2 points",
+        )
+        if not isinstance(self.allow_50ohm, bool):
+            raise TypeError("average capture V2 allow_50ohm must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageConfigurationV2:
+    mechanism: ScopeAverageMechanism
+    acquisition_type: str
+    average_count: int
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.mechanism,
+            {"global_acquisition"},
+            label="average configuration mechanism",
+        )
+        _safe_token(self.acquisition_type, label="average configuration acquisition_type")
+        _strict_int(
+            self.average_count,
+            label="average configuration average_count",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCompletionProofV2:
+    evidence: ScopeAverageCompletionEvidence
+    mechanism: ScopeAverageMechanism
+    configured_average_count: int
+    configuration_readback: ScopeAverageConfigurationV2
+    acquisition_completion: ScopeAcquisitionCompletion
+    device_average_complete: Literal[True]
+    contract_id: str
+    context_id: str
+    session_epoch: str
+    acquisition_baseline_nonce_digest: str
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.evidence,
+            {"device_average_complete"},
+            label="average completion evidence",
+        )
+        _literal(
+            self.mechanism,
+            {"global_acquisition"},
+            label="average completion mechanism",
+        )
+        _strict_int(
+            self.configured_average_count,
+            label="average completion configured_average_count",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        if not isinstance(self.configuration_readback, ScopeAverageConfigurationV2):
+            raise TypeError("average completion configuration_readback has an invalid type")
+        if self.configuration_readback.mechanism != self.mechanism:
+            raise ValueError("average completion mechanism does not match configuration readback")
+        if self.configuration_readback.average_count != self.configured_average_count:
+            raise ValueError("average completion count does not match configuration readback")
+        if not isinstance(self.acquisition_completion, ScopeAcquisitionCompletion):
+            raise TypeError("average completion acquisition_completion has an invalid type")
+        if self.device_average_complete is not True:
+            raise ValueError("average completion requires device_average_complete=True")
+        _safe_token(self.contract_id, label="average completion contract_id")
+        _safe_token(self.context_id, label="average completion context_id")
+        _safe_token(self.session_epoch, label="average completion session_epoch")
+        if (
+            not isinstance(self.acquisition_baseline_nonce_digest, str)
+            or re.fullmatch(r"[0-9a-f]{16}", self.acquisition_baseline_nonce_digest) is None
+        ):
+            raise ValueError("average completion baseline nonce digest must be 16 lowercase hex chars")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureStateSnapshot:
+    captured_fields: tuple[ScopeAverageCaptureField, ...]
+    configuration: ScopeAverageConfigurationV2
+    run_state: ScopeAcquisitionRunState
+    run_state_token: str | None = None
+    acquisition_token: str | None = None
+    trigger_token: str | None = None
+    timebase_token: str | None = None
+    channel_display_token: str | None = None
+    channel_vertical_token: str | None = None
+    waveform_source_token: str | None = None
+    waveform_mode_token: str | None = None
+    query_response_header_token: str | None = None
+    waveform_format_token: str | None = None
+    waveform_byte_order_token: str | None = None
+    waveform_points_token: str | None = None
+    waveform_transfer_window_token: str | None = None
+
+    def __post_init__(self) -> None:
+        fields = _average_capture_field_tuple(
+            self.captured_fields,
+            label="average capture snapshot captured_fields",
+        )
+        if not isinstance(self.configuration, ScopeAverageConfigurationV2):
+            raise TypeError("average capture snapshot configuration has an invalid type")
+        if not isinstance(self.run_state, ScopeAcquisitionRunState):
+            raise TypeError("average capture snapshot run_state has an invalid type")
+        for field_name, attr_name in _AVERAGE_CAPTURE_TOKEN_ATTRS.items():
+            token = _optional_safe_token(getattr(self, attr_name), label=attr_name)
+            if (field_name in fields) != (token is not None):
+                raise ValueError(f"{attr_name} presence must match captured fields")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureBaseline:
+    context_id: str
+    session_epoch: str
+    baseline_nonce: str
+    snapshot: ScopeAverageCaptureStateSnapshot
+    restore_order: tuple[ScopeAverageCaptureField, ...]
+    acquisition_baseline: ScopeAcquisitionControlBaseline
+
+    def __post_init__(self) -> None:
+        _safe_token(self.context_id, label="average capture baseline context_id")
+        _safe_token(self.session_epoch, label="average capture baseline session_epoch")
+        _safe_token(self.baseline_nonce, label="average capture baseline nonce")
+        if not isinstance(self.snapshot, ScopeAverageCaptureStateSnapshot):
+            raise TypeError("average capture baseline snapshot has an invalid type")
+        restore_order = _average_capture_field_tuple(
+            self.restore_order,
+            label="average capture restore_order",
+        )
+        if restore_order != self.snapshot.captured_fields:
+            raise ValueError("average capture restore order must match snapshot fields exactly")
+        if not isinstance(self.acquisition_baseline, ScopeAcquisitionControlBaseline):
+            raise TypeError("average capture acquisition baseline has an invalid type")
+        acquisition_baseline = self.acquisition_baseline
+        if (
+            acquisition_baseline.context_id != self.context_id
+            or acquisition_baseline.session_epoch != self.session_epoch
+            or acquisition_baseline.baseline_nonce == self.baseline_nonce
+        ):
+            raise ValueError("average capture child baseline has an invalid context binding")
+        if acquisition_baseline.snapshot.run_state != self.snapshot.run_state:
+            raise ValueError("average capture child baseline run state does not match parent")
+        if acquisition_baseline.snapshot.trigger_state_token != self.snapshot.trigger_token:
+            raise ValueError("average capture child baseline trigger token does not match parent")
+        if acquisition_baseline.snapshot.acquisition_state_token != self.snapshot.acquisition_token:
+            raise ValueError("average capture child baseline acquisition token does not match parent")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureRestoreResult:
+    status: Literal["completed", "failed", "not_attempted"]
+    attempted_fields: tuple[ScopeAverageCaptureField, ...]
+    restored_fields: tuple[ScopeAverageCaptureField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        _average_capture_field_tuple(
+            self.attempted_fields,
+            label="average capture attempted_fields",
+            allow_empty=True,
+        )
+        _average_capture_field_tuple(
+            self.restored_fields,
+            label="average capture restored_fields",
+            allow_empty=True,
+        )
+        _optional_safe_token(self.error_code, label="average capture restore error_code")
+
+    def validate_for(self, baseline: ScopeAverageCaptureBaseline) -> None:
+        if not isinstance(baseline, ScopeAverageCaptureBaseline):
+            raise TypeError("average capture restore baseline has an invalid type")
+        _validate_prefix_and_subsequence(
+            expected=baseline.restore_order,
+            attempted=self.attempted_fields,
+            completed=self.restored_fields,
+            status=self.status,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureVerification:
+    status: Literal["verified", "mismatch", "unavailable"]
+    verified_fields: tuple[ScopeAverageCaptureField, ...]
+    mismatched_fields: tuple[ScopeAverageCaptureField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.status,
+            {"verified", "mismatch", "unavailable"},
+            label="average capture verification status",
+        )
+        verified = _average_capture_field_tuple(
+            self.verified_fields,
+            label="average capture verified_fields",
+            allow_empty=True,
+        )
+        mismatched = _average_capture_field_tuple(
+            self.mismatched_fields,
+            label="average capture mismatched_fields",
+            allow_empty=True,
+        )
+        if set(verified) & set(mismatched):
+            raise ValueError("average capture verification fields overlap")
+        _optional_safe_token(self.error_code, label="average capture verification error_code")
+        if self.status == "verified" and mismatched:
+            raise ValueError("verified average capture state cannot contain mismatches")
+        if self.status == "mismatch" and not mismatched:
+            raise ValueError("mismatched average capture verification requires mismatch fields")
+        if self.status == "unavailable" and (verified or mismatched):
+            raise ValueError("unavailable average capture verification cannot claim fields")
+
+    def validate_for(self, baseline: ScopeAverageCaptureBaseline) -> None:
+        if not isinstance(baseline, ScopeAverageCaptureBaseline):
+            raise TypeError("average capture verification baseline has an invalid type")
+        if self.status == "verified" and self.verified_fields != baseline.restore_order:
+            raise ValueError("verified average capture state must cover every restore field")
+        if not set(self.verified_fields + self.mismatched_fields) <= set(baseline.restore_order):
+            raise ValueError("average capture verification fields exceed the restore closure")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureResultV2:
+    request: ScopeAverageCaptureRequestV2
+    waveforms: tuple[WaveformData, ...]
+    configuration_before: ScopeAverageConfigurationV2
+    configuration_after: ScopeAverageConfigurationV2
+    run_state_before: ScopeAcquisitionRunState
+    run_state_after: ScopeAcquisitionRunState
+    completion: ScopeAverageCompletionProofV2
+    restore: ScopeAverageCaptureRestoreResult
+    verification: ScopeAverageCaptureVerification
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, ScopeAverageCaptureRequestV2):
+            raise TypeError("average capture result request has an invalid type")
+        if (
+            not isinstance(self.waveforms, tuple)
+            or len(self.waveforms) != 1
+            or not isinstance(self.waveforms[0], WaveformData)
+            or self.waveforms[0].channel != self.request.channels[0]
+        ):
+            raise ValueError("average capture result waveform does not match the request")
+        for label, value, expected in (
+            ("configuration_before", self.configuration_before, ScopeAverageConfigurationV2),
+            ("configuration_after", self.configuration_after, ScopeAverageConfigurationV2),
+            ("run_state_before", self.run_state_before, ScopeAcquisitionRunState),
+            ("run_state_after", self.run_state_after, ScopeAcquisitionRunState),
+            ("completion", self.completion, ScopeAverageCompletionProofV2),
+            ("restore", self.restore, ScopeAverageCaptureRestoreResult),
+            ("verification", self.verification, ScopeAverageCaptureVerification),
+        ):
+            if not isinstance(value, expected):
+                raise TypeError(f"average capture result {label} has an invalid type")
+        if self.configuration_after != self.configuration_before:
+            raise ValueError("average capture result configuration was not restored")
+        if self.run_state_before.phase != "stopped" or self.run_state_after != self.run_state_before:
+            raise ValueError("average capture result run state was not restored to a stopped baseline")
+        if self.completion.mechanism != self.request.mechanism or (
+            self.completion.configured_average_count != self.request.average_count
+        ):
+            raise ValueError("average capture completion proof does not match the request")
+        if self.restore.status != "completed" or self.verification.status != "verified":
+            raise ValueError("average capture result requires completed restore and verification")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureBinaryProfile:
+    response_max_bytes: int
+    operation_max_bytes: int
+    query_max_count: int
+    resynchronization_max_bytes: int
+    framing: BinaryResponseFraming = BinaryResponseFraming.DEFINITE_BLOCK
+    transport_trailing_hex: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "framing", BinaryResponseFraming(self.framing))
+        if self.framing is not BinaryResponseFraming.DEFINITE_BLOCK:
+            raise ValueError("average capture binary profiles only support definite-block framing")
+        _strict_int(
+            self.response_max_bytes,
+            label="average capture response_max_bytes",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+        )
+        _strict_int(
+            self.operation_max_bytes,
+            label="average capture operation_max_bytes",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+        )
+        if self.operation_max_bytes < self.response_max_bytes:
+            raise ValueError("average capture operation limit cannot be smaller than response limit")
+        _strict_int(
+            self.query_max_count,
+            label="average capture query_max_count",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+        )
+        _strict_int(
+            self.resynchronization_max_bytes,
+            label="average capture resynchronization_max_bytes",
+            minimum=0,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        )
+        _hex_bytes(self.transport_trailing_hex, label="average capture transport_trailing_hex")
+
+    @property
+    def transport_trailing(self) -> bytes:
+        return bytes.fromhex(self.transport_trailing_hex)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureProfileV2:
+    global_acquisition_type: str
+    completion_contract_id: str
+    channel_range: tuple[int, int]
+    supported_points: tuple[str, ...]
+    average_count_min: int
+    average_count_max: int
+    requires_power_of_two: bool
+    binary: ScopeAverageCaptureBinaryProfile
+    restore_order: tuple[ScopeAverageCaptureField, ...]
+    snapshot_max_steps: int
+    main_max_steps: int
+    restore_max_steps: int
+    verify_max_steps: int
+
+    def __post_init__(self) -> None:
+        _safe_token(self.global_acquisition_type, label="average capture global_acquisition_type")
+        _safe_token(self.completion_contract_id, label="average capture completion_contract_id")
+        if (
+            not isinstance(self.channel_range, tuple)
+            or len(self.channel_range) != 2
+        ):
+            raise ValueError("average capture channel_range must contain exactly two integers")
+        minimum_channel = _strict_int(
+            self.channel_range[0],
+            label="average capture channel_range minimum",
+            minimum=1,
+        )
+        maximum_channel = _strict_int(
+            self.channel_range[1],
+            label="average capture channel_range maximum",
+            minimum=1,
+        )
+        if minimum_channel > maximum_channel:
+            raise ValueError("average capture channel_range minimum exceeds maximum")
+        if not isinstance(self.supported_points, tuple) or not self.supported_points:
+            raise ValueError("average capture supported_points must be a non-empty tuple")
+        if len(set(self.supported_points)) != len(self.supported_points) or not set(
+            self.supported_points
+        ) <= set(_AVERAGE_CAPTURE_POINTS):
+            raise ValueError("average capture supported_points contain unsupported or duplicate values")
+        expected_points = tuple(
+            point for point in _AVERAGE_CAPTURE_POINTS if point in self.supported_points
+        )
+        if self.supported_points != expected_points:
+            raise ValueError("average capture supported_points must use stable point order")
+        minimum_count = _strict_int(
+            self.average_count_min,
+            label="average capture average_count_min",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        maximum_count = _strict_int(
+            self.average_count_max,
+            label="average capture average_count_max",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        if minimum_count > maximum_count:
+            raise ValueError("average capture average_count_min exceeds average_count_max")
+        if not isinstance(self.requires_power_of_two, bool):
+            raise TypeError("average capture requires_power_of_two must be bool")
+        if not isinstance(self.binary, ScopeAverageCaptureBinaryProfile):
+            raise TypeError("average capture binary profile has an invalid type")
+        restore_order = _average_capture_field_tuple(
+            self.restore_order,
+            label="average capture profile restore_order",
+        )
+        if restore_order != SCOPE_AVERAGE_CAPTURE_FIELD_ORDER:
+            raise ValueError("average capture profile restore_order must cover the full R1 closure")
+        for label, value in (
+            ("snapshot_max_steps", self.snapshot_max_steps),
+            ("restore_max_steps", self.restore_max_steps),
+            ("verify_max_steps", self.verify_max_steps),
+        ):
+            _strict_int(value, label=f"average capture {label}", minimum=len(restore_order), maximum=64)
+        _strict_int(
+            self.main_max_steps,
+            label="average capture main_max_steps",
+            minimum=8,
+            maximum=128,
+        )
+
+    def validate_request(self, request: ScopeAverageCaptureRequestV2) -> None:
+        if not isinstance(request, ScopeAverageCaptureRequestV2):
+            raise TypeError("average capture request has an invalid type")
+        channel = request.channels[0]
+        if not self.channel_range[0] <= channel <= self.channel_range[1]:
+            raise ValueError("average capture channel is outside the descriptor range")
+        if request.points not in self.supported_points:
+            raise ValueError("average capture points are unsupported by the descriptor profile")
+        if not self.average_count_min <= request.average_count <= self.average_count_max:
+            raise ValueError("average capture count is outside the descriptor range")
+        if self.requires_power_of_two and request.average_count & (request.average_count - 1):
+            raise ValueError("average capture count must be a power of two")
+
+    def validate_configuration(
+        self,
+        configuration: ScopeAverageConfigurationV2,
+        *,
+        request: ScopeAverageCaptureRequestV2 | None = None,
+    ) -> None:
+        if not isinstance(configuration, ScopeAverageConfigurationV2):
+            raise TypeError("average capture configuration has an invalid type")
+        if configuration.mechanism != "global_acquisition":
+            raise ValueError("average capture configuration mechanism is unsupported")
+        if configuration.acquisition_type != self.global_acquisition_type:
+            raise ValueError("average capture configuration type does not match the profile")
+        if request is not None:
+            self.validate_request(request)
+            if configuration.average_count != request.average_count:
+                raise ValueError("average capture configuration count does not match the request")
+
+
 ScopeTraceKind = Literal["analog", "digital", "math", "reference", "spectrum"]
 ScopeAxisKind = Literal["time", "frequency", "index", "unknown"]
 ScopeAxisUnit = Literal["s", "Hz", "1", "unknown"]
@@ -2303,6 +2838,7 @@ class ScopeDescriptorExtensions:
     measurement_statistics_profile_v2: ScopeMeasurementStatisticsProfileV2 | None = None
     fft_status_profile_v2: ScopeFftStatusProfileV2 | None = None
     cursor_readout_profile_v2: ScopeCursorReadoutProfileV2 | None = None
+    average_capture_profile_v2: ScopeAverageCaptureProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -2342,6 +2878,11 @@ class ScopeDescriptorExtensions:
                 "cursor_readout_profile_v2",
                 self.cursor_readout_profile_v2,
                 ScopeCursorReadoutProfileV2,
+            ),
+            (
+                "average_capture_profile_v2",
+                self.average_capture_profile_v2,
+                ScopeAverageCaptureProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):
@@ -2393,6 +2934,65 @@ class ScopeAcquisitionStatusDriverV2(InstrumentDriver, Protocol):
         *,
         fields: tuple[ScopeAcquisitionStatusFieldV2, ...],
     ) -> ScopeAcquisitionStatusV2: ...
+
+
+@runtime_checkable
+class ScopeAverageCaptureDriverV2(ScopeAcquisitionRunStateDriver, Protocol):
+    def snapshot_average_capture_state(
+        self,
+        fields: tuple[ScopeAverageCaptureField, ...],
+    ) -> ScopeAverageCaptureStateSnapshot: ...
+
+    def set_average_acquisition_type_v2(
+        self,
+        acquisition_type: str,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> None: ...
+
+    def get_average_configuration_v2(
+        self,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> ScopeAverageConfigurationV2: ...
+
+    def set_average_count_v2(
+        self,
+        average_count: int,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> None: ...
+
+    def acquire_average_single_v2(
+        self,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+        deadline: float,
+    ) -> ScopeAcquisitionCompletion: ...
+
+    def get_device_average_complete_v2(
+        self,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> bool: ...
+
+    def fetch_average_waveform_bounded(
+        self,
+        channel: int,
+        *,
+        points: str,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> WaveformData: ...
+
+    def restore_average_capture_state(
+        self,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> ScopeAverageCaptureRestoreResult: ...
+
+    def verify_average_capture_state_restored(
+        self,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> ScopeAverageCaptureStateSnapshot: ...
 
 
 @runtime_checkable
@@ -2549,6 +3149,8 @@ __all__ = [
     or name.startswith("Error")
     or name
     in {
+        "SCOPE_AVERAGE_CAPTURE_FIELD_ORDER",
+        "SCOPE_AVERAGE_COUNT_MAX_V2",
         "DriverErrorRecord",
         "SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER",
         "SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES",

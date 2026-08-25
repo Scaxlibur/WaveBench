@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING, Literal, Mapping
 
 from wavebench.errors import ConfigError
 from wavebench.scope_extension_constants import (
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_OPERATION_TIMEOUT_MS,
     SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS,
     SCOPE_ACQUISITION_STATUS_V2_OPERATION_TIMEOUT_MS,
     SCOPE_CURSOR_READOUT_V2_OPERATION_TIMEOUT_MS,
@@ -333,6 +338,29 @@ _SCOPE_CAPTURE_VERIFICATION_FIELDS = (
     "scope.waveform_mode",
     *_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS,
     "scope.capture_identity",
+)
+_SCOPE_AVERAGE_CAPTURE_RESTORE_FIELDS = (
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+)
+_SCOPE_AVERAGE_CAPTURE_GRANULAR_FIELDS = (
+    "scope.acquisition.type",
+    "scope.acquisition.average_count",
+)
+_SCOPE_AVERAGE_CAPTURE_CHANGED_FIELDS = (
+    *_SCOPE_AVERAGE_CAPTURE_RESTORE_FIELDS,
+    *_SCOPE_AVERAGE_CAPTURE_GRANULAR_FIELDS,
 )
 
 
@@ -1230,6 +1258,34 @@ _SCOPE_PORTABILITY_V2_SPECS = (
         operation_timeout_ms=SCOPE_ACQUISITION_STATUS_V2_OPERATION_TIMEOUT_MS,
         error_check_minimum="disabled",
         risk_flags=("profile_query",),
+    ),
+    _scope_operation(
+        "scope.capture_average_v2",
+        required_capabilities=("scope.capture_average_v2",),
+        effect="acquire",
+        timeout_ms=SCOPE_AVERAGE_CAPTURE_V2_OPERATION_TIMEOUT_MS,
+        changed_fields=_SCOPE_AVERAGE_CAPTURE_CHANGED_FIELDS,
+        restore_coverage="average-capture-baseline",
+        verification_fields=(
+            "scope.identity",
+            *_SCOPE_AVERAGE_CAPTURE_CHANGED_FIELDS,
+        ),
+        postcondition_fields=_SCOPE_AVERAGE_CAPTURE_GRANULAR_FIELDS,
+        cleanup_verification_fields=_SCOPE_AVERAGE_CAPTURE_RESTORE_FIELDS,
+        risk_flags=(
+            "trigger",
+            "acquisition_state",
+            "temporary_transfer_setup",
+            "binary_response",
+            "recovery_required",
+        ),
+        binary_limits=(
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        ),
+        error_check_minimum="disabled",
     ),
     _spec(
         "scope.measurement_statistics_v2",

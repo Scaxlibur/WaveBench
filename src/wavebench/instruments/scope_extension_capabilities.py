@@ -24,6 +24,7 @@ SCOPE_STRICT_V2_CAPABILITIES = frozenset(
         "scope.measurement_statistics_v2",
         "scope.fft_status_v2",
         "scope.cursor_readout_v2",
+        "scope.capture_average_v2",
     }
 )
 
@@ -80,6 +81,17 @@ SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "scope.measurement_statistics_v2": ("get_measurement_statistics_v2",),
         "scope.fft_status_v2": ("get_fft_status_v2",),
         "scope.cursor_readout_v2": ("get_cursor_readout_v2",),
+        "scope.capture_average_v2": (
+            "snapshot_average_capture_state",
+            "set_average_acquisition_type_v2",
+            "get_average_configuration_v2",
+            "set_average_count_v2",
+            "acquire_average_single_v2",
+            "get_device_average_complete_v2",
+            "fetch_average_waveform_bounded",
+            "restore_average_capture_state",
+            "verify_average_capture_state_restored",
+        ),
     }
 )
 
@@ -99,8 +111,12 @@ def validate_scope_descriptor(
     waveform_profile = (
         extensions.waveform_binary_profile if extensions is not None else None
     )
-    declared = set(descriptor.capabilities) & set(SCOPE_CAPABILITY_METHODS)
-    if not declared and waveform_profile is None:
+    average_profile = (
+        extensions.average_capture_profile_v2 if extensions is not None else None
+    )
+    declared_capabilities = set(descriptor.capabilities)
+    declared = declared_capabilities & set(SCOPE_CAPABILITY_METHODS)
+    if not declared and waveform_profile is None and average_profile is None:
         return
     if descriptor.kind != "scope":
         raise ConfigError("scope extension capabilities require a scope descriptor")
@@ -124,9 +140,16 @@ def validate_scope_descriptor(
             )
     dependencies = {
         "scope.acquisition_control": {"scope.acquisition_run_state"},
+        "scope.capture_average_v2": {
+            "scope.idn",
+            "scope.acquisition_status_v2",
+            "scope.acquisition_run_state",
+            "scope.acquisition_control",
+            "scope.channel_input_state_v2",
+        },
     }
     for capability, required in dependencies.items():
-        if capability in declared and not required <= declared:
+        if capability in declared and not required <= declared_capabilities:
             raise ConfigError(
                 f"instrument {descriptor.driver_id!r} capability {capability!r} requires "
                 + ", ".join(sorted(required))
@@ -142,6 +165,7 @@ def validate_scope_descriptor(
         "scope.measurement_statistics_v2": "measurement_statistics_profile_v2",
         "scope.fft_status_v2": "fft_status_profile_v2",
         "scope.cursor_readout_v2": "cursor_readout_profile_v2",
+        "scope.capture_average_v2": "average_capture_profile_v2",
     }
     for capability in sorted(declared):
         profile_name = profile_requirements.get(capability)
@@ -181,6 +205,11 @@ def validate_scope_descriptor(
         descriptor,
         driver=driver,
         waveform_profile=waveform_profile,
+        require_public_version=_require_public_version,
+    )
+    _validate_average_capture_profile(
+        descriptor,
+        average_profile=average_profile,
         require_public_version=_require_public_version,
     )
 
@@ -243,6 +272,36 @@ def _validate_waveform_binary_profile(
         raise ConfigError(
             f"instrument {descriptor.driver_id!r} waveform binary profile requires "
             f"callable method(s): {', '.join(unavailable)}"
+        )
+
+
+def _validate_average_capture_profile(
+    descriptor: InstrumentDescriptor,
+    *,
+    average_profile: object | None,
+    require_public_version: bool,
+) -> None:
+    """Validate the standalone average-capture V2 profile declaration."""
+
+    if average_profile is None:
+        return
+    if descriptor.kind != "scope":
+        raise ConfigError("average capture profiles require a scope descriptor")
+    if require_public_version:
+        try:
+            minimum = Version(descriptor.wavebench_min_version)
+            contract_minimum = Version(SCOPE_PORTABILITY_V2_MIN_CORE_VERSION)
+        except InvalidVersion as exc:
+            raise ConfigError("average capture descriptor has an invalid core version") from exc
+        if minimum < contract_minimum:
+            raise ConfigError(
+                "average capture profiles require wavebench_min_version "
+                f">= {SCOPE_PORTABILITY_V2_MIN_CORE_VERSION}"
+            )
+    if "scope.capture_average_v2" not in descriptor.capabilities:
+        raise ConfigError(
+            f"instrument {descriptor.driver_id!r} average capture profile requires "
+            "capability 'scope.capture_average_v2'"
         )
 
 

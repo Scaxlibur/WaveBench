@@ -71,10 +71,18 @@ def open_instrument_driver(
         if descriptor.scope_extensions is not None
         else None
     )
+    average_capture_profile = (
+        descriptor.scope_extensions.average_capture_profile_v2
+        if descriptor.scope_extensions is not None
+        else None
+    )
+    bounded_binary_profile_opt_in = (
+        waveform_binary_profile is not None or average_capture_profile is not None
+    )
     strict_v2_capability_opt_in = bool(
         set(descriptor.capabilities) & SCOPE_STRICT_V2_CAPABILITIES
     )
-    construction_latched = waveform_binary_profile is not None or strict_v2_capability_opt_in
+    construction_latched = bounded_binary_profile_opt_in or strict_v2_capability_opt_in
     backend = _select_backend(configured_backend, descriptor.backends)
     _validate_resource_scheme(resource, descriptor.resource_schemes)
     try:
@@ -146,10 +154,10 @@ def open_instrument_driver(
     try:
         driver = descriptor.factory(context)
         validate_declared_capabilities(descriptor, driver)
-        if waveform_binary_profile is not None:
+        if bounded_binary_profile_opt_in:
             if len(opened_transports) != 1:
                 raise ConfigError(
-                    f"instrument driver {descriptor.driver_id!r} waveform binary profile "
+                    f"instrument driver {descriptor.driver_id!r} bounded binary profile "
                     "requires exactly one context transport"
                 )
             _validate_bounded_binary_transport(
