@@ -6,7 +6,13 @@ import pytest
 
 from wavebench.errors import ConfigError, DataError, TransportIOError
 from wavebench.instruments.api import InstrumentDescriptor
+from wavebench.instruments.capabilities import CAPABILITY_METHODS
+from wavebench.instruments.contracts import ScopeAverageCaptureDriver
 from wavebench.instruments.factory import open_instrument_driver
+from wavebench.instruments.scope_extension_capabilities import (
+    SCOPE_CAPABILITY_METHODS,
+    SCOPE_STRICT_V2_CAPABILITIES,
+)
 from wavebench.instruments.models import (
     ScopeChannelInputStateV2,
     WaveformData,
@@ -34,6 +40,11 @@ from wavebench.instruments.scope_extensions import (
     ScopeDescriptorExtensions,
 )
 from wavebench.services.scope_average_capture_executor import ScopeAverageCaptureExecutor
+from wavebench.services.operation_specs import (
+    SCOPE_OPERATION_SPECS,
+    SCOPE_PORTABILITY_V2_OPERATION_SPECS,
+    require_operation_spec,
+)
 from wavebench.services.scope_service import ScopeService
 from wavebench.logging import CommandLogger
 from wavebench.transport.contracts import (
@@ -195,6 +206,72 @@ def test_average_capture_v2_profile_validates_the_single_channel_r1_contract() -
         request=request,
     )
     assert profile.binary.transport_trailing == b"\n"
+
+
+def test_average_capture_v2_is_additive_and_uses_its_own_registered_contract() -> None:
+    class Driver:
+        def idn(self) -> str:
+            return "EXAMPLE,AVG-1,SN-1,1.0"
+
+        def close(self) -> None:
+            pass
+
+        def get_acquisition_run_state(self) -> ScopeAcquisitionRunState:
+            return _stopped_state()
+
+        def snapshot_average_capture_state(self, fields):
+            return _snapshot()
+
+        def set_average_acquisition_type_v2(self, acquisition_type, *, baseline) -> None:
+            pass
+
+        def get_average_configuration_v2(self, *, baseline):
+            return ScopeAverageConfigurationV2("global_acquisition", "average", 4)
+
+        def set_average_count_v2(self, average_count, *, baseline) -> None:
+            pass
+
+        def acquire_average_single_v2(self, *, baseline, deadline):
+            return _completion()
+
+        def get_device_average_complete_v2(self, *, baseline):
+            return True
+
+        def fetch_average_waveform_bounded(self, channel, *, points, baseline):
+            return _waveform()
+
+        def restore_average_capture_state(self, baseline):
+            return ScopeAverageCaptureRestoreResult("completed", baseline.restore_order, baseline.restore_order)
+
+        def verify_average_capture_state_restored(self, baseline):
+            return baseline.snapshot
+
+    from wavebench.instruments.scope_extensions import ScopeAverageCaptureDriverV2
+
+    assert isinstance(Driver(), ScopeAverageCaptureDriverV2)
+    assert "capture_average_v2" not in ScopeAverageCaptureDriver.__dict__
+    assert SCOPE_CAPABILITY_METHODS["scope.capture_average_v2"] == (
+        "snapshot_average_capture_state",
+        "set_average_acquisition_type_v2",
+        "get_average_configuration_v2",
+        "set_average_count_v2",
+        "acquire_average_single_v2",
+        "get_device_average_complete_v2",
+        "fetch_average_waveform_bounded",
+        "restore_average_capture_state",
+        "verify_average_capture_state_restored",
+    )
+    assert CAPABILITY_METHODS["scope.capture_average_v2"] == SCOPE_CAPABILITY_METHODS[
+        "scope.capture_average_v2"
+    ]
+    assert "scope.capture_average_v2" in SCOPE_STRICT_V2_CAPABILITIES
+    assert "scope.capture_average_v2" not in SCOPE_OPERATION_SPECS
+    spec = SCOPE_PORTABILITY_V2_OPERATION_SPECS["scope.capture_average_v2"]
+    assert require_operation_spec("scope.capture_average_v2") is spec
+    assert spec.effect == "acquire"
+    assert spec.lease_mode == "exclusive"
+    assert spec.restore_coverage == "average-capture-baseline"
+    assert spec.error_check_minimum == "disabled"
 
 
 @pytest.mark.parametrize(
