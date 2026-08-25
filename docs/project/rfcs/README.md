@@ -20,7 +20,7 @@ RFC 使用以下状态：
 | --- | --- | --- |
 | [RFC-0001：消费型文本查询与错误队列](WaveBench_scope可移植性RFC-0001_消费型文本查询.md) | `Superseded R1` | 使用 `ReplayPolicy.NO_REPLAY` 与 `scope.error_drain_v1`，不新增 `query_text_once()` |
 | [RFC-0002：通道输入状态 V2](WaveBench_scope可移植性RFC-0002_通道输入状态.md) | `Implemented R1（未发布）` | 追加 coupling/termination 分离模型和 V2 安全判断，不修改旧 coupling 安全门 |
-| [RFC-0003：截图 framing 与菜单合同](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | `Superseded R1` | 使用 `query_binary()`、screenshot profile 和 `scope.screenshot_v2` |
+| [RFC-0003：截图 framing 与菜单合同](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | `Superseded R1；预算 R1.1 已实现（未发布）` | 使用 `query_binary()`、screenshot profile 和 `scope.screenshot_v2`；核心上限为 `8388608/8388608/1/0` |
 | [RFC-0004：数字通道状态 V2](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | `Implemented R1（未发布）` | 追加字段可缺失且保留作用域的 digital status；waveform 另行取证 |
 | [RFC-0005：可组合状态快照 V2](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | `Implemented R1（未发布）` | M3b 已完成核心模型、profile、Protocol、factory gate 与 Service；不改旧 CLI/artifact |
 | [RFC-0006：采集状态与平均采集 V2](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | `Implemented R1（未发布；0006a/0006b-0/0006b 单通道）` | M4 已完成 status V2；M6 已完成通用 bounded transaction 与单通道 `global_acquisition`／设备完成位 executor；插件仍未 opt-in |

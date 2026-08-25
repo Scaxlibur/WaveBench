@@ -43,7 +43,7 @@
 
    | operation | response / total / query / resync | default timeout |
    | --- | --- | --- |
-   | `scope.screenshot_v2` | `262144 / 262144 / 1 / 0` | `5000 ms` |
+   | `scope.screenshot_v2` | `8388608 / 8388608 / 1 / 0` | `5000 ms` |
    | `scope.acquisition_start/single` | binary `—` | `30000 ms` |
    | `scope.fetch_trace` | `8388608 / 67108864 / 256 / 65536` | `60000 ms` |
 

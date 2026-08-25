@@ -44,7 +44,7 @@ RFC-0006b 已按该顺序完成核心本地实现；它仍不授权插件 opt-in
 | --- | --- | --- | --- |
 | [RFC-0001](WaveBench_scope可移植性RFC-0001_消费型文本查询.md) | 原 `query_text_once()` 被统一 replay 合同和 `scope.error_drain_v1` 取代 | `Superseded R1` | 只保留回归、迁移说明和插件采用条件 |
 | [RFC-0002](WaveBench_scope可移植性RFC-0002_通道输入状态.md) | 追加 coupling/termination 分离的输入状态 V2 | `Implemented R1（未发布）` | 纯读取、独立安全判断与 construction barrier；旧 coupling 路径不变 |
-| [RFC-0003](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | 原 `query_raw_bytes_once()` 被 `query_binary()` 和 screenshot profile 取代 | `Superseded R1` | 核心合同已有；具体插件仍需 framing、菜单和恢复证据 |
+| [RFC-0003](WaveBench_scope可移植性RFC-0003_截图framing与菜单.md) | 原 `query_raw_bytes_once()` 被 `query_binary()` 和 screenshot profile 取代 | `Superseded R1；预算 R1.1 已实现（未发布）` | 核心截图上限为 `8388608/8388608/1/0`；具体插件仍需 framing、菜单和恢复证据 |
 | [RFC-0004](WaveBench_scope可移植性RFC-0004_数字通道状态.md) | 追加保留未知值和字段作用域的 digital status V2 | `Implemented R1（未发布）` | 只处理状态；digital waveform 另行取证 |
 | [RFC-0005](WaveBench_scope可移植性RFC-0005_可组合状态快照.md) | 追加可组合、字段可缺失的 snapshot V2 | `Implemented R1（未发布）` | M3b 已完成核心模型/profile/Protocol/factory gate/Service；不修改完整 snapshot、partial summary 或旧 CLI |
 | [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Implemented R1（未发布；0006a/0006b-0/0006b 单通道）` | M4 已完成 status V2；M6 已完成通用 bounded transaction、单通道 profile、factory gate、executor 与 Service；插件仍未 opt-in |
@@ -265,6 +265,11 @@ RFC-0001、RFC-0003 与 RFC-0008 的核心替代合同已完成离线回归，�
 `scope.error_drain_v1`、screenshot V2 和标准 waveform bounded profile 仍是开发线中
 `Implemented（未发布）` 的核心合同。外部插件采用必须等待第一个实际包含完整合同的正式发行版本；
 开发树中的 `0.8.23`／`0.8.24` 只作为静态校验下限，不能单独证明可发布的版本门。
+
+RFC-0003 的截图 V2 预算已由 `262144/262144/1/0` 提高到 `8388608/8388608/1/0`，与 trace/waveform
+的单响应核心上限一致。该调整覆盖已文档化的 `387,356`-byte definite-block 示例，并为常见高分辨率
+PNG 保留余量；单次 query、零 resynchronization、精确 trailing、PNG
+校验和超限 fail-closed；它不自动声明任何插件 capability，也不构成设备实机吞吐结论。
 
 ## M2 完成记录
 

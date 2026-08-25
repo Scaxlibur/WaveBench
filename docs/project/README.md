@@ -37,7 +37,8 @@
   availability、纯文本 budget 与无 CLI/artifact 的核心实现；0006b-0 已完成 core-only bounded transaction
   内核，0006b 已完成单通道 `global_acquisition` 与设备完成位的核心模型、profile、factory gate、executor 和
   Service 离线实现。RFC-0009 已为完成式 SINGLE control 追加 profile-gated mode-readback terminal STOP
-  proof，不开放 capture、average 或插件 capability；当前不新增插件 capability 或硬件工作。
+  proof，不开放 capture、average 或插件 capability。截图 V2 的全局预算为 `8388608/8388608/1/0`，
+  仍不自动授权插件采用；当前不新增插件 capability 或硬件工作。
 - [Source V2 能力、状态与复合输出安全 RFC](rfcs/WaveBench_source能力状态与复合输出安全RFC.md)：
   `Accepted R6`；核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2，
   M6-A、M6-B 与 M6-C 已完成核心离线合同；真实插件验收与发布审计仍按里程碑推进。

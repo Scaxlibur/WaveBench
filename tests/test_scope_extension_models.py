@@ -32,22 +32,24 @@ from wavebench.instruments.scope_extensions import (
     ScopeWaveformTransferStateSnapshot,
     validate_acquisition_completion,
 )
+from wavebench.scope_extension_constants import (
+    SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+)
 from wavebench.transport.contracts import BinaryResponseFraming
 
 
-def _png(width: int = 2, height: int = 3) -> bytes:
+def _png(width: int = 2, height: int = 3, *, private_chunk_bytes: int = 0) -> bytes:
     def chunk(kind: bytes, payload: bytes) -> bytes:
         crc = zlib.crc32(kind + payload) & 0xFFFFFFFF
         return len(payload).to_bytes(4, "big") + kind + payload + crc.to_bytes(4, "big")
 
     ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x02\x00\x00\x00"
     rows = b"".join(b"\x00" + b"\x00" * (width * 3) for _ in range(height))
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", ihdr)
-        + chunk(b"IDAT", zlib.compress(rows))
-        + chunk(b"IEND", b"")
-    )
+    payload = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(rows))
+    if private_chunk_bytes:
+        payload += chunk(b"raNd", b"x" * private_chunk_bytes)
+    return payload + chunk(b"IEND", b"")
 
 
 def test_scope_extension_types_are_exported_from_stable_instrument_api() -> None:
@@ -62,8 +64,8 @@ def test_screenshot_profile_uses_exact_request_tuples_and_fixed_limits() -> None
         request=request,
         media_type="image/png",
         framing=BinaryResponseFraming.DEFINITE_BLOCK,
-        response_max_bytes=262_144,
-        operation_max_bytes=262_144,
+        response_max_bytes=SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+        operation_max_bytes=SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
         resynchronization_max_bytes=0,
         changed_fields=(),
         restore_order=(),
@@ -73,6 +75,10 @@ def test_screenshot_profile_uses_exact_request_tuples_and_fixed_limits() -> None
     )
     profile = ScopeScreenshotProfile((variant,))
 
+    assert (
+        SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+        SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
+    ) == (8_388_608, 8_388_608)
     assert profile.select(request) is variant
     with pytest.raises(ValueError, match="exactly one"):
         profile.select(ScopeScreenshotRequest(menu_mode="exclude"))
@@ -90,6 +96,21 @@ def test_screenshot_profile_uses_exact_request_tuples_and_fixed_limits() -> None
             restore_max_steps=0,
             verify_max_steps=0,
         )
+    with pytest.raises(ValueError, match="response_max_bytes"):
+        replace(
+            variant,
+            response_max_bytes=SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES + 1,
+            operation_max_bytes=SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES + 1,
+        )
+    with pytest.raises(ValueError, match="operation_max_bytes"):
+        replace(
+            variant,
+            operation_max_bytes=SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES + 1,
+        )
+    with pytest.raises(ValueError, match="resynchronization_max_bytes"):
+        replace(variant, resynchronization_max_bytes=1)
+    with pytest.raises(ValueError, match="exactly 1"):
+        replace(variant, query_max_count=2)
 
 
 def test_screenshot_state_tokens_and_png_dimensions_are_verified() -> None:
@@ -110,6 +131,37 @@ def test_screenshot_state_tokens_and_png_dimensions_are_verified() -> None:
         framing=BinaryResponseFraming.DEFINITE_BLOCK,
     )
     assert screenshot.width_px == 2
+    base_png = _png()
+    documented_payload = _png(
+        private_chunk_bytes=387_356 - len(base_png) - 12,
+    )
+    assert len(documented_payload) == 387_356
+    assert len(documented_payload) <= SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES
+    assert ScopeScreenshot(
+        data=documented_payload,
+        media_type="image/png",
+        width_px=2,
+        height_px=3,
+        requested=ScopeScreenshotRequest(),
+        effective=ScopeScreenshotRequest(),
+        framing=BinaryResponseFraming.DEFINITE_BLOCK,
+    ).width_px == 2
+    oversized_payload = _png(
+        private_chunk_bytes=(
+            SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES + 1 - len(base_png) - 12
+        ),
+    )
+    assert len(oversized_payload) == SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES + 1
+    with pytest.raises(ValueError, match="not a PNG"):
+        ScopeScreenshot(
+            data=oversized_payload,
+            media_type="image/png",
+            width_px=2,
+            height_px=3,
+            requested=ScopeScreenshotRequest(),
+            effective=ScopeScreenshotRequest(),
+            framing=BinaryResponseFraming.DEFINITE_BLOCK,
+        )
     with pytest.raises(ValueError, match="dimensions"):
         ScopeScreenshot(
             data=_png(),

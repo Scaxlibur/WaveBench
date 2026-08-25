@@ -1,6 +1,6 @@
 # RFC-0003：示波器截图 framing 与菜单合同
 
-> 状态：`Superseded R1`
+> 状态：`Superseded R1`；截图 V2 预算 R1.1 已实现（未发布）
 > 原提案：新增 `query_raw_bytes_once()` 和可空菜单布尔值
 > 核心裁决：使用 `query_binary()`、`ScopeScreenshotProfile` 和 `scope.screenshot_v2`
 > 相关规范：[scope 通用扩展接口 RFC](WaveBench_scope通用扩展接口RFC.md)
@@ -57,6 +57,18 @@ color_mode = device | color | monochrome | inverted
 
 菜单不可控制或无法证明时，只能声明 `device`，不能把 unknown 静默改写成
 `exclude`。结果中的 effective request 必须与已验证 variant 一致。
+
+### 截图预算 R1.1
+
+`scope.screenshot_v2` 的 response/operation 核心上限为 `8388608 / 8388608 / 1 / 0`。response
+和 operation 同时提高到 8 MiB，与 trace/waveform 的单响应核心上限一致。该值覆盖厂商资料中
+已文档化的 `387,356`-byte TMC definite-block 截图示例，并为常见高分辨率 PNG 保留余量；query
+上限仍为 1，resynchronization 预算仍为 0。
+
+该调整不改变 `DEFINITE_BLOCK`/`MESSAGE` 的 framing 要求、精确 trailing、PNG 校验、operation
+timeout 或超限 fail-closed 语义。descriptor profile 和 connection 限制只能进一步收紧；核心预算
+提高也不自动授权任一插件声明 screenshot capability。首个采用新预算的插件必须依赖包含该合同的
+正式核心版本，并完成自身的 framing、payload、恢复和实机验收。
 
 ## 媒体与 transport 分层
 

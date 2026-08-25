@@ -214,7 +214,7 @@ error policy 和 binary budget 必须可序列化、可审计。
 | operation | capability | effect / lease | changed_fields | restore_coverage | required_verified_fields | verification_fields | postcondition / cleanup fields | risk_flags | timeout_source | binary response / operation / query / resync limits | error minimum | 最低 access | Service / CLI / artifact |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `scope.screenshot_profile` | `scope.screenshot_profile` | `stateful_read` / `exclusive` | `none` | `none` | `scope.identity` | `none` | — / — | `profile_query` | `operation.timeout_ms=5000` | — | — | `read_only` | `ScopeService.screenshot_profile()` / `wavebench scope screenshot profile` / `screenshot.profile` |
-| `scope.screenshot_v2` | `scope.screenshot_v2` | `write` / `exclusive` | `scope.display_menu`, `scope.display_color`, `scope.error_queue`, `output.screenshot` | `screenshot-baseline-only` | `scope.identity` | `scope.display_menu`, `scope.display_color` | — / `scope.display_menu`, `scope.display_color` | `front_panel_state`, `binary_response`, `temporary_display_setup` | `operation.timeout_ms=5000` | `262144 / 262144 / 1 / 0` | `disabled` | `read_write` | `ScopeService.screenshot_v2(request)` / `wavebench scope screenshot capture` / `screenshot`、`effective_request`、`media_type`、`dimensions`、`framing` |
+| `scope.screenshot_v2` | `scope.screenshot_v2` | `write` / `exclusive` | `scope.display_menu`, `scope.display_color`, `scope.error_queue`, `output.screenshot` | `screenshot-baseline-only` | `scope.identity` | `scope.display_menu`, `scope.display_color` | — / `scope.display_menu`, `scope.display_color` | `front_panel_state`, `binary_response`, `temporary_display_setup` | `operation.timeout_ms=5000` | `8388608 / 8388608 / 1 / 0` | `disabled` | `read_write` | `ScopeService.screenshot_v2(request)` / `wavebench scope screenshot capture` / `screenshot`、`effective_request`、`media_type`、`dimensions`、`framing` |
 | `scope.acquisition_run_state` | `scope.acquisition_run_state` | `stateful_read` / `exclusive` | `none` | `none` | `scope.identity` | `none` | — / — | `state_observation` | `operation.timeout_ms=5000` | — | — | `read_only` | `ScopeService.acquisition_run_state()` / `wavebench scope acquisition status` / `acquisition.run_state` |
 | `scope.acquisition_start` | `scope.acquisition_control` + `scope.acquisition_run_state` | `write` / `exclusive` | `scope.run_state`, `scope.trigger`, `scope.acquisition`, `scope.error_queue` | `failure-cleanup-only` | `scope.identity` | `scope.trigger`, `scope.acquisition` | `scope.run_state`, `scope.trigger`, `scope.acquisition` / `scope.run_state`, `scope.trigger`, `scope.acquisition` | `trigger`, `acquisition_state`, `recovery_required` | `operation.timeout_ms=30000` | — | `disabled` | `read_write` | `ScopeService.start_acquisition(request)` / `wavebench scope acquisition start` / `acquisition.control`、`effective_trigger_mode`、`postcondition`、`cleanup` |
 | `scope.acquisition_single` | `scope.acquisition_control` + `scope.acquisition_run_state` | `acquire` / `exclusive` | `scope.run_state`, `scope.trigger`, `scope.acquisition`, `scope.error_queue` | `failure-cleanup-only` | `scope.identity` | `scope.trigger`, `scope.acquisition` | `scope.run_state`, `scope.trigger`, `scope.acquisition` / `scope.run_state`, `scope.trigger`, `scope.acquisition` | `trigger`, `acquisition_state`, `recovery_required` | `operation.timeout_ms=30000` | — | `disabled` | `read_write` | `ScopeService.acquire_single()` / `wavebench scope acquisition single` / `acquisition.control`、`postcondition`、`completion_proof`、`cleanup` |
@@ -226,8 +226,8 @@ R1.3 acceptance addendum 固定下列数值；表中 binary 列依次为 respons
 count、resynchronization bytes：
 
 ```python
-SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES = 262_144
-SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES = 262_144
+SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES = 8_388_608
+SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES = 8_388_608
 SCOPE_SCREENSHOT_BINARY_QUERY_MAX_COUNT = 1
 SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES = 0
 
@@ -243,7 +243,10 @@ SCOPE_TRACE_OPERATION_TIMEOUT_MS = 60_000
 ```
 
 这些值是核心上限，不是 driver 默认值；descriptor/profile/connection 只能收紧，不能提高。
-`scope.screenshot_v2` 首版单次 PNG 上限为 256 KiB，依据已有 SDS raw PNG 证据保留明确余量；
+`scope.screenshot_v2` 的 R1.1 单次 PNG 上限为 8 MiB，与 trace/waveform 的单响应核心上限一致。
+该值覆盖已文档化的 `387,356`-byte TMC definite-block 截图示例，并为常见高分辨率 PNG 保留余量；
+它不构成所有型号、固件、颜色或菜单状态的吞吐承诺。单次 query、
+零 resynchronization 和 5 秒 operation timeout 不变；具体 descriptor profile 仍须按设备证据收紧。
 `scope.fetch_trace` 每次 response 上限为 8 MiB、一次 operation 总上限为 64 MiB、最多 256 次
 binary query，并允许最多丢弃 64 KiB 以证明边界。超出 resynchronization 上限或无法证明边界时，
 核心固定关闭 transport 并将 session 标记为 `poisoned`，不由 backend 自行选择 close/poison
@@ -910,7 +913,7 @@ class ScopeScreenshotDriver(InstrumentDriver, Protocol):
 `variants` MUST 非空，每个 request 只能出现一次；R1.3 首版只接受 `png` / `image/png`。
 两个 byte 上限 MUST 为正数，`resynchronization_max_bytes` MUST 为非 bool 非负整数；
 descriptor variant 的 response/operation/query/resynchronization 值不得超过
-`262144/262144/1/0`，connection 或更严格 profile 只能进一步收紧；
+`8388608/8388608/1/0`，connection 或更严格 profile 只能进一步收紧；
 首版 screenshot 只允许一次
 binary response，因此 `query_max_count == 1` 且
 `operation_max_bytes == response_max_bytes`。尺寸范围的上下界必须为正数且满足
@@ -2262,7 +2265,7 @@ fixture、版本门和实机验收后，才能在正式 descriptor 中声明新�
 2. **capability/descriptor**：`ScopeDescriptorExtensions` 字段、中央
    `CAPABILITY_METHODS` 映射和各 required Protocol 已实现；缺失 profile/method 时在零 I/O
    阶段拒绝，额外方法不产生隐式 capability。
-3. **numeric and deadline constants**：截图 `262144/262144/1/0`、trace
+3. **numeric and deadline constants**：截图 `8388608/8388608/1/0`、trace
    `8388608/67108864/256/65536`、operation timeout `5000/30000/60000 ms` 已作为核心常量
    实现；profile/connection 只能收紧，超出同步界限统一 close + `poisoned`。
 4. **error timing**：默认 `before_and_after`、recovery 固定 `disabled`、每次 I/O 受绝对

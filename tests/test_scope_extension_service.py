@@ -32,6 +32,10 @@ from wavebench.instruments.scope_extensions import (
     ScopeTraceTransferRestoreResult,
     ScopeTraceTransferStateSnapshot,
 )
+from wavebench.scope_extension_constants import (
+    SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+)
 from wavebench.services.scope_extension_service import (
     ExperimentalScopeExtensionService,
     ScopeExtensionService,
@@ -67,6 +71,7 @@ class _Backend:
         self.queries: list[str] = []
         self.writes: list[str] = []
         self.binary_queries = 0
+        self.binary_max_bytes: list[int] = []
 
     def record_event(self, direction: str, text: str) -> None:
         pass
@@ -106,6 +111,7 @@ class _Backend:
         _resynchronization_max_bytes: int = 0,
     ) -> BinaryQueryResult:
         self.binary_queries += 1
+        self.binary_max_bytes.append(max_bytes)
         data = _png() if "SCREEN" in command else b"\x01\x02"
         assert len(data) <= max_bytes
         if framing is BinaryResponseFraming.MESSAGE:
@@ -173,8 +179,8 @@ class _Driver:
                     ),
                     media_type="image/png",
                     framing=BinaryResponseFraming.DEFINITE_BLOCK,
-                    response_max_bytes=262_144,
-                    operation_max_bytes=262_144,
+                    response_max_bytes=SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
+                    operation_max_bytes=SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
                     resynchronization_max_bytes=0,
                     changed_fields=("scope.display_menu", "scope.display_color"),
                     restore_order=("scope.display_menu", "scope.display_color"),
@@ -255,7 +261,7 @@ class _Driver:
         binary = self.transport.query_binary(
             "SCREEN?",
             framing=BinaryResponseFraming.DEFINITE_BLOCK,
-            max_bytes=262_144,
+            max_bytes=SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
         )
         if self.fail_screenshot:
             raise DataError("screenshot parser failed")
@@ -511,6 +517,7 @@ def test_screenshot_success_restores_and_verifies_before_return() -> None:
     assert transport.session_state.health is SessionHealth.HEALTHY
     assert driver.restore_calls == 1
     assert backend.binary_queries == 1
+    assert backend.binary_max_bytes == [SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES]
     assert [phase["phase"] for phase in result.diagnostics["phases"]] == [
         "preflight",
         "main",

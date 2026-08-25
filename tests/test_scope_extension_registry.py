@@ -369,7 +369,7 @@ def test_scope_extension_operation_specs_freeze_timeout_and_binary_limits() -> N
         screenshot.binary_operation_max_bytes,
         screenshot.binary_query_max_count,
         screenshot.binary_resynchronization_max_bytes,
-    ) == (262_144, 262_144, 1, 0)
+    ) == (8_388_608, 8_388_608, 1, 0)
 
     trace = SCOPE_OPERATION_SPECS["scope.fetch_trace"]
     assert trace.operation_timeout_ms == 60_000
@@ -432,4 +432,5 @@ def test_embedded_screenshot_parent_specs_have_complete_static_field_closure() -
             spec.cleanup_verification_fields
         )
         assert "scope.screenshot_v2" in spec.optional_capabilities
-        assert spec.binary_response_max_bytes == 262_144
+        assert spec.binary_response_max_bytes == 8_388_608
+        assert spec.binary_operation_max_bytes == 8_388_608
