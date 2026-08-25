@@ -13,6 +13,9 @@ from wavebench.instruments.scope_extension_capabilities import (
     validate_scope_descriptor,
 )
 from wavebench.instruments.scope_extensions import (
+    SCOPE_AVERAGE_CAPTURE_FIELD_ORDER,
+    ScopeAverageCaptureBinaryProfile,
+    ScopeAverageCaptureProfileV2,
     ScopeDescriptorExtensions,
     ScopeScreenshotProfile,
     ScopeScreenshotRequest,
@@ -83,6 +86,29 @@ def _waveform_profile(*, operation_kind: str = "fetch") -> ScopeWaveformBinaryPr
                 verify_max_steps=len(fields),
             ),
         )
+    )
+
+
+def _average_capture_profile() -> ScopeAverageCaptureProfileV2:
+    return ScopeAverageCaptureProfileV2(
+        global_acquisition_type="average",
+        completion_contract_id="device-average-complete-v1",
+        channel_range=(1, 4),
+        supported_points=("def",),
+        average_count_min=2,
+        average_count_max=64,
+        requires_power_of_two=True,
+        binary=ScopeAverageCaptureBinaryProfile(
+            response_max_bytes=1_024,
+            operation_max_bytes=4_096,
+            query_max_count=4,
+            resynchronization_max_bytes=0,
+        ),
+        restore_order=SCOPE_AVERAGE_CAPTURE_FIELD_ORDER,
+        snapshot_max_steps=len(SCOPE_AVERAGE_CAPTURE_FIELD_ORDER),
+        main_max_steps=8,
+        restore_max_steps=len(SCOPE_AVERAGE_CAPTURE_FIELD_ORDER),
+        verify_max_steps=len(SCOPE_AVERAGE_CAPTURE_FIELD_ORDER),
     )
 
 
@@ -291,6 +317,25 @@ def test_waveform_binary_profile_requires_its_own_core_version_floor() -> None:
     )
 
     with pytest.raises(ConfigError, match="0.8.24"):
+        validate_scope_descriptor(descriptor)
+
+
+def test_average_capture_profile_requires_its_capability_and_static_dependencies() -> None:
+    descriptor = replace(
+        _descriptor(
+            capabilities=("scope.idn",),
+            extensions=False,
+            wavebench_min_version="0.8.24",
+        ),
+        scope_extensions=ScopeDescriptorExtensions(
+            average_capture_profile_v2=_average_capture_profile()
+        ),
+    )
+    with pytest.raises(ConfigError, match="scope.capture_average_v2"):
+        validate_scope_descriptor(descriptor)
+
+    descriptor = replace(descriptor, capabilities=("scope.capture_average_v2",))
+    with pytest.raises(ConfigError, match="scope.acquisition_control"):
         validate_scope_descriptor(descriptor)
 
 

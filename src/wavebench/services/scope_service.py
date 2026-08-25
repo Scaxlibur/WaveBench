@@ -67,6 +67,9 @@ from wavebench.instruments.scope_extensions import (
     ScopeAcquisitionStatusDriverV2,
     ScopeAcquisitionStatusProfileV2,
     ScopeAcquisitionStatusV2,
+    ScopeAverageCaptureProfileV2,
+    ScopeAverageCaptureRequestV2,
+    ScopeAverageCaptureResultV2,
     ScopeCursorReadoutProfileV2,
     ScopeFftStatusProfileV2,
     ScopeMeasurementStatisticsProfileV2,
@@ -85,6 +88,7 @@ from wavebench.services.scope_extension_service import (
     ScopeExtensionService,
 )
 from wavebench.services.scope_waveform_executor import BoundedWaveformExecutor
+from wavebench.services.scope_average_capture_executor import ScopeAverageCaptureExecutor
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import (
@@ -591,6 +595,39 @@ class ScopeService(SessionStateAliasMixin):
                     coupling_policy=descriptor.scope_coupling_policy,
                 )
             return cast(ScopeAverageCaptureDriver, scope).capture_average(request)
+
+    def capture_average_v2(
+        self,
+        request: ScopeAverageCaptureRequestV2,
+    ) -> ScopeAverageCaptureResultV2:
+        if not isinstance(request, ScopeAverageCaptureRequestV2):
+            raise ConfigError("scope average capture V2 request has an invalid type")
+        profile = self._average_capture_v2_profile()
+        if profile is None:
+            raise ConfigError(
+                "scope average capture V2 requires "
+                "scope_extensions.average_capture_profile_v2"
+            )
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"invalid scope average capture V2 request: {exc}") from exc
+        required = [
+            "scope.capture_average_v2",
+            "scope.idn",
+            "scope.acquisition_status_v2",
+            "scope.acquisition_run_state",
+            "scope.acquisition_control",
+            "scope.channel_input_state_v2",
+        ]
+        if self.config.scope.check_errors:
+            required.append("scope.error_drain_v1")
+        self._require("scope.capture_average_v2", *required)
+        with self._scope_session() as scope:
+            return self._average_capture_v2_executor(scope).execute(
+                request,
+                check_errors=self.config.scope.check_errors,
+            ).value
 
     def history_timestamps(self, channel: int) -> ScopeHistoryTimestamps:
         self._require("scope.history_timestamps", "scope.history_timestamps")
@@ -1230,6 +1267,17 @@ class ScopeService(SessionStateAliasMixin):
             )
         return profile
 
+    def _average_capture_v2_profile(self) -> ScopeAverageCaptureProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "average_capture_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeAverageCaptureProfileV2):
+            raise ConfigError("scope average capture V2 descriptor profile has an invalid type")
+        return profile
+
     def _measurement_statistics_v2_profile(
         self,
     ) -> ScopeMeasurementStatisticsProfileV2 | None:
@@ -1271,6 +1319,19 @@ class ScopeService(SessionStateAliasMixin):
                 "bounded waveform operations require a factory-owned descriptor and session"
             )
         return BoundedWaveformExecutor(
+            driver=scope,
+            descriptor=self.descriptor,
+            session_state=self.session_state,
+            connection_timeout_ms=self.config.connection.timeout_ms,
+            transport=self.transport if isinstance(self.transport, GuardedAuditedTransport) else None,
+        )
+
+    def _average_capture_v2_executor(self, scope: object) -> ScopeAverageCaptureExecutor:
+        if self.descriptor is None or self.session_state is None:
+            raise ConfigError(
+                "average capture V2 requires a factory-owned descriptor and session"
+            )
+        return ScopeAverageCaptureExecutor(
             driver=scope,
             descriptor=self.descriptor,
             session_state=self.session_state,
