@@ -178,8 +178,21 @@ def _bounded_transport(
     state: InstrumentSessionState,
 ) -> GuardedAuditedTransport:
     transport = GuardedAuditedTransport(backend, session_state=state)
-    transport._mark_bounded_waveform_backend_verified()
+    transport._mark_bounded_binary_backend_verified()
     return transport
+
+
+def test_waveform_backend_marker_compatibility_aliases_share_generic_state() -> None:
+    transport = GuardedAuditedTransport(
+        _Backend(),
+        session_state=InstrumentSessionState(epoch_id="marker-alias"),
+    )
+
+    assert not transport._has_verified_bounded_binary_backend()
+    assert not transport._has_verified_bounded_waveform_backend()
+    transport._mark_bounded_waveform_backend_verified()
+    assert transport._has_verified_bounded_binary_backend()
+    assert transport._has_verified_bounded_waveform_backend()
 
 
 class _Driver:

@@ -99,7 +99,7 @@ class BoundedWaveformExecutor:
         if (
             not isinstance(self.transport, GuardedAuditedTransport)
             or self.transport.session_state is not self.session_state
-            or not self.transport._has_verified_bounded_waveform_backend()
+            or not self.transport._has_verified_bounded_binary_backend()
         ):
             raise ConfigError(
                 "bounded waveform operations require a factory-validated bounded transport"

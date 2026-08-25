@@ -83,7 +83,7 @@ class GuardedAuditedTransport:
     session_state: InstrumentSessionState = field(default_factory=InstrumentSessionState)
     construction_latched: bool = False
     _closed: bool = field(default=False, init=False, repr=False)
-    _bounded_waveform_backend_verified: bool = field(default=False, init=False, repr=False)
+    _bounded_binary_backend_verified: bool = field(default=False, init=False, repr=False)
 
     def __setattr__(self, name: str, value: object) -> None:
         # A guard and its session state form one connection epoch.  Rebinding
@@ -425,21 +425,31 @@ class GuardedAuditedTransport:
                 raise RuntimeError("cannot release construction latch on an unavailable transport")
             self.construction_latched = False
 
-    def _mark_bounded_waveform_backend_verified(self) -> None:
-        """Record the factory's successful bounded-backend conformance check."""
+    def _mark_bounded_binary_backend_verified(self) -> None:
+        """Record the factory's successful bounded-binary backend conformance check."""
 
         with self.session_state.transaction_lock:
             if self._closed or self.session_state.health is not SessionHealth.HEALTHY:
                 raise RuntimeError("cannot verify bounded backend on an unavailable transport")
-            self._bounded_waveform_backend_verified = True
+            self._bounded_binary_backend_verified = True
 
-    def _has_verified_bounded_waveform_backend(self) -> bool:
+    def _has_verified_bounded_binary_backend(self) -> bool:
         with self.session_state.transaction_lock:
             return (
-                self._bounded_waveform_backend_verified
+                self._bounded_binary_backend_verified
                 and not self._closed
                 and self.session_state.health is SessionHealth.HEALTHY
             )
+
+    def _mark_bounded_waveform_backend_verified(self) -> None:
+        """Compatibility alias for the former waveform-specific internal marker."""
+
+        self._mark_bounded_binary_backend_verified()
+
+    def _has_verified_bounded_waveform_backend(self) -> bool:
+        """Compatibility alias for the former waveform-specific internal predicate."""
+
+        return self._has_verified_bounded_binary_backend()
 
     def _check_access(self, operation: str, *, write: bool = False) -> None:
         if write and self.access != "read_write":

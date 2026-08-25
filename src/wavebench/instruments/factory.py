@@ -152,11 +152,11 @@ def open_instrument_driver(
                     f"instrument driver {descriptor.driver_id!r} waveform binary profile "
                     "requires exactly one context transport"
                 )
-            _validate_waveform_binary_transport(
+            _validate_bounded_binary_transport(
                 descriptor=descriptor,
                 transport=opened_transports[0],
             )
-            opened_transports[0]._mark_bounded_waveform_backend_verified()
+            opened_transports[0]._mark_bounded_binary_backend_verified()
         if construction_latched:
             for transport in opened_transports:
                 transport._release_construction_latch()
@@ -311,7 +311,7 @@ def _close_factory_failure(
             pass
 
 
-def _validate_waveform_binary_transport(
+def _validate_bounded_binary_transport(
     *,
     descriptor: InstrumentDescriptor,
     transport: GuardedAuditedTransport,
@@ -331,6 +331,16 @@ def _validate_waveform_binary_transport(
                 raw_session = None
     if raw_session is None or not visa_binary_contract_supported(raw_session):
         raise ConfigError(
-            f"instrument driver {descriptor.driver_id!r} waveform binary profile requires "
+            f"instrument driver {descriptor.driver_id!r} bounded binary operation requires "
             "a bounded PyVISA or RsInstrument INSTR resource"
         )
+
+
+def _validate_waveform_binary_transport(
+    *,
+    descriptor: InstrumentDescriptor,
+    transport: GuardedAuditedTransport,
+) -> None:
+    """Compatibility wrapper for the former waveform-specific internal validator."""
+
+    _validate_bounded_binary_transport(descriptor=descriptor, transport=transport)

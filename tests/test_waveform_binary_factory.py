@@ -174,7 +174,7 @@ def test_opt_in_factory_latch_blocks_all_instrument_io_until_validation(monkeypa
     )
     monkeypatch.setattr("wavebench.instruments.factory._open_transport", lambda **kwargs: inner)
     monkeypatch.setattr(
-        "wavebench.instruments.factory._validate_waveform_binary_transport",
+        "wavebench.instruments.factory._validate_bounded_binary_transport",
         lambda **kwargs: None,
     )
 
@@ -185,6 +185,8 @@ def test_opt_in_factory_latch_blocks_all_instrument_io_until_validation(monkeypa
     assert all(error.attempts == 0 for error in errors)
     assert inner.queries == []
     assert inner.writes == []
+    assert opened.transport._has_verified_bounded_binary_backend()
+    assert opened.transport._has_verified_bounded_waveform_backend()
     assert opened.transport.query("*IDN?") == "ok"
     assert inner.queries == ["*IDN?"]
 
