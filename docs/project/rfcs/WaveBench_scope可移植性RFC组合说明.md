@@ -350,6 +350,36 @@ not-applicable path 明示，indexed 结果必须精确 echo request；不存在
 non-query I/O、missing-state fail-closed 与 legacy route；核心完整离线回归与外部 MSO8000 插件新 core source
 回归均通过。内建 descriptor 和插件仍未声明 cursor V2。
 
+## M6 完成记录
+
+RFC-0006b-0 已完成 operation-agnostic bounded binary 内核：factory 只对可信的 PyVISA／RsInstrument
+VISA `INSTR` backend 标记同一 factory-owned guarded transport；`ScopeBinaryLimits` 将 operation spec、
+descriptor profile 与 connection 限制逐项取最小值；一个 operation 只持有一个 context、deadline 和 ledger。
+标准 waveform 继续使用这一内部结论，旧私有 waveform 标记只是兼容别名。
+
+RFC-0006b R1 已完成 core-only 单通道 `global_acquisition + device_average_complete` 实现：独立的
+request/configuration/completion/result、profile、parent baseline 与 child acquisition baseline、Protocol、
+strict factory gate、OperationSpec、core-owned executor 和 `ScopeService.capture_average_v2()` 均已追加。
+main 固定为 type write/readback、count write/readback、stopped recheck、single completion、fresh device
+complete 和一次 bounded fetch；成功和已证明同步失败都执行 restore/fresh verify，失步后不追加 backend I/O。
+
+这条路径不调用 legacy `capture_average()`，不复用标准 waveform profile 或 executor，不新增 CLI、run-plan
+step、capture package/artifact schema，也不修改内建 descriptor 或外部插件 capability。多通道、arithmetic、
+callbacks、partial result 与 `documented_single_completion` 继续留在 R2 接受门。
+
+## M7 完成记录
+
+核心 M7 离线验收已完成：完整 pytest 为 `1787 passed, 1 skipped, 131 subtests passed`；wheel/sdist
+离线安装与项目元数据聚焦测试为 `3 passed`；Ruff 和 `git diff --check` 均通过。M0 的内建 legacy
+descriptor／Service 路由和新旧核心／插件矩阵继续在回归中保持 fail-closed。
+
+外部 MSO8000 插件只作为只读兼容对象验证：在本分支 `src/` 下运行既有离线测试为 `171 passed`，Ruff 和
+`wavebench plugin package check` 均通过，插件工作树保持干净。它没有声明 `scope.capture_average_v2` 或任何
+前置 V2 capability，因此这不是插件 conformance、版本门升级或硬件验收。
+
+M7 的完成只证明当前核心分支的本地代码、发行物布局和旧插件兼容性。正式核心发布、任一插件 opt-in 和真实
+仪器验证仍须在独立范围内进行。
+
 ## 后续 Draft 验证与接受门
 
 本轮已在单项 RFC 中冻结以下文档语义：RFC-0005 的 identity 新鲜来源、text query 计数、封闭
