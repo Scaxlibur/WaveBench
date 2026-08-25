@@ -1,11 +1,11 @@
 # RFC-0006：可移植的采集状态与平均采集 V2
 
-> 状态：`Implemented R1（未发布；0006a/0006b-0 内部前置）；Accepted R1（0006b 单通道）`
+> 状态：`Implemented R1（未发布；0006a/0006b-0/0006b 单通道）`
 > 核心基线：legacy acquisition/average API 与 R1.3 acquisition control
 > 范围：普通采集状态 V2、平均配置和平均采集事务
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
 > 本轮范围：0006a 已完成核心只读模型、profile、factory gate 与 Service；0006b-0 已完成内部
-> bounded transaction 内核；0006b R1 已接受单通道 public contract，核心 public 实现尚未开始，插件 opt-in 仍为 Draft
+> bounded transaction 内核；0006b R1 已完成单通道 core-only public implementation，插件 opt-in 仍为 Draft
 
 ## 摘要
 
@@ -630,7 +630,8 @@ average capture 使用自己的 `ScopeAverageCaptureBinaryProfile` 和
 `query_binary()`、四维 ledger、backend gate、no-replay 和 poison 合同；方法存在不产生标准
 fetch capability。插件可以复用私有 preamble/decoder 代码，但两个 profile 分别校验。
 
-R1 的上述 capability/profile/Protocol/OperationSpec 以本节进入 `Accepted` 后才可实现或在 descriptor 中声明。
+R1 的上述 capability/profile/Protocol/OperationSpec 已在核心开发线实现并通过离线回归；它们仍不授权
+内建 descriptor 或外部插件声明该 capability。
 
 `scope.channel_input_state_v2` 是 R1 的必需依赖，不回退 legacy coupling；
 `scope.error_drain_v1` 是有效 error policy 非 disabled 时的条件依赖。factory 必须将静态依赖、
@@ -788,16 +789,15 @@ recovery/verification 固定不读取错误队列；legacy `scope.errors` 不得
 
 ## 接受与实施顺序
 
-RFC-0006a/0006b-0 已完成核心离线实现但尚未发布。RFC-0006b R1 现接受单通道
-`global_acquisition + device_average_complete` 的 public contract，为后续独立的 model/profile/baseline/
-Protocol/OperationSpec/Service/factory gate 和单通道离线验收冻结边界；它不授权 CLI、run plan、artifact schema、
-内建 descriptor、外部插件 opt-in 或任何 R2 变体。本轮只完成这项文档接受，不开始公共实现。后续实施顺序为：
+RFC-0006a/0006b-0/0006b 已完成核心离线实现但尚未发布。RFC-0006b R1 已实现单通道
+`global_acquisition + device_average_complete` 的独立 model/profile/baseline/Protocol/OperationSpec/Service/
+factory gate 和离线验收；它不授权 CLI、run plan、artifact schema、内建 descriptor、外部插件 opt-in 或任何
+R2 变体。后续实施顺序为：
 
-1. 先实现本节 R1 单通道合同并完成离线 conformance；
-2. 只有 R1 单通道回归、发行兼容矩阵和独立设备证据完成后，才评审同次多通道；
-3. `channel_arithmetic`、`combined`、callbacks、partial result 和 `documented_single_completion` 必须各自
+1. 只有 R1 单通道回归、发行兼容矩阵和独立设备证据完成后，才评审同次多通道；
+2. `channel_arithmetic`、`combined`、callbacks、partial result 和 `documented_single_completion` 必须各自
    通过独立 Accepted 附录；
-4. 插件只在首个包含完整合同的正式核心发行版、离线 conformance 和对应实机证据均具备后单独 opt-in。
+3. 插件只在首个包含完整合同的正式核心发行版、离线 conformance 和对应实机证据均具备后单独 opt-in。
 
 具体设备在 average mode 下缺少平均完成证据时，可以采用 status V2 并将
 `average.complete=None` 记录为 unavailable，但不能声明 average capture V2。
