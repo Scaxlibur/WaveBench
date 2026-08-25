@@ -101,6 +101,19 @@ def _completion() -> ScopeAcquisitionCompletion:
     )
 
 
+def _terminal_stop_completion() -> ScopeAcquisitionCompletion:
+    stopped = _stopped_state()
+    return ScopeAcquisitionCompletion(
+        state=stopped,
+        original_state=stopped,
+        proof_baseline_state=stopped,
+        proof_baseline_stage="original_atomic_arm",
+        proof="single_mode_readback_then_stopped",
+        observed_states=(stopped,),
+        post_arm_trigger_mode="single",
+    )
+
+
 def _snapshot(
     *,
     configuration: ScopeAverageConfigurationV2 | None = None,
@@ -358,6 +371,9 @@ def test_average_capture_v2_result_requires_full_restore_and_fresh_verification(
         session_epoch=baseline.session_epoch,
         acquisition_baseline_nonce_digest="0123456789abcdef",
     )
+
+    with pytest.raises(ValueError, match="terminal STOP"):
+        replace(completion, acquisition_completion=_terminal_stop_completion())
     restore = ScopeAverageCaptureRestoreResult(
         "completed",
         baseline.restore_order,
@@ -460,6 +476,7 @@ class _Driver:
         self.complete = True
         self.fail_after_binary = False
         self.skip_binary = False
+        self.acquisition_completion: ScopeAcquisitionCompletion | None = None
         self.restore_calls = 0
         self.verify_calls = 0
         self.drain_calls = 0
@@ -541,7 +558,7 @@ class _Driver:
     def acquire_average_single_v2(self, *, baseline, deadline: float) -> ScopeAcquisitionCompletion:
         self.events.append("single")
         self.transport.write("SINGLE")
-        return _completion()
+        return self.acquisition_completion or _completion()
 
     def get_device_average_complete_v2(self, *, baseline) -> bool:
         self.events.append("complete")
@@ -590,20 +607,29 @@ class _Driver:
         raise AssertionError("average capture V2 must not use legacy capture_average")
 
 
-def _acquisition_profile() -> ScopeAcquisitionControlProfile:
+def _acquisition_profile(
+    *,
+    single_arm_semantics: str = "configure_then_arm",
+    single_mode_readback_allows_terminal_stop: bool = False,
+) -> ScopeAcquisitionControlProfile:
     return ScopeAcquisitionControlProfile(
         supported_continuous_modes=("normal",),
-        single_arm_semantics="configure_then_arm",
+        single_arm_semantics=single_arm_semantics,  # type: ignore[arg-type]
         arm_resets_acquisition_count=False,
         failure_restore_order=("scope.trigger", "scope.acquisition"),
         snapshot_max_steps=3,
         restore_max_steps=3,
         verify_max_steps=3,
         identity_semantics="unique_within_session_epoch",
+        single_mode_readback_allows_terminal_stop=single_mode_readback_allows_terminal_stop,
     )
 
 
-def _descriptor(*, error_drain: bool = True) -> InstrumentDescriptor:
+def _descriptor(
+    *,
+    error_drain: bool = True,
+    acquisition_profile: ScopeAcquisitionControlProfile | None = None,
+) -> InstrumentDescriptor:
     capabilities = (
         "scope.idn",
         "scope.capture_average_v2",
@@ -627,7 +653,7 @@ def _descriptor(*, error_drain: bool = True) -> InstrumentDescriptor:
         factory=lambda _context: object(),
         wavebench_min_version="0.8.24",
         scope_extensions=ScopeDescriptorExtensions(
-            acquisition_control_profile=_acquisition_profile(),
+            acquisition_control_profile=acquisition_profile or _acquisition_profile(),
             acquisition_status_profile_v2=ScopeAcquisitionStatusProfileV2(
                 readable_fields=("acquisition_type",),
                 max_queries=1,
@@ -640,11 +666,13 @@ def _descriptor(*, error_drain: bool = True) -> InstrumentDescriptor:
 def _executor(
     backend: _Backend,
     driver: _Driver,
+    *,
+    descriptor: InstrumentDescriptor | None = None,
 ) -> ScopeAverageCaptureExecutor:
     transport = driver.transport
     return ScopeAverageCaptureExecutor(
         driver=driver,
-        descriptor=_descriptor(),
+        descriptor=descriptor or _descriptor(),
         session_state=transport.session_state,
         connection_timeout_ms=10_000,
         transport=transport,
@@ -712,6 +740,26 @@ def test_average_capture_v2_completion_failure_restores_without_binary_fetch() -
     assert driver.verify_calls == 1
     assert "fetch" not in driver.events
     assert driver.drain_calls == 0
+
+
+def test_average_capture_v2_rejects_terminal_stop_proof_before_complete_or_fetch() -> None:
+    backend = _Backend()
+    driver = _Driver(_bounded_transport(backend))
+    driver.acquisition_completion = _terminal_stop_completion()
+    descriptor = _descriptor(
+        acquisition_profile=_acquisition_profile(
+            single_arm_semantics="atomic_configure_and_arm",
+            single_mode_readback_allows_terminal_stop=True,
+        )
+    )
+
+    with pytest.raises(DataError, match="does not accept a terminal STOP"):
+        _executor(backend, driver, descriptor=descriptor).execute(_request(), check_errors=False)
+
+    assert driver.restore_calls == 1
+    assert driver.verify_calls == 1
+    assert "complete" not in driver.events
+    assert "fetch" not in driver.events
 
 
 def test_average_capture_v2_data_failure_after_proven_boundary_restores() -> None:

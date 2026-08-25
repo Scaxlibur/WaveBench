@@ -701,11 +701,14 @@ readback 和已验证的 SINGLE completion 后，以新鲜 query 返回真正的
 `completion_contract_id` 标识 descriptor 声明的完成位合同，不代替厂商文档、fixture 或实机验收；没有完成位、
 不能读到 true 或无法关联到 profile contract 时不得声明 R1 capability。`documented_single_completion`
 必须通过后续 R2 接受门，冻结厂商文档适用范围、fixture/实机证据和 core verifier 后才能加入。
+RFC-0009 的 `single_mode_readback_then_stopped` 是 control-only proof，不能作为 R1 average capture
+的 child acquisition completion；即使同时读到设备完成位，average executor 也必须在 binary fetch 前拒绝。
 
 `ScopeAverageCompletionProofV2` 还必须满足：
 
 - configuration readback 与 request 的 mechanism/count 精确一致；
 - acquisition completion 绑定本 operation 派生的子 baseline，并证明一次新采集；
+- acquisition completion 不得使用 RFC-0009 的 `single_mode_readback_then_stopped`；
 - `device_average_complete` 分支要求 fresh `device_average_complete is True`；
 - contract ID 与 profile 的 completion contract ID 精确一致；
 - context、session epoch 和 child-baseline nonce digest 与 parent baseline 精确一致；

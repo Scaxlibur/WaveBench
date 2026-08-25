@@ -1,4 +1,4 @@
-# WaveBench scope 可移植性 RFC-0001～RFC-0008 组合说明
+# WaveBench scope 可移植性 RFC-0001～RFC-0009 组合说明
 
 > 状态：`Accepted R1`
 > 核心基线：WaveBench `0.8.24` 开发线
@@ -8,15 +8,18 @@
 
 ## 摘要
 
-本系列把外部插件提出的 RFC-0001～RFC-0008 转换为 WaveBench 核心侧的厂商无关裁决。
+本系列把外部插件提出的 RFC-0001～RFC-0009 转换为 WaveBench 核心侧的厂商无关裁决。
 插件 RFC 是问题和设备证据的来源，不是核心公共接口的事实源。核心只有在对应文档进入
 `Accepted`、实现通过离线验收并随正式版本发布后，外部插件才可以依赖新增合同。
 
-八份提案不能按原始草案逐项照搬。RFC-0001、RFC-0003 和 RFC-0008 的早期 transport
+前八份提案不能按原始草案逐项照搬。RFC-0001、RFC-0003 和 RFC-0008 的早期 transport
 入口已经被更严格的核心合同取代；RFC-0002、RFC-0004、RFC-0005、RFC-0006a 和
 RFC-0007 的追加式 V2 模型已在开发线完成离线实现但尚未发布。RFC-0006b 的单通道
 `global_acquisition`／设备完成位合同也已完成核心离线实现；插件采用、版本门和硬件验收仍待独立推进。
 被取代不表示问题不存在，而是表示不能再实现已否决的平行 API。
+
+RFC-0009 是 R1.3 acquisition control 的窄补充：仅当 descriptor 明确声明 SINGLE 模式读回
+可以约束首条终态 STOP 时，才追加完成证明分支。它不改变 average/capture 的完成和新鲜性要求。
 
 M0 冻结本组合说明和 legacy 黄金基线。文档接受本身不授权插件 capability 声明或真实仪器
 操作；`Implemented R1（未发布）` 只记录已经提交并完成离线验证的核心代码。仍为 `Draft`
@@ -47,6 +50,7 @@ RFC-0006b 已按该顺序完成核心本地实现；它仍不授权插件 opt-in
 | [RFC-0006](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | 复用 R1.3 acquisition control，另增 status V2 和 average capture V2 | `Implemented R1（未发布；0006a/0006b-0/0006b 单通道）` | M4 已完成 status V2；M6 已完成通用 bounded transaction、单通道 profile、factory gate、executor 与 Service；插件仍未 opt-in |
 | [RFC-0007](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | 拆成统计 selector、FFT status 和 cursor quantity 三项 V2 | `Implemented R1（未发布；0007a/0007b/0007c）` | M5a/M5b/M5c 已完成 statistics/FFT/cursor 的 profile、零 I/O gate 与 Service；不改旧 CLI/artifact |
 | [RFC-0008](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | 使用 descriptor profile、`query_binary()` 和核心恢复编排 | `Implemented R1（未发布）` | P0～P3 已完成；插件 opt-in 与实机验收不在本分支 |
+| [RFC-0009](WaveBench_scope可移植性RFC-0009_SINGLE模式终态STOP证明.md) | 在 R1.3 SINGLE control 中追加受 profile 约束的 mode-readback terminal STOP proof | `Implemented R1（未发布）` | 只改 completion verifier；不新增 capability、CLI 或插件 opt-in |
 
 ## 本轮文档冻结
 
@@ -65,6 +69,9 @@ conformance 分支。RFC-0006b-0 已完成 core-only bounded transaction 内核�
 documented-SINGLE 仍是候选，在各自进入 `Accepted` 前不得创建 capability、Protocol、Service、CLI、
 descriptor profile 或插件 conformance 分支。RFC-0001、RFC-0003 的原始
 入口已经被取代，不重新实施。
+
+RFC-0009 已完成 core-only 的 profile/completion 追加字段、验证器和离线回归。其默认 profile
+继续拒绝首条 `STOP`；插件 descriptor、driver、版本门和实机验收不在本次范围内。
 
 ## 共同术语
 
@@ -191,6 +198,9 @@ transport R1 + scope R1.3
   ├─ RFC-0003：截图 framing/profile 裁决
   └─ RFC-0008：标准 waveform bounded binary
 
+scope R1.3 acquisition control
+  └─ RFC-0009：SINGLE mode-readback terminal STOP proof
+
 共同 unknown/unavailable 语义
   ├─ RFC-0002：输入状态 V2
   ├─ RFC-0004：数字状态 V2
@@ -202,7 +212,7 @@ RFC-0002 + RFC-0006a + RFC-0008
   └─ RFC-0006b：average capture V2
 ~~~
 
-推荐里程碑如下。M0～M6 是已完成的历史记录；M7 继续承担发行产物与跨版本离线验收，
+推荐里程碑如下。M0～M7 是已完成的历史记录；M8 记录 RFC-0009 的核心追加实现，
 不等同于正式发布或插件硬件验收：
 
 1. M0：冻结本组合说明和 legacy 黄金基线；
@@ -216,6 +226,7 @@ RFC-0002 + RFC-0006a + RFC-0008
 7. M6：已完成 RFC-0006b-0 可复用 bounded transaction 基础，以及单通道
    `global_acquisition` 平均采集的独立 profile、factory gate、executor 与 Service；
 8. M7：在每项已接受且已实现后，完成跨版本、发行产物和完整离线验收。
+9. M8：实现 RFC-0009 的 profile-gated SINGLE terminal STOP proof，并保持插件采用和实机验收独立。
 
 每个里程碑应拆成可独立回滚的小提交，不把模型、factory、Service、CLI 和插件采用压入同一个
 提交。
@@ -223,7 +234,7 @@ RFC-0002 + RFC-0006a + RFC-0008
 ## M0 冻结记录
 
 本组合说明以 `Accepted R1` 冻结以下共同边界：编号映射、替代关系、unknown/unavailable
-语义、legacy 不变量、construction barrier、四种核心／插件组合和 M1～M7 顺序。
+语义、legacy 不变量、construction barrier、四种核心／插件组合和 M1～M8 顺序。
 
 离线黄金基线位于 `tests/test_scope_portability_m0.py`，覆盖：
 
@@ -379,6 +390,18 @@ descriptor／Service 路由和新旧核心／插件矩阵继续在回归中保�
 
 M7 的完成只证明当前核心分支的本地代码、发行物布局和旧插件兼容性。正式核心发布、任一插件 opt-in 和真实
 仪器验证仍须在独立范围内进行。
+
+## M8 完成记录
+
+RFC-0009 已在核心追加 `single_mode_readback_allows_terminal_stop` 和
+`post_arm_trigger_mode`，并把 `single_mode_readback_then_stopped` 加入 completion verifier。
+该分支要求显式 profile opt-in、SINGLE 模式 readback、唯一终态 `stopped/single` 观察和空的
+count/identity evidence；其他 proof 不变。average capture V2 在读取完成位和 binary fetch 前显式
+拒绝该 control-only proof。
+
+核心没有新增 capability、Service 入口、CLI、run-plan 或插件声明。离线测试覆盖合法 proof、默认
+拒绝、非法 readback/observed state/count evidence 和 Service 成功路径。具体设备仍须在插件仓库完成
+命令顺序 conformance、版本门和实机恢复验收后，才能设 profile flag 或声明 control capability。
 
 ## 后续 Draft 验证与接受门
 

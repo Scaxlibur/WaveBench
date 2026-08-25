@@ -1053,6 +1053,7 @@ class ScopeAcquisitionControlProfile:
     verify_max_steps: int
     identity_semantics: ScopeAcquisitionIdentitySemantics
     atomic_arm_preserves_count_mode_semantics: bool = False
+    single_mode_readback_allows_terminal_stop: bool = False
 
 @dataclass(frozen=True)
 class ScopeAcquisitionControlSnapshot:
@@ -1090,6 +1091,7 @@ ScopeCompletionProof = Literal[
     "count_delta_with_epoch",
     "identity_delta",
     "state_transition",
+    "single_mode_readback_then_stopped",
 ]
 
 @dataclass(frozen=True)
@@ -1113,6 +1115,7 @@ class ScopeAcquisitionCompletion:
     baseline_identity: str | None = None
     completed_identity: str | None = None
     observed_states: tuple[ScopeAcquisitionRunState, ...] = ()
+    post_arm_trigger_mode: ScopeTriggerMode | None = None
 ```
 
 `ScopeAcquisitionControlProfile` 是 descriptor 静态事实，不是 driver 在 operation 中自报的
@@ -1124,7 +1127,7 @@ driver 返回值扩大 descriptor profile。
 profile 不变量为：
 
 - `supported_continuous_modes` 非空、唯一，且只包含 `auto/normal/roll`；
-- 两个 bool 字段必须是真正的 `bool`；
+- 三个 bool 字段必须是真正的 `bool`；
 - `failure_restore_order` 必须恰好各包含一次 `scope.trigger` 和 `scope.acquisition`；
   顺序是核心恢复授权与 driver 实现的唯一事实源；
 - 三个 `*_max_steps` 必须是 `1..64` 的非 bool 整数；snapshot/verify 各至少覆盖 run state、
@@ -1135,10 +1138,12 @@ profile 不变量为：
 - `single_arm_semantics="atomic_configure_and_arm"` 时，只有
   `atomic_arm_preserves_count_mode_semantics=true` 且 `arm_resets_acquisition_count=false` 时，
   operation verifier 才可以在原始状态确为 `trigger_mode="single"` 时把 count 作为辅助证据；
-- `arm_resets_acquisition_count=true` 时任何 arm 路径都不得使用 `count_delta_with_epoch`；只能使用
-  identity 或状态迁移证据。
-- `identity_semantics="unique_within_session_epoch"` 才允许 `identity_delta`；
-  `unknown` 时核心不得接受 identity proof，只能使用满足本节要求的 state transition。
+- `arm_resets_acquisition_count=true` 时任何 arm 路径都不得使用 `count_delta_with_epoch`；
+  `identity_delta`、`state_transition` 和满足 RFC-0009 的 terminal STOP proof 仍各自按其条件校验。
+- `identity_semantics="unique_within_session_epoch"` 只约束 `identity_delta`；`unknown` 时核心不得接受
+  identity proof，但不改变 `state_transition` 或满足 RFC-0009 的 terminal STOP proof 的独立条件。
+- `single_mode_readback_allows_terminal_stop=true` 只授权 RFC-0009 定义的终态 STOP proof；
+  它不替代 SINGLE arm、count、identity 或失败恢复语义。
 
 核心构造 `ScopeAcquisitionControlBaseline` 时必须把固定的
 `("scope.run_state", *profile.failure_restore_order)` 写入 `restore_order`；baseline 中的顺序
@@ -1177,6 +1182,11 @@ driver 若在 restore/verify 中抛出 transport 或协议异常，核心必须�
 `state_transition` 要求保留本节的最小观察序列，且不依赖 count；若该分支同时携带 count，
 仍必须提供未变化的 `counter_epoch`，否则核心必须忽略 count 并按纯状态迁移验证。任一终态或证据不完整只能抛出
 `completion_unproven`，不得返回一个携带「不可用」proof 的成功对象。
+`single_mode_readback_then_stopped` 只在 profile 明确 opt-in、SINGLE 写入后的 mode readback
+为 `single`、最终 state 为 `stopped/single`、`observed_states` 恰为最终 state，且四个
+count/identity proof 字段均为空时成立。该分支的顺序与插件采用门由
+[RFC-0009](WaveBench_scope可移植性RFC-0009_SINGLE模式终态STOP证明.md)冻结；普通 state query
+不能自行构造它。
 `identity_delta` 也不能仅凭两个 token 不同就成立；核心只在已验证 descriptor profile 的
 `identity_semantics="unique_within_session_epoch"` 时接受该 proof。`unknown` 或 profile
 缺失时，即使 fixture 观察到 token 不同，也只能使用完整 `state_transition`，或拒绝完成证明。
@@ -1197,7 +1207,7 @@ forced trigger 是瞬时 action/event，不是可 query-back 的持久 `ScopeTri
 | `scope.acquisition_start`（driver: `start_continuous`） | `stopped`、`ready`、`complete` | 写入后回读 `ready`/`arming`/`waiting`/`acquiring`/`rolling` | 写后回读失败，保留 session health 和 cleanup 结果 |
 | `scope.acquisition_single`（driver: `acquire_single`） | `stopped`、`ready`、`complete` | 记录基线，观察新采集状态，再到 `complete/stopped` 且有 proof | 只观察到 arm 不算成功；超时进入失败 cleanup |
 | trigger accepted | `arming`、`waiting`、`ready` | `acquiring` 或 `complete` | 外部变化时回读为 `unknown` |
-| acquisition complete | 已观察到 `arming`、`waiting`、`ready` 或 `acquiring` 中至少一个新采集状态 | `complete` 或 `stopped` 且有 completion proof | 轮询可以跳过瞬时 `acquiring`；只有原本已 `stopped` 不足以证明新采集完成 |
+| acquisition complete | 已观察到 `arming`、`waiting`、`ready` 或 `acquiring` 中至少一个新采集状态；或满足 RFC-0009 的 profile-gated SINGLE mode-readback 条件 | `complete` 或 `stopped` 且有 completion proof | 轮询可以跳过瞬时 `acquiring`；只有原本已 `stopped` 不足以证明新采集完成 |
 | normal `scope.acquisition_stop`（driver: `stop_acquisition`） | `stopped`、`ready`、`arming`、`waiting`、`acquiring`、`rolling`、`stopping` 或 `complete` | 回读 `stopped` | 幂等；回读失败时保留 `uncertain`/`poisoned` |
 | recovery STOP | 核心已签发有界 recovery authorization 的 `healthy/uncertain` session；phase 可为 `unknown/error` | 只写 STOP 并回读 `stopped` | 不得向 `poisoned` session 发送；结果只记入 cleanup，不伪装成 normal success |
 | 外部/设备错误 | 任意 | `error` 或 `unknown` | 必须重新查询确认，不能继续普通 I/O |
@@ -1314,11 +1324,12 @@ original 已为 `trigger_mode="single"`，且 `ScopeAcquisitionControlProfile` �
 `single_arm_semantics="atomic_configure_and_arm"`、
 `atomic_arm_preserves_count_mode_semantics=true` 和 `arm_resets_acquisition_count=false` 时，
 才能把 count 作为辅助证据；最终 proof 仍必须同时满足未变化的 `counter_epoch` 和有效
-`state_transition`。否则必须改用 identity delta 或完整的 state transition。
+`state_transition`。否则必须改用 identity delta、完整的 state transition，或满足 RFC-0009 的
+profile-gated mode-readback terminal STOP proof。
 
 真正 arm 后，Service/driver 在同一 deadline 内等待新 acquisition 完成。只有看到有效
-identity 变化，或看到 R1.3 暂定的最小状态序列后，才能成功返回 completion
-proof；调用前本来就是 `stopped` 不能单独作为完成条件。没有 completion proof 时
+identity 变化、R1.3 暂定的最小状态序列，或满足 RFC-0009 的 profile-gated mode-readback terminal
+STOP 条件后，才能成功返回 completion proof；调用前本来就是 `stopped` 不能单独作为完成条件。没有 completion proof 时
 返回 `completion_unproven`，不得返回成功 waveform。
 
 R1.3 暂定的最小 `state_transition` proof 为：SINGLE 写入并 query-back 后至少观察一次
@@ -1326,7 +1337,9 @@ R1.3 暂定的最小 `state_transition` proof 为：SINGLE 写入并 query-back 
 `trigger_mode="single"`，且 `(phase, trigger_mode)` 不得与 `proof_baseline_state` 相同。随后必须观察
 `complete` 或 `stopped`。如果仪器把
 写后第一个查询直接返回 `stopped`，且 count/identity 均不变或不可用，则 completion
-unproven。后续若跨厂商 fixture 证明该序列仍不通用，应保持 `[OPEN]`，不得由单个插件放宽。
+unproven，除非满足 [RFC-0009](WaveBench_scope可移植性RFC-0009_SINGLE模式终态STOP证明.md)
+规定的 profile-gated mode-readback proof。后续若跨厂商 fixture 证明该序列仍不通用，应保持
+`[OPEN]`，不得由单个插件放宽。
 
 arm-only API 不属于 R1.3；未来如确有非阻塞需要，应新增 `scope.acquisition_arm_single`，其
 effect 为 `write`、成功输出只证明已 arm，不能复用 `scope.acquisition_single` 的成功合同。
@@ -2265,7 +2278,8 @@ fixture、版本门和实机验收后，才能在正式 descriptor 中声明新�
   nonce 按 `fresh -> passed_to_main -> restore_attempted -> consumed` 一次性消费，重放在 I/O
   前拒绝，artifact 只留摘要。
 - **identity proof**：`ScopeAcquisitionControlProfile.identity_semantics` 必须为
-  `unique_within_session_epoch` 才能使用 `identity_delta`；否则只能使用完整 state transition。
+  `unique_within_session_epoch` 才能使用 `identity_delta`；该条件只约束 identity proof。
+  `state_transition` 和 RFC-0009 的 profile-gated terminal STOP proof 仍按各自条件校验。
 - **phase API bridge**：核心通过 `ScopeOperationContextCoordinator.authorize_phase()` 包裹
   当前 normal gate 与 `SessionTransactionCoordinator.authorize()`，并用 sidecar/扩展记录绑定
   context、phase、fields、allowed I/O、deadline 和 max steps；driver 不接收 session token。

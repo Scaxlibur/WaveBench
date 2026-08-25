@@ -12,8 +12,8 @@ RFC 使用以下状态：
 
 ## Scope 可移植性编号系列
 
-[scope 可移植性 RFC-0001～RFC-0008 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-记录八份提案的规范优先级、共同 unknown/unavailable 语义、追加式兼容合同、版本组合和
+[scope 可移植性 RFC-0001～RFC-0009 组合说明](WaveBench_scope可移植性RFC组合说明.md)
+记录九份提案的规范优先级、共同 unknown/unavailable 语义、追加式兼容合同、版本组合和
 实施顺序。编号与外部插件提出的问题一一对应，但核心裁决不照搬已被否决的早期 API。
 
 | RFC | 状态 | 核心裁决 |
@@ -26,6 +26,7 @@ RFC 使用以下状态：
 | [RFC-0006：采集状态与平均采集 V2](WaveBench_scope可移植性RFC-0006_采集状态与平均采集.md) | `Implemented R1（未发布；0006a/0006b-0/0006b 单通道）` | M4 已完成 status V2；M6 已完成通用 bounded transaction 与单通道 `global_acquisition`／设备完成位 executor；插件仍未 opt-in |
 | [RFC-0007：统计、FFT 与光标读取 V2](WaveBench_scope可移植性RFC-0007_统计FFT与光标读取.md) | `Implemented R1（未发布；0007a/0007b/0007c）` | M5a/M5b/M5c 已完成 statistics/FFT/cursor 的 profile、零 I/O gate 与 Service；不改旧 CLI/artifact |
 | [RFC-0008：有界波形传输裁决](WaveBench_scope可移植性RFC-0008_有界波形传输裁决.md) | `Implemented R1（未发布）` | 采用 descriptor profile、`query_binary()`、四维预算和核心恢复编排 |
+| [RFC-0009：SINGLE 模式终态 STOP 完成证明](WaveBench_scope可移植性RFC-0009_SINGLE模式终态STOP证明.md) | `Implemented R1（未发布）` | 只在 profile 显式 opt-in 时接受 SINGLE mode-readback 后的首条 STOP；不开放 capture/average |
 
 本系列中的 `Draft` 不表示接口已经存在，也不授权开始代码、插件 capability 或硬件工作。`Superseded`
 表示原提案入口已由更严格合同取代，不表示原始安全问题可以忽略。
@@ -36,7 +37,7 @@ RFC 使用以下状态：
   `Accepted R6`，核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2；
   M6-A、M6-B 与 M6-C 已完成核心离线合同；真实插件 opt-in、实机验收与发布门仍按里程碑逐阶段实施。
 - [transport 重放与 session 健康 RFC](WaveBench_transport重放与session健康RFC.md)：定义查询重放、结构化传输错误、共享 session 健康状态、恢复授权和版本迁移。
-- [scope 通用扩展接口 RFC](WaveBench_scope通用扩展接口RFC.md)：`Accepted R1.3`，定义 operation context、binary budget、截图、采集控制、trace、错误策略及恢复验证合同。公共合同已进入核心 `0.8.23` 开发线；插件按 capability 单独 opt-in。
+- [scope 通用扩展接口 RFC](WaveBench_scope通用扩展接口RFC.md)：`Accepted R1.3`，定义 operation context、binary budget、截图、采集控制、trace、错误策略及恢复验证合同；RFC-0009 追加 SINGLE mode-readback terminal STOP proof。公共合同已进入核心 `0.8.23` 开发线；插件按 capability 单独 opt-in。
 - [scope 通用扩展接口 RFC：R1.3 Acceptance Addendum A1](WaveBench_scope通用扩展接口RFC-R1.3-acceptance-addendum.md)：记录公共 capability 注册采用的 P0/P1 验收门和离线完成证据。
 - [scope 通用扩展接口 RFC：核心实施说明](WaveBench_scope通用扩展接口RFC_核心实施说明.md)：记录 backend、公共 Service/CLI、artifact、版本门、旧 capture 分流和插件迁移边界。
 - [标准波形有界二进制传输 RFC](WaveBench_标准波形有界二进制传输RFC.md)：`Implemented R1（未发布）`，标准 `scope.fetch_waveform` 和 `scope.capture*` 可在 descriptor 显式 opt-in 时复用 R1.3 bounded binary context；外部插件 conformance 与实机验收仍单独进行。

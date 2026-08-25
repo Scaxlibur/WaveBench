@@ -147,12 +147,19 @@ TRACE_FIELDS = (
 
 
 class _Driver:
-    def __init__(self, transport: GuardedAuditedTransport) -> None:
+    def __init__(
+        self,
+        transport: GuardedAuditedTransport,
+        *,
+        terminal_stop_completion: bool = False,
+    ) -> None:
         self.transport = transport
         self.fail_screenshot = False
         self.trace_verify_mismatch = False
         self.fail_single_completion = False
         self.fail_stop_once = False
+        self.terminal_stop_completion = terminal_stop_completion
+        self.terminal_stop_mode = "single"
         self.restore_calls = 0
         self.error_records: tuple[DriverErrorRecord, ...] = ()
         self.error_queries = 0
@@ -181,13 +188,18 @@ class _Driver:
         )
         self.acquisition_profile = ScopeAcquisitionControlProfile(
             supported_continuous_modes=("auto", "normal"),
-            single_arm_semantics="configure_then_arm",
+            single_arm_semantics=(
+                "atomic_configure_and_arm"
+                if terminal_stop_completion
+                else "configure_then_arm"
+            ),
             arm_resets_acquisition_count=False,
             failure_restore_order=("scope.trigger", "scope.acquisition"),
             snapshot_max_steps=3,
             restore_max_steps=3,
             verify_max_steps=3,
             identity_semantics="unique_within_session_epoch",
+            single_mode_readback_allows_terminal_stop=terminal_stop_completion,
         )
         self.trace_profile = ScopeTraceProfile(
             fetchable_kinds=("analog",),
@@ -304,6 +316,19 @@ class _Driver:
 
     def acquire_single(self, *, baseline, deadline):
         self.transport.write("TRIGGER SINGLE")
+        if self.terminal_stop_completion:
+            self.transport.query("TRIGGER SWEEP?")
+            self.transport.query("RUN STATE?")
+            completed = ScopeAcquisitionRunState("stopped", "single", "STOP")
+            return ScopeAcquisitionCompletion(
+                state=completed,
+                original_state=baseline.snapshot.run_state,
+                proof_baseline_state=baseline.snapshot.run_state,
+                proof_baseline_stage="original_atomic_arm",
+                proof="single_mode_readback_then_stopped",
+                observed_states=(completed,),
+                post_arm_trigger_mode=self.terminal_stop_mode,
+            )
         self.transport.query("READY?")
         proof_baseline = ScopeAcquisitionRunState(
             "ready",
@@ -427,10 +452,14 @@ class _Driver:
         )
 
 
-def _service(*, error_capability: bool = False):
+def _service(
+    *,
+    error_capability: bool = False,
+    terminal_stop_completion: bool = False,
+):
     backend = _Backend()
     transport = GuardedAuditedTransport(backend)
-    driver = _Driver(transport)
+    driver = _Driver(transport, terminal_stop_completion=terminal_stop_completion)
     capabilities = [
         "scope.idn",
         "scope.screenshot_profile",
@@ -559,6 +588,30 @@ def test_acquisition_success_keeps_postcondition_and_failure_restores_baseline()
     driver.fail_single_completion = True
     with pytest.raises(ValueError, match="identity proof") as raised:
         service.acquire_single()
+    assert driver.restore_calls == 1
+    assert transport.session_state.health is SessionHealth.HEALTHY
+    assert raised.value.scope_operation_diagnostics["cleanup"]["verification"]["status"] == "verified"
+
+
+def test_acquisition_service_accepts_profile_gated_terminal_stop_proof() -> None:
+    service, driver, transport, _ = _service(terminal_stop_completion=True)
+
+    result = service.acquire_single()
+
+    assert result.value.proof == "single_mode_readback_then_stopped"
+    assert result.value.post_arm_trigger_mode == "single"
+    assert result.value.observed_states == (result.value.state,)
+    assert driver.restore_calls == 0
+    assert transport.session_state.health is SessionHealth.HEALTHY
+
+
+def test_acquisition_service_restores_after_invalid_terminal_stop_proof() -> None:
+    service, driver, transport, _ = _service(terminal_stop_completion=True)
+    driver.terminal_stop_mode = "normal"
+
+    with pytest.raises(ValueError, match="mode readback") as raised:
+        service.acquire_single()
+
     assert driver.restore_calls == 1
     assert transport.session_state.health is SessionHealth.HEALTHY
     assert raised.value.scope_operation_diagnostics["cleanup"]["verification"]["status"] == "verified"

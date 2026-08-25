@@ -469,7 +469,12 @@ ScopeAcquisitionRestoreField = Literal[
     "scope.trigger",
     "scope.acquisition",
 ]
-ScopeCompletionProof = Literal["count_delta_with_epoch", "identity_delta", "state_transition"]
+ScopeCompletionProof = Literal[
+    "count_delta_with_epoch",
+    "identity_delta",
+    "state_transition",
+    "single_mode_readback_then_stopped",
+]
 ScopeAcquisitionStatusFieldV2 = Literal[
     "acquisition_type",
     "run_state",
@@ -541,6 +546,7 @@ class ScopeAcquisitionControlProfile:
     verify_max_steps: int
     identity_semantics: ScopeAcquisitionIdentitySemantics
     atomic_arm_preserves_count_mode_semantics: bool = False
+    single_mode_readback_allows_terminal_stop: bool = False
 
     def __post_init__(self) -> None:
         modes = _unique_tuple(
@@ -554,8 +560,10 @@ class ScopeAcquisitionControlProfile:
             {"configure_then_arm", "atomic_configure_and_arm"},
             label="single arm semantics",
         )
-        if not isinstance(self.arm_resets_acquisition_count, bool) or not isinstance(
-            self.atomic_arm_preserves_count_mode_semantics, bool
+        if (
+            not isinstance(self.arm_resets_acquisition_count, bool)
+            or not isinstance(self.atomic_arm_preserves_count_mode_semantics, bool)
+            or not isinstance(self.single_mode_readback_allows_terminal_stop, bool)
         ):
             raise TypeError("acquisition profile flags must be bool")
         restore = _unique_tuple(self.failure_restore_order, label="failure_restore_order")
@@ -1368,6 +1376,7 @@ class ScopeAcquisitionCompletion:
     baseline_identity: str | None = None
     completed_identity: str | None = None
     observed_states: tuple[ScopeAcquisitionRunState, ...] = ()
+    post_arm_trigger_mode: ScopeTriggerMode | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -1382,9 +1391,20 @@ class ScopeAcquisitionCompletion:
         )
         _literal(
             self.proof,
-            {"count_delta_with_epoch", "identity_delta", "state_transition"},
+            {
+                "count_delta_with_epoch",
+                "identity_delta",
+                "state_transition",
+                "single_mode_readback_then_stopped",
+            },
             label="completion proof",
         )
+        if self.post_arm_trigger_mode is not None:
+            _literal(
+                self.post_arm_trigger_mode,
+                {"auto", "normal", "single", "roll", "unknown"},
+                label="post-arm trigger mode",
+            )
         if not isinstance(self.observed_states, tuple) or not self.observed_states:
             raise ValueError("completion proof must retain observed states")
         if any(not isinstance(item, ScopeAcquisitionRunState) for item in self.observed_states):
@@ -1445,7 +1465,26 @@ def validate_acquisition_completion(
         )
         for item in completion.observed_states[:-1]
     )
-    if completion.proof == "identity_delta":
+    if completion.proof == "single_mode_readback_then_stopped":
+        if not profile.single_mode_readback_allows_terminal_stop:
+            raise ValueError("terminal STOP proof is not enabled by the acquisition profile")
+        if completion.post_arm_trigger_mode != "single":
+            raise ValueError("terminal STOP proof requires a post-arm single-mode readback")
+        if completion.state.phase != "stopped" or completion.state.trigger_mode != "single":
+            raise ValueError("terminal STOP proof requires a stopped single-mode state")
+        if completion.observed_states != (completion.state,):
+            raise ValueError("terminal STOP proof requires exactly one terminal observed state")
+        if any(
+            value is not None
+            for value in (
+                completion.baseline_count,
+                completion.completed_count,
+                completion.baseline_identity,
+                completion.completed_identity,
+            )
+        ):
+            raise ValueError("terminal STOP proof cannot claim count or identity evidence")
+    elif completion.proof == "identity_delta":
         if profile.identity_semantics != "unique_within_session_epoch":
             raise ValueError("identity proof requires unique-within-epoch semantics")
         if (
@@ -1643,6 +1682,8 @@ class ScopeAverageCompletionProofV2:
             raise ValueError("average completion count does not match configuration readback")
         if not isinstance(self.acquisition_completion, ScopeAcquisitionCompletion):
             raise TypeError("average completion acquisition_completion has an invalid type")
+        if self.acquisition_completion.proof == "single_mode_readback_then_stopped":
+            raise ValueError("average completion cannot use a terminal STOP proof")
         if self.device_average_complete is not True:
             raise ValueError("average completion requires device_average_complete=True")
         _safe_token(self.contract_id, label="average completion contract_id")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import fields, replace
+
 import numpy as np
 import pytest
 import zlib
@@ -135,16 +137,19 @@ def test_screenshot_state_tokens_and_png_dimensions_are_verified() -> None:
 def _acquisition_profile(
     *,
     identity_semantics: str = "unique_within_session_epoch",
+    single_arm_semantics: str = "configure_then_arm",
+    single_mode_readback_allows_terminal_stop: bool = False,
 ) -> ScopeAcquisitionControlProfile:
     return ScopeAcquisitionControlProfile(
         supported_continuous_modes=("auto", "normal"),
-        single_arm_semantics="configure_then_arm",
+        single_arm_semantics=single_arm_semantics,  # type: ignore[arg-type]
         arm_resets_acquisition_count=False,
         failure_restore_order=("scope.trigger", "scope.acquisition"),
         snapshot_max_steps=3,
         restore_max_steps=3,
         verify_max_steps=3,
         identity_semantics=identity_semantics,  # type: ignore[arg-type]
+        single_mode_readback_allows_terminal_stop=single_mode_readback_allows_terminal_stop,
     )
 
 
@@ -184,6 +189,199 @@ def test_acquisition_identity_proof_depends_on_descriptor_semantics() -> None:
             baseline=baseline,
             profile=_acquisition_profile(identity_semantics="unknown"),
         )
+
+
+def test_acquisition_terminal_stop_proof_requires_explicit_mode_readback_contract() -> None:
+    original = ScopeAcquisitionRunState("stopped", "normal", "STOP")
+    completed = ScopeAcquisitionRunState("stopped", "single", "STOP")
+    baseline = ScopeAcquisitionControlBaseline(
+        "ctx",
+        "epoch",
+        "nonce",
+        ScopeAcquisitionControlSnapshot(original, "TRIG", "ACQ"),
+        ("scope.run_state", "scope.trigger", "scope.acquisition"),
+    )
+    completion = ScopeAcquisitionCompletion(
+        state=completed,
+        original_state=original,
+        proof_baseline_state=original,
+        proof_baseline_stage="original_atomic_arm",
+        proof="single_mode_readback_then_stopped",
+        observed_states=(completed,),
+        post_arm_trigger_mode="single",
+    )
+    profile = _acquisition_profile(
+        single_arm_semantics="atomic_configure_and_arm",
+        single_mode_readback_allows_terminal_stop=True,
+    )
+
+    validate_acquisition_completion(completion, baseline=baseline, profile=profile)
+
+    with pytest.raises(ValueError, match="not enabled"):
+        validate_acquisition_completion(
+            completion,
+            baseline=baseline,
+            profile=_acquisition_profile(single_arm_semantics="atomic_configure_and_arm"),
+        )
+    with pytest.raises(ValueError, match="mode readback"):
+        validate_acquisition_completion(
+            replace(completion, post_arm_trigger_mode="normal"),
+            baseline=baseline,
+            profile=profile,
+        )
+    for invalid_state in (
+        ScopeAcquisitionRunState("complete", "single", "COMPLETE"),
+        ScopeAcquisitionRunState("stopped", "normal", "STOP"),
+    ):
+        with pytest.raises(ValueError, match="stopped single-mode"):
+            validate_acquisition_completion(
+                replace(
+                    completion,
+                    state=invalid_state,
+                    observed_states=(invalid_state,),
+                ),
+                baseline=baseline,
+                profile=profile,
+            )
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_acquisition_completion(
+            replace(
+                completion,
+                observed_states=(
+                    ScopeAcquisitionRunState("waiting", "single", "WAIT"),
+                    completed,
+                ),
+            ),
+            baseline=baseline,
+            profile=profile,
+        )
+    counted_completed = replace(completed, acquisition_count=0)
+    with pytest.raises(ValueError, match="count or identity"):
+        validate_acquisition_completion(
+            replace(
+                completion,
+                state=counted_completed,
+                observed_states=(counted_completed,),
+                completed_count=0,
+            ),
+            baseline=baseline,
+            profile=profile,
+        )
+    identified_completed = replace(completed, acquisition_identity="completed")
+    with pytest.raises(ValueError, match="count or identity"):
+        validate_acquisition_completion(
+            replace(
+                completion,
+                state=identified_completed,
+                observed_states=(identified_completed,),
+                completed_identity="completed",
+            ),
+            baseline=baseline,
+            profile=profile,
+        )
+    with pytest.raises(TypeError, match="must be bool"):
+        _acquisition_profile(single_mode_readback_allows_terminal_stop=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="post-arm trigger mode"):
+        replace(completion, post_arm_trigger_mode="invalid")
+
+
+def test_acquisition_terminal_stop_fields_are_append_only_with_legacy_defaults() -> None:
+    profile = ScopeAcquisitionControlProfile(
+        ("auto", "normal"),
+        "configure_then_arm",
+        False,
+        ("scope.trigger", "scope.acquisition"),
+        3,
+        3,
+        3,
+        "unknown",
+        False,
+    )
+    original = ScopeAcquisitionRunState("stopped", "normal", "STOP")
+    stopped = ScopeAcquisitionRunState("stopped", "single", "STOP")
+    completion = ScopeAcquisitionCompletion(
+        stopped,
+        original,
+        original,
+        "original_atomic_arm",
+        "state_transition",
+        None,
+        None,
+        None,
+        None,
+        (ScopeAcquisitionRunState("waiting", "single", "WAIT"), stopped),
+    )
+
+    assert [field.name for field in fields(ScopeAcquisitionControlProfile)][-2:] == [
+        "atomic_arm_preserves_count_mode_semantics",
+        "single_mode_readback_allows_terminal_stop",
+    ]
+    assert profile.single_mode_readback_allows_terminal_stop is False
+    assert [field.name for field in fields(ScopeAcquisitionCompletion)][-2:] == [
+        "observed_states",
+        "post_arm_trigger_mode",
+    ]
+    assert completion.post_arm_trigger_mode is None
+
+
+def test_existing_acquisition_count_and_state_transition_proofs_remain_valid() -> None:
+    original = ScopeAcquisitionRunState(
+        "stopped",
+        "normal",
+        "STOP",
+        acquisition_count=3,
+        counter_epoch="epoch",
+    )
+    proof_baseline = ScopeAcquisitionRunState(
+        "ready",
+        "single",
+        "READY",
+        acquisition_count=3,
+        counter_epoch="epoch",
+    )
+    arming = ScopeAcquisitionRunState(
+        "arming",
+        "single",
+        "ARM",
+        acquisition_count=3,
+        counter_epoch="epoch",
+    )
+    stopped = ScopeAcquisitionRunState(
+        "stopped",
+        "single",
+        "STOP",
+        acquisition_count=4,
+        counter_epoch="epoch",
+    )
+    baseline = ScopeAcquisitionControlBaseline(
+        "ctx",
+        "epoch",
+        "nonce",
+        ScopeAcquisitionControlSnapshot(original, "TRIG", "ACQ"),
+        ("scope.run_state", "scope.trigger", "scope.acquisition"),
+    )
+    profile = _acquisition_profile(identity_semantics="unknown")
+    state_transition = ScopeAcquisitionCompletion(
+        state=stopped,
+        original_state=original,
+        proof_baseline_state=proof_baseline,
+        proof_baseline_stage="configured_pre_arm",
+        proof="state_transition",
+        observed_states=(arming, stopped),
+    )
+    count_delta = ScopeAcquisitionCompletion(
+        state=stopped,
+        original_state=original,
+        proof_baseline_state=proof_baseline,
+        proof_baseline_stage="configured_pre_arm",
+        proof="count_delta_with_epoch",
+        baseline_count=3,
+        completed_count=4,
+        observed_states=(arming, stopped),
+    )
+
+    validate_acquisition_completion(state_transition, baseline=baseline, profile=profile)
+    validate_acquisition_completion(count_delta, baseline=baseline, profile=profile)
 
 
 def test_trace_models_copy_arrays_and_enforce_r1_3_fetch_scope() -> None:

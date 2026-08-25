@@ -533,6 +533,8 @@ class ScopeAverageCaptureExecutor:
     ) -> None:
         if not isinstance(completion, ScopeAcquisitionCompletion):
             raise DataError("average capture single completion has an invalid type")
+        if completion.proof == "single_mode_readback_then_stopped":
+            raise DataError("average capture V2 does not accept a terminal STOP completion proof")
         extensions = self.descriptor.scope_extensions
         profile = extensions.acquisition_control_profile if extensions is not None else None
         if not isinstance(profile, ScopeAcquisitionControlProfile):
