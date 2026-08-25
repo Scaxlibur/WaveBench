@@ -1,11 +1,11 @@
 # RFC-0006：可移植的采集状态与平均采集 V2
 
-> 状态：`Implemented R1（未发布；仅 RFC-0006a）；Accepted R1（0006b-0 内部 bounded transaction）`
+> 状态：`Implemented R1（未发布；0006a/0006b-0 内部前置）`
 > 核心基线：legacy acquisition/average API 与 R1.3 acquisition control
 > 范围：普通采集状态 V2、平均配置和平均采集事务
 > 系列总览：[scope 可移植性 RFC 组合说明](WaveBench_scope可移植性RFC组合说明.md)
-> 本轮范围：0006a 已完成核心只读模型、profile、factory gate 与 Service；0006b-0 已接受内部
-> bounded transaction 前置合同；average capture 的公共模型、capability 与插件 opt-in 仍为 Draft
+> 本轮范围：0006a 已完成核心只读模型、profile、factory gate 与 Service；0006b-0 已完成内部
+> bounded transaction 内核；average capture 的公共模型、capability 与插件 opt-in 仍为 Draft
 
 ## 摘要
 
@@ -448,6 +448,18 @@ OperationSpec；只能向本内核提交 limits、framing、phase specs 与 reco
 `BoundedWaveformExecutor` 的业务编排。average 公共代码仍须另行进入 `Accepted`，并同时冻结 completion
 evidence、composite baseline 精确覆盖、error policy 和无 CLI/artifact 边界。
 
+#### 0006b-0 R1 核心实现状态
+
+核心开发线已将 factory-owned bounded backend marker 从 waveform 专用内部名称收敛为 operation-agnostic
+bounded-binary marker：标准 waveform executor 继续检查同一 factory 验证结论，旧私有 waveform marker 和
+validator 仅保留为委托到 generic 实现的兼容别名，不产生第二份状态或旁路。可信 backend 仍仅限
+PyVISA/RsInstrument VISA `INSTR`，construction latch、transport 关闭和零 I/O failure 语义不变。
+
+`ScopeOperationContextCoordinator` 已有的 `ScopeBinaryLimits.intersect()` 现以离线回归固定为
+spec/profile/connection 三方逐项最小值；未提供 connection 限制仍等价于 `+∞`，直到另一个核心配置合同
+引入真实 connection binary-limit source。没有 average capability、profile、Protocol、descriptor 字段、CLI、
+artifact 或插件 opt-in 随此内部 refactor 创建。核心和外部 MSO8000 插件的既有离线回归均通过。
+
 ### Baseline 与恢复 Protocol
 
 R1.3 acquisition baseline 只覆盖 run state、trigger 和 acquisition token，不能覆盖平均、
@@ -718,9 +730,8 @@ average capture 是 `acquire` operation，只允许
 
 ## 接受与实施顺序
 
-RFC-0006a 已完成核心离线实现但尚未发布。0006b-0 已接受 generic bounded transaction 前置合同，
-仅授权该内部内核的重命名／复用与离线回归；它不授权 average 的 public capability、descriptor profile、
-Protocol、CLI 或插件 opt-in。average 仍须依次完成：
+RFC-0006a/0006b-0 已完成核心离线实现但尚未发布。0006b-0 只实现 generic bounded transaction 内核，
+不授权 average 的 public capability、descriptor profile、Protocol、CLI 或插件 opt-in。average 仍须依次完成：
 
 1. 冻结 completion evidence、平均次数核心硬上限、average profile 与 composite baseline 的精确覆盖；
 2. 接受并实现 snapshot/configure/readback/completion/bounded-fetch/restore/verify 的独立模型、Protocol 和
