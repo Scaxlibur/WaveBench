@@ -316,6 +316,7 @@ class _Backend:
     def __init__(self) -> None:
         self.events: list[str] = []
         self.fail_binary_sync = False
+        self.closed = 0
 
     def record_event(self, _direction: str, _text: str) -> None:
         pass
@@ -367,7 +368,7 @@ class _Backend:
         self.events.append(command)
 
     def close(self) -> None:
-        pass
+        self.closed += 1
 
 
 class _Driver:
@@ -774,3 +775,31 @@ def test_average_capture_v2_factory_latch_blocks_construction_io(
     assert backend.events == []
     assert opened.transport is not None
     assert opened.transport._has_verified_bounded_binary_backend()
+
+
+def test_average_capture_v2_factory_rejects_missing_method_without_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _Backend()
+
+    class MissingFetch(_Driver):
+        fetch_average_waveform_bounded = None
+
+    descriptor = replace(
+        _descriptor(),
+        factory=lambda context: MissingFetch(context.open_transport()),
+    )
+    monkeypatch.setattr(
+        "wavebench.instruments.factory.resolve_instrument_descriptor",
+        lambda _reference, expected_kind: descriptor,
+    )
+    monkeypatch.setattr(
+        "wavebench.instruments.factory._open_transport",
+        lambda **_kwargs: backend,
+    )
+
+    with pytest.raises(ConfigError, match="fetch_average_waveform_bounded"):
+        _open_factory_descriptor()
+
+    assert backend.events == []
+    assert backend.closed == 1
