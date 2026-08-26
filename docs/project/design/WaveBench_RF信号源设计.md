@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | Core `0.8.25` 开发线 | 已实现 `rf_source` kind、append-only descriptor extension、`[rf_source]`、M0 只读路径、M1 OFF-only CW、M2 端口输出、M3 内部正弦 AM／FM／PM，以及仅用于受控恢复的调制关闭事务。 | production capability 仍由各插件的实机证据逐项决定。 |
 | DSG830 包 `0.2.0` | 已迁移为 `kind="rf_source"`，提供 `rf_out` 静态 topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP` 和内部正弦 AM／FM／PM 映射；A1／A2／A3 证据已经完成。 | production descriptor 声明 `rf_source.idn`、`rf_source.snapshot`、OFF-only `rf_source.cw_configure` 和受 safety 限制的 `rf_source.output`；M3／M4 写 capability 仍关闭。 |
-| 实机证据 | A1、A2、A3 已完成；A4 已进入受控验证但尚无合格证据；A5 未开始。 | DSG830 production descriptor 开放 snapshot、OFF-only CW 和端口级 output。 |
+| 实机证据 | A1、A2、A3 已完成；A4 的 AM、FM RF-OFF 序列已通过，PM 仍有严格读回不匹配；A5 未开始。 | M3 capability 覆盖三种模式，DSG830 production descriptor 继续只开放 snapshot、OFF-only CW 和端口级 output。 |
 
 普通 `source` 仍是面向函数／任意波形发生器的 Vpp、offset、数字 channel 与波形模型。它不是 RF 领域的兼容别名。
 
@@ -348,12 +348,12 @@ Pulse、Sweep 和 trigger 的命令与 step 仍是目标合同，尚未进入当
 | M0（生产只读） | `rf_source` kind、config、拓扑/profile、可观测 snapshot、Protocol、registry、doctor、只读 CLI 与 run status | 严格 snapshot parser；A1 后 production descriptor 声明只读 snapshot | descriptor 无 I/O；每个状态 query、解析和坏响应测试通过；A1 证据复核后仅提升 snapshot。 |
 | M1（离线完成；DSG830 A3 已提升） | CW request／result、OFF-only transaction、CLI、run step、artifact 与端口范围检查 | 频率／dBm 功率单次写入与独立回读 | output ON、活动调制／Pulse／Sweep 或越界请求时零写拒绝；结果不明无重试；DSG830 仅在 A3 复核后声明 CW。 |
 | M2（离线完成；DSG830 A2 已提升） | per-port 输出事务、安全预检、受 guard 的一次性 RF OFF recovery、CLI、run step 与 artifact | RF ON/OFF 单次写入；Core 负责独立 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF；DSG830 仅在 A2 复核后声明 output。 |
-| M3（离线完成；A4 受控验证中，尚未通过） | 内部正弦 AM／FM／PM profile、typed request/result、调制 snapshot、配置 Service／CLI／run step／artifact；按模式关闭仅用于本地证据与私有恢复 | 内部 Sine 调制序列、严格 readback、单模式 RF-OFF evidence harness 与受限恢复路径 | 输出未 OFF、任一模式已开启、profile 不支持、Pulse／Sweep／protection 冲突或 postcondition 不符时零写拒绝；production capability 等待 A4。 |
+| M3（离线完成；A4 的 AM、FM 已通过，PM 待定位） | 内部正弦 AM／FM／PM profile、typed request/result、调制 snapshot、配置 Service／CLI／run step／artifact；按模式关闭仅用于本地证据与私有恢复 | 内部 Sine 调制序列、严格 readback、单模式 RF-OFF evidence harness 与受限恢复路径 | 输出未 OFF、任一模式已开启、profile 不支持、Pulse／Sweep／protection 冲突或 postcondition 不符时零写拒绝；production capability 等待完整 A4。 |
 | M4 | 声明式 Pulse／Sweep profile、typed request/result、arm/fire/stop、CLI、run step 与 operation spec | 已声明 Pulse 与 Step Sweep 子集 | 错误模式、未声明 option、外部 trigger 或 fire 前置不满足时零写拒绝；fire／trigger 仅由 fake descriptor 覆盖。 |
 
 M0–M4 只证明代码合同和 SCPI 映射。后续证据顺序固定为：A1 只读 snapshot，A2 RF OFF/ON，A3 CW 环回，A4 调制／Pulse／Sweep，A5 外部触发或同步接线。每项 evidence 绑定 capability、型号、固件、选件、端口、端接和最终 RF OFF 状态。
 
-DSG830 的 A1 已使 production descriptor 声明 `rf_source.snapshot`，A2 已使其声明 `rf_source.output`，A3 已使其声明 `rf_source.cw_configure`。A4 的本地 RF-OFF 单模式 harness 已完成 fake 回归并进入受控硬件验证，但尚未取得可提升 capability 的合格证据；A4、A5 仍分别是调制／Pulse／Sweep、外部 trigger／同步 capability 的实机提升门槛。未取得对应 evidence 时不得声明或提升其它 production descriptor capability。
+DSG830 的 A1 已使 production descriptor 声明 `rf_source.snapshot`，A2 已使其声明 `rf_source.output`，A3 已使其声明 `rf_source.cw_configure`。A4 的 AM、FM RF-OFF 单模式验证已通过并完成关闭恢复；PM 仍有严格读回不匹配，因此尚未形成可提升整体调制 capability 的合格证据。A4、A5 仍分别是调制／Pulse／Sweep、外部 trigger／同步 capability 的实机提升门槛。未取得对应 evidence 时不得声明或提升其它 production descriptor capability。
 
 ## 首个适配器：RIGOL DSG830
 
@@ -389,5 +389,5 @@ DSG830 的 production `descriptor()` 在 A1／A2／A3 完成后声明 `rf_source
 - 核心开发分支：`Scaxlibur/feat/rf-source-core`。
 - DSG830 插件开发分支：`Scaxlibur/feat/rf-source-dsg830`。
 - Core M0 提交：`8a746fb`、`6fa9c48`、`f3ae6d7`、`55474be`、`e8ff1be`、`cf53e14`；DSG830 M0 提交：`0c5c2bf`。
-- M0–M3 离线验证已完成；DSG830 A1 snapshot、A2 受控输出与 A3 CW 环回证据已通过，production 已提升 snapshot、`rf_source.output` 和 `rf_source.cw_configure`。Core `ab4de10` 与插件 `36e1e8e` 增加按模式调制关闭与私有恢复路径；A4 已进入受控验证，但尚未取得可提升调制 capability 的合格证据。A4–A5 仍不能据此提升调制、Pulse、Sweep 或 trigger capability。
+- M0–M3 离线验证已完成；DSG830 A1 snapshot、A2 受控输出与 A3 CW 环回证据已通过，production 已提升 snapshot、`rf_source.output` 和 `rf_source.cw_configure`。Core `ab4de10` 与插件 `36e1e8e` 增加按模式调制关闭与私有恢复路径；A4 的 AM、FM RF-OFF 序列通过，PM 尚有严格读回不匹配，故整体调制 capability 仍关闭。A4–A5 仍不能据此提升调制、Pulse、Sweep 或 trigger capability。
 - `tool-of-rei/` 是本地恢复上下文，已忽略；面向项目的设计文档保存在 `docs/project/design/`。

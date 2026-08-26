@@ -122,7 +122,7 @@ wavebench tui --fake
 
 ## RF 信号源
 
-`rf_source` 是独立于普通 `source` 的仪器领域。当前 DSG830 已开放只读状态、RF OFF 时的单字段 CW 配置，以及具有完整 safety 配置的 `rf_out` ON/OFF；内部正弦 AM／FM／PM、Pulse、Sweep 和触发仍由各自的实机证据门控制。
+`rf_source` 是独立于普通 `source` 的仪器领域。当前 DSG830 已开放只读状态、RF OFF 时的单字段 CW 配置，以及具有完整 safety 配置的 `rf_out` ON/OFF。内部正弦调制的 A4 验证已通过 AM、FM 的 RF-OFF 序列，但 PM 仍有严格读回不匹配；由于 capability 覆盖三种模式，调制、Pulse、Sweep 和触发继续保持关闭。
 
 - 日常配置与操作：[RF 信号源使用指南](docs/project/guides/WaveBench_RF信号源使用指南.md)
 - 模型、安全语义和 capability 边界：[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)
