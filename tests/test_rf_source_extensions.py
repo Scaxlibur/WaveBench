@@ -351,6 +351,10 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
             "get_rf_pulse_snapshot",
             "configure_rf_pulse",
         ),
+        "rf_source.sweep_configure": (
+            "get_rf_sweep_snapshot",
+            "configure_rf_sweep",
+        ),
         "rf_source.output": ("set_rf_output",),
     }
     assert {key: CAPABILITY_METHODS[key] for key in RF_SOURCE_CAPABILITY_METHODS} == dict(
