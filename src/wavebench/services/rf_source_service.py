@@ -49,12 +49,22 @@ from wavebench.instruments.rf_source_extensions import (
     RfSourceDescriptorExtensions,
     RfSourceDriver,
     RfSourceSnapshot,
+    RfSweepConfigureRequest,
+    RfSweepConfigureResult,
+    RfSweepDirection,
+    RfSweepModeProfile,
+    RfSweepProfile,
+    RfSweepShape,
+    RfSweepSnapshot,
+    RfSweepSpacing,
     RfSweepState,
+    RfSweepType,
     rf_source_cw_operation_artifact,
     rf_source_modulation_disable_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_output_operation_artifact,
     rf_source_pulse_operation_artifact,
+    rf_source_sweep_operation_artifact,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
@@ -101,6 +111,14 @@ class _RfPulseTransaction:
     preflight_snapshot: RfSourceSnapshot
     postcondition_snapshot: RfSourceSnapshot
     postcondition_pulse_snapshot: RfPulseSnapshot
+
+
+@dataclass(frozen=True)
+class _RfSweepTransaction:
+    result: RfSweepConfigureResult
+    preflight_snapshot: RfSourceSnapshot
+    postcondition_snapshot: RfSourceSnapshot
+    postcondition_sweep_snapshot: RfSweepSnapshot
 
 
 @dataclass(frozen=True)
@@ -546,6 +564,84 @@ class RfSourceService(SessionStateAliasMixin):
                         session_state.degrade(
                             SessionHealth.UNCERTAIN,
                             reason="rf_pulse_postcondition_unverified",
+                        )
+                    raise
+
+    def configure_sweep(self, request: RfSweepConfigureRequest) -> RfSweepConfigureResult:
+        return self._configure_sweep_transaction(request).result
+
+    def configure_sweep_with_artifact(
+        self,
+        request: RfSweepConfigureRequest,
+    ) -> tuple[RfSweepConfigureResult, dict[str, object]]:
+        """Apply one RF-OFF Step Sweep profile while Sweep stays disabled."""
+
+        transaction = self._configure_sweep_transaction(request)
+        return (
+            transaction.result,
+            rf_source_sweep_operation_artifact(
+                request,
+                transaction.result,
+                preflight_snapshot=transaction.preflight_snapshot,
+                postcondition_snapshot=transaction.postcondition_snapshot,
+                postcondition_sweep_snapshot=transaction.postcondition_sweep_snapshot,
+            ),
+        )
+
+    def _configure_sweep_transaction(
+        self,
+        request: RfSweepConfigureRequest,
+    ) -> _RfSweepTransaction:
+        """Configure one disabled, frequency-only Step Sweep without triggering.
+
+        This first Sweep slice cannot arm, trigger, fire, or select a Level
+        Sweep. It writes only the descriptor-bounded frequency profile and
+        explicitly requires RF output, modulation, Pulse, and Sweep to remain
+        disabled through the independent readback.
+        """
+
+        if not isinstance(request, RfSweepConfigureRequest):
+            raise ConfigError("rf_source Sweep configuration requires RfSweepConfigureRequest")
+        operation = "rf_source.sweep_configure"
+        self._require(operation, "rf_source.snapshot", "rf_source.sweep_configure")
+        mode_profile = self._validate_sweep_descriptor(request, operation)
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            with session_state.transaction_lock:
+                if session_state.health is not SessionHealth.HEALTHY:
+                    raise ConfigError(f"{operation} requires a healthy session")
+                preflight_snapshot = rf_source.get_rf_snapshot()
+                self._validate_sweep_preflight(
+                    request,
+                    preflight_snapshot,
+                    operation=operation,
+                )
+                main_entered = False
+                try:
+                    main_entered = True
+                    rf_source.configure_rf_sweep(request)
+                    postcondition_snapshot = rf_source.get_rf_snapshot()
+                    postcondition_sweep_snapshot = rf_source.get_rf_sweep_snapshot(request.port_id)
+                    result = self._validate_sweep_postcondition(
+                        request,
+                        postcondition_snapshot,
+                        postcondition_sweep_snapshot,
+                        mode_profile,
+                        operation=operation,
+                    )
+                    return _RfSweepTransaction(
+                        result=result,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        postcondition_sweep_snapshot=postcondition_sweep_snapshot,
+                    )
+                except BaseException:
+                    if main_entered and session_state.health is SessionHealth.HEALTHY:
+                        session_state.degrade(
+                            SessionHealth.UNCERTAIN,
+                            reason="rf_sweep_postcondition_unverified",
                         )
                     raise
 
@@ -1027,6 +1123,147 @@ class RfSourceService(SessionStateAliasMixin):
             period_s=request.period_s,
             width_s=request.width_s,
             polarity=request.polarity,
+        )
+
+    def _validate_sweep_descriptor(
+        self,
+        request: RfSweepConfigureRequest,
+        operation: str,
+    ) -> RfSweepModeProfile:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.rf_source_extensions
+        if not isinstance(extensions, RfSourceDescriptorExtensions):
+            raise ConfigError(f"{operation} requires validated rf_source_extensions")
+        if not any(port.port_id == request.port_id for port in extensions.topology.ports):
+            raise ConfigError(f"{operation} references an undeclared RF port")
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.SWEEP),
+            None,
+        )
+        if (
+            feature is None
+            or RfFeatureDirection.CONFIGURE not in feature.directions
+            or RfFeatureDirection.READ not in feature.directions
+            or request.port_id not in feature.port_ids
+            or not isinstance(feature.profile, RfSweepProfile)
+            or not feature.profile.configuration_readable
+        ):
+            raise ConfigError(
+                f"{operation} requires a readable configurable Sweep profile for the target port"
+            )
+        mode_profile = next(
+            (
+                item
+                for item in feature.profile.mode_profiles
+                if (
+                    item.sweep_type is RfSweepType.STEP
+                    and item.direction is RfSweepDirection.FORWARD
+                    and item.shape is RfSweepShape.RAMP
+                    and item.spacing is RfSweepSpacing.LINEAR
+                )
+            ),
+            None,
+        )
+        if mode_profile is None:
+            raise ConfigError(
+                f"{operation} requires a frequency-only forward linear Step Sweep profile"
+            )
+        if not (
+            mode_profile.frequency_min_hz
+            <= request.start_frequency_hz
+            <= mode_profile.frequency_max_hz
+        ):
+            raise ConfigError(f"{operation} request start_frequency_hz is outside the descriptor range")
+        if not (
+            mode_profile.frequency_min_hz
+            <= request.stop_frequency_hz
+            <= mode_profile.frequency_max_hz
+        ):
+            raise ConfigError(f"{operation} request stop_frequency_hz is outside the descriptor range")
+        if not mode_profile.points_min <= request.points <= mode_profile.points_max:
+            raise ConfigError(f"{operation} request points is outside the descriptor range")
+        if not mode_profile.dwell_min_s <= request.dwell_s <= mode_profile.dwell_max_s:
+            raise ConfigError(f"{operation} request dwell_s is outside the descriptor range")
+        return mode_profile
+
+    def _validate_sweep_preflight(
+        self,
+        request: RfSweepConfigureRequest,
+        snapshot: RfSourceSnapshot,
+        *,
+        operation: str,
+    ) -> RfPortSnapshot:
+        port = self._snapshot_port(snapshot, request.port_id, operation=operation)
+        output_enabled = self._observed_value(
+            port.output_enabled,
+            f"{operation} requires a readable RF output state",
+        )
+        if output_enabled is not False:
+            raise ConfigError(f"{operation} requires target RF output OFF")
+        modulation = self._observed_value(
+            port.modulation,
+            f"{operation} requires a readable modulation state",
+        )
+        if modulation is not RfModulationState.DISABLED:
+            raise ConfigError(f"{operation} requires modulation disabled")
+        pulse = self._observed_value(
+            port.pulse,
+            f"{operation} requires a readable Pulse state",
+        )
+        if pulse is not RfPulseState.DISABLED:
+            raise ConfigError(f"{operation} requires Pulse disabled")
+        sweep = self._observed_value(
+            port.sweep,
+            f"{operation} requires a readable Sweep state",
+        )
+        if sweep is not RfSweepState.DISABLED:
+            raise ConfigError(f"{operation} requires Sweep disabled")
+        protection = self._observed_value(
+            snapshot.protection,
+            f"{operation} requires a readable protection state",
+        )
+        if not isinstance(protection, RfProtectionStatus):
+            raise ConfigError(f"{operation} requires a valid protection state")
+        if protection.active_codes:
+            raise ConfigError(f"{operation} requires no active protection condition")
+        return port
+
+    def _validate_sweep_postcondition(
+        self,
+        request: RfSweepConfigureRequest,
+        snapshot: RfSourceSnapshot,
+        sweep_snapshot: RfSweepSnapshot,
+        mode_profile: RfSweepModeProfile,
+        *,
+        operation: str,
+    ) -> RfSweepConfigureResult:
+        self._validate_sweep_preflight(request, snapshot, operation=operation)
+        if sweep_snapshot.port_id != request.port_id:
+            raise ConfigError(f"{operation} Sweep snapshot does not match the requested port")
+        if (
+            sweep_snapshot.sweep_type is not mode_profile.sweep_type
+            or sweep_snapshot.direction is not mode_profile.direction
+            or sweep_snapshot.shape is not mode_profile.shape
+            or sweep_snapshot.spacing is not mode_profile.spacing
+        ):
+            raise ConfigError(
+                f"{operation} postcondition requires the declared frequency-only Step Sweep profile"
+            )
+        if sweep_snapshot.state is not RfSweepState.DISABLED:
+            raise ConfigError(f"{operation} postcondition requires Sweep disabled")
+        if (
+            sweep_snapshot.start_frequency_hz != request.start_frequency_hz
+            or sweep_snapshot.stop_frequency_hz != request.stop_frequency_hz
+            or sweep_snapshot.points != request.points
+            or sweep_snapshot.dwell_s != request.dwell_s
+        ):
+            raise ConfigError(f"{operation} Sweep readback does not match request")
+        return RfSweepConfigureResult(
+            port_id=request.port_id,
+            start_frequency_hz=request.start_frequency_hz,
+            stop_frequency_hz=request.stop_frequency_hz,
+            points=request.points,
+            dwell_s=request.dwell_s,
         )
 
     def _validate_modulation_descriptor(
