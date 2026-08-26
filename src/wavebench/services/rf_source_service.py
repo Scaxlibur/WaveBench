@@ -851,6 +851,7 @@ class RfSourceService(SessionStateAliasMixin):
             request,
             modulation_snapshot,
             mode_profile,
+            require_selected_fm_pm_kind=False,
             operation=operation,
         )
         if modulation_snapshot.global_enabled or modulation_snapshot.enabled_modes:
@@ -877,6 +878,7 @@ class RfSourceService(SessionStateAliasMixin):
             request,
             modulation_snapshot,
             mode_profile,
+            require_selected_fm_pm_kind=True,
             operation=operation,
         )
         if modulation_snapshot.enabled_modes != (request.kind,):
@@ -961,12 +963,27 @@ class RfSourceService(SessionStateAliasMixin):
         snapshot: RfModulationSnapshot,
         mode_profile: RfModulationModeProfile,
         *,
+        require_selected_fm_pm_kind: bool,
         operation: str,
     ) -> None:
         if snapshot.port_id != request.port_id or snapshot.kind is not request.kind:
             raise ConfigError(f"{operation} modulation snapshot does not match the requested port and kind")
         if snapshot.source is not mode_profile.source or snapshot.waveform is not mode_profile.waveform:
             raise ConfigError(f"{operation} requires readable internal-sine modulation source and waveform")
+        if request.kind is RfModulationKind.AM:
+            if snapshot.selected_fm_pm_kind is not None:
+                raise ConfigError(f"{operation} AM snapshot has an unexpected FM/PM selection")
+            return
+        if snapshot.selected_fm_pm_kind not in {
+            RfModulationKind.FM,
+            RfModulationKind.PM,
+        }:
+            raise ConfigError(f"{operation} requires a readable FM/PM selection")
+        if (
+            require_selected_fm_pm_kind
+            and snapshot.selected_fm_pm_kind is not request.kind
+        ):
+            raise ConfigError(f"{operation} postcondition does not select the requested FM/PM kind")
 
     @staticmethod
     def _snapshot_port(

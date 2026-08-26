@@ -328,7 +328,7 @@ wavebench rf-source sweep fire ...
 wavebench rf-source sweep stop ...
 ```
 
-M3 使用 `modulation_kind = "am" | "fm" | "pm"`，并且只接受与该模式匹配的 `depth_percent`、`frequency_deviation_hz` 或 `phase_deviation_rad` 之一。它要求 RF OFF、所有调制模式 disabled、Pulse／Sweep disabled 和无活动 protection condition；固定 driver 写入序列后以调制 snapshot 独立验证目标模式、内部 source、Sine waveform、数值、内部频率和全局状态。结果不明时不重试，且不会隐式执行 RF OFF recovery。
+M3 使用 `modulation_kind = "am" | "fm" | "pm"`，并且只接受与该模式匹配的 `depth_percent`、`frequency_deviation_hz` 或 `phase_deviation_rad` 之一。它要求 RF OFF、所有调制模式 disabled、Pulse／Sweep disabled 和无活动 protection condition。FM／PM 的共享选择位作为调制 snapshot 的独立字段记录：preflight 可接受另一种已关闭的 FM／PM 选择，固定 driver 写入会明确选择目标类型，postcondition 则必须确认目标类型。随后以调制 snapshot 独立验证目标模式、内部 source、Sine waveform、数值、内部频率和全局状态。结果不明时不重试，且不会隐式执行 RF OFF recovery。
 
 Pulse、Sweep 和 trigger 的命令与 step 仍是目标合同，尚未进入当前 run schema。所有这些入口都必须显式指定 `port_id`，拥有独立 `OperationSpec` 与 `wavebench.rf_source.operation.v1` artifact。它们不得访问普通 source channel，也不操作外部 trigger、Pulse In/Out 或其他未声明端口。
 

@@ -134,7 +134,7 @@ depth_percent = 25
 internal_frequency_hz = 1000
 ```
 
-M3 事务要求目标 RF 输出 OFF、AM／FM／PM 三种模式均处于 disabled、Pulse／Sweep disabled，且没有活动 protection condition。driver 只执行固定的内部正弦序列；Core 会用独立调制 snapshot 验证目标模式、源、波形、数值、内部频率、全局调制开关和 RF 输出仍然 OFF。写入结果不明或 postcondition 不匹配时不重试，session 会降为不确定状态。
+M3 事务要求目标 RF 输出 OFF、AM／FM／PM 三种模式均处于 disabled、Pulse／Sweep disabled，且没有活动 protection condition。FM 与 PM 共享设备的当前选择位：在三种模式均关闭时，preflight 可以观察到另一种 FM／PM 选择，固定写入会明确选择目标类型；postcondition 必须确认已切换到目标类型。Core 用独立调制 snapshot 验证目标模式、源、波形、数值、内部频率、全局调制开关和 RF 输出仍然 OFF。写入结果不明或 postcondition 不匹配时不重试，session 会降为不确定状态。
 
 截至当前，DSG830 production descriptor 不声明 `rf_source.modulation_configure`。因此上述命令和 step 仅用于离线 fake descriptor、开发验证或未来已取得 A4 证据的插件；对当前 production DSG830 会在打开 transport 前被 capability 门拒绝。
 

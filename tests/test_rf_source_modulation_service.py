@@ -154,6 +154,7 @@ def _modulation_snapshot(
     value: float = 50.0,
     source: RfModulationSource = RfModulationSource.INTERNAL,
     waveform: RfModulationWaveform = RfModulationWaveform.SINE,
+    selected_fm_pm_kind: RfModulationKind | None = None,
     faults: tuple[str, ...] = (),
 ) -> RfModulationSnapshot:
     fields: dict[str, object] = {
@@ -162,6 +163,11 @@ def _modulation_snapshot(
         "source": source,
         "waveform": waveform,
         "internal_frequency_hz": 1_000.0,
+        "selected_fm_pm_kind": (
+            selected_fm_pm_kind
+            if selected_fm_pm_kind is not None
+            else (kind if kind in {RfModulationKind.FM, RfModulationKind.PM} else None)
+        ),
         "enabled_modes": (kind,) if enabled else (),
         "global_enabled": enabled,
         "fault_codes": faults,
@@ -268,6 +274,75 @@ def test_modulation_uses_one_driver_sequence_and_independent_readback() -> None:
     assert artifact["postcondition_modulation_snapshot"]["global_enabled"] is True
     assert service.session_state is not None
     assert service.session_state.health is SessionHealth.HEALTHY
+
+
+def test_modulation_allows_off_only_fm_pm_selection_change_before_fixed_write() -> None:
+    request = RfModulationRequest(
+        port_id="rf_out",
+        kind=RfModulationKind.PM,
+        internal_frequency_hz=1_000.0,
+        phase_deviation_rad=2.0,
+    )
+    service, driver = _service(
+        [_rf_snapshot(), _rf_snapshot(modulation=RfModulationState.ENABLED)],
+        [
+            _modulation_snapshot(
+                kind=RfModulationKind.PM,
+                value=2.0,
+                selected_fm_pm_kind=RfModulationKind.FM,
+            ),
+            _modulation_snapshot(
+                kind=RfModulationKind.PM,
+                enabled=True,
+                value=2.0,
+                selected_fm_pm_kind=RfModulationKind.PM,
+            ),
+        ],
+    )
+
+    result = service.configure_modulation(request)
+
+    assert result.kind is RfModulationKind.PM
+    assert driver.requests == [request]
+    assert driver.calls == [
+        "snapshot",
+        "modulation_snapshot",
+        "configure_modulation",
+        "snapshot",
+        "modulation_snapshot",
+    ]
+
+
+def test_modulation_requires_fm_pm_selection_after_fixed_write() -> None:
+    request = RfModulationRequest(
+        port_id="rf_out",
+        kind=RfModulationKind.PM,
+        internal_frequency_hz=1_000.0,
+        phase_deviation_rad=2.0,
+    )
+    service, driver = _service(
+        [_rf_snapshot(), _rf_snapshot(modulation=RfModulationState.ENABLED)],
+        [
+            _modulation_snapshot(
+                kind=RfModulationKind.PM,
+                value=2.0,
+                selected_fm_pm_kind=RfModulationKind.FM,
+            ),
+            _modulation_snapshot(
+                kind=RfModulationKind.PM,
+                enabled=True,
+                value=2.0,
+                selected_fm_pm_kind=RfModulationKind.FM,
+            ),
+        ],
+    )
+
+    with pytest.raises(ConfigError, match="does not select the requested FM/PM kind"):
+        service.configure_modulation(request)
+
+    assert driver.requests == [request]
+    assert service.session_state is not None
+    assert service.session_state.health is SessionHealth.UNCERTAIN
 
 
 @pytest.mark.parametrize(

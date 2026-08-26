@@ -652,13 +652,21 @@ class RfModulationResult:
 
 @dataclass(frozen=True, slots=True)
 class RfModulationSnapshot:
-    """Complete typed readback for one internal-sine modulation mode."""
+    """Complete typed readback for one internal-sine modulation mode.
+
+    ``kind`` identifies the stored profile queried by the driver.  On devices
+    with one shared FM/PM front-panel selection, ``selected_fm_pm_kind`` records
+    that current selection separately.  This lets an OFF-only transaction
+    safely prepare PM while FM is currently selected, then require the target
+    selection in its postcondition.
+    """
 
     port_id: str
     kind: RfModulationKind
     source: RfModulationSource
     waveform: RfModulationWaveform
     internal_frequency_hz: float
+    selected_fm_pm_kind: RfModulationKind | None = None
     depth_percent: float | None = None
     frequency_deviation_hz: float | None = None
     phase_deviation_rad: float | None = None
@@ -684,6 +692,14 @@ class RfModulationSnapshot:
             phase_deviation_rad=self.phase_deviation_rad,
             label="RF modulation snapshot",
         )
+        if self.kind is RfModulationKind.AM:
+            if self.selected_fm_pm_kind is not None:
+                raise ValueError("AM modulation snapshots cannot carry an FM/PM selection")
+        elif self.selected_fm_pm_kind not in {
+            RfModulationKind.FM,
+            RfModulationKind.PM,
+        }:
+            raise ValueError("FM/PM modulation snapshots require a selected FM/PM kind")
         _require_enum_tuple(
             self.enabled_modes,
             RfModulationKind,

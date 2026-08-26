@@ -86,7 +86,8 @@ Sine AM／FM／PM：AM 使用 percent 深度，FM 使用 Hz 频偏，PM 使用 r
 run plan 使用 `modulation_kind` 表示 AM／FM／PM，避免与步骤自身的 `kind` 键冲突，并且只能提供与该模式匹配的一个数值字段。
 
 DSG830 driver 已实现固定且无重试的内部正弦写入序列与严格 readback：读取全局调制状态、三种模式的 enable 状态、
-目标模式 source／waveform／数值／内部频率，并对 FM／PM 核对共享 mode type。M3 preflight 要求目标 RF 输出 OFF、AM／FM／PM
+目标模式 source／waveform／数值／内部频率与 FM／PM 共享 mode type。当前类型与目标 FM／PM 不同但三种模式均 disabled 时，preflight 可继续，
+固定写入显式选择目标类型；postcondition 必须核对目标类型。M3 preflight 要求目标 RF 输出 OFF、AM／FM／PM
 均 disabled、Pulse／Sweep disabled 且无活动 protection condition；postcondition 要求 RF 仍 OFF、仅目标模式 enabled、全局调制
 开启且所有目标字段精确匹配。写入或 postcondition 结果不明时不重试，session 降为不确定状态。
 

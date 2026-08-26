@@ -613,7 +613,7 @@ capability 的高级配置保持 V1。插件不得把 capability 注册视为
 `wavebench.instruments` 导入。`rf_source.snapshot` 缺失时，status 入口会在 transport I/O 前拒绝；实现
 `get_rf_snapshot()` 本身不会形成隐式 capability。M1／M2／M3 的 CLI 与 run step 也是 capability、access、
 profile 和 fresh safety preflight 的共同门禁；实现 `configure_cw()`、`configure_rf_modulation()` 或 `set_rf_output()` 本身不会形成隐式
-capability。M3 request 只能选择内部 Sine AM／FM／PM 中的一种，并分别使用 percent、Hz 或 rad 值字段；driver 不得扩展外部 source、其它波形、IQ、Pulse、Sweep 或 raw SCPI passthrough。production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md)
+capability。M3 request 只能选择内部 Sine AM／FM／PM 中的一种，并分别使用 percent、Hz 或 rad 值字段；对共享 FM／PM 选择位的设备，snapshot 必须将当前选择与被查询 profile 分开表示，preflight 只能在所有模式关闭时接受不同选择，postcondition 必须确认目标选择。driver 不得扩展外部 source、其它波形、IQ、Pulse、Sweep 或 raw SCPI passthrough。production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md)
 的 A 级实机证据逐项提升，不能由 descriptor 静态校验或 fake transport 测试替代。
 
 ### Power、DMM 和 sweep analyzer

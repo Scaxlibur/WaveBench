@@ -251,6 +251,25 @@ def test_modulation_profile_and_snapshot_are_strict() -> None:
             enabled_modes=(RfModulationKind.PM, RfModulationKind.AM),
             global_enabled=True,
         )
+    with pytest.raises(ValueError, match="require a selected FM/PM kind"):
+        RfModulationSnapshot(
+            port_id="rf_out",
+            kind=RfModulationKind.FM,
+            source=RfModulationSource.INTERNAL,
+            waveform=RfModulationWaveform.SINE,
+            internal_frequency_hz=1_000.0,
+            frequency_deviation_hz=10_000.0,
+        )
+    with pytest.raises(ValueError, match="cannot carry an FM/PM selection"):
+        RfModulationSnapshot(
+            port_id="rf_out",
+            kind=RfModulationKind.AM,
+            source=RfModulationSource.INTERNAL,
+            waveform=RfModulationWaveform.SINE,
+            internal_frequency_hz=1_000.0,
+            selected_fm_pm_kind=RfModulationKind.FM,
+            depth_percent=50.0,
+        )
 
 
 def test_modulation_descriptor_requires_readable_bounded_feature_and_methods() -> None:
