@@ -120,7 +120,7 @@ wavebench tui --fake
 
 详细的能力边界和参数见 [文档总览](docs/README.md)、[项目文档分类](docs/project/README.md) 及 `docs/project/reference/` 下的参考页。
 
-RF 信号源采用独立于普通 `source` 的领域模型。Core `0.8.25` 已提供 M0 只读合同；DSG830 插件的 production descriptor 暂仅开放 `rf_source.idn`，尚未通过 A1 snapshot 实机证据，也没有 RF 写入能力。设计与下一步见[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](docs/project/design/WaveBench_RF信号源开发里程碑.md)。
+RF 信号源采用独立于普通 `source` 的领域模型。Core `0.8.25` 已提供 M0 只读合同；DSG830 已完成 A1 只读快照证据，production descriptor 开放 `rf_source.idn` 和 `rf_source.snapshot`，但没有 RF 写入能力。设计与下一步见[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](docs/project/design/WaveBench_RF信号源开发里程碑.md)。
 
 ## 三条常用路径
 

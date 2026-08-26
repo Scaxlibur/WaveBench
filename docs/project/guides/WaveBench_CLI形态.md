@@ -88,9 +88,9 @@ wavebench capability explain rf_source.snapshot --driver rigol.dsg830 --kind rf_
 ```
 
 `rf-source idn` 要求 descriptor 声明 `rf_source.idn`。`rf-source status` 要求
-`rf_source.snapshot`，并在缺少 capability 时于 transport I/O 前拒绝。当前 DSG830 production
-descriptor 只声明身份查询，故 status 的拒绝是预期安全边界；它不表示可以改用 raw SCPI。RF M0 不提供
-频率、功率、RF 输出、调制、Pulse 或 Sweep 写入命令。
+`rf_source.snapshot`，并在缺少 capability 时于 transport I/O 前拒绝。DSG830 已完成 A1，并在
+production descriptor 中声明这两个只读 capability；其他插件仍可能被该门禁拒绝。它不表示可以改用 raw
+SCPI。RF M0 不提供频率、功率、RF 输出、调制、Pulse 或 Sweep 写入命令。
 
 已声明对应写 capability 的插件还可以配置跨通道关系：
 

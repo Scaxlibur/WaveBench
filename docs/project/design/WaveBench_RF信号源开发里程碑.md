@@ -9,8 +9,8 @@
 | 范围 | 当前状态 | 说明 |
 | --- | --- | --- |
 | Core `0.8.25` 开发线 | M0 离线完成 | 已有 `rf_source` kind、配置、只读 Service／CLI／doctor、`rf_source.status` run 路径、artifact 和 descriptor extension；未实现 RF 写入事务。 |
-| DSG830 包 `0.2.0` | M0 离线完成 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology 与严格 snapshot parser；production descriptor 仅 `rf_source.idn`。 |
-| 真实仪器证据 | A1–A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 前不能提升 `rf_source.snapshot`。 |
+| DSG830 包 `0.2.0` | M0 离线完成；A1 已完成 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology 与严格 snapshot parser；production descriptor 声明只读 `rf_source.idn` 与 `rf_source.snapshot`。 |
+| 真实仪器证据 | A1 已完成；A2–A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 仅提升 `rf_source.snapshot`。 |
 
 ## 双仓库交付规则
 
@@ -27,7 +27,7 @@
 | 阶段 | 状态 | Core 交付 | DSG830 交付 | 完成条件 |
 | --- | --- | --- | --- | --- |
 | Seed | 历史完成 | 无 RF Core 改动 | `0.1.0` 的旧 `source.idn` 种子、无 I/O descriptor、包装与 fake 测试 | 已由 M0 迁移取代，不代表 RF 支持。 |
-| M0 | 离线完成，等待 A1 | `rf_source` 只读领域 | `rf_out` topology 与严格 snapshot parser | 生产包仍只可声明 `rf_source.idn`；snapshot 等待 A1。 |
+| M0 | 离线完成；A1 已完成 | `rf_source` 只读领域 | `rf_out` topology 与严格 snapshot parser | A1 复核后，生产包声明 `rf_source.idn` 和 `rf_source.snapshot`。 |
 | M1 | 未开始 | OFF-only CW 配置 | `:FREQ`／`:LEV` 写后独立回读 | 输出 ON、活动 feature、越界或状态缺失时零写拒绝。 |
 | M2 | 未开始 | RF 输出安全事务 | `:OUTP` ON/OFF 及 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次 OFF recovery。 |
 | M3 | 未开始 | 声明式 AM／FM／PM | 已声明的内部 Sine 调制子集 | 只在 OFF 状态、profile 匹配且 postcondition 成立时写入。 |
@@ -57,8 +57,8 @@ DSG830 `0.1.0` 种子包只包含 `*IDN?`、`close()`、无 I/O descriptor、包
 
 - 已将种子 package 迁移到 `kind="rf_source"`、`rf_source.*` 和 `[rf_source]`。
 - 已声明一个稳定端口 `rf_out`、手册范围和设备 dBm 参考阻抗。
-- 已实现严格 snapshot parser，分别覆盖正常响应、未知响应、坏响应与 protection condition；它目前只用于离线测试。
-- A1 前 production descriptor 保持 `rf_source.idn`，不声明 `rf_source.snapshot`；后续 M1–M4 capability 只能存在于 fake descriptor 或离线 driver 测试中。
+- 已实现严格 snapshot parser，分别覆盖正常响应、未知响应、坏响应与 protection condition；A1 后可由 production 的只读状态入口消费。
+- A1 已提升 `rf_source.snapshot`；后续 M1–M4 capability 仍只能存在于 fake descriptor 或离线 driver 测试中。
 
 ### 离线完成条件
 
@@ -102,14 +102,13 @@ DSG830 只进入手册与离线测试均覆盖的 Pulse／frequency-only Step Sw
 
 每次证据记录必须独立于代码提交，且不能包含真实资源地址、序列号、原始响应或实验室专用配置。未恢复或无法确认最终 RF OFF 的验收不能用于提升 capability。
 
-### A1：只读 snapshot 验收流程
+### A1：已完成的只读 snapshot 验收
 
-A1 不是将 `rf_source.snapshot` 临时加入 production descriptor，也不能通过 `rf-source status` 绕过现有
-capability 门禁。验收使用一次性、非 production 的本地 evidence harness；production descriptor 在整个
-流程中保持仅 `rf_source.idn`。
+A1 已使用一次性、非 production 的本地 evidence harness 完成并经复核。当时没有临时将
+`rf_source.snapshot` 加入 production descriptor，也没有通过 `rf-source status` 绕过 capability 门禁。验收期间，production descriptor 始终保持仅 `rf_source.idn`。
 
 1. 使用独立的本地 TOML 副本，不修改现有 `wavebench.toml`。副本中的 `[rf_source]` 必须指定已核对的
-   canonical driver、资源和 `access = "read_only"`；不得使用 `read_write`、网络扫描或资源猜测。
+   canonical driver、资源和 `access = "read_only"`；不得使用 `read_write` 或资源猜测。若需网络发现，必须在 harness 之外以有界、单独授权的流程完成，人工复核后才写入副本，且发现结果不进入证据。
 2. harness 通过受 guard 的 transport 和独占 resource lease 创建单个 session，只调用手册已审计的 snapshot
    query，且不添加 query 重试：`*IDN?`、`:FREQ?`、`:LEV?`、`:OUTP?`、`:MOD:STAT?`、`:PULM:STAT?`、
    `:SWE:STAT?`、`:STAT:QUES:POW:COND?`。
@@ -124,12 +123,12 @@ capability 门禁。验收使用一次性、非 production 的本地 evidence ha
    `access=read_only`、query 数量与预期一致、所有写计数和 `instrument_mutation_writes` 均为零。输出为 ON、
    状态未知、保护／解析异常、session 异常或关闭失败均为未通过，不能提升 capability。
 
-只有上述证据由人工复核后，才可以在单独补丁中把 `rf_source.snapshot` 加入 DSG830 production descriptor。
+本次证据已由人工复核，并在对应插件补丁中把 `rf_source.snapshot` 加入 DSG830 production descriptor。该提升不包含任何 RF 写 capability。
 
 ## 推荐实施顺序
 
 1. 已完成 Core M0 的 kind、descriptor、配置、只读 Service／CLI 与 run status 全链路。
 2. 已在匹配的 Core `0.8.25` 开发线上迁移 DSG830 的 descriptor、依赖区间、topology 与 snapshot parser；正式 wheel 验收等待 Core 发布版本。
-3. 下一步先准备并取得 A1 的只读 snapshot 证据；在证据前不得把 DSG830 parser 暴露为 production capability。
-4. 再用 fake descriptor 完成 M1／M2 的零写拒绝、postcondition 与 recovery 测试，并实现 DSG830 的对应离线 SCPI 映射。
+3. 已取得并复核 A1 的只读 snapshot 证据；DSG830 parser 已仅作为 `rf_source.snapshot` 暴露为 production capability。
+4. 下一步用 fake descriptor 完成 M1／M2 的零写拒绝、postcondition 与 recovery 测试，并实现 DSG830 的对应离线 SCPI 映射。
 5. 取得 A2、A3 证据后，按 capability 而非按「整台仪器已支持」逐项提升 production descriptor；M3／M4 保持独立工作。

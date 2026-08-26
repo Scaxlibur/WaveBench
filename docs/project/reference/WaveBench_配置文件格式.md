@@ -449,8 +449,8 @@ actual_termination_ohm = 50
 `[rf_source]` 是独立于普通 `[source]` 的 RF 信号源配置。它使用 plugin descriptor 的稳定
 `port_id`、Hz 和 dBm，不存在 `default_channel`、Vpp 或波形字段。当前 M0 可使用
 `wavebench rf-source idn`；`wavebench rf-source status` 还要求 production descriptor 声明
-`rf_source.snapshot`。DSG830 在 A1 实机证据前仅声明 `rf_source.idn`，因此 status 会在打开
-transport 前被拒绝。
+`rf_source.snapshot`。DSG830 已完成 A1，并声明 `rf_source.idn` 和 `rf_source.snapshot`，所以可在
+已配置的只读 session 中执行 status；其他未声明 snapshot 的插件仍会在打开 transport 前被拒绝。
 
 字段说明：
 
