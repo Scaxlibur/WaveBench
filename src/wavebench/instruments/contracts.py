@@ -22,15 +22,23 @@ from .models import (
     ScopeAverageCaptureRequest,
     ScopeAverageCaptureResult,
     ScopeAcquisitionStatus,
+    ScopeChannelInputStateV2,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
+    ScopeMeasurementStatisticsRequestV2,
+    ScopeMeasurementStatisticsV2,
     ScopeCursorReadout,
+    ScopeCursorReadoutV2,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalChannelStatusV2,
     ScopeDigitalWaveform,
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
+    ScopeFftStatusV2,
     ScopeSnapshot,
+    ScopeSnapshotFieldV2,
+    ScopeSnapshotV2,
     SourceAmModulationConfiguration,
     SourceAmModulationProfile,
     SourceBurstConfiguration,
@@ -118,8 +126,23 @@ class ScopeSnapshotDriver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class ScopeSnapshotDriverV2(InstrumentDriver, Protocol):
+    def get_snapshot_v2(
+        self,
+        channel: int,
+        *,
+        fields: tuple[ScopeSnapshotFieldV2, ...],
+    ) -> ScopeSnapshotV2: ...
+
+
+@runtime_checkable
 class ScopeAcquisitionStatusDriver(InstrumentDriver, Protocol):
     def get_acquisition_status(self) -> ScopeAcquisitionStatus: ...
+
+
+@runtime_checkable
+class ScopeChannelInputStateDriverV2(InstrumentDriver, Protocol):
+    def get_channel_input_state_v2(self, channel: int) -> ScopeChannelInputStateV2: ...
 
 
 @runtime_checkable
@@ -133,6 +156,11 @@ class ScopeAverageCaptureDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class ScopeDigitalStatusDriver(InstrumentDriver, Protocol):
     def get_digital_status(self, channel: int) -> ScopeDigitalChannelStatus: ...
+
+
+@runtime_checkable
+class ScopeDigitalStatusDriverV2(InstrumentDriver, Protocol):
+    def get_digital_status_v2(self, channel: int) -> ScopeDigitalChannelStatusV2: ...
 
 
 @runtime_checkable
@@ -158,6 +186,34 @@ class ScopeMeasurementStatisticsDriver(InstrumentDriver, Protocol):
         include_buffer: bool = False,
         acquisition_stopped: bool = False,
     ) -> ScopeMeasurementStatistics: ...
+
+
+@runtime_checkable
+class ScopeMeasurementStatisticsDriverV2(InstrumentDriver, Protocol):
+    def get_measurement_statistics_v2(
+        self,
+        request: ScopeMeasurementStatisticsRequestV2,
+    ) -> ScopeMeasurementStatisticsV2: ...
+
+
+@runtime_checkable
+class ScopeFftStatusDriverV2(InstrumentDriver, Protocol):
+    def get_fft_status_v2(
+        self,
+        math_index: int,
+        *,
+        configured_fft: bool,
+    ) -> ScopeFftStatusV2: ...
+
+
+@runtime_checkable
+class ScopeCursorReadoutDriverV2(InstrumentDriver, Protocol):
+    def get_cursor_readout_v2(
+        self,
+        cursor_index: int | None,
+        *,
+        configured_cursor: bool,
+    ) -> ScopeCursorReadoutV2: ...
 
 
 @runtime_checkable

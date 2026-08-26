@@ -15,6 +15,15 @@ from .source_extension_capabilities import (
 )
 
 
+_PROFILE_AWARE_WAVEFORM_CAPABILITIES = frozenset(
+    {
+        "scope.fetch_waveform",
+        "scope.capture_waveform",
+        "scope.capture_waveforms",
+    }
+)
+
+
 CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     "scope.idn": ("idn",),
     "scope.errors": ("errors",),
@@ -117,7 +126,16 @@ def validate_declared_capabilities(
 ) -> None:
     if not callable(getattr(driver, "close", None)):
         raise TypeError("factory returned a driver without callable close()")
+    extensions = descriptor.scope_extensions
+    waveform_binary_profile = (
+        extensions.waveform_binary_profile if extensions is not None else None
+    )
     for capability in descriptor.capabilities:
+        if (
+            waveform_binary_profile is not None
+            and capability in _PROFILE_AWARE_WAVEFORM_CAPABILITIES
+        ):
+            continue
         methods = CAPABILITY_METHODS.get(capability)
         if methods is None:
             raise TypeError(f"descriptor declares unknown capability {capability!r}")

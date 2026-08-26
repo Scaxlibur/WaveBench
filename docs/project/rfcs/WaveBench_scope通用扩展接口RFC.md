@@ -164,7 +164,8 @@ R1.3 暂定四个独立 binary 限制：`binary_response_max_bytes` 限制每次
 短生命周期的
 `BinaryQueryBudget`。transport 每次 binary query 都必须验证 budget 与 operation context、phase、
 correlation 和 session epoch 匹配；插件只能进一步收紧单次上限，不能提高或重置累计额度。没有 budget 的新
-`query_binary()` 调用在发送前拒绝；旧 `query_bin_block()` 兼容入口使用核心固定有限上限。
+`query_binary()` 调用在发送前拒绝；旧 `query_bin_block()` 兼容入口只保留给 legacy operation，
+在 active binary budget phase 中必须在发送前拒绝。
 
 现有 `verification_fields` 只表示按 `restore_coverage` 恢复到 baseline 后必须闭合的字段，
 不用于表示读操作的观察结果，也不用于证明有意保留的控制状态。
@@ -213,7 +214,7 @@ error policy 和 binary budget 必须可序列化、可审计。
 | operation | capability | effect / lease | changed_fields | restore_coverage | required_verified_fields | verification_fields | postcondition / cleanup fields | risk_flags | timeout_source | binary response / operation / query / resync limits | error minimum | 最低 access | Service / CLI / artifact |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `scope.screenshot_profile` | `scope.screenshot_profile` | `stateful_read` / `exclusive` | `none` | `none` | `scope.identity` | `none` | — / — | `profile_query` | `operation.timeout_ms=5000` | — | — | `read_only` | `ScopeService.screenshot_profile()` / `wavebench scope screenshot profile` / `screenshot.profile` |
-| `scope.screenshot_v2` | `scope.screenshot_v2` | `write` / `exclusive` | `scope.display_menu`, `scope.display_color`, `scope.error_queue`, `output.screenshot` | `screenshot-baseline-only` | `scope.identity` | `scope.display_menu`, `scope.display_color` | — / `scope.display_menu`, `scope.display_color` | `front_panel_state`, `binary_response`, `temporary_display_setup` | `operation.timeout_ms=5000` | `262144 / 262144 / 1 / 0` | `disabled` | `read_write` | `ScopeService.screenshot_v2(request)` / `wavebench scope screenshot capture` / `screenshot`、`effective_request`、`media_type`、`dimensions`、`framing` |
+| `scope.screenshot_v2` | `scope.screenshot_v2` | `write` / `exclusive` | `scope.display_menu`, `scope.display_color`, `scope.error_queue`, `output.screenshot` | `screenshot-baseline-only` | `scope.identity` | `scope.display_menu`, `scope.display_color` | — / `scope.display_menu`, `scope.display_color` | `front_panel_state`, `binary_response`, `temporary_display_setup` | `operation.timeout_ms=5000` | `8388608 / 8388608 / 1 / 0` | `disabled` | `read_write` | `ScopeService.screenshot_v2(request)` / `wavebench scope screenshot capture` / `screenshot`、`effective_request`、`media_type`、`dimensions`、`framing` |
 | `scope.acquisition_run_state` | `scope.acquisition_run_state` | `stateful_read` / `exclusive` | `none` | `none` | `scope.identity` | `none` | — / — | `state_observation` | `operation.timeout_ms=5000` | — | — | `read_only` | `ScopeService.acquisition_run_state()` / `wavebench scope acquisition status` / `acquisition.run_state` |
 | `scope.acquisition_start` | `scope.acquisition_control` + `scope.acquisition_run_state` | `write` / `exclusive` | `scope.run_state`, `scope.trigger`, `scope.acquisition`, `scope.error_queue` | `failure-cleanup-only` | `scope.identity` | `scope.trigger`, `scope.acquisition` | `scope.run_state`, `scope.trigger`, `scope.acquisition` / `scope.run_state`, `scope.trigger`, `scope.acquisition` | `trigger`, `acquisition_state`, `recovery_required` | `operation.timeout_ms=30000` | — | `disabled` | `read_write` | `ScopeService.start_acquisition(request)` / `wavebench scope acquisition start` / `acquisition.control`、`effective_trigger_mode`、`postcondition`、`cleanup` |
 | `scope.acquisition_single` | `scope.acquisition_control` + `scope.acquisition_run_state` | `acquire` / `exclusive` | `scope.run_state`, `scope.trigger`, `scope.acquisition`, `scope.error_queue` | `failure-cleanup-only` | `scope.identity` | `scope.trigger`, `scope.acquisition` | `scope.run_state`, `scope.trigger`, `scope.acquisition` / `scope.run_state`, `scope.trigger`, `scope.acquisition` | `trigger`, `acquisition_state`, `recovery_required` | `operation.timeout_ms=30000` | — | `disabled` | `read_write` | `ScopeService.acquire_single()` / `wavebench scope acquisition single` / `acquisition.control`、`postcondition`、`completion_proof`、`cleanup` |
@@ -225,8 +226,8 @@ R1.3 acceptance addendum 固定下列数值；表中 binary 列依次为 respons
 count、resynchronization bytes：
 
 ```python
-SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES = 262_144
-SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES = 262_144
+SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES = 8_388_608
+SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES = 8_388_608
 SCOPE_SCREENSHOT_BINARY_QUERY_MAX_COUNT = 1
 SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES = 0
 
@@ -242,7 +243,10 @@ SCOPE_TRACE_OPERATION_TIMEOUT_MS = 60_000
 ```
 
 这些值是核心上限，不是 driver 默认值；descriptor/profile/connection 只能收紧，不能提高。
-`scope.screenshot_v2` 首版单次 PNG 上限为 256 KiB，依据已有 SDS raw PNG 证据保留明确余量；
+`scope.screenshot_v2` 的 R1.1 单次 PNG 上限为 8 MiB，与 trace/waveform 的单响应核心上限一致。
+该值覆盖已文档化的 `387,356`-byte TMC definite-block 截图示例，并为常见高分辨率 PNG 保留余量；
+它不构成所有型号、固件、颜色或菜单状态的吞吐承诺。单次 query、
+零 resynchronization 和 5 秒 operation timeout 不变；具体 descriptor profile 仍须按设备证据收紧。
 `scope.fetch_trace` 每次 response 上限为 8 MiB、一次 operation 总上限为 64 MiB、最多 256 次
 binary query，并允许最多丢弃 64 KiB 以证明边界。超出 resynchronization 上限或无法证明边界时，
 核心固定关闭 transport 并将 session 标记为 `poisoned`，不由 backend 自行选择 close/poison
@@ -653,11 +657,10 @@ profile 或 connection 没有对应限制时只是不进一步收紧，不能取
 Service 在第一个阶段授权前向 operation context 安装与 context/operation/correlation/epoch
 绑定的 opaque budget ledger。没有 ledger 或 active phase 不允许 binary I/O 的新
 `query_binary()` 调用必须在 `BEFORE_SEND` 以 `NOT_SENT` 拒绝。现有 `query_bin_block()` 保留
-为 definite block 兼容入口。它在 legacy operation 中使用核心固定的有限兼容上限；在已安装
-R1.3 budget 的新 operation 中必须消耗同一个 response/operation/query/resync budget，不得建立第二套
-兼容额度。新 operation 若无 R1.3 budget，通过 `query_bin_block()` 也必须在发送前拒绝。
-核心冻结 legacy 兼容上限时必须覆盖现有已接受 operation 的合法 payload，或给旧 operation 保留
-独立的有限 spec；不能在没有迁移说明的情况下静默降低既有波形读取上限。
+为 definite block 兼容入口，只允许没有 active binary budget 的 legacy operation。在已安装 R1.3
+budget 的新 operation 中，它必须以 `binary_legacy_entry_unsupported` 在发送前拒绝，不得消耗、
+重建或模拟 response/operation/query/resync budget。新 operation 若没有 R1.3 budget，
+`query_binary()` 同样在发送前拒绝。
 
 如果 operation 使用 binary profile，则每个参与的 variant 必须提供有限正整数的 response、
 operation-total 和 query-count，以及有限非负整数的 resynchronization 限制；没有 profile 层的 operation 直接使用
@@ -910,7 +913,7 @@ class ScopeScreenshotDriver(InstrumentDriver, Protocol):
 `variants` MUST 非空，每个 request 只能出现一次；R1.3 首版只接受 `png` / `image/png`。
 两个 byte 上限 MUST 为正数，`resynchronization_max_bytes` MUST 为非 bool 非负整数；
 descriptor variant 的 response/operation/query/resynchronization 值不得超过
-`262144/262144/1/0`，connection 或更严格 profile 只能进一步收紧；
+`8388608/8388608/1/0`，connection 或更严格 profile 只能进一步收紧；
 首版 screenshot 只允许一次
 binary response，因此 `query_max_count == 1` 且
 `operation_max_bytes == response_max_bytes`。尺寸范围的上下界必须为正数且满足
@@ -1053,6 +1056,7 @@ class ScopeAcquisitionControlProfile:
     verify_max_steps: int
     identity_semantics: ScopeAcquisitionIdentitySemantics
     atomic_arm_preserves_count_mode_semantics: bool = False
+    single_mode_readback_allows_terminal_stop: bool = False
 
 @dataclass(frozen=True)
 class ScopeAcquisitionControlSnapshot:
@@ -1090,6 +1094,7 @@ ScopeCompletionProof = Literal[
     "count_delta_with_epoch",
     "identity_delta",
     "state_transition",
+    "single_mode_readback_then_stopped",
 ]
 
 @dataclass(frozen=True)
@@ -1113,6 +1118,7 @@ class ScopeAcquisitionCompletion:
     baseline_identity: str | None = None
     completed_identity: str | None = None
     observed_states: tuple[ScopeAcquisitionRunState, ...] = ()
+    post_arm_trigger_mode: ScopeTriggerMode | None = None
 ```
 
 `ScopeAcquisitionControlProfile` 是 descriptor 静态事实，不是 driver 在 operation 中自报的
@@ -1124,7 +1130,7 @@ driver 返回值扩大 descriptor profile。
 profile 不变量为：
 
 - `supported_continuous_modes` 非空、唯一，且只包含 `auto/normal/roll`；
-- 两个 bool 字段必须是真正的 `bool`；
+- 三个 bool 字段必须是真正的 `bool`；
 - `failure_restore_order` 必须恰好各包含一次 `scope.trigger` 和 `scope.acquisition`；
   顺序是核心恢复授权与 driver 实现的唯一事实源；
 - 三个 `*_max_steps` 必须是 `1..64` 的非 bool 整数；snapshot/verify 各至少覆盖 run state、
@@ -1135,10 +1141,12 @@ profile 不变量为：
 - `single_arm_semantics="atomic_configure_and_arm"` 时，只有
   `atomic_arm_preserves_count_mode_semantics=true` 且 `arm_resets_acquisition_count=false` 时，
   operation verifier 才可以在原始状态确为 `trigger_mode="single"` 时把 count 作为辅助证据；
-- `arm_resets_acquisition_count=true` 时任何 arm 路径都不得使用 `count_delta_with_epoch`；只能使用
-  identity 或状态迁移证据。
-- `identity_semantics="unique_within_session_epoch"` 才允许 `identity_delta`；
-  `unknown` 时核心不得接受 identity proof，只能使用满足本节要求的 state transition。
+- `arm_resets_acquisition_count=true` 时任何 arm 路径都不得使用 `count_delta_with_epoch`；
+  `identity_delta`、`state_transition` 和满足 RFC-0009 的 terminal STOP proof 仍各自按其条件校验。
+- `identity_semantics="unique_within_session_epoch"` 只约束 `identity_delta`；`unknown` 时核心不得接受
+  identity proof，但不改变 `state_transition` 或满足 RFC-0009 的 terminal STOP proof 的独立条件。
+- `single_mode_readback_allows_terminal_stop=true` 只授权 RFC-0009 定义的终态 STOP proof；
+  它不替代 SINGLE arm、count、identity 或失败恢复语义。
 
 核心构造 `ScopeAcquisitionControlBaseline` 时必须把固定的
 `("scope.run_state", *profile.failure_restore_order)` 写入 `restore_order`；baseline 中的顺序
@@ -1177,6 +1185,11 @@ driver 若在 restore/verify 中抛出 transport 或协议异常，核心必须�
 `state_transition` 要求保留本节的最小观察序列，且不依赖 count；若该分支同时携带 count，
 仍必须提供未变化的 `counter_epoch`，否则核心必须忽略 count 并按纯状态迁移验证。任一终态或证据不完整只能抛出
 `completion_unproven`，不得返回一个携带「不可用」proof 的成功对象。
+`single_mode_readback_then_stopped` 只在 profile 明确 opt-in、SINGLE 写入后的 mode readback
+为 `single`、最终 state 为 `stopped/single`、`observed_states` 恰为最终 state，且四个
+count/identity proof 字段均为空时成立。该分支的顺序与插件采用门由
+[RFC-0009](WaveBench_scope可移植性RFC-0009_SINGLE模式终态STOP证明.md)冻结；普通 state query
+不能自行构造它。
 `identity_delta` 也不能仅凭两个 token 不同就成立；核心只在已验证 descriptor profile 的
 `identity_semantics="unique_within_session_epoch"` 时接受该 proof。`unknown` 或 profile
 缺失时，即使 fixture 观察到 token 不同，也只能使用完整 `state_transition`，或拒绝完成证明。
@@ -1197,7 +1210,7 @@ forced trigger 是瞬时 action/event，不是可 query-back 的持久 `ScopeTri
 | `scope.acquisition_start`（driver: `start_continuous`） | `stopped`、`ready`、`complete` | 写入后回读 `ready`/`arming`/`waiting`/`acquiring`/`rolling` | 写后回读失败，保留 session health 和 cleanup 结果 |
 | `scope.acquisition_single`（driver: `acquire_single`） | `stopped`、`ready`、`complete` | 记录基线，观察新采集状态，再到 `complete/stopped` 且有 proof | 只观察到 arm 不算成功；超时进入失败 cleanup |
 | trigger accepted | `arming`、`waiting`、`ready` | `acquiring` 或 `complete` | 外部变化时回读为 `unknown` |
-| acquisition complete | 已观察到 `arming`、`waiting`、`ready` 或 `acquiring` 中至少一个新采集状态 | `complete` 或 `stopped` 且有 completion proof | 轮询可以跳过瞬时 `acquiring`；只有原本已 `stopped` 不足以证明新采集完成 |
+| acquisition complete | 已观察到 `arming`、`waiting`、`ready` 或 `acquiring` 中至少一个新采集状态；或满足 RFC-0009 的 profile-gated SINGLE mode-readback 条件 | `complete` 或 `stopped` 且有 completion proof | 轮询可以跳过瞬时 `acquiring`；只有原本已 `stopped` 不足以证明新采集完成 |
 | normal `scope.acquisition_stop`（driver: `stop_acquisition`） | `stopped`、`ready`、`arming`、`waiting`、`acquiring`、`rolling`、`stopping` 或 `complete` | 回读 `stopped` | 幂等；回读失败时保留 `uncertain`/`poisoned` |
 | recovery STOP | 核心已签发有界 recovery authorization 的 `healthy/uncertain` session；phase 可为 `unknown/error` | 只写 STOP 并回读 `stopped` | 不得向 `poisoned` session 发送；结果只记入 cleanup，不伪装成 normal success |
 | 外部/设备错误 | 任意 | `error` 或 `unknown` | 必须重新查询确认，不能继续普通 I/O |
@@ -1314,11 +1327,12 @@ original 已为 `trigger_mode="single"`，且 `ScopeAcquisitionControlProfile` �
 `single_arm_semantics="atomic_configure_and_arm"`、
 `atomic_arm_preserves_count_mode_semantics=true` 和 `arm_resets_acquisition_count=false` 时，
 才能把 count 作为辅助证据；最终 proof 仍必须同时满足未变化的 `counter_epoch` 和有效
-`state_transition`。否则必须改用 identity delta 或完整的 state transition。
+`state_transition`。否则必须改用 identity delta、完整的 state transition，或满足 RFC-0009 的
+profile-gated mode-readback terminal STOP proof。
 
 真正 arm 后，Service/driver 在同一 deadline 内等待新 acquisition 完成。只有看到有效
-identity 变化，或看到 R1.3 暂定的最小状态序列后，才能成功返回 completion
-proof；调用前本来就是 `stopped` 不能单独作为完成条件。没有 completion proof 时
+identity 变化、R1.3 暂定的最小状态序列，或满足 RFC-0009 的 profile-gated mode-readback terminal
+STOP 条件后，才能成功返回 completion proof；调用前本来就是 `stopped` 不能单独作为完成条件。没有 completion proof 时
 返回 `completion_unproven`，不得返回成功 waveform。
 
 R1.3 暂定的最小 `state_transition` proof 为：SINGLE 写入并 query-back 后至少观察一次
@@ -1326,7 +1340,9 @@ R1.3 暂定的最小 `state_transition` proof 为：SINGLE 写入并 query-back 
 `trigger_mode="single"`，且 `(phase, trigger_mode)` 不得与 `proof_baseline_state` 相同。随后必须观察
 `complete` 或 `stopped`。如果仪器把
 写后第一个查询直接返回 `stopped`，且 count/identity 均不变或不可用，则 completion
-unproven。后续若跨厂商 fixture 证明该序列仍不通用，应保持 `[OPEN]`，不得由单个插件放宽。
+unproven，除非满足 [RFC-0009](WaveBench_scope可移植性RFC-0009_SINGLE模式终态STOP证明.md)
+规定的 profile-gated mode-readback proof。后续若跨厂商 fixture 证明该序列仍不通用，应保持
+`[OPEN]`，不得由单个插件放宽。
 
 arm-only API 不属于 R1.3；未来如确有非阻塞需要，应新增 `scope.acquisition_arm_single`，其
 effect 为 `write`、成功输出只证明已 arm，不能复用 `scope.acquisition_single` 的成功合同。
@@ -2156,9 +2172,10 @@ scope.error_drain_v1
 - 为没有错误队列的仪器返回空列表；
 - 超过 `max_bytes` 后在 healthy session 中留下未消费响应。
 
-## 十一、R1.3 暂定安全结论与待决问题
+## 十一、R1.3 已冻结安全结论与后续问题
 
-以下是 Draft 阶段暂定的安全不变量，不代表 schema、常量或核心实现已经接受：
+以下安全不变量已经随 R1.3 接受，并由第十二节的验收门限定。后续问题不得反向扩大已经注册
+capability 的语义，也不表示具体插件已经完成 opt-in 或实机验收：
 
 1. 采集 start、完成式 single、stop 是三个 action-specific operation；共享 capability 不改变
    各自 effect、postcondition、失败 cleanup 或最低 access。descriptor 的
@@ -2189,24 +2206,25 @@ scope.error_drain_v1
    有效 `state_transition` 联合时作为辅助证据，任何回绕、复位或非严格递增都必须转用
    `identity_delta`/`state_transition`。旧 `scope.errors` 不提供 R1.3 终止证明。
 
-剩余待决问题：
+后续独立问题：
 
-1. `OperationSpec` 的完整输入/输出序列化、取消、幂等性和并发字段仍未公开冻结；在这些字段
-   冻结前，核心只能实现第 12 节列出的内部 / feature-gated 骨架。
-2. 各 backend 是否能在固定 resynchronization 上限内安全 drain 仍需 fixture；超出上限时
-   close + `poisoned` 已是 R1.3 的统一默认，不再由 backend 自选。
-3. 哪些 PyVISA resource class 和 RsInstrument API 能稳定证明 message END。
+1. 更通用的 operation 输入/输出序列化、取消、幂等性和并发元数据若有需求，应由独立 RFC
+   追加；当前已注册 operation 的输入、结果和 artifact 形状保持不变。
+2. 当前批准的 backend/resource 已有固定 resynchronization fixture；其他 backend 只有补齐
+   同等 fixture 后才能 opt-in。超出上限时 close + `poisoned` 仍是统一默认。
+3. 当前只认可已验证的 PyVISA/RsInstrument VISA `INSTR` 路径；新增 resource class 或 API
+   的 message END 证明属于后续 backend 扩展。
 4. `READ_CONTINUATION_ONLY` 的 core-issued continuation token 和返回模型如何授权。
-5. 旧 screenshot adapter 的具体拒绝码和更多 profile variant 仍待 fixture；profile 来源已固定为
-   descriptor 或 descriptor/query 的 `combined` 交集。
+5. 更多 screenshot profile variant 仍待独立 fixture；旧 capture 与 V2 的拒绝/分流语义已经
+   冻结，profile 来源仍为 descriptor 或 descriptor/query 的 `combined` 交集。
 6. poisoned session 的 recovery/reopen API 仍属 transport 生命周期设计；在该 API 冻结前，
    新 capability 不得从 poisoned session 继续 I/O。
 7. 暂定的 completion state-transition 序列及 counter-epoch 联合条件能否通过第二个厂商
    fixture，是否需要进一步收紧；更丰富的计数器世代语义仍待单独 RFC。
 8. `spectrum` 是否作为独立 `ScopeTraceKind`，以及单位校验复用哪些现有核心模型；该项已
    明确排除在 R1.3 公共 fetch scope 外，移入后续 trace-extensions RFC。
-9. binary operation/profile 的连接项如何映射到不同 backend 仍需核心实现细节；R1.3 的
-   operation 常量、profile 收紧规则和超限 close/poison 默认已冻结。
+9. 当前批准 backend 的 binary operation/profile 映射已实现；其他 backend 必须复用相同
+   operation 常量、profile 收紧规则和超限 close/poison 默认。
 10. error queue 的未来 peek/clear operation 仍待独立设计；R1.3 timing 默认固定为
     `before_and_after`，未知能力不得增加 skip 分支。
 
@@ -2247,7 +2265,7 @@ fixture、版本门和实机验收后，才能在正式 descriptor 中声明新�
 2. **capability/descriptor**：`ScopeDescriptorExtensions` 字段、中央
    `CAPABILITY_METHODS` 映射和各 required Protocol 已实现；缺失 profile/method 时在零 I/O
    阶段拒绝，额外方法不产生隐式 capability。
-3. **numeric and deadline constants**：截图 `262144/262144/1/0`、trace
+3. **numeric and deadline constants**：截图 `8388608/8388608/1/0`、trace
    `8388608/67108864/256/65536`、operation timeout `5000/30000/60000 ms` 已作为核心常量
    实现；profile/connection 只能收紧，超出同步界限统一 close + `poisoned`。
 4. **error timing**：默认 `before_and_after`、recovery 固定 `disabled`、每次 I/O 受绝对
@@ -2263,7 +2281,8 @@ fixture、版本门和实机验收后，才能在正式 descriptor 中声明新�
   nonce 按 `fresh -> passed_to_main -> restore_attempted -> consumed` 一次性消费，重放在 I/O
   前拒绝，artifact 只留摘要。
 - **identity proof**：`ScopeAcquisitionControlProfile.identity_semantics` 必须为
-  `unique_within_session_epoch` 才能使用 `identity_delta`；否则只能使用完整 state transition。
+  `unique_within_session_epoch` 才能使用 `identity_delta`；该条件只约束 identity proof。
+  `state_transition` 和 RFC-0009 的 profile-gated terminal STOP proof 仍按各自条件校验。
 - **phase API bridge**：核心通过 `ScopeOperationContextCoordinator.authorize_phase()` 包裹
   当前 normal gate 与 `SessionTransactionCoordinator.authorize()`，并用 sidecar/扩展记录绑定
   context、phase、fields、allowed I/O、deadline 和 max steps；driver 不接收 session token。

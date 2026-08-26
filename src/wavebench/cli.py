@@ -58,8 +58,10 @@ from .cli_output import (
     _print_run_preflight,
     _print_scope_acquisition_status,
     _print_scope_average_capture,
+    _print_scope_channel_input_state,
     _print_scope_history_timestamps,
     _print_scope_digital_status,
+    _print_scope_digital_status_v2,
     _print_scope_digital_waveform,
     _print_scope_measurement_statistics,
     _print_scope_cursor_readout,
@@ -1700,6 +1702,14 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     _print_scope_snapshot(result)
                 return 0
+            if args.command == "channel-input-state":
+                channel = args.channel or service.config.scope.default_channel
+                result = service.channel_input_state_v2(channel)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    _print_scope_channel_input_state(result)
+                return 0
             if args.command == "acquisition-status":
                 _print_scope_acquisition_status(service.acquisition_status())
                 return 0
@@ -1719,6 +1729,13 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "digital-status":
                 _print_scope_digital_status(service.digital_status(channel=args.channel))
+                return 0
+            if args.command == "digital-status-v2":
+                result = service.digital_status_v2(channel=args.channel)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    _print_scope_digital_status_v2(result)
                 return 0
             if args.command == "digital-waveform":
                 output_path = None

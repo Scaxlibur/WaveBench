@@ -6,6 +6,7 @@ from wavebench.services.scope_extension_specs import EXPERIMENTAL_SCOPE_OPERATIO
 from wavebench.services.scope_phase_coordinator import (
     BaselineUseState,
     OperationPhase,
+    ScopeBinaryLimits,
     ScopeOperationContextCoordinator,
 )
 from wavebench.transport.contracts import ReplayPolicy
@@ -267,6 +268,43 @@ def test_context_reserves_cleanup_time_inside_hard_operation_deadline() -> None:
     _, context = _context()
     assert context.main_deadline < context.deadline
     assert 1_000 <= context.cleanup_reserve_ms <= 5_000
+
+
+def test_context_intersects_spec_profile_and_connection_binary_limits() -> None:
+    transport = GuardedAuditedTransport(_TextTransport())  # type: ignore[arg-type]
+    context = ScopeOperationContextCoordinator(
+        session_state=transport.session_state,
+        spec=EXPERIMENTAL_SCOPE_OPERATION_SPECS["scope.fetch_trace"],
+        connection_timeout_ms=1_000,
+        profile_binary_limits=ScopeBinaryLimits(
+            response_max_bytes=4_096,
+            operation_max_bytes=16_384,
+            query_max_count=8,
+            resynchronization_max_bytes=512,
+        ),
+        connection_binary_limits=ScopeBinaryLimits(
+            response_max_bytes=2_048,
+            operation_max_bytes=8_192,
+            query_max_count=4,
+            resynchronization_max_bytes=256,
+        ),
+        enabled=True,
+    )
+
+    assert context.binary_ledger is not None
+    assert context.binary_ledger.snapshot() == {
+        "ledger_id": context.binary_ledger.ledger_id,
+        "active": True,
+        "per_response_max_bytes": 2_048,
+        "operation_max_bytes": 8_192,
+        "remaining_operation_bytes": 8_192,
+        "query_max_count": 4,
+        "remaining_query_count": 4,
+        "resynchronization_max_bytes": 256,
+        "discarded_bytes": 0,
+        "transport_trailing_bytes": 0,
+        "required_framing": None,
+    }
 
 
 def test_main_cannot_skip_preflight() -> None:

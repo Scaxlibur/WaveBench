@@ -14,13 +14,23 @@ from typing import TYPE_CHECKING, Literal, Mapping
 
 from wavebench.errors import ConfigError
 from wavebench.scope_extension_constants import (
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_OPERATION_TIMEOUT_MS,
     SCOPE_ACQUISITION_OPERATION_TIMEOUT_MS,
+    SCOPE_ACQUISITION_STATUS_V2_OPERATION_TIMEOUT_MS,
+    SCOPE_CURSOR_READOUT_V2_OPERATION_TIMEOUT_MS,
+    SCOPE_MEASUREMENT_STATISTICS_V2_OPERATION_TIMEOUT_MS,
+    SCOPE_FFT_STATUS_V2_OPERATION_TIMEOUT_MS,
     SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
     SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_QUERY_MAX_COUNT,
     SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
     SCOPE_SCREENSHOT_OPERATION_TIMEOUT_MS,
+    SCOPE_SNAPSHOT_V2_OPERATION_TIMEOUT_MS,
     SCOPE_TRACE_BINARY_OPERATION_MAX_BYTES,
     SCOPE_TRACE_BINARY_QUERY_MAX_COUNT,
     SCOPE_TRACE_BINARY_RESPONSE_MAX_BYTES,
@@ -329,6 +339,30 @@ _SCOPE_CAPTURE_VERIFICATION_FIELDS = (
     *_SCOPE_CAPTURE_TRANSFER_STATE_FIELDS,
     "scope.capture_identity",
 )
+_SCOPE_AVERAGE_CAPTURE_RESTORE_FIELDS = (
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+)
+_SCOPE_AVERAGE_CAPTURE_GRANULAR_FIELDS = (
+    "scope.acquisition.type",
+    "scope.acquisition.average_count",
+)
+_SCOPE_AVERAGE_CAPTURE_CHANGED_FIELDS = (
+    *_SCOPE_AVERAGE_CAPTURE_RESTORE_FIELDS,
+    *_SCOPE_AVERAGE_CAPTURE_GRANULAR_FIELDS,
+    "scope.error_queue",
+)
 
 
 _BUILTIN_SPECS = (
@@ -355,6 +389,13 @@ _BUILTIN_SPECS = (
         optional_capabilities=("scope.snapshot", "scope.channel_coupling"),
         effect="stateful_read",
         safe_alternatives=("scope.idn", "scope.channel_coupling"),
+    ),
+    _spec(
+        "scope.channel_input_state_v2",
+        "scope",
+        required_capabilities=("scope.channel_input_state_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
     ),
     _spec("scope.acquisition_status", "scope", required_capabilities=("scope.acquisition_status",), effect="stateful_read"),
     _spec("scope.channel_coupling", "scope", required_capabilities=("scope.channel_coupling",), effect="stateful_read"),
@@ -393,6 +434,13 @@ _BUILTIN_SPECS = (
     _spec("scope.fetch_waveform", "scope", required_capabilities=("scope.fetch_waveform",), effect="acquire", changed_fields=_SCOPE_CAPTURE_CHANGED_FIELDS, restore_coverage="capture-baseline-only", required_verified_fields=("scope.identity",), verification_fields=_SCOPE_CAPTURE_VERIFICATION_FIELDS, risk_flags=("acquisition_state", "temporary_transfer_setup")),
     _spec("scope.capture_average", "scope", required_capabilities=("scope.capture_average",), effect="acquire", changed_fields=("acquisition", "waveform_package"), risk_flags=("trigger", "acquisition_state")),
     _spec("scope.digital_status", "scope", required_capabilities=("scope.digital_status",), effect="stateful_read"),
+    _spec(
+        "scope.digital_status_v2",
+        "scope",
+        required_capabilities=("scope.digital_status_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+    ),
     _spec("scope.digital_waveform", "scope", required_capabilities=("scope.digital_waveform",), effect="acquire", changed_fields=("acquisition", "waveform_package"), risk_flags=("trigger", "acquisition_state")),
     _spec("scope.history_timestamps", "scope", required_capabilities=("scope.history_timestamps",), effect="stateful_read"),
     _spec("scope.measurement_statistics", "scope", required_capabilities=("scope.measurement_statistics",), effect="stateful_read"),
@@ -1187,10 +1235,106 @@ SCOPE_OPERATION_SPECS: Mapping[str, OperationSpec] = MappingProxyType(
     {spec.operation: spec for spec in _SCOPE_EXTENSION_SPECS}
 )
 
+_SCOPE_PORTABILITY_V2_SPECS = (
+    _spec(
+        "scope.snapshot_v2",
+        "scope",
+        required_capabilities=("scope.snapshot_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=SCOPE_SNAPSHOT_V2_OPERATION_TIMEOUT_MS,
+        error_check_minimum="disabled",
+        risk_flags=("profile_query",),
+    ),
+    _spec(
+        "scope.acquisition_status_v2",
+        "scope",
+        required_capabilities=("scope.acquisition_status_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=SCOPE_ACQUISITION_STATUS_V2_OPERATION_TIMEOUT_MS,
+        error_check_minimum="disabled",
+        risk_flags=("profile_query",),
+    ),
+    _scope_operation(
+        "scope.capture_average_v2",
+        required_capabilities=("scope.capture_average_v2",),
+        effect="acquire",
+        timeout_ms=SCOPE_AVERAGE_CAPTURE_V2_OPERATION_TIMEOUT_MS,
+        changed_fields=_SCOPE_AVERAGE_CAPTURE_CHANGED_FIELDS,
+        restore_coverage="average-capture-baseline",
+        verification_fields=(
+            "scope.identity",
+            *_SCOPE_AVERAGE_CAPTURE_CHANGED_FIELDS,
+        ),
+        postcondition_fields=_SCOPE_AVERAGE_CAPTURE_GRANULAR_FIELDS,
+        cleanup_verification_fields=_SCOPE_AVERAGE_CAPTURE_RESTORE_FIELDS,
+        risk_flags=(
+            "trigger",
+            "acquisition_state",
+            "temporary_transfer_setup",
+            "binary_response",
+            "recovery_required",
+        ),
+        binary_limits=(
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+            SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        ),
+        error_check_minimum="disabled",
+    ),
+    _spec(
+        "scope.measurement_statistics_v2",
+        "scope",
+        required_capabilities=("scope.measurement_statistics_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=SCOPE_MEASUREMENT_STATISTICS_V2_OPERATION_TIMEOUT_MS,
+        error_check_minimum="disabled",
+        risk_flags=("profile_query",),
+    ),
+    _spec(
+        "scope.fft_status_v2",
+        "scope",
+        required_capabilities=("scope.fft_status_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=SCOPE_FFT_STATUS_V2_OPERATION_TIMEOUT_MS,
+        error_check_minimum="disabled",
+        risk_flags=("profile_query",),
+    ),
+    _spec(
+        "scope.cursor_readout_v2",
+        "scope",
+        required_capabilities=("scope.cursor_readout_v2",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=SCOPE_CURSOR_READOUT_V2_OPERATION_TIMEOUT_MS,
+        error_check_minimum="disabled",
+        risk_flags=("profile_query",),
+    ),
+)
+
+SCOPE_PORTABILITY_V2_OPERATION_SPECS: Mapping[str, OperationSpec] = MappingProxyType(
+    {spec.operation: spec for spec in _SCOPE_PORTABILITY_V2_SPECS}
+)
+
 OPERATION_REGISTRY = OperationRegistry(
     {
         **{spec.operation: spec for spec in _BUILTIN_SPECS},
         **SCOPE_OPERATION_SPECS,
+        **SCOPE_PORTABILITY_V2_OPERATION_SPECS,
     }
 )
 

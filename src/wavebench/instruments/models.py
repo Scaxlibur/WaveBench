@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from math import isclose, isfinite
+import re
 from typing import Literal
 
 import numpy as np
@@ -121,6 +122,506 @@ class ScopeSnapshot:
     trigger: ScopeEdgeTriggerSnapshot
 
 
+ScopeSnapshotFieldV2 = Literal[
+    "identity.manufacturer",
+    "identity.model",
+    "identity.serial_number",
+    "identity.firmware",
+    "identity.options",
+    "health.status_byte",
+    "health.operation_condition",
+    "health.questionable_condition",
+    "health.acquisition_available",
+    "health.acquisition_count",
+    "health.sample_rate_hz",
+    "health.error_queue_nonempty",
+    "health.waiting_for_trigger",
+    "channel.channel",
+    "channel.enabled",
+    "channel.coupling",
+    "channel.range_v",
+    "channel.scale_v_per_div",
+    "channel.offset_v",
+    "channel.position_div",
+    "channel.bandwidth_hz",
+    "channel.polarity",
+    "channel.skew_s",
+    "channel.label",
+    "channel.label_enabled",
+    "channel.overloaded",
+    "channel.acquisition_type",
+    "timebase.acquisition_time_s",
+    "timebase.divisions",
+    "timebase.position_s",
+    "timebase.range_s",
+    "timebase.reference_percent",
+    "timebase.scale_s_per_div",
+    "timebase.roll_enabled",
+    "probe.channel",
+    "probe.attenuation_factor",
+    "probe.bandwidth_hz",
+    "probe.capacitance_f",
+    "probe.impedance_ohm",
+    "probe.name",
+    "probe.probe_type",
+    "waveform.channel",
+    "waveform.x_start_s",
+    "waveform.x_stop_s",
+    "waveform.points",
+    "waveform.values_per_sample",
+    "waveform.x_increment_s",
+    "waveform.x_origin_s",
+    "waveform.y_increment_v",
+    "waveform.y_origin_v",
+    "waveform.y_resolution_bits",
+    "trigger.trigger_type",
+    "trigger.source_channel",
+    "trigger.mode",
+    "trigger.slope",
+    "trigger.coupling",
+    "trigger.level_v",
+    "trigger.hysteresis_mode",
+    "trigger.holdoff_mode",
+    "trigger.holdoff_time_s",
+]
+
+SCOPE_SNAPSHOT_V2_FIELD_ORDER: tuple[ScopeSnapshotFieldV2, ...] = (
+    "identity.manufacturer",
+    "identity.model",
+    "identity.serial_number",
+    "identity.firmware",
+    "identity.options",
+    "health.status_byte",
+    "health.operation_condition",
+    "health.questionable_condition",
+    "health.acquisition_available",
+    "health.acquisition_count",
+    "health.sample_rate_hz",
+    "health.error_queue_nonempty",
+    "health.waiting_for_trigger",
+    "channel.channel",
+    "channel.enabled",
+    "channel.coupling",
+    "channel.range_v",
+    "channel.scale_v_per_div",
+    "channel.offset_v",
+    "channel.position_div",
+    "channel.bandwidth_hz",
+    "channel.polarity",
+    "channel.skew_s",
+    "channel.label",
+    "channel.label_enabled",
+    "channel.overloaded",
+    "channel.acquisition_type",
+    "timebase.acquisition_time_s",
+    "timebase.divisions",
+    "timebase.position_s",
+    "timebase.range_s",
+    "timebase.reference_percent",
+    "timebase.scale_s_per_div",
+    "timebase.roll_enabled",
+    "probe.channel",
+    "probe.attenuation_factor",
+    "probe.bandwidth_hz",
+    "probe.capacitance_f",
+    "probe.impedance_ohm",
+    "probe.name",
+    "probe.probe_type",
+    "waveform.channel",
+    "waveform.x_start_s",
+    "waveform.x_stop_s",
+    "waveform.points",
+    "waveform.values_per_sample",
+    "waveform.x_increment_s",
+    "waveform.x_origin_s",
+    "waveform.y_increment_v",
+    "waveform.y_origin_v",
+    "waveform.y_resolution_bits",
+    "trigger.trigger_type",
+    "trigger.source_channel",
+    "trigger.mode",
+    "trigger.slope",
+    "trigger.coupling",
+    "trigger.level_v",
+    "trigger.hysteresis_mode",
+    "trigger.holdoff_mode",
+    "trigger.holdoff_time_s",
+)
+SCOPE_SNAPSHOT_V2_FIELDS = frozenset(SCOPE_SNAPSHOT_V2_FIELD_ORDER)
+_SCOPE_SNAPSHOT_V2_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$")
+
+
+def _scope_snapshot_v2_required_channel(value: object, *, label: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{label} must be a positive integer")
+
+
+def _scope_snapshot_v2_optional_int(value: object, *, label: str) -> None:
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+        raise ValueError(f"{label} must be an integer when provided")
+
+
+def _scope_snapshot_v2_optional_float(value: object, *, label: str) -> None:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value)
+    ):
+        raise ValueError(f"{label} must be finite when provided")
+
+
+def _scope_snapshot_v2_optional_bool(value: object, *, label: str) -> None:
+    if value is not None and not isinstance(value, bool):
+        raise ValueError(f"{label} must be bool when provided")
+
+
+def _scope_snapshot_v2_optional_str(value: object, *, label: str) -> None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{label} must be str when provided")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeHealthSnapshotV2:
+    status_byte: int | None = None
+    operation_condition: int | None = None
+    questionable_condition: int | None = None
+    acquisition_available: int | None = None
+    acquisition_count: int | None = None
+    sample_rate_hz: float | None = None
+    error_queue_nonempty: bool | None = None
+    waiting_for_trigger: bool | None = None
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("health status_byte", self.status_byte),
+            ("health operation_condition", self.operation_condition),
+            ("health questionable_condition", self.questionable_condition),
+            ("health acquisition_available", self.acquisition_available),
+            ("health acquisition_count", self.acquisition_count),
+        ):
+            _scope_snapshot_v2_optional_int(value, label=label)
+        _scope_snapshot_v2_optional_float(self.sample_rate_hz, label="health sample_rate_hz")
+        _scope_snapshot_v2_optional_bool(
+            self.error_queue_nonempty,
+            label="health error_queue_nonempty",
+        )
+        _scope_snapshot_v2_optional_bool(
+            self.waiting_for_trigger,
+            label="health waiting_for_trigger",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAnalogChannelSnapshotV2:
+    channel: int
+    enabled: bool | None = None
+    coupling: str | None = None
+    range_v: float | None = None
+    scale_v_per_div: float | None = None
+    offset_v: float | None = None
+    position_div: float | None = None
+    bandwidth_hz: float | None = None
+    polarity: str | None = None
+    skew_s: float | None = None
+    label: str | None = None
+    label_enabled: bool | None = None
+    overloaded: bool | None = None
+    acquisition_type: str | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_required_channel(self.channel, label="snapshot channel")
+        _scope_snapshot_v2_optional_bool(self.enabled, label="snapshot channel enabled")
+        for label, value in (
+            ("snapshot channel coupling", self.coupling),
+            ("snapshot channel polarity", self.polarity),
+            ("snapshot channel label", self.label),
+            ("snapshot channel acquisition_type", self.acquisition_type),
+        ):
+            _scope_snapshot_v2_optional_str(value, label=label)
+        for label, value in (
+            ("snapshot channel range_v", self.range_v),
+            ("snapshot channel scale_v_per_div", self.scale_v_per_div),
+            ("snapshot channel offset_v", self.offset_v),
+            ("snapshot channel position_div", self.position_div),
+            ("snapshot channel bandwidth_hz", self.bandwidth_hz),
+            ("snapshot channel skew_s", self.skew_s),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_bool(
+            self.label_enabled,
+            label="snapshot channel label_enabled",
+        )
+        _scope_snapshot_v2_optional_bool(self.overloaded, label="snapshot channel overloaded")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeTimebaseSnapshotV2:
+    acquisition_time_s: float | None = None
+    divisions: int | None = None
+    position_s: float | None = None
+    range_s: float | None = None
+    reference_percent: float | None = None
+    scale_s_per_div: float | None = None
+    roll_enabled: bool | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_optional_float(
+            self.acquisition_time_s,
+            label="snapshot timebase acquisition_time_s",
+        )
+        _scope_snapshot_v2_optional_int(self.divisions, label="snapshot timebase divisions")
+        for label, value in (
+            ("snapshot timebase position_s", self.position_s),
+            ("snapshot timebase range_s", self.range_s),
+            ("snapshot timebase reference_percent", self.reference_percent),
+            ("snapshot timebase scale_s_per_div", self.scale_s_per_div),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_bool(
+            self.roll_enabled,
+            label="snapshot timebase roll_enabled",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeProbeSnapshotV2:
+    channel: int
+    attenuation_factor: float | None = None
+    bandwidth_hz: float | None = None
+    capacitance_f: float | None = None
+    impedance_ohm: float | None = None
+    name: str | None = None
+    probe_type: str | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_required_channel(self.channel, label="snapshot probe channel")
+        for label, value in (
+            ("snapshot probe attenuation_factor", self.attenuation_factor),
+            ("snapshot probe bandwidth_hz", self.bandwidth_hz),
+            ("snapshot probe capacitance_f", self.capacitance_f),
+            ("snapshot probe impedance_ohm", self.impedance_ohm),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_str(self.name, label="snapshot probe name")
+        _scope_snapshot_v2_optional_str(self.probe_type, label="snapshot probe probe_type")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformMetadataSnapshotV2:
+    channel: int
+    x_start_s: float | None = None
+    x_stop_s: float | None = None
+    points: int | None = None
+    values_per_sample: int | None = None
+    x_increment_s: float | None = None
+    x_origin_s: float | None = None
+    y_increment_v: float | None = None
+    y_origin_v: float | None = None
+    y_resolution_bits: int | None = None
+
+    def __post_init__(self) -> None:
+        _scope_snapshot_v2_required_channel(self.channel, label="snapshot waveform channel")
+        for label, value in (
+            ("snapshot waveform x_start_s", self.x_start_s),
+            ("snapshot waveform x_stop_s", self.x_stop_s),
+            ("snapshot waveform x_increment_s", self.x_increment_s),
+            ("snapshot waveform x_origin_s", self.x_origin_s),
+            ("snapshot waveform y_increment_v", self.y_increment_v),
+            ("snapshot waveform y_origin_v", self.y_origin_v),
+        ):
+            _scope_snapshot_v2_optional_float(value, label=label)
+        _scope_snapshot_v2_optional_int(self.points, label="snapshot waveform points")
+        _scope_snapshot_v2_optional_int(
+            self.values_per_sample,
+            label="snapshot waveform values_per_sample",
+        )
+        _scope_snapshot_v2_optional_int(
+            self.y_resolution_bits,
+            label="snapshot waveform y_resolution_bits",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeTriggerSnapshotV2:
+    trigger_type: str
+    source_channel: int | None = None
+    mode: str | None = None
+    slope: str | None = None
+    coupling: str | None = None
+    level_v: float | None = None
+    hysteresis_mode: str | None = None
+    holdoff_mode: str | None = None
+    holdoff_time_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.trigger_type, str) or _SCOPE_SNAPSHOT_V2_TOKEN.fullmatch(
+            self.trigger_type
+        ) is None:
+            raise ValueError("snapshot trigger_type must be a safe token")
+        _scope_snapshot_v2_optional_int(
+            self.source_channel,
+            label="snapshot trigger source_channel",
+        )
+        for label, value in (
+            ("snapshot trigger mode", self.mode),
+            ("snapshot trigger slope", self.slope),
+            ("snapshot trigger coupling", self.coupling),
+            ("snapshot trigger hysteresis_mode", self.hysteresis_mode),
+            ("snapshot trigger holdoff_mode", self.holdoff_mode),
+        ):
+            _scope_snapshot_v2_optional_str(value, label=label)
+        _scope_snapshot_v2_optional_float(self.level_v, label="snapshot trigger level_v")
+        _scope_snapshot_v2_optional_float(
+            self.holdoff_time_s,
+            label="snapshot trigger holdoff_time_s",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeSnapshotV2:
+    """Portable scope snapshot with explicit availability for every optional leaf."""
+
+    identity: ScopeIdentitySnapshot
+    health: ScopeHealthSnapshotV2 | None = None
+    channel: ScopeAnalogChannelSnapshotV2 | None = None
+    timebase: ScopeTimebaseSnapshotV2 | None = None
+    probe: ScopeProbeSnapshotV2 | None = None
+    waveform: ScopeWaveformMetadataSnapshotV2 | None = None
+    trigger: ScopeTriggerSnapshotV2 | None = None
+    unavailable_fields: tuple[ScopeSnapshotFieldV2, ...] = ()
+    not_applicable_fields: tuple[ScopeSnapshotFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, ScopeIdentitySnapshot):
+            raise TypeError("snapshot V2 identity has an invalid type")
+        identity_values = (
+            self.identity.manufacturer,
+            self.identity.model,
+            self.identity.serial_number,
+            self.identity.firmware,
+        )
+        if any(not isinstance(value, str) or not value.strip() for value in identity_values):
+            raise ValueError("snapshot V2 identity fields must be non-empty strings")
+        if not isinstance(self.identity.options, tuple) or any(
+            not isinstance(value, str) or not value.strip() for value in self.identity.options
+        ):
+            raise ValueError("snapshot V2 identity options must be a tuple of non-empty strings")
+        for label, value, expected in (
+            ("health", self.health, ScopeHealthSnapshotV2),
+            ("channel", self.channel, ScopeAnalogChannelSnapshotV2),
+            ("timebase", self.timebase, ScopeTimebaseSnapshotV2),
+            ("probe", self.probe, ScopeProbeSnapshotV2),
+            ("waveform", self.waveform, ScopeWaveformMetadataSnapshotV2),
+            ("trigger", self.trigger, ScopeTriggerSnapshotV2),
+        ):
+            if value is not None and not isinstance(value, expected):
+                raise TypeError(f"snapshot V2 {label} has an invalid type")
+        unavailable = self._availability_paths(
+            self.unavailable_fields,
+            label="unavailable_fields",
+        )
+        not_applicable = self._availability_paths(
+            self.not_applicable_fields,
+            label="not_applicable_fields",
+        )
+        if set(unavailable) & set(not_applicable):
+            raise ValueError("snapshot V2 availability paths must be mutually exclusive")
+        missing = {
+            field_name
+            for field_name, value in self.field_values().items()
+            if value is None
+        }
+        if set(unavailable) | set(not_applicable) != missing:
+            raise ValueError(
+                "snapshot V2 availability paths must exactly describe missing fields"
+            )
+
+    @staticmethod
+    def _availability_paths(
+        paths: object,
+        *,
+        label: str,
+    ) -> tuple[ScopeSnapshotFieldV2, ...]:
+        if not isinstance(paths, tuple):
+            raise TypeError(f"snapshot V2 {label} must be a tuple")
+        if len(set(paths)) != len(paths):
+            raise ValueError(f"snapshot V2 {label} must not contain duplicates")
+        if not set(paths) <= SCOPE_SNAPSHOT_V2_FIELDS:
+            raise ValueError(f"snapshot V2 {label} contain unsupported paths")
+        expected = tuple(field for field in SCOPE_SNAPSHOT_V2_FIELD_ORDER if field in paths)
+        if paths != expected:
+            raise ValueError(f"snapshot V2 {label} must use stable field order")
+        return paths
+
+    def field_values(self) -> dict[ScopeSnapshotFieldV2, object | None]:
+        health = self.health
+        channel = self.channel
+        timebase = self.timebase
+        probe = self.probe
+        waveform = self.waveform
+        trigger = self.trigger
+        return {
+            "identity.manufacturer": self.identity.manufacturer,
+            "identity.model": self.identity.model,
+            "identity.serial_number": self.identity.serial_number,
+            "identity.firmware": self.identity.firmware,
+            "identity.options": self.identity.options,
+            "health.status_byte": None if health is None else health.status_byte,
+            "health.operation_condition": None if health is None else health.operation_condition,
+            "health.questionable_condition": None if health is None else health.questionable_condition,
+            "health.acquisition_available": None if health is None else health.acquisition_available,
+            "health.acquisition_count": None if health is None else health.acquisition_count,
+            "health.sample_rate_hz": None if health is None else health.sample_rate_hz,
+            "health.error_queue_nonempty": None if health is None else health.error_queue_nonempty,
+            "health.waiting_for_trigger": None if health is None else health.waiting_for_trigger,
+            "channel.channel": None if channel is None else channel.channel,
+            "channel.enabled": None if channel is None else channel.enabled,
+            "channel.coupling": None if channel is None else channel.coupling,
+            "channel.range_v": None if channel is None else channel.range_v,
+            "channel.scale_v_per_div": None if channel is None else channel.scale_v_per_div,
+            "channel.offset_v": None if channel is None else channel.offset_v,
+            "channel.position_div": None if channel is None else channel.position_div,
+            "channel.bandwidth_hz": None if channel is None else channel.bandwidth_hz,
+            "channel.polarity": None if channel is None else channel.polarity,
+            "channel.skew_s": None if channel is None else channel.skew_s,
+            "channel.label": None if channel is None else channel.label,
+            "channel.label_enabled": None if channel is None else channel.label_enabled,
+            "channel.overloaded": None if channel is None else channel.overloaded,
+            "channel.acquisition_type": None if channel is None else channel.acquisition_type,
+            "timebase.acquisition_time_s": None if timebase is None else timebase.acquisition_time_s,
+            "timebase.divisions": None if timebase is None else timebase.divisions,
+            "timebase.position_s": None if timebase is None else timebase.position_s,
+            "timebase.range_s": None if timebase is None else timebase.range_s,
+            "timebase.reference_percent": None if timebase is None else timebase.reference_percent,
+            "timebase.scale_s_per_div": None if timebase is None else timebase.scale_s_per_div,
+            "timebase.roll_enabled": None if timebase is None else timebase.roll_enabled,
+            "probe.channel": None if probe is None else probe.channel,
+            "probe.attenuation_factor": None if probe is None else probe.attenuation_factor,
+            "probe.bandwidth_hz": None if probe is None else probe.bandwidth_hz,
+            "probe.capacitance_f": None if probe is None else probe.capacitance_f,
+            "probe.impedance_ohm": None if probe is None else probe.impedance_ohm,
+            "probe.name": None if probe is None else probe.name,
+            "probe.probe_type": None if probe is None else probe.probe_type,
+            "waveform.channel": None if waveform is None else waveform.channel,
+            "waveform.x_start_s": None if waveform is None else waveform.x_start_s,
+            "waveform.x_stop_s": None if waveform is None else waveform.x_stop_s,
+            "waveform.points": None if waveform is None else waveform.points,
+            "waveform.values_per_sample": None if waveform is None else waveform.values_per_sample,
+            "waveform.x_increment_s": None if waveform is None else waveform.x_increment_s,
+            "waveform.x_origin_s": None if waveform is None else waveform.x_origin_s,
+            "waveform.y_increment_v": None if waveform is None else waveform.y_increment_v,
+            "waveform.y_origin_v": None if waveform is None else waveform.y_origin_v,
+            "waveform.y_resolution_bits": None if waveform is None else waveform.y_resolution_bits,
+            "trigger.trigger_type": None if trigger is None else trigger.trigger_type,
+            "trigger.source_channel": None if trigger is None else trigger.source_channel,
+            "trigger.mode": None if trigger is None else trigger.mode,
+            "trigger.slope": None if trigger is None else trigger.slope,
+            "trigger.coupling": None if trigger is None else trigger.coupling,
+            "trigger.level_v": None if trigger is None else trigger.level_v,
+            "trigger.hysteresis_mode": None if trigger is None else trigger.hysteresis_mode,
+            "trigger.holdoff_mode": None if trigger is None else trigger.holdoff_mode,
+            "trigger.holdoff_time_s": None if trigger is None else trigger.holdoff_time_s,
+        }
+
+
 @dataclass(frozen=True)
 class ScopeAcquisitionStatus:
     average_count: int
@@ -130,6 +631,47 @@ class ScopeAcquisitionStatus:
     segmented_maximum_enabled: bool | None
     segment_capacity: int | None
     segments_available: int | None
+
+
+ScopeInputCoupling = Literal["ac", "dc", "gnd", "unknown"]
+ScopeInputTermination = Literal["high_z", "50_ohm", "unknown"]
+ScopeChannelInputStateFieldV2 = Literal["impedance_ohm"]
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelInputStateV2:
+    """Typed read-only coupling and termination state for one analog channel."""
+
+    channel: int
+    coupling: ScopeInputCoupling
+    termination: ScopeInputTermination
+    impedance_ohm: float | None = None
+    unavailable_fields: tuple[ScopeChannelInputStateFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.channel, bool) or not isinstance(self.channel, int) or self.channel < 1:
+            raise ValueError("scope input-state channel must be a positive integer")
+        if self.coupling not in {"ac", "dc", "gnd", "unknown"}:
+            raise ValueError("scope input-state coupling is invalid")
+        if self.termination not in {"high_z", "50_ohm", "unknown"}:
+            raise ValueError("scope input-state termination is invalid")
+        if not isinstance(self.unavailable_fields, tuple):
+            raise TypeError("scope input-state unavailable_fields must be a tuple")
+        if self.impedance_ohm is None:
+            if self.unavailable_fields != ("impedance_ohm",):
+                raise ValueError(
+                    "scope input-state missing impedance must be marked unavailable"
+                )
+            return
+        if (
+            isinstance(self.impedance_ohm, bool)
+            or not isinstance(self.impedance_ohm, (int, float))
+            or not isfinite(self.impedance_ohm)
+            or self.impedance_ohm <= 0
+        ):
+            raise ValueError("scope input-state impedance must be a finite positive number")
+        if self.unavailable_fields:
+            raise ValueError("scope input-state available impedance cannot be unavailable")
 
 
 ScopeChannelArithmetic = Literal["OFF", "ENVELOPE", "AVERAGE", "SMOOTH", "FILTER"]
@@ -155,6 +697,213 @@ class ScopeDigitalChannelStatus:
     position_div: float
     label: str
     label_enabled: bool
+
+
+ScopeDigitalThresholdScope = Literal["channel", "pod", "unknown"]
+ScopeDigitalActivityV2 = Literal["LOW", "HIGH", "TOGGLE", "unknown"]
+ScopeDigitalTechnologyV2 = Literal["TTL", "ECL", "CMOS", "MANUAL", "unknown"]
+ScopeDigitalHysteresisV2 = Literal["MAXIMUM", "ROBUST", "NORMAL", "unknown"]
+ScopeDigitalSizeV2 = Literal[
+    "SMALL",
+    "MEDIUM",
+    "LARGE",
+    "DIV1",
+    "DIV2",
+    "DIV4",
+    "DIV8",
+    "unknown",
+]
+ScopeDigitalStatusFieldV2 = Literal[
+    "displayed",
+    "position_div",
+    "label",
+    "label_enabled",
+    "activity",
+    "technology",
+    "hysteresis",
+    "pod",
+    "pod.threshold_v",
+    "pod.threshold_scope",
+    "shared",
+    "shared.module_present",
+    "shared.timing_calibration_s",
+    "shared.size",
+]
+
+_SCOPE_DIGITAL_STATUS_V2_FIELD_ORDER: tuple[ScopeDigitalStatusFieldV2, ...] = (
+    "displayed",
+    "position_div",
+    "label",
+    "label_enabled",
+    "activity",
+    "technology",
+    "hysteresis",
+    "pod",
+    "pod.threshold_v",
+    "pod.threshold_scope",
+    "shared",
+    "shared.module_present",
+    "shared.timing_calibration_s",
+    "shared.size",
+)
+_SCOPE_DIGITAL_STATUS_V2_FIELDS = frozenset(_SCOPE_DIGITAL_STATUS_V2_FIELD_ORDER)
+
+
+def _scope_v2_nonnegative_int(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return value
+
+
+def _scope_v2_optional_finite(value: object, *, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+        raise ValueError(f"{label} must be finite when provided")
+    return float(value)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDigitalPodStatusV2:
+    start_channel: int
+    stop_channel: int
+    threshold_v: float | None = None
+    threshold_scope: ScopeDigitalThresholdScope | None = None
+
+    def __post_init__(self) -> None:
+        _scope_v2_nonnegative_int(self.start_channel, label="digital pod start_channel")
+        _scope_v2_nonnegative_int(self.stop_channel, label="digital pod stop_channel")
+        if self.start_channel > self.stop_channel:
+            raise ValueError("digital pod start_channel must not exceed stop_channel")
+        _scope_v2_optional_finite(self.threshold_v, label="digital pod threshold_v")
+        if self.threshold_scope is not None and self.threshold_scope not in {
+            "channel",
+            "pod",
+            "unknown",
+        }:
+            raise ValueError("digital pod threshold_scope is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDigitalSharedStatusV2:
+    module_present: bool | None = None
+    timing_calibration_s: float | None = None
+    size: ScopeDigitalSizeV2 | None = None
+
+    def __post_init__(self) -> None:
+        if self.module_present is not None and not isinstance(self.module_present, bool):
+            raise ValueError("digital shared module_present must be bool when provided")
+        _scope_v2_optional_finite(
+            self.timing_calibration_s,
+            label="digital shared timing_calibration_s",
+        )
+        if self.size is not None and self.size not in {
+            "SMALL",
+            "MEDIUM",
+            "LARGE",
+            "DIV1",
+            "DIV2",
+            "DIV4",
+            "DIV8",
+            "unknown",
+        }:
+            raise ValueError("digital shared size is invalid")
+        if self.module_present is None and self.timing_calibration_s is None and self.size is None:
+            raise ValueError("digital shared status must contain at least one available field")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDigitalChannelStatusV2:
+    """Portable digital channel state that does not invent unavailable device fields."""
+
+    channel: int
+    displayed: bool | None = None
+    position_div: float | None = None
+    label: str | None = None
+    label_enabled: bool | None = None
+    activity: ScopeDigitalActivityV2 | None = None
+    technology: ScopeDigitalTechnologyV2 | None = None
+    hysteresis: ScopeDigitalHysteresisV2 | None = None
+    pod: ScopeDigitalPodStatusV2 | None = None
+    shared: ScopeDigitalSharedStatusV2 | None = None
+    unavailable_fields: tuple[ScopeDigitalStatusFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        _scope_v2_nonnegative_int(self.channel, label="digital status channel")
+        if self.displayed is not None and not isinstance(self.displayed, bool):
+            raise ValueError("digital status displayed must be bool when provided")
+        _scope_v2_optional_finite(self.position_div, label="digital status position_div")
+        if self.label is not None and not isinstance(self.label, str):
+            raise ValueError("digital status label must be str when provided")
+        if self.label_enabled is not None and not isinstance(self.label_enabled, bool):
+            raise ValueError("digital status label_enabled must be bool when provided")
+        if self.activity is not None and self.activity not in {"LOW", "HIGH", "TOGGLE", "unknown"}:
+            raise ValueError("digital status activity is invalid")
+        if self.technology is not None and self.technology not in {
+            "TTL",
+            "ECL",
+            "CMOS",
+            "MANUAL",
+            "unknown",
+        }:
+            raise ValueError("digital status technology is invalid")
+        if self.hysteresis is not None and self.hysteresis not in {
+            "MAXIMUM",
+            "ROBUST",
+            "NORMAL",
+            "unknown",
+        }:
+            raise ValueError("digital status hysteresis is invalid")
+        if self.pod is not None:
+            if not isinstance(self.pod, ScopeDigitalPodStatusV2):
+                raise TypeError("digital status pod has an invalid type")
+            if not self.pod.start_channel <= self.channel <= self.pod.stop_channel:
+                raise ValueError("digital pod range must include the requested channel")
+        if self.shared is not None and not isinstance(self.shared, ScopeDigitalSharedStatusV2):
+            raise TypeError("digital status shared has an invalid type")
+        if not isinstance(self.unavailable_fields, tuple):
+            raise TypeError("digital status unavailable_fields must be a tuple")
+        if len(set(self.unavailable_fields)) != len(self.unavailable_fields):
+            raise ValueError("digital status unavailable_fields must not contain duplicates")
+        if not set(self.unavailable_fields) <= _SCOPE_DIGITAL_STATUS_V2_FIELDS:
+            raise ValueError("digital status unavailable_fields contain unsupported paths")
+
+        expected_unavailable: set[ScopeDigitalStatusFieldV2] = set()
+        for field_name, value in (
+            ("displayed", self.displayed),
+            ("position_div", self.position_div),
+            ("label", self.label),
+            ("label_enabled", self.label_enabled),
+            ("activity", self.activity),
+            ("technology", self.technology),
+            ("hysteresis", self.hysteresis),
+        ):
+            if value is None:
+                expected_unavailable.add(field_name)  # type: ignore[arg-type]
+        if self.pod is None:
+            expected_unavailable.add("pod")
+        else:
+            if self.pod.threshold_v is None:
+                expected_unavailable.add("pod.threshold_v")
+            if self.pod.threshold_scope is None:
+                expected_unavailable.add("pod.threshold_scope")
+        if self.shared is None:
+            expected_unavailable.add("shared")
+        else:
+            if self.shared.module_present is None:
+                expected_unavailable.add("shared.module_present")
+            if self.shared.timing_calibration_s is None:
+                expected_unavailable.add("shared.timing_calibration_s")
+            if self.shared.size is None:
+                expected_unavailable.add("shared.size")
+        expected = tuple(
+            field for field in _SCOPE_DIGITAL_STATUS_V2_FIELD_ORDER if field in expected_unavailable
+        )
+        if self.unavailable_fields != expected:
+            raise ValueError(
+                "digital status unavailable_fields must exactly describe missing fields "
+                "in stable order"
+            )
 
 
 @dataclass(frozen=True)
@@ -348,6 +1097,118 @@ class ScopeMeasurementStatistics:
     buffered_values: tuple[float, ...] | None = None
 
 
+ScopeMeasurementSelectorMode = Literal["slot", "item_sources"]
+_SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementSelector:
+    slot: int | None = None
+    item: str | None = None
+    sources: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sources, tuple):
+            raise TypeError("measurement selector sources must be a tuple")
+        if self.slot is not None:
+            if isinstance(self.slot, bool) or not isinstance(self.slot, int) or self.slot < 1:
+                raise ValueError("measurement selector slot must be a positive integer")
+            if self.item is not None or self.sources:
+                raise ValueError("slot measurement selector cannot include item or sources")
+            return
+        if (
+            not isinstance(self.item, str)
+            or _SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN.fullmatch(self.item) is None
+        ):
+            raise ValueError("item measurement selector requires a safe item token")
+        if not self.sources:
+            raise ValueError("item measurement selector requires at least one source")
+        if len(set(self.sources)) != len(self.sources):
+            raise ValueError("item measurement selector sources must be unique")
+        for source in self.sources:
+            if (
+                not isinstance(source, str)
+                or _SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN.fullmatch(source) is None
+            ):
+                raise ValueError("item measurement selector sources must be safe tokens")
+
+    @property
+    def mode(self) -> ScopeMeasurementSelectorMode:
+        return "slot" if self.slot is not None else "item_sources"
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementStatisticsRequestV2:
+    selector: ScopeMeasurementSelector
+    configured: bool
+    include_buffer: bool = False
+    acquisition_stopped: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.selector, ScopeMeasurementSelector):
+            raise TypeError("measurement statistics V2 selector has an invalid type")
+        if self.configured is not True:
+            raise ValueError("measurement statistics V2 requires configured=True")
+        if not isinstance(self.include_buffer, bool):
+            raise TypeError("measurement statistics V2 include_buffer must be bool")
+        if not isinstance(self.acquisition_stopped, bool):
+            raise TypeError("measurement statistics V2 acquisition_stopped must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementStatisticsV2:
+    selector: ScopeMeasurementSelector
+    category: str
+    actual: float
+    average: float
+    standard_deviation: float
+    minimum: float
+    maximum: float
+    waveform_count: int
+    buffered_values: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.selector, ScopeMeasurementSelector):
+            raise TypeError("measurement statistics V2 selector has an invalid type")
+        if (
+            not isinstance(self.category, str)
+            or _SCOPE_MEASUREMENT_STATISTICS_V2_TOKEN.fullmatch(self.category) is None
+        ):
+            raise ValueError("measurement statistics V2 category must be a safe token")
+        for label, value in (
+            ("actual", self.actual),
+            ("average", self.average),
+            ("standard_deviation", self.standard_deviation),
+            ("minimum", self.minimum),
+            ("maximum", self.maximum),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+            ):
+                raise ValueError(f"measurement statistics V2 {label} must be finite")
+        if (
+            isinstance(self.waveform_count, bool)
+            or not isinstance(self.waveform_count, int)
+            or self.waveform_count < 0
+        ):
+            raise ValueError("measurement statistics V2 waveform_count must be non-negative")
+        if self.buffered_values is None:
+            return
+        if not isinstance(self.buffered_values, tuple):
+            raise TypeError("measurement statistics V2 buffered_values must be a tuple")
+        for value in self.buffered_values:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+            ):
+                raise ValueError("measurement statistics V2 buffered_values must be finite")
+
+
 @dataclass(frozen=True)
 class ScopeDerivedWaveformMetadata:
     source_kind: Literal["math", "reference"]
@@ -370,6 +1231,293 @@ class ScopeFftStatus:
     average_complete: bool
     resolution_bandwidth_hz: float
     sample_rate_hz: float
+
+
+ScopeFftStatusFieldV2 = Literal[
+    "source",
+    "window",
+    "vertical_unit",
+    "frequency_start_hz",
+    "frequency_stop_hz",
+    "average_complete",
+    "resolution_bandwidth_hz",
+    "sample_rate_hz",
+]
+SCOPE_FFT_STATUS_V2_FIELD_ORDER: tuple[ScopeFftStatusFieldV2, ...] = (
+    "source",
+    "window",
+    "vertical_unit",
+    "frequency_start_hz",
+    "frequency_stop_hz",
+    "average_complete",
+    "resolution_bandwidth_hz",
+    "sample_rate_hz",
+)
+_SCOPE_FFT_STATUS_V2_FIELDS = frozenset(SCOPE_FFT_STATUS_V2_FIELD_ORDER)
+_SCOPE_FFT_STATUS_V2_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFftStatusV2:
+    math_index: int
+    source: str | None = None
+    window: str | None = None
+    vertical_unit: str | None = None
+    frequency_start_hz: float | None = None
+    frequency_stop_hz: float | None = None
+    average_complete: bool | None = None
+    resolution_bandwidth_hz: float | None = None
+    sample_rate_hz: float | None = None
+    unavailable_fields: tuple[ScopeFftStatusFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.math_index, bool) or not isinstance(self.math_index, int) or self.math_index < 1:
+            raise ValueError("FFT status V2 math_index must be a positive integer")
+        for label, value in (
+            ("source", self.source),
+            ("window", self.window),
+            ("vertical_unit", self.vertical_unit),
+        ):
+            if value is not None and (
+                not isinstance(value, str)
+                or _SCOPE_FFT_STATUS_V2_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"FFT status V2 {label} must be a safe token")
+        for label, value in (
+            ("frequency_start_hz", self.frequency_start_hz),
+            ("frequency_stop_hz", self.frequency_stop_hz),
+            ("resolution_bandwidth_hz", self.resolution_bandwidth_hz),
+            ("sample_rate_hz", self.sample_rate_hz),
+        ):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+            ):
+                raise ValueError(f"FFT status V2 {label} must be finite")
+        if self.average_complete is not None and not isinstance(self.average_complete, bool):
+            raise ValueError("FFT status V2 average_complete must be bool when provided")
+        if (
+            self.frequency_start_hz is None
+        ) != (
+            self.frequency_stop_hz is None
+        ):
+            raise ValueError("FFT status V2 frequency range must be present or unavailable together")
+        if (
+            self.frequency_start_hz is not None
+            and self.frequency_stop_hz is not None
+            and self.frequency_start_hz >= self.frequency_stop_hz
+        ):
+            raise ValueError("FFT status V2 frequency_start_hz must be below frequency_stop_hz")
+        for label, value in (
+            ("resolution_bandwidth_hz", self.resolution_bandwidth_hz),
+            ("sample_rate_hz", self.sample_rate_hz),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"FFT status V2 {label} must be positive")
+        if not isinstance(self.unavailable_fields, tuple):
+            raise TypeError("FFT status V2 unavailable_fields must be a tuple")
+        if len(set(self.unavailable_fields)) != len(self.unavailable_fields):
+            raise ValueError("FFT status V2 unavailable_fields must not contain duplicates")
+        if not set(self.unavailable_fields) <= _SCOPE_FFT_STATUS_V2_FIELDS:
+            raise ValueError("FFT status V2 unavailable_fields contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_FFT_STATUS_V2_FIELD_ORDER
+            if self.field_values()[field_name] is None
+        )
+        if self.unavailable_fields != expected:
+            raise ValueError(
+                "FFT status V2 unavailable_fields must exactly describe missing fields "
+                "in stable order"
+            )
+
+    def field_values(self) -> dict[ScopeFftStatusFieldV2, object | None]:
+        return {
+            "source": self.source,
+            "window": self.window,
+            "vertical_unit": self.vertical_unit,
+            "frequency_start_hz": self.frequency_start_hz,
+            "frequency_stop_hz": self.frequency_stop_hz,
+            "average_complete": self.average_complete,
+            "resolution_bandwidth_hz": self.resolution_bandwidth_hz,
+            "sample_rate_hz": self.sample_rate_hz,
+        }
+
+
+ScopeCursorUnit = Literal["s", "Hz", "degree", "percent", "source"]
+ScopeCursorReadoutFieldV2 = Literal[
+    "cursor_index",
+    "source_a",
+    "source_b",
+    "x_a",
+    "x_b",
+    "x_delta",
+    "inverse_x_delta",
+    "y_a",
+    "y_b",
+    "y_delta",
+]
+SCOPE_CURSOR_READOUT_V2_FIELD_ORDER: tuple[ScopeCursorReadoutFieldV2, ...] = (
+    "cursor_index",
+    "source_a",
+    "source_b",
+    "x_a",
+    "x_b",
+    "x_delta",
+    "inverse_x_delta",
+    "y_a",
+    "y_b",
+    "y_delta",
+)
+_SCOPE_CURSOR_READOUT_V2_FIELDS = frozenset(SCOPE_CURSOR_READOUT_V2_FIELD_ORDER)
+_SCOPE_CURSOR_READOUT_V2_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,63}$")
+_SCOPE_CURSOR_SOURCE_UNIT = re.compile(r"^[A-Za-z][A-Za-z0-9._/%^/-]{0,31}$")
+_SCOPE_CURSOR_SOURCE_UNIT_RESOURCE_PREFIXES = (
+    "ASRL",
+    "GPIB",
+    "SOCKET",
+    "TCPIP",
+    "USB",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeCursorQuantity:
+    value: float
+    unit: ScopeCursorUnit
+    source_unit: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.value, bool)
+            or not isinstance(self.value, (int, float))
+            or not isfinite(self.value)
+        ):
+            raise ValueError("cursor quantity value must be finite")
+        if not isinstance(self.unit, str) or self.unit not in {
+            "s",
+            "Hz",
+            "degree",
+            "percent",
+            "source",
+        }:
+            raise ValueError("cursor quantity unit is unsupported")
+        if self.source_unit is not None:
+            if self.unit != "source":
+                raise ValueError("cursor quantity source_unit requires unit='source'")
+            if (
+                not isinstance(self.source_unit, str)
+                or _SCOPE_CURSOR_SOURCE_UNIT.fullmatch(self.source_unit) is None
+                or self.source_unit.upper().startswith(
+                    _SCOPE_CURSOR_SOURCE_UNIT_RESOURCE_PREFIXES
+                )
+            ):
+                raise ValueError("cursor quantity source_unit must be a visible unit token")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeCursorReadoutV2:
+    cursor_index: int | None
+    mode: str
+    function: str
+    source_a: str | None
+    source_b: str | None
+    x_a: ScopeCursorQuantity | None = None
+    x_b: ScopeCursorQuantity | None = None
+    x_delta: ScopeCursorQuantity | None = None
+    inverse_x_delta: ScopeCursorQuantity | None = None
+    y_a: ScopeCursorQuantity | None = None
+    y_b: ScopeCursorQuantity | None = None
+    y_delta: ScopeCursorQuantity | None = None
+    unavailable_fields: tuple[ScopeCursorReadoutFieldV2, ...] = ()
+    not_applicable_fields: tuple[ScopeCursorReadoutFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.cursor_index is not None and (
+            isinstance(self.cursor_index, bool)
+            or not isinstance(self.cursor_index, int)
+            or self.cursor_index < 1
+        ):
+            raise ValueError("cursor readout V2 cursor_index must be a positive integer or None")
+        for label, value in (("mode", self.mode), ("function", self.function)):
+            if (
+                not isinstance(value, str)
+                or _SCOPE_CURSOR_READOUT_V2_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"cursor readout V2 {label} must be a safe token")
+        if (self.source_a is None) != (self.source_b is None):
+            raise ValueError("cursor readout V2 sources must be present or unavailable together")
+        for label, value in (("source_a", self.source_a), ("source_b", self.source_b)):
+            if value is not None and (
+                not isinstance(value, str)
+                or _SCOPE_CURSOR_READOUT_V2_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"cursor readout V2 {label} must be a safe token")
+        for label, value in self.field_values().items():
+            if label in {"cursor_index", "source_a", "source_b"} or value is None:
+                continue
+            if not isinstance(value, ScopeCursorQuantity):
+                raise TypeError(f"cursor readout V2 {label} must be a ScopeCursorQuantity")
+        self._validate_availability_paths()
+
+    def _validate_availability_paths(self) -> None:
+        for label, fields in (
+            ("unavailable_fields", self.unavailable_fields),
+            ("not_applicable_fields", self.not_applicable_fields),
+        ):
+            if not isinstance(fields, tuple):
+                raise TypeError(f"cursor readout V2 {label} must be a tuple")
+            if len(set(fields)) != len(fields):
+                raise ValueError(f"cursor readout V2 {label} must not contain duplicates")
+            if not set(fields) <= _SCOPE_CURSOR_READOUT_V2_FIELDS:
+                raise ValueError(f"cursor readout V2 {label} contain unsupported paths")
+            expected = tuple(
+                field_name
+                for field_name in SCOPE_CURSOR_READOUT_V2_FIELD_ORDER
+                if field_name in fields
+            )
+            if fields != expected:
+                raise ValueError(
+                    f"cursor readout V2 {label} must use stable field order"
+                )
+        unavailable = set(self.unavailable_fields)
+        not_applicable = set(self.not_applicable_fields)
+        if unavailable & not_applicable:
+            raise ValueError("cursor readout V2 availability paths must be disjoint")
+        missing = {
+            field_name
+            for field_name, value in self.field_values().items()
+            if value is None
+        }
+        if unavailable | not_applicable != missing:
+            raise ValueError(
+                "cursor readout V2 availability paths must exactly describe missing fields"
+            )
+        source_unavailable = {
+            field_name in unavailable for field_name in ("source_a", "source_b")
+        }
+        source_not_applicable = {
+            field_name in not_applicable for field_name in ("source_a", "source_b")
+        }
+        if len(source_unavailable) != 1 or len(source_not_applicable) != 1:
+            raise ValueError(
+                "cursor readout V2 sources must use the same availability classification"
+            )
+
+    def field_values(self) -> dict[ScopeCursorReadoutFieldV2, object | None]:
+        return {
+            "cursor_index": self.cursor_index,
+            "source_a": self.source_a,
+            "source_b": self.source_b,
+            "x_a": self.x_a,
+            "x_b": self.x_b,
+            "x_delta": self.x_delta,
+            "inverse_x_delta": self.inverse_x_delta,
+            "y_a": self.y_a,
+            "y_b": self.y_b,
+            "y_delta": self.y_delta,
+        }
 
 
 @dataclass(frozen=True)

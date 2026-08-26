@@ -981,6 +981,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(status)
 
+    channel_input_state = scope_sub.add_parser(
+        "channel-input-state",
+        help="Query typed coupling and termination state for one analog channel",
+    )
+    channel_input_state.add_argument("--channel", type=int, default=None)
+    add_runtime_options(channel_input_state)
+
     acquisition_status = scope_sub.add_parser(
         "acquisition-status",
         help="Query read-only average and segmented-acquisition state",
@@ -1034,6 +1041,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Zero-based digital channel number (for example, 0 for D0)",
     )
     add_runtime_options(digital_status)
+
+    digital_status_v2 = scope_sub.add_parser(
+        "digital-status-v2",
+        help="Query a portable, field-aware state for one MSO digital channel",
+    )
+    digital_status_v2.add_argument(
+        "--channel",
+        type=int,
+        required=True,
+        help="Zero-based digital channel number (for example, 0 for D0)",
+    )
+    add_runtime_options(digital_status_v2)
 
     digital_waveform = scope_sub.add_parser(
         "digital-waveform",

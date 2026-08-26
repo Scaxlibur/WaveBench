@@ -295,6 +295,41 @@ def test_guarded_binary_query_requires_context_budget_and_debits_it() -> None:
     context.complete()
 
 
+@pytest.mark.parametrize(
+    ("replay", "reason_code"),
+    (
+        (ReplayPolicy.SAFE_TO_REPLAY, "binary_replay_unsupported"),
+        (ReplayPolicy.READ_CONTINUATION_ONLY, "binary_continuation_unsupported"),
+    ),
+)
+def test_guarded_bounded_binary_rejects_replay_before_backend_send(
+    replay: ReplayPolicy,
+    reason_code: str,
+) -> None:
+    backend = _BinaryBackend()
+    guarded = GuardedAuditedTransport(backend)  # type: ignore[arg-type]
+    context = _binary_context(guarded)
+    phase = context.make_phase_spec(
+        OperationPhase.MAIN,
+        allowed_io={"query_binary"},
+        fields={"scope.waveform_transfer_window"},
+        max_steps=1,
+    )
+
+    with context.authorize_phase(phase):
+        with pytest.raises(TransportIOError) as raised:
+            guarded.query_binary(
+                "DATA?",
+                framing=BinaryResponseFraming.DEFINITE_BLOCK,
+                max_bytes=4,
+                replay=replay,
+            )
+
+    assert raised.value.reason_code == reason_code
+    assert raised.value.attempts == 0
+    assert backend.calls == 0
+
+
 def test_guarded_binary_contract_violation_poison_closes_backend() -> None:
     backend = _BinaryBackend(wrong_result=True)
     guarded = GuardedAuditedTransport(backend)  # type: ignore[arg-type]
@@ -438,6 +473,26 @@ def test_real_backends_stream_bounded_definite_blocks_and_restore_settings(backe
     assert raw.read_termination == "\n"
     if rs_session is not None:
         assert rs_session.write_str_calls == 0
+
+
+@pytest.mark.parametrize("backend", ["pyvisa", "rsinstrument"])
+@pytest.mark.parametrize("replay", [ReplayPolicy.NO_REPLAY, ReplayPolicy.SAFE_TO_REPLAY])
+def test_visa_binary_query_is_always_one_send(backend: str, replay: ReplayPolicy) -> None:
+    raw = _FakeVisaSession(b"#14data")
+    if backend == "pyvisa":
+        transport = PyVisaTransport("fake", object(), raw, CommandLogger())
+    else:
+        transport = RsInstrumentTransport("fake", _FakeRsSession(raw), CommandLogger())
+
+    result = transport.query_binary(
+        "DATA?",
+        framing=BinaryResponseFraming.DEFINITE_BLOCK,
+        max_bytes=4,
+        replay=replay,
+    )
+
+    assert result.data == b"data"
+    assert raw.commands == ["DATA?"]
 
 
 @pytest.mark.parametrize("backend", ["pyvisa", "rsinstrument"])

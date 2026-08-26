@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite
 import re
@@ -11,14 +12,41 @@ import zlib
 import numpy as np
 
 from wavebench.scope_extension_constants import (
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+    SCOPE_AVERAGE_COUNT_MAX_V2,
+    SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
+    SCOPE_CURSOR_READOUT_V2_MAX_QUERIES,
+    SCOPE_FFT_STATUS_V2_MAX_QUERIES,
+    SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES,
     SCOPE_SCREENSHOT_BINARY_OPERATION_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESPONSE_MAX_BYTES,
     SCOPE_SCREENSHOT_BINARY_RESYNCHRONIZATION_MAX_BYTES,
     SCOPE_TRACE_MAX_POINTS,
+    SCOPE_WAVEFORM_BINARY_OPERATION_MAX_BYTES,
+    SCOPE_WAVEFORM_BINARY_QUERY_MAX_COUNT,
+    SCOPE_WAVEFORM_BINARY_RESPONSE_MAX_BYTES,
+    SCOPE_WAVEFORM_BINARY_RESYNCHRONIZATION_MAX_BYTES,
 )
 from wavebench.transport.contracts import BinaryResponseFraming
 
 from .contracts import InstrumentDriver
+from .models import (
+    SCOPE_SNAPSHOT_V2_FIELD_ORDER,
+    SCOPE_CURSOR_READOUT_V2_FIELD_ORDER,
+    SCOPE_FFT_STATUS_V2_FIELD_ORDER,
+    ScopeCursorReadoutFieldV2,
+    ScopeCursorReadoutV2,
+    ScopeMeasurementStatisticsRequestV2,
+    ScopeMeasurementStatisticsV2,
+    ScopeFftStatusFieldV2,
+    ScopeFftStatusV2,
+    ScopeSnapshotFieldV2,
+    ScopeSnapshotV2,
+    WaveformData,
+)
 
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -441,7 +469,56 @@ ScopeAcquisitionRestoreField = Literal[
     "scope.trigger",
     "scope.acquisition",
 ]
-ScopeCompletionProof = Literal["count_delta_with_epoch", "identity_delta", "state_transition"]
+ScopeCompletionProof = Literal[
+    "count_delta_with_epoch",
+    "identity_delta",
+    "state_transition",
+    "single_mode_readback_then_stopped",
+]
+ScopeAcquisitionStatusFieldV2 = Literal[
+    "acquisition_type",
+    "run_state",
+    "sample_rate_hz",
+    "memory_depth",
+    "average",
+    "average.configured_count",
+    "average.complete",
+    "segmented",
+    "segmented.option_installed",
+    "segmented.enabled",
+    "segmented.maximum_enabled",
+    "segmented.capacity",
+    "segmented.available",
+]
+SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER: tuple[ScopeAcquisitionStatusFieldV2, ...] = (
+    "acquisition_type",
+    "run_state",
+    "sample_rate_hz",
+    "memory_depth",
+    "average",
+    "average.configured_count",
+    "average.complete",
+    "segmented",
+    "segmented.option_installed",
+    "segmented.enabled",
+    "segmented.maximum_enabled",
+    "segmented.capacity",
+    "segmented.available",
+)
+_ACQUISITION_STATUS_V2_FIELDS = frozenset(SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER)
+_ACQUISITION_STATUS_V2_PARTITION_FIELDS = {
+    "average": (
+        "average.configured_count",
+        "average.complete",
+    ),
+    "segmented": (
+        "segmented.option_installed",
+        "segmented.enabled",
+        "segmented.maximum_enabled",
+        "segmented.capacity",
+        "segmented.available",
+    ),
+}
 _ACQUISITION_SETTING_FIELDS = {"scope.trigger", "scope.acquisition"}
 _ACQUISITION_RESTORE_FIELDS = {"scope.run_state", *_ACQUISITION_SETTING_FIELDS}
 _ACQUISITION_PHASES = {
@@ -469,6 +546,7 @@ class ScopeAcquisitionControlProfile:
     verify_max_steps: int
     identity_semantics: ScopeAcquisitionIdentitySemantics
     atomic_arm_preserves_count_mode_semantics: bool = False
+    single_mode_readback_allows_terminal_stop: bool = False
 
     def __post_init__(self) -> None:
         modes = _unique_tuple(
@@ -482,8 +560,10 @@ class ScopeAcquisitionControlProfile:
             {"configure_then_arm", "atomic_configure_and_arm"},
             label="single arm semantics",
         )
-        if not isinstance(self.arm_resets_acquisition_count, bool) or not isinstance(
-            self.atomic_arm_preserves_count_mode_semantics, bool
+        if (
+            not isinstance(self.arm_resets_acquisition_count, bool)
+            or not isinstance(self.atomic_arm_preserves_count_mode_semantics, bool)
+            or not isinstance(self.single_mode_readback_allows_terminal_stop, bool)
         ):
             raise TypeError("acquisition profile flags must be bool")
         restore = _unique_tuple(self.failure_restore_order, label="failure_restore_order")
@@ -537,6 +617,663 @@ class ScopeAcquisitionRunState:
             _strict_int(self.acquisition_count, label="acquisition_count", minimum=0)
         _optional_safe_token(self.counter_epoch, label="counter_epoch")
         _optional_safe_token(self.acquisition_identity, label="acquisition_identity")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageStatusV2:
+    configured_count: int
+    complete: bool | None = None
+
+    def __post_init__(self) -> None:
+        _strict_int(
+            self.configured_count,
+            label="average configured_count",
+            minimum=1,
+        )
+        if self.complete is not None and not isinstance(self.complete, bool):
+            raise ValueError("average complete must be bool when provided")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeSegmentedStatusV2:
+    option_installed: bool | None = None
+    enabled: bool | None = None
+    maximum_enabled: bool | None = None
+    capacity: int | None = None
+    available: int | None = None
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("segmented option_installed", self.option_installed),
+            ("segmented enabled", self.enabled),
+            ("segmented maximum_enabled", self.maximum_enabled),
+        ):
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{label} must be bool when provided")
+        for label, value in (
+            ("segmented capacity", self.capacity),
+            ("segmented available", self.available),
+        ):
+            if value is not None:
+                _strict_int(value, label=label, minimum=0)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAcquisitionStatusV2:
+    """Portable acquisition state with explicit static and mode-dependent absence."""
+
+    acquisition_type: str | None = None
+    run_state: ScopeAcquisitionRunState | None = None
+    sample_rate_hz: float | None = None
+    memory_depth: int | None = None
+    average: ScopeAverageStatusV2 | None = None
+    segmented: ScopeSegmentedStatusV2 | None = None
+    unavailable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
+    not_applicable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.acquisition_type is not None:
+            _safe_token(self.acquisition_type, label="acquisition type")
+        if self.run_state is not None and not isinstance(
+            self.run_state,
+            ScopeAcquisitionRunState,
+        ):
+            raise TypeError("acquisition status V2 run_state has an invalid type")
+        if self.sample_rate_hz is not None:
+            sample_rate_hz = _finite(
+                self.sample_rate_hz,
+                label="acquisition status V2 sample_rate_hz",
+            )
+            if sample_rate_hz <= 0:
+                raise ValueError("acquisition status V2 sample_rate_hz must be positive")
+        if self.memory_depth is not None:
+            _strict_int(
+                self.memory_depth,
+                label="acquisition status V2 memory_depth",
+                minimum=1,
+            )
+        if self.average is not None and not isinstance(self.average, ScopeAverageStatusV2):
+            raise TypeError("acquisition status V2 average has an invalid type")
+        if self.segmented is not None and not isinstance(self.segmented, ScopeSegmentedStatusV2):
+            raise TypeError("acquisition status V2 segmented has an invalid type")
+
+        unavailable = self._availability_paths(
+            self.unavailable_fields,
+            label="unavailable_fields",
+        )
+        not_applicable = self._availability_paths(
+            self.not_applicable_fields,
+            label="not_applicable_fields",
+        )
+        if set(unavailable) & set(not_applicable):
+            raise ValueError("acquisition status V2 availability paths must be mutually exclusive")
+        all_paths = set(unavailable) | set(not_applicable)
+        for parent, children in _ACQUISITION_STATUS_V2_PARTITION_FIELDS.items():
+            if parent in all_paths and set(children) & all_paths:
+                raise ValueError(
+                    "acquisition status V2 availability paths cannot mix partition and leaf paths"
+                )
+        expected_missing = set(self._missing_paths())
+        if all_paths != expected_missing:
+            raise ValueError(
+                "acquisition status V2 availability paths must exactly describe missing fields"
+            )
+
+    @staticmethod
+    def _availability_paths(
+        paths: object,
+        *,
+        label: str,
+    ) -> tuple[ScopeAcquisitionStatusFieldV2, ...]:
+        if not isinstance(paths, tuple):
+            raise TypeError(f"acquisition status V2 {label} must be a tuple")
+        if len(set(paths)) != len(paths):
+            raise ValueError(f"acquisition status V2 {label} must not contain duplicates")
+        if not set(paths) <= _ACQUISITION_STATUS_V2_FIELDS:
+            raise ValueError(f"acquisition status V2 {label} contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER
+            if field_name in paths
+        )
+        if paths != expected:
+            raise ValueError(
+                f"acquisition status V2 {label} must use stable field order"
+            )
+        return paths
+
+    def _missing_paths(self) -> tuple[ScopeAcquisitionStatusFieldV2, ...]:
+        missing: set[ScopeAcquisitionStatusFieldV2] = set()
+        if self.acquisition_type is None:
+            missing.add("acquisition_type")
+        if self.run_state is None:
+            missing.add("run_state")
+        if self.sample_rate_hz is None:
+            missing.add("sample_rate_hz")
+        if self.memory_depth is None:
+            missing.add("memory_depth")
+        if self.average is None:
+            missing.add("average")
+        elif self.average.complete is None:
+            missing.add("average.complete")
+        if self.segmented is None:
+            missing.add("segmented")
+        else:
+            for field_name, value in (
+                ("segmented.option_installed", self.segmented.option_installed),
+                ("segmented.enabled", self.segmented.enabled),
+                ("segmented.maximum_enabled", self.segmented.maximum_enabled),
+                ("segmented.capacity", self.segmented.capacity),
+                ("segmented.available", self.segmented.available),
+            ):
+                if value is None:
+                    missing.add(field_name)  # type: ignore[arg-type]
+        return tuple(
+            field_name
+            for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER
+            if field_name in missing
+        )
+
+    def field_values(self) -> dict[ScopeAcquisitionStatusFieldV2, object | None]:
+        average = self.average
+        segmented = self.segmented
+        return {
+            "acquisition_type": self.acquisition_type,
+            "run_state": self.run_state,
+            "sample_rate_hz": self.sample_rate_hz,
+            "memory_depth": self.memory_depth,
+            "average": average,
+            "average.configured_count": (
+                None if average is None else average.configured_count
+            ),
+            "average.complete": None if average is None else average.complete,
+            "segmented": segmented,
+            "segmented.option_installed": (
+                None if segmented is None else segmented.option_installed
+            ),
+            "segmented.enabled": None if segmented is None else segmented.enabled,
+            "segmented.maximum_enabled": (
+                None if segmented is None else segmented.maximum_enabled
+            ),
+            "segmented.capacity": None if segmented is None else segmented.capacity,
+            "segmented.available": None if segmented is None else segmented.available,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAcquisitionStatusProfileV2:
+    """Descriptor-owned pure-text query contract for acquisition status V2."""
+
+    readable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...]
+    max_queries: int
+    conditionally_applicable_fields: tuple[ScopeAcquisitionStatusFieldV2, ...] = ()
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        readable = self._profile_paths(self.readable_fields, label="readable_fields")
+        if not readable:
+            raise ValueError("acquisition status V2 readable_fields must not be empty")
+        if "acquisition_type" not in readable:
+            raise ValueError(
+                "acquisition status V2 readable_fields must include acquisition_type"
+            )
+        conditional = self._profile_paths(
+            self.conditionally_applicable_fields,
+            label="conditionally_applicable_fields",
+        )
+        if not set(conditional) <= set(readable):
+            raise ValueError("acquisition status V2 conditional fields must be readable")
+        if "acquisition_type" in conditional:
+            raise ValueError("acquisition status V2 acquisition_type cannot be conditional")
+        _strict_int(
+            self.max_queries,
+            label="acquisition status V2 max_queries",
+            minimum=1,
+            maximum=SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES,
+        )
+        _literal(self.allowed_effect, {"pure_read"}, label="acquisition status V2 effect")
+        readable_set = set(readable)
+        for parent, children in _ACQUISITION_STATUS_V2_PARTITION_FIELDS.items():
+            readable_children = readable_set & set(children)
+            if readable_children and parent not in readable_set:
+                raise ValueError(
+                    f"acquisition status V2 {parent} fields require {parent!r}"
+                )
+            if parent not in readable_set:
+                continue
+            if parent == "average" and "average.configured_count" not in readable_set:
+                raise ValueError(
+                    "acquisition status V2 average requires average.configured_count"
+                )
+            if parent == "segmented" and not readable_children:
+                raise ValueError(
+                    "acquisition status V2 segmented requires a readable leaf field"
+                )
+
+    @staticmethod
+    def _profile_paths(
+        paths: object,
+        *,
+        label: str,
+    ) -> tuple[ScopeAcquisitionStatusFieldV2, ...]:
+        if not isinstance(paths, tuple):
+            raise TypeError(f"acquisition status V2 {label} must be a tuple")
+        if len(set(paths)) != len(paths):
+            raise ValueError(f"acquisition status V2 {label} must not contain duplicates")
+        if not set(paths) <= _ACQUISITION_STATUS_V2_FIELDS:
+            raise ValueError(f"acquisition status V2 {label} contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER
+            if field_name in paths
+        )
+        if paths != expected:
+            raise ValueError(
+                f"acquisition status V2 {label} must use stable field order"
+            )
+        return paths
+
+    def validate_result(self, result: ScopeAcquisitionStatusV2) -> None:
+        """Reject results that expand or silently shrink this descriptor profile."""
+
+        if not isinstance(result, ScopeAcquisitionStatusV2):
+            raise TypeError("acquisition status V2 driver returned an invalid result")
+        values = result.field_values()
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        unavailable = set(result.unavailable_fields)
+        not_applicable = set(result.not_applicable_fields)
+        for field_name in SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER:
+            value = values[field_name]
+            unavailable_path = self._covering_availability_path(unavailable, field_name)
+            not_applicable_path = self._covering_availability_path(
+                not_applicable,
+                field_name,
+            )
+            parent = self._parent_path(field_name)
+            is_conditional = field_name in conditional or parent in conditional
+            if field_name not in readable:
+                if value is not None:
+                    raise ValueError(
+                        "acquisition status V2 result provided a field outside the descriptor profile"
+                    )
+                if unavailable_path is not None and not_applicable_path is None:
+                    continue
+                if not_applicable_path is not None and parent in conditional:
+                    continue
+                raise ValueError(
+                    "acquisition status V2 result provided a field outside the descriptor profile"
+                )
+            if is_conditional:
+                if value is None and (
+                    not_applicable_path is None or unavailable_path is not None
+                ):
+                    raise ValueError(
+                        "acquisition status V2 conditional fields must be marked not applicable"
+                    )
+                if value is not None and (
+                    unavailable_path is not None or not_applicable_path is not None
+                ):
+                    raise ValueError(
+                        "acquisition status V2 available conditional fields cannot have an availability path"
+                    )
+                continue
+            if value is None or unavailable_path is not None or not_applicable_path is not None:
+                raise ValueError(
+                    "acquisition status V2 non-conditional readable fields must have a value"
+                )
+
+    @staticmethod
+    def _parent_path(
+        field_name: ScopeAcquisitionStatusFieldV2,
+    ) -> ScopeAcquisitionStatusFieldV2 | None:
+        for parent, children in _ACQUISITION_STATUS_V2_PARTITION_FIELDS.items():
+            if field_name in children:
+                return parent  # type: ignore[return-value]
+        return None
+
+    @classmethod
+    def _covering_availability_path(
+        cls,
+        paths: set[ScopeAcquisitionStatusFieldV2],
+        field_name: ScopeAcquisitionStatusFieldV2,
+    ) -> ScopeAcquisitionStatusFieldV2 | None:
+        if field_name in paths:
+            return field_name
+        parent = cls._parent_path(field_name)
+        if parent is not None and parent in paths:
+            return parent
+        return None
+
+
+_MEASUREMENT_STATISTICS_V2_SELECTOR_MODE_ORDER = ("slot", "item_sources")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeMeasurementStatisticsProfileV2:
+    """Descriptor-owned pure-text query contract for complete statistics V2."""
+
+    selector_modes: tuple[Literal["slot", "item_sources"], ...]
+    max_queries: int
+    supports_buffer: Literal[False] = False
+    slot_range: tuple[int, int] | None = None
+    supported_items: tuple[str, ...] = ()
+    item_source_count_range: tuple[int, int] | None = None
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        modes = _unique_tuple(self.selector_modes, label="statistics selector_modes")
+        if not modes or not set(modes) <= set(_MEASUREMENT_STATISTICS_V2_SELECTOR_MODE_ORDER):
+            raise ValueError("statistics selector_modes are invalid")
+        expected_modes = tuple(
+            mode
+            for mode in _MEASUREMENT_STATISTICS_V2_SELECTOR_MODE_ORDER
+            if mode in modes
+        )
+        if modes != expected_modes:
+            raise ValueError("statistics selector_modes must use stable mode order")
+        _strict_int(
+            self.max_queries,
+            label="statistics max_queries",
+            minimum=1,
+            maximum=SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES,
+        )
+        if not isinstance(self.supports_buffer, bool):
+            raise TypeError("statistics supports_buffer must be bool")
+        if self.supports_buffer is not False:
+            raise ValueError("statistics V2 R1 does not support statistics buffers")
+        _literal(self.allowed_effect, {"pure_read"}, label="statistics effect")
+
+        if "slot" in modes:
+            self._validate_range(self.slot_range, label="statistics slot_range")
+        elif self.slot_range is not None:
+            raise ValueError("statistics slot_range requires the slot selector mode")
+
+        if "item_sources" in modes:
+            items = _unique_tuple(self.supported_items, label="statistics supported_items")
+            if not items:
+                raise ValueError("statistics item_sources mode requires supported_items")
+            for item in items:
+                _safe_token(item, label="statistics supported item")
+            self._validate_range(
+                self.item_source_count_range,
+                label="statistics item_source_count_range",
+            )
+        elif self.supported_items or self.item_source_count_range is not None:
+            raise ValueError(
+                "statistics supported_items and item_source_count_range require item_sources"
+            )
+
+    @staticmethod
+    def _validate_range(value: object, *, label: str) -> tuple[int, int]:
+        if not isinstance(value, tuple) or len(value) != 2:
+            raise ValueError(f"{label} must be a two-integer tuple")
+        lower, upper = value
+        _strict_int(lower, label=f"{label} lower", minimum=1)
+        _strict_int(upper, label=f"{label} upper", minimum=1)
+        if lower > upper:
+            raise ValueError(f"{label} lower bound must not exceed upper bound")
+        return lower, upper
+
+    def validate_request(self, request: ScopeMeasurementStatisticsRequestV2) -> None:
+        """Reject unsupported statistics requests before opening an instrument session."""
+
+        if not isinstance(request, ScopeMeasurementStatisticsRequestV2):
+            raise TypeError("measurement statistics V2 request has an invalid type")
+        if request.configured is not True:
+            raise ValueError("measurement statistics V2 requires configured=True")
+        selector = request.selector
+        if selector.mode not in self.selector_modes:
+            raise ValueError("measurement statistics V2 selector mode is not supported")
+        if selector.mode == "slot":
+            if self.slot_range is None or selector.slot is None:
+                raise ValueError("measurement statistics V2 slot selector is not supported")
+            lower, upper = self.slot_range
+            if not lower <= selector.slot <= upper:
+                raise ValueError("measurement statistics V2 slot is outside the descriptor profile")
+        else:
+            if selector.item not in self.supported_items:
+                raise ValueError("measurement statistics V2 item is outside the descriptor profile")
+            if self.item_source_count_range is None:
+                raise ValueError("measurement statistics V2 item selector is not supported")
+            lower, upper = self.item_source_count_range
+            if not lower <= len(selector.sources) <= upper:
+                raise ValueError(
+                    "measurement statistics V2 source count is outside the descriptor profile"
+                )
+        if request.include_buffer:
+            raise ValueError("measurement statistics V2 R1 does not support statistics buffers")
+
+    def validate_result(
+        self,
+        result: ScopeMeasurementStatisticsV2,
+        *,
+        request: ScopeMeasurementStatisticsRequestV2,
+    ) -> None:
+        """Reject result selectors and buffer values outside the R1 contract."""
+
+        if not isinstance(result, ScopeMeasurementStatisticsV2):
+            raise TypeError("measurement statistics V2 driver returned an invalid result")
+        if result.selector != request.selector:
+            raise ValueError("measurement statistics V2 result selector does not match request")
+        if result.buffered_values is not None:
+            raise ValueError("measurement statistics V2 R1 result must not include a buffer")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFftStatusProfileV2:
+    """Descriptor-owned pure-text query contract for the current FFT status."""
+
+    readable_fields: tuple[ScopeFftStatusFieldV2, ...]
+    max_queries: int
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.readable_fields, tuple):
+            raise TypeError("FFT status readable_fields must be a tuple")
+        if not self.readable_fields:
+            raise ValueError("FFT status readable_fields must not be empty")
+        if len(set(self.readable_fields)) != len(self.readable_fields):
+            raise ValueError("FFT status readable_fields must not contain duplicates")
+        if not set(self.readable_fields) <= set(SCOPE_FFT_STATUS_V2_FIELD_ORDER):
+            raise ValueError("FFT status readable_fields contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_FFT_STATUS_V2_FIELD_ORDER
+            if field_name in self.readable_fields
+        )
+        if self.readable_fields != expected:
+            raise ValueError("FFT status readable_fields must use stable field order")
+        start_present = "frequency_start_hz" in self.readable_fields
+        stop_present = "frequency_stop_hz" in self.readable_fields
+        if start_present != stop_present:
+            raise ValueError(
+                "FFT status frequency range fields must be readable together"
+            )
+        _strict_int(
+            self.max_queries,
+            label="FFT status max_queries",
+            minimum=1,
+            maximum=SCOPE_FFT_STATUS_V2_MAX_QUERIES,
+        )
+        _literal(self.allowed_effect, {"pure_read"}, label="FFT status effect")
+
+    def validate_result(self, result: ScopeFftStatusV2, *, math_index: int) -> None:
+        """Reject results that expand or silently shrink this FFT profile."""
+
+        if not isinstance(result, ScopeFftStatusV2):
+            raise TypeError("FFT status V2 driver returned an invalid result")
+        if result.math_index != math_index:
+            raise ValueError("FFT status V2 driver returned the wrong math_index")
+        readable = set(self.readable_fields)
+        unavailable = set(result.unavailable_fields)
+        for field_name, value in result.field_values().items():
+            if field_name in readable:
+                if value is None or field_name in unavailable:
+                    raise ValueError("FFT status V2 readable fields must have a value")
+            elif value is not None or field_name not in unavailable:
+                raise ValueError(
+                    "FFT status V2 result provided a field outside the descriptor profile"
+                )
+
+
+ScopeCursorAddressing = Literal["global", "indexed"]
+_SCOPE_CURSOR_READOUT_V2_QUANTITY_FIELDS = frozenset(
+    {
+        "x_a",
+        "x_b",
+        "x_delta",
+        "inverse_x_delta",
+        "y_a",
+        "y_b",
+        "y_delta",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeCursorReadoutProfileV2:
+    """Descriptor-owned pure-text query contract for the current cursor readout."""
+
+    readable_fields: tuple[ScopeCursorReadoutFieldV2, ...]
+    conditionally_applicable_fields: tuple[ScopeCursorReadoutFieldV2, ...]
+    addressing: ScopeCursorAddressing
+    max_queries: int
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        self._validate_fields(self.readable_fields, label="cursor readout readable_fields")
+        if not self.readable_fields:
+            raise ValueError("cursor readout readable_fields must not be empty")
+        self._validate_fields(
+            self.conditionally_applicable_fields,
+            label="cursor readout conditionally_applicable_fields",
+        )
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        if not conditional <= readable:
+            raise ValueError(
+                "cursor readout conditionally_applicable_fields must be readable"
+            )
+        if not readable & _SCOPE_CURSOR_READOUT_V2_QUANTITY_FIELDS:
+            raise ValueError("cursor readout readable_fields must include a quantity")
+        self._validate_source_pair(readable, label="cursor readout readable_fields")
+        self._validate_source_pair(
+            conditional,
+            label="cursor readout conditionally_applicable_fields",
+        )
+        _literal(self.addressing, {"global", "indexed"}, label="cursor readout addressing")
+        cursor_readable = "cursor_index" in readable
+        cursor_conditional = "cursor_index" in conditional
+        if self.addressing == "global" and (cursor_readable or cursor_conditional):
+            raise ValueError("global cursor addressing must not make cursor_index readable")
+        if self.addressing == "indexed" and (
+            not cursor_readable or cursor_conditional
+        ):
+            raise ValueError(
+                "indexed cursor addressing requires a non-conditional cursor_index"
+            )
+        _strict_int(
+            self.max_queries,
+            label="cursor readout max_queries",
+            minimum=1,
+            maximum=SCOPE_CURSOR_READOUT_V2_MAX_QUERIES,
+        )
+        _literal(self.allowed_effect, {"pure_read"}, label="cursor readout effect")
+
+    @staticmethod
+    def _validate_fields(
+        fields: object,
+        *,
+        label: str,
+    ) -> None:
+        if not isinstance(fields, tuple):
+            raise TypeError(f"{label} must be a tuple")
+        if len(set(fields)) != len(fields):
+            raise ValueError(f"{label} must not contain duplicates")
+        if not set(fields) <= set(SCOPE_CURSOR_READOUT_V2_FIELD_ORDER):
+            raise ValueError(f"{label} contain unsupported paths")
+        expected = tuple(
+            field_name
+            for field_name in SCOPE_CURSOR_READOUT_V2_FIELD_ORDER
+            if field_name in fields
+        )
+        if fields != expected:
+            raise ValueError(f"{label} must use stable field order")
+
+    @staticmethod
+    def _validate_source_pair(fields: set[str], *, label: str) -> None:
+        if ("source_a" in fields) != ("source_b" in fields):
+            raise ValueError(f"{label} must include source_a and source_b together")
+
+    def validate_request(
+        self,
+        *,
+        cursor_index: int | None,
+        configured_cursor: bool,
+    ) -> None:
+        """Reject an incompatible cursor addressing request before instrument I/O."""
+
+        if configured_cursor is not True:
+            raise ValueError("cursor readout V2 requires configured_cursor=True")
+        if self.addressing == "global":
+            if cursor_index is not None:
+                raise ValueError("global cursor addressing requires cursor_index=None")
+            return
+        if (
+            isinstance(cursor_index, bool)
+            or not isinstance(cursor_index, int)
+            or cursor_index < 1
+        ):
+            raise ValueError("indexed cursor addressing requires a positive cursor_index")
+
+    def validate_result(
+        self,
+        result: ScopeCursorReadoutV2,
+        *,
+        cursor_index: int | None,
+    ) -> None:
+        """Reject results that expand or silently shrink this cursor profile."""
+
+        if not isinstance(result, ScopeCursorReadoutV2):
+            raise TypeError("cursor readout V2 driver returned an invalid result")
+        unavailable = set(result.unavailable_fields)
+        not_applicable = set(result.not_applicable_fields)
+        if self.addressing == "global":
+            if result.cursor_index is not None:
+                raise ValueError("global cursor readout V2 must return cursor_index=None")
+            if (
+                "cursor_index" not in not_applicable
+                or "cursor_index" in unavailable
+            ):
+                raise ValueError(
+                    "global cursor readout V2 must mark cursor_index not applicable"
+                )
+        elif result.cursor_index != cursor_index:
+            raise ValueError("indexed cursor readout V2 returned the wrong cursor_index")
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        for field_name, value in result.field_values().items():
+            if self.addressing == "global" and field_name == "cursor_index":
+                continue
+            if field_name not in readable:
+                if (
+                    value is not None
+                    or field_name not in unavailable
+                    or field_name in not_applicable
+                ):
+                    raise ValueError(
+                        "cursor readout V2 result provided a field outside the descriptor profile"
+                    )
+                continue
+            if field_name in conditional:
+                if value is None and field_name not in not_applicable:
+                    raise ValueError(
+                        "cursor readout V2 conditional fields must be present or not applicable"
+                    )
+                continue
+            if value is None or field_name in unavailable or field_name in not_applicable:
+                raise ValueError("cursor readout V2 readable fields must have a value")
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,6 +1376,7 @@ class ScopeAcquisitionCompletion:
     baseline_identity: str | None = None
     completed_identity: str | None = None
     observed_states: tuple[ScopeAcquisitionRunState, ...] = ()
+    post_arm_trigger_mode: ScopeTriggerMode | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -653,9 +1391,20 @@ class ScopeAcquisitionCompletion:
         )
         _literal(
             self.proof,
-            {"count_delta_with_epoch", "identity_delta", "state_transition"},
+            {
+                "count_delta_with_epoch",
+                "identity_delta",
+                "state_transition",
+                "single_mode_readback_then_stopped",
+            },
             label="completion proof",
         )
+        if self.post_arm_trigger_mode is not None:
+            _literal(
+                self.post_arm_trigger_mode,
+                {"auto", "normal", "single", "roll", "unknown"},
+                label="post-arm trigger mode",
+            )
         if not isinstance(self.observed_states, tuple) or not self.observed_states:
             raise ValueError("completion proof must retain observed states")
         if any(not isinstance(item, ScopeAcquisitionRunState) for item in self.observed_states):
@@ -716,7 +1465,26 @@ def validate_acquisition_completion(
         )
         for item in completion.observed_states[:-1]
     )
-    if completion.proof == "identity_delta":
+    if completion.proof == "single_mode_readback_then_stopped":
+        if not profile.single_mode_readback_allows_terminal_stop:
+            raise ValueError("terminal STOP proof is not enabled by the acquisition profile")
+        if completion.post_arm_trigger_mode != "single":
+            raise ValueError("terminal STOP proof requires a post-arm single-mode readback")
+        if completion.state.phase != "stopped" or completion.state.trigger_mode != "single":
+            raise ValueError("terminal STOP proof requires a stopped single-mode state")
+        if completion.observed_states != (completion.state,):
+            raise ValueError("terminal STOP proof requires exactly one terminal observed state")
+        if any(
+            value is not None
+            for value in (
+                completion.baseline_count,
+                completion.completed_count,
+                completion.baseline_identity,
+                completion.completed_identity,
+            )
+        ):
+            raise ValueError("terminal STOP proof cannot claim count or identity evidence")
+    elif completion.proof == "identity_delta":
         if profile.identity_semantics != "unique_within_session_epoch":
             raise ValueError("identity proof requires unique-within-epoch semantics")
         if (
@@ -746,6 +1514,538 @@ def validate_acquisition_completion(
         raise ValueError("state-transition proof does not contain a valid new acquisition transition")
     if phases[-1] not in {"complete", "stopped"}:
         raise ValueError("completion proof has an invalid terminal phase")
+
+
+ScopeAverageMechanism = Literal["global_acquisition"]
+ScopeAverageCompletionEvidence = Literal["device_average_complete"]
+ScopeAverageCaptureField = Literal[
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+]
+SCOPE_AVERAGE_CAPTURE_FIELD_ORDER: tuple[ScopeAverageCaptureField, ...] = (
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+)
+_AVERAGE_CAPTURE_FIELDS = frozenset(SCOPE_AVERAGE_CAPTURE_FIELD_ORDER)
+_AVERAGE_CAPTURE_TOKEN_ATTRS = {
+    "scope.run_state": "run_state_token",
+    "scope.acquisition": "acquisition_token",
+    "scope.trigger": "trigger_token",
+    "scope.timebase": "timebase_token",
+    "scope.channel_display": "channel_display_token",
+    "scope.channel_vertical": "channel_vertical_token",
+    "scope.waveform_source": "waveform_source_token",
+    "scope.waveform_mode": "waveform_mode_token",
+    "scope.query_response_header": "query_response_header_token",
+    "scope.waveform_format": "waveform_format_token",
+    "scope.waveform_byte_order": "waveform_byte_order_token",
+    "scope.waveform_points": "waveform_points_token",
+    "scope.waveform_transfer_window": "waveform_transfer_window_token",
+}
+_AVERAGE_CAPTURE_POINTS = ("def", "max", "dmax")
+
+
+def _average_capture_field_tuple(
+    values: object,
+    *,
+    label: str,
+    allow_empty: bool = False,
+) -> tuple[ScopeAverageCaptureField, ...]:
+    if not isinstance(values, tuple):
+        raise TypeError(f"{label} must be a tuple")
+    if not values and not allow_empty:
+        raise ValueError(f"{label} must not be empty")
+    if len(set(values)) != len(values) or not set(values) <= _AVERAGE_CAPTURE_FIELDS:
+        raise ValueError(f"{label} must contain supported unique average capture fields")
+    expected = tuple(
+        field_name for field_name in SCOPE_AVERAGE_CAPTURE_FIELD_ORDER if field_name in values
+    )
+    if values != expected:
+        raise ValueError(f"{label} must use stable average capture field order")
+    return values
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureRequestV2:
+    channels: tuple[int, ...]
+    average_count: int
+    mechanism: ScopeAverageMechanism
+    acquisition_stopped: Literal[True]
+    points: str = "dmax"
+    allow_50ohm: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.channels, tuple) or len(self.channels) != 1:
+            raise ValueError("average capture V2 requires exactly one channel")
+        channel = self.channels[0]
+        _strict_int(channel, label="average capture V2 channel", minimum=1)
+        _strict_int(
+            self.average_count,
+            label="average capture V2 average_count",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        _literal(
+            self.mechanism,
+            {"global_acquisition"},
+            label="average capture V2 mechanism",
+        )
+        if self.acquisition_stopped is not True:
+            raise ValueError("average capture V2 requires acquisition_stopped=True")
+        _literal(
+            self.points,
+            set(_AVERAGE_CAPTURE_POINTS),
+            label="average capture V2 points",
+        )
+        if not isinstance(self.allow_50ohm, bool):
+            raise TypeError("average capture V2 allow_50ohm must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageConfigurationV2:
+    mechanism: ScopeAverageMechanism
+    acquisition_type: str
+    average_count: int
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.mechanism,
+            {"global_acquisition"},
+            label="average configuration mechanism",
+        )
+        _safe_token(self.acquisition_type, label="average configuration acquisition_type")
+        _strict_int(
+            self.average_count,
+            label="average configuration average_count",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCompletionProofV2:
+    evidence: ScopeAverageCompletionEvidence
+    mechanism: ScopeAverageMechanism
+    configured_average_count: int
+    configuration_readback: ScopeAverageConfigurationV2
+    acquisition_completion: ScopeAcquisitionCompletion
+    device_average_complete: Literal[True]
+    contract_id: str
+    context_id: str
+    session_epoch: str
+    acquisition_baseline_nonce_digest: str
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.evidence,
+            {"device_average_complete"},
+            label="average completion evidence",
+        )
+        _literal(
+            self.mechanism,
+            {"global_acquisition"},
+            label="average completion mechanism",
+        )
+        _strict_int(
+            self.configured_average_count,
+            label="average completion configured_average_count",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        if not isinstance(self.configuration_readback, ScopeAverageConfigurationV2):
+            raise TypeError("average completion configuration_readback has an invalid type")
+        if self.configuration_readback.mechanism != self.mechanism:
+            raise ValueError("average completion mechanism does not match configuration readback")
+        if self.configuration_readback.average_count != self.configured_average_count:
+            raise ValueError("average completion count does not match configuration readback")
+        if not isinstance(self.acquisition_completion, ScopeAcquisitionCompletion):
+            raise TypeError("average completion acquisition_completion has an invalid type")
+        if self.acquisition_completion.proof == "single_mode_readback_then_stopped":
+            raise ValueError("average completion cannot use a terminal STOP proof")
+        if self.device_average_complete is not True:
+            raise ValueError("average completion requires device_average_complete=True")
+        _safe_token(self.contract_id, label="average completion contract_id")
+        _safe_token(self.context_id, label="average completion context_id")
+        _safe_token(self.session_epoch, label="average completion session_epoch")
+        if (
+            not isinstance(self.acquisition_baseline_nonce_digest, str)
+            or re.fullmatch(r"[0-9a-f]{16}", self.acquisition_baseline_nonce_digest) is None
+        ):
+            raise ValueError("average completion baseline nonce digest must be 16 lowercase hex chars")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureStateSnapshot:
+    captured_fields: tuple[ScopeAverageCaptureField, ...]
+    configuration: ScopeAverageConfigurationV2
+    run_state: ScopeAcquisitionRunState
+    run_state_token: str | None = None
+    acquisition_token: str | None = None
+    trigger_token: str | None = None
+    timebase_token: str | None = None
+    channel_display_token: str | None = None
+    channel_vertical_token: str | None = None
+    waveform_source_token: str | None = None
+    waveform_mode_token: str | None = None
+    query_response_header_token: str | None = None
+    waveform_format_token: str | None = None
+    waveform_byte_order_token: str | None = None
+    waveform_points_token: str | None = None
+    waveform_transfer_window_token: str | None = None
+
+    def __post_init__(self) -> None:
+        fields = _average_capture_field_tuple(
+            self.captured_fields,
+            label="average capture snapshot captured_fields",
+        )
+        if not isinstance(self.configuration, ScopeAverageConfigurationV2):
+            raise TypeError("average capture snapshot configuration has an invalid type")
+        if not isinstance(self.run_state, ScopeAcquisitionRunState):
+            raise TypeError("average capture snapshot run_state has an invalid type")
+        for field_name, attr_name in _AVERAGE_CAPTURE_TOKEN_ATTRS.items():
+            token = _optional_safe_token(getattr(self, attr_name), label=attr_name)
+            if (field_name in fields) != (token is not None):
+                raise ValueError(f"{attr_name} presence must match captured fields")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureBaseline:
+    context_id: str
+    session_epoch: str
+    baseline_nonce: str
+    snapshot: ScopeAverageCaptureStateSnapshot
+    restore_order: tuple[ScopeAverageCaptureField, ...]
+    acquisition_baseline: ScopeAcquisitionControlBaseline
+
+    def __post_init__(self) -> None:
+        _safe_token(self.context_id, label="average capture baseline context_id")
+        _safe_token(self.session_epoch, label="average capture baseline session_epoch")
+        _safe_token(self.baseline_nonce, label="average capture baseline nonce")
+        if not isinstance(self.snapshot, ScopeAverageCaptureStateSnapshot):
+            raise TypeError("average capture baseline snapshot has an invalid type")
+        restore_order = _average_capture_field_tuple(
+            self.restore_order,
+            label="average capture restore_order",
+        )
+        if restore_order != self.snapshot.captured_fields:
+            raise ValueError("average capture restore order must match snapshot fields exactly")
+        if not isinstance(self.acquisition_baseline, ScopeAcquisitionControlBaseline):
+            raise TypeError("average capture acquisition baseline has an invalid type")
+        acquisition_baseline = self.acquisition_baseline
+        if (
+            acquisition_baseline.context_id != self.context_id
+            or acquisition_baseline.session_epoch != self.session_epoch
+            or acquisition_baseline.baseline_nonce == self.baseline_nonce
+        ):
+            raise ValueError("average capture child baseline has an invalid context binding")
+        if acquisition_baseline.snapshot.run_state != self.snapshot.run_state:
+            raise ValueError("average capture child baseline run state does not match parent")
+        if acquisition_baseline.snapshot.trigger_state_token != self.snapshot.trigger_token:
+            raise ValueError("average capture child baseline trigger token does not match parent")
+        if acquisition_baseline.snapshot.acquisition_state_token != self.snapshot.acquisition_token:
+            raise ValueError("average capture child baseline acquisition token does not match parent")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureRestoreResult:
+    status: Literal["completed", "failed", "not_attempted"]
+    attempted_fields: tuple[ScopeAverageCaptureField, ...]
+    restored_fields: tuple[ScopeAverageCaptureField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        _average_capture_field_tuple(
+            self.attempted_fields,
+            label="average capture attempted_fields",
+            allow_empty=True,
+        )
+        _average_capture_field_tuple(
+            self.restored_fields,
+            label="average capture restored_fields",
+            allow_empty=True,
+        )
+        _optional_safe_token(self.error_code, label="average capture restore error_code")
+
+    def validate_for(self, baseline: ScopeAverageCaptureBaseline) -> None:
+        if not isinstance(baseline, ScopeAverageCaptureBaseline):
+            raise TypeError("average capture restore baseline has an invalid type")
+        _validate_prefix_and_subsequence(
+            expected=baseline.restore_order,
+            attempted=self.attempted_fields,
+            completed=self.restored_fields,
+            status=self.status,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureVerification:
+    status: Literal["verified", "mismatch", "unavailable"]
+    verified_fields: tuple[ScopeAverageCaptureField, ...]
+    mismatched_fields: tuple[ScopeAverageCaptureField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.status,
+            {"verified", "mismatch", "unavailable"},
+            label="average capture verification status",
+        )
+        verified = _average_capture_field_tuple(
+            self.verified_fields,
+            label="average capture verified_fields",
+            allow_empty=True,
+        )
+        mismatched = _average_capture_field_tuple(
+            self.mismatched_fields,
+            label="average capture mismatched_fields",
+            allow_empty=True,
+        )
+        if set(verified) & set(mismatched):
+            raise ValueError("average capture verification fields overlap")
+        _optional_safe_token(self.error_code, label="average capture verification error_code")
+        if self.status == "verified" and mismatched:
+            raise ValueError("verified average capture state cannot contain mismatches")
+        if self.status == "mismatch" and not mismatched:
+            raise ValueError("mismatched average capture verification requires mismatch fields")
+        if self.status == "unavailable" and (verified or mismatched):
+            raise ValueError("unavailable average capture verification cannot claim fields")
+
+    def validate_for(self, baseline: ScopeAverageCaptureBaseline) -> None:
+        if not isinstance(baseline, ScopeAverageCaptureBaseline):
+            raise TypeError("average capture verification baseline has an invalid type")
+        if self.status == "verified" and self.verified_fields != baseline.restore_order:
+            raise ValueError("verified average capture state must cover every restore field")
+        if not set(self.verified_fields + self.mismatched_fields) <= set(baseline.restore_order):
+            raise ValueError("average capture verification fields exceed the restore closure")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureResultV2:
+    request: ScopeAverageCaptureRequestV2
+    waveforms: tuple[WaveformData, ...]
+    configuration_before: ScopeAverageConfigurationV2
+    configuration_after: ScopeAverageConfigurationV2
+    run_state_before: ScopeAcquisitionRunState
+    run_state_after: ScopeAcquisitionRunState
+    completion: ScopeAverageCompletionProofV2
+    restore: ScopeAverageCaptureRestoreResult
+    verification: ScopeAverageCaptureVerification
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, ScopeAverageCaptureRequestV2):
+            raise TypeError("average capture result request has an invalid type")
+        if (
+            not isinstance(self.waveforms, tuple)
+            or len(self.waveforms) != 1
+            or not isinstance(self.waveforms[0], WaveformData)
+            or self.waveforms[0].channel != self.request.channels[0]
+        ):
+            raise ValueError("average capture result waveform does not match the request")
+        for label, value, expected in (
+            ("configuration_before", self.configuration_before, ScopeAverageConfigurationV2),
+            ("configuration_after", self.configuration_after, ScopeAverageConfigurationV2),
+            ("run_state_before", self.run_state_before, ScopeAcquisitionRunState),
+            ("run_state_after", self.run_state_after, ScopeAcquisitionRunState),
+            ("completion", self.completion, ScopeAverageCompletionProofV2),
+            ("restore", self.restore, ScopeAverageCaptureRestoreResult),
+            ("verification", self.verification, ScopeAverageCaptureVerification),
+        ):
+            if not isinstance(value, expected):
+                raise TypeError(f"average capture result {label} has an invalid type")
+        if self.configuration_after != self.configuration_before:
+            raise ValueError("average capture result configuration was not restored")
+        if self.run_state_before.phase != "stopped" or self.run_state_after != self.run_state_before:
+            raise ValueError("average capture result run state was not restored to a stopped baseline")
+        if self.completion.mechanism != self.request.mechanism or (
+            self.completion.configured_average_count != self.request.average_count
+        ):
+            raise ValueError("average capture completion proof does not match the request")
+        if self.restore.status != "completed" or self.verification.status != "verified":
+            raise ValueError("average capture result requires completed restore and verification")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureBinaryProfile:
+    response_max_bytes: int
+    operation_max_bytes: int
+    query_max_count: int
+    resynchronization_max_bytes: int
+    framing: BinaryResponseFraming = BinaryResponseFraming.DEFINITE_BLOCK
+    transport_trailing_hex: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "framing", BinaryResponseFraming(self.framing))
+        if self.framing is not BinaryResponseFraming.DEFINITE_BLOCK:
+            raise ValueError("average capture binary profiles only support definite-block framing")
+        _strict_int(
+            self.response_max_bytes,
+            label="average capture response_max_bytes",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESPONSE_MAX_BYTES,
+        )
+        _strict_int(
+            self.operation_max_bytes,
+            label="average capture operation_max_bytes",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_OPERATION_MAX_BYTES,
+        )
+        if self.operation_max_bytes < self.response_max_bytes:
+            raise ValueError("average capture operation limit cannot be smaller than response limit")
+        _strict_int(
+            self.query_max_count,
+            label="average capture query_max_count",
+            minimum=1,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_QUERY_MAX_COUNT,
+        )
+        _strict_int(
+            self.resynchronization_max_bytes,
+            label="average capture resynchronization_max_bytes",
+            minimum=0,
+            maximum=SCOPE_AVERAGE_CAPTURE_V2_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        )
+        _hex_bytes(self.transport_trailing_hex, label="average capture transport_trailing_hex")
+
+    @property
+    def transport_trailing(self) -> bytes:
+        return bytes.fromhex(self.transport_trailing_hex)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAverageCaptureProfileV2:
+    global_acquisition_type: str
+    completion_contract_id: str
+    channel_range: tuple[int, int]
+    supported_points: tuple[str, ...]
+    average_count_min: int
+    average_count_max: int
+    requires_power_of_two: bool
+    binary: ScopeAverageCaptureBinaryProfile
+    restore_order: tuple[ScopeAverageCaptureField, ...]
+    snapshot_max_steps: int
+    main_max_steps: int
+    restore_max_steps: int
+    verify_max_steps: int
+
+    def __post_init__(self) -> None:
+        _safe_token(self.global_acquisition_type, label="average capture global_acquisition_type")
+        _safe_token(self.completion_contract_id, label="average capture completion_contract_id")
+        if (
+            not isinstance(self.channel_range, tuple)
+            or len(self.channel_range) != 2
+        ):
+            raise ValueError("average capture channel_range must contain exactly two integers")
+        minimum_channel = _strict_int(
+            self.channel_range[0],
+            label="average capture channel_range minimum",
+            minimum=1,
+        )
+        maximum_channel = _strict_int(
+            self.channel_range[1],
+            label="average capture channel_range maximum",
+            minimum=1,
+        )
+        if minimum_channel > maximum_channel:
+            raise ValueError("average capture channel_range minimum exceeds maximum")
+        if not isinstance(self.supported_points, tuple) or not self.supported_points:
+            raise ValueError("average capture supported_points must be a non-empty tuple")
+        if len(set(self.supported_points)) != len(self.supported_points) or not set(
+            self.supported_points
+        ) <= set(_AVERAGE_CAPTURE_POINTS):
+            raise ValueError("average capture supported_points contain unsupported or duplicate values")
+        expected_points = tuple(
+            point for point in _AVERAGE_CAPTURE_POINTS if point in self.supported_points
+        )
+        if self.supported_points != expected_points:
+            raise ValueError("average capture supported_points must use stable point order")
+        minimum_count = _strict_int(
+            self.average_count_min,
+            label="average capture average_count_min",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        maximum_count = _strict_int(
+            self.average_count_max,
+            label="average capture average_count_max",
+            minimum=2,
+            maximum=SCOPE_AVERAGE_COUNT_MAX_V2,
+        )
+        if minimum_count > maximum_count:
+            raise ValueError("average capture average_count_min exceeds average_count_max")
+        if not isinstance(self.requires_power_of_two, bool):
+            raise TypeError("average capture requires_power_of_two must be bool")
+        if not isinstance(self.binary, ScopeAverageCaptureBinaryProfile):
+            raise TypeError("average capture binary profile has an invalid type")
+        restore_order = _average_capture_field_tuple(
+            self.restore_order,
+            label="average capture profile restore_order",
+        )
+        if restore_order != SCOPE_AVERAGE_CAPTURE_FIELD_ORDER:
+            raise ValueError("average capture profile restore_order must cover the full R1 closure")
+        for label, value in (
+            ("snapshot_max_steps", self.snapshot_max_steps),
+            ("restore_max_steps", self.restore_max_steps),
+            ("verify_max_steps", self.verify_max_steps),
+        ):
+            _strict_int(value, label=f"average capture {label}", minimum=len(restore_order), maximum=64)
+        _strict_int(
+            self.main_max_steps,
+            label="average capture main_max_steps",
+            minimum=8,
+            maximum=128,
+        )
+
+    def validate_request(self, request: ScopeAverageCaptureRequestV2) -> None:
+        if not isinstance(request, ScopeAverageCaptureRequestV2):
+            raise TypeError("average capture request has an invalid type")
+        channel = request.channels[0]
+        if not self.channel_range[0] <= channel <= self.channel_range[1]:
+            raise ValueError("average capture channel is outside the descriptor range")
+        if request.points not in self.supported_points:
+            raise ValueError("average capture points are unsupported by the descriptor profile")
+        if not self.average_count_min <= request.average_count <= self.average_count_max:
+            raise ValueError("average capture count is outside the descriptor range")
+        if self.requires_power_of_two and request.average_count & (request.average_count - 1):
+            raise ValueError("average capture count must be a power of two")
+
+    def validate_configuration(
+        self,
+        configuration: ScopeAverageConfigurationV2,
+        *,
+        request: ScopeAverageCaptureRequestV2 | None = None,
+    ) -> None:
+        if not isinstance(configuration, ScopeAverageConfigurationV2):
+            raise TypeError("average capture configuration has an invalid type")
+        if configuration.mechanism != "global_acquisition":
+            raise ValueError("average capture configuration mechanism is unsupported")
+        if configuration.acquisition_type != self.global_acquisition_type:
+            raise ValueError("average capture configuration type does not match the profile")
+        if request is not None:
+            self.validate_request(request)
+            if configuration.average_count != request.average_count:
+                raise ValueError("average capture configuration count does not match the request")
 
 
 ScopeTraceKind = Literal["analog", "digital", "math", "reference", "spectrum"]
@@ -1073,6 +2373,354 @@ class ScopeTraceTransferVerification:
             raise ValueError("unavailable transfer verification cannot claim fields")
 
 
+# Standard waveform capture is broader than trace fetch: a standard capture
+# may configure acquisition, trigger, timebase and channel state before it
+# performs the temporary waveform-transfer setup.  Keep its recovery proof
+# separate from the frozen trace model so the capture closure is explicit.
+ScopeWaveformTransferField = Literal[
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+]
+_WAVEFORM_TRANSFER_FIELDS = {
+    "scope.run_state",
+    "scope.acquisition",
+    "scope.trigger",
+    "scope.timebase",
+    "scope.channel_display",
+    "scope.channel_vertical",
+    "scope.waveform_source",
+    "scope.waveform_mode",
+    "scope.query_response_header",
+    "scope.waveform_format",
+    "scope.waveform_byte_order",
+    "scope.waveform_points",
+    "scope.waveform_transfer_window",
+}
+_WAVEFORM_TOKEN_ATTRS = {
+    "scope.run_state": "run_state_token",
+    "scope.acquisition": "acquisition_token",
+    "scope.trigger": "trigger_token",
+    "scope.timebase": "timebase_token",
+    "scope.channel_display": "channel_display_token",
+    "scope.channel_vertical": "channel_vertical_token",
+    "scope.waveform_source": "waveform_source_token",
+    "scope.waveform_mode": "waveform_mode_token",
+    "scope.query_response_header": "query_response_header_token",
+    "scope.waveform_format": "waveform_format_token",
+    "scope.waveform_byte_order": "waveform_byte_order_token",
+    "scope.waveform_points": "waveform_points_token",
+    "scope.waveform_transfer_window": "waveform_transfer_window_token",
+}
+_WAVEFORM_CAPTURE_RECOVERY_FIELDS = frozenset(_WAVEFORM_TRANSFER_FIELDS)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferStateSnapshot:
+    captured_fields: tuple[ScopeWaveformTransferField, ...]
+    run_state_token: str | None = None
+    acquisition_token: str | None = None
+    trigger_token: str | None = None
+    timebase_token: str | None = None
+    channel_display_token: str | None = None
+    channel_vertical_token: str | None = None
+    waveform_source_token: str | None = None
+    waveform_mode_token: str | None = None
+    query_response_header_token: str | None = None
+    waveform_format_token: str | None = None
+    waveform_byte_order_token: str | None = None
+    waveform_points_token: str | None = None
+    waveform_transfer_window_token: str | None = None
+
+    def __post_init__(self) -> None:
+        fields = _unique_tuple(self.captured_fields, label="captured_fields")
+        if not set(fields) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform transfer snapshot contains unsupported fields")
+        for field_name, attr_name in _WAVEFORM_TOKEN_ATTRS.items():
+            token = _optional_safe_token(getattr(self, attr_name), label=attr_name)
+            if (field_name in fields) != (token is not None):
+                raise ValueError(f"{attr_name} presence must match captured fields")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferBaseline:
+    context_id: str
+    session_epoch: str
+    baseline_nonce: str
+    snapshot: ScopeWaveformTransferStateSnapshot
+    restore_order: tuple[ScopeWaveformTransferField, ...]
+
+    def __post_init__(self) -> None:
+        _safe_token(self.context_id, label="context_id")
+        _safe_token(self.session_epoch, label="session_epoch")
+        _safe_token(self.baseline_nonce, label="baseline_nonce")
+        if not isinstance(self.snapshot, ScopeWaveformTransferStateSnapshot):
+            raise TypeError("waveform transfer baseline snapshot has an invalid type")
+        order = _unique_tuple(self.restore_order, label="restore_order")
+        if set(order) != set(self.snapshot.captured_fields):
+            raise ValueError("waveform transfer restore order must cover captured fields exactly")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferRestoreResult:
+    status: Literal["completed", "failed", "not_attempted"]
+    attempted_fields: tuple[ScopeWaveformTransferField, ...]
+    restored_fields: tuple[ScopeWaveformTransferField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        attempted = _unique_tuple(self.attempted_fields, label="attempted_fields")
+        restored = _unique_tuple(self.restored_fields, label="restored_fields")
+        if not set(attempted + restored) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform transfer restore fields are invalid")
+        _optional_safe_token(self.error_code, label="error_code")
+
+    def validate_for(self, baseline: ScopeWaveformTransferBaseline) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        _optional_safe_token(self.error_code, label="error_code")
+        _validate_prefix_and_subsequence(
+            expected=baseline.restore_order,
+            attempted=self.attempted_fields,
+            completed=self.restored_fields,
+            status=self.status,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformTransferVerification:
+    status: Literal["verified", "mismatch", "unavailable"]
+    verified_fields: tuple[ScopeWaveformTransferField, ...]
+    mismatched_fields: tuple[ScopeWaveformTransferField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"verified", "mismatch", "unavailable"}, label="verification status")
+        verified = _unique_tuple(self.verified_fields, label="verified_fields")
+        mismatched = _unique_tuple(self.mismatched_fields, label="mismatched_fields")
+        if set(verified) & set(mismatched) or not set(
+            verified + mismatched
+        ) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform transfer verification fields are inconsistent")
+        _optional_safe_token(self.error_code, label="error_code")
+        if self.status == "verified" and mismatched:
+            raise ValueError("verified transfer state cannot contain mismatches")
+        if self.status == "mismatch" and not mismatched:
+            raise ValueError("mismatched transfer verification requires mismatched fields")
+        if self.status == "unavailable" and (verified or mismatched):
+            raise ValueError("unavailable transfer verification cannot claim fields")
+
+ScopeWaveformBinaryOperationKind = Literal["fetch", "capture_single", "capture_multiple"]
+_WAVEFORM_BINARY_OPERATION_KINDS = {"fetch", "capture_single", "capture_multiple"}
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformBinaryOperationProfile:
+    """Per-standard-operation limits and recovery closure for bounded waveform I/O."""
+
+    operation_kind: ScopeWaveformBinaryOperationKind
+    response_max_bytes: int
+    operation_max_bytes: int
+    query_max_count: int
+    resynchronization_max_bytes: int
+    restore_order: tuple[ScopeWaveformTransferField, ...]
+    snapshot_max_steps: int
+    restore_max_steps: int
+    verify_max_steps: int
+
+    def __post_init__(self) -> None:
+        _literal(
+            self.operation_kind,
+            _WAVEFORM_BINARY_OPERATION_KINDS,
+            label="waveform binary operation kind",
+        )
+        _strict_int(
+            self.response_max_bytes,
+            label="response_max_bytes",
+            minimum=1,
+            maximum=SCOPE_WAVEFORM_BINARY_RESPONSE_MAX_BYTES,
+        )
+        _strict_int(
+            self.operation_max_bytes,
+            label="operation_max_bytes",
+            minimum=1,
+            maximum=SCOPE_WAVEFORM_BINARY_OPERATION_MAX_BYTES,
+        )
+        if self.operation_max_bytes < self.response_max_bytes:
+            raise ValueError("waveform operation limit cannot be smaller than response limit")
+        _strict_int(
+            self.query_max_count,
+            label="query_max_count",
+            minimum=1,
+            maximum=SCOPE_WAVEFORM_BINARY_QUERY_MAX_COUNT,
+        )
+        _strict_int(
+            self.resynchronization_max_bytes,
+            label="resynchronization_max_bytes",
+            minimum=0,
+            maximum=SCOPE_WAVEFORM_BINARY_RESYNCHRONIZATION_MAX_BYTES,
+        )
+        restore = _unique_tuple(self.restore_order, label="restore_order")
+        if not restore or not set(restore) <= _WAVEFORM_TRANSFER_FIELDS:
+            raise ValueError("waveform restore order must contain supported transfer fields")
+        for field_name in restore:
+            if not isinstance(field_name, str):
+                raise TypeError("waveform restore fields must be strings")
+        if self.operation_kind in {"capture_single", "capture_multiple"} and not (
+            _WAVEFORM_CAPTURE_RECOVERY_FIELDS <= set(restore)
+        ):
+            raise ValueError(
+                "waveform capture restore order must cover acquisition and transfer recovery fields"
+            )
+        steps = (self.snapshot_max_steps, self.restore_max_steps, self.verify_max_steps)
+        for label, value in zip(
+            ("snapshot_max_steps", "restore_max_steps", "verify_max_steps"),
+            steps,
+            strict=True,
+        ):
+            _strict_int(value, label=label, minimum=len(restore), maximum=64)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeWaveformBinaryProfile:
+    """Descriptor-owned bounded definite-block contract for standard waveform operations."""
+
+    operations: tuple[ScopeWaveformBinaryOperationProfile, ...]
+    framing: BinaryResponseFraming = BinaryResponseFraming.DEFINITE_BLOCK
+    transport_trailing_hex: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "framing", BinaryResponseFraming(self.framing))
+        if self.framing is not BinaryResponseFraming.DEFINITE_BLOCK:
+            raise ValueError("waveform binary profiles only support definite-block framing")
+        if not isinstance(self.operations, tuple) or not self.operations:
+            raise ValueError("waveform binary profile operations must be a non-empty tuple")
+        if any(not isinstance(item, ScopeWaveformBinaryOperationProfile) for item in self.operations):
+            raise TypeError("waveform binary profile operations have an invalid type")
+        kinds = tuple(item.operation_kind for item in self.operations)
+        if len(set(kinds)) != len(kinds):
+            raise ValueError("waveform binary profile operation kinds must be unique")
+        _hex_bytes(self.transport_trailing_hex, label="transport_trailing_hex")
+
+    @property
+    def transport_trailing(self) -> bytes:
+        return bytes.fromhex(self.transport_trailing_hex)
+
+    def operation_for(
+        self,
+        operation_kind: ScopeWaveformBinaryOperationKind,
+    ) -> ScopeWaveformBinaryOperationProfile:
+        for operation in self.operations:
+            if operation.operation_kind == operation_kind:
+                return operation
+        raise ValueError(f"waveform binary profile has no {operation_kind!r} operation")
+
+
+_SCOPE_SNAPSHOT_V2_IDENTITY_FIELDS = frozenset(
+    {
+        "identity.manufacturer",
+        "identity.model",
+        "identity.serial_number",
+        "identity.firmware",
+        "identity.options",
+    }
+)
+_SCOPE_SNAPSHOT_V2_PARTITION_IDENTITIES = {
+    "channel": "channel.channel",
+    "probe": "probe.channel",
+    "waveform": "waveform.channel",
+    "trigger": "trigger.trigger_type",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeSnapshotProfileV2:
+    """Descriptor-owned pure-text query contract for a composable scope snapshot."""
+
+    readable_fields: tuple[ScopeSnapshotFieldV2, ...]
+    max_queries: int
+    conditionally_applicable_fields: tuple[ScopeSnapshotFieldV2, ...] = ()
+    allowed_effect: Literal["pure_read"] = "pure_read"
+
+    def __post_init__(self) -> None:
+        readable = _unique_tuple(self.readable_fields, label="snapshot readable_fields")
+        if not readable or not set(readable) <= set(SCOPE_SNAPSHOT_V2_FIELD_ORDER):
+            raise ValueError("snapshot readable_fields must contain supported unique fields")
+        if not _SCOPE_SNAPSHOT_V2_IDENTITY_FIELDS <= set(readable):
+            raise ValueError("snapshot readable_fields must include all identity fields")
+        conditional = _unique_tuple(
+            self.conditionally_applicable_fields,
+            label="snapshot conditionally_applicable_fields",
+        )
+        if not set(conditional) <= set(readable):
+            raise ValueError("snapshot conditional fields must be readable")
+        prohibited_conditional = _SCOPE_SNAPSHOT_V2_IDENTITY_FIELDS | set(
+            _SCOPE_SNAPSHOT_V2_PARTITION_IDENTITIES.values()
+        )
+        if set(conditional) & prohibited_conditional:
+            raise ValueError("snapshot identity fields cannot be conditional")
+        _strict_int(self.max_queries, label="snapshot max_queries", minimum=1)
+        _literal(self.allowed_effect, {"pure_read"}, label="snapshot allowed_effect")
+        readable_set = set(readable)
+        for partition, identity_field in _SCOPE_SNAPSHOT_V2_PARTITION_IDENTITIES.items():
+            prefix = f"{partition}."
+            if any(field_name.startswith(prefix) and field_name != identity_field for field_name in readable):
+                if identity_field not in readable_set:
+                    raise ValueError(
+                        f"snapshot {partition} fields require {identity_field!r}"
+                    )
+
+    def validate_result(self, result: ScopeSnapshotV2, *, channel: int) -> None:
+        """Reject results that expand or silently shrink this descriptor's profile."""
+
+        if not isinstance(result, ScopeSnapshotV2):
+            raise TypeError("snapshot V2 driver returned an invalid result")
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise ValueError("snapshot V2 channel must be a positive integer")
+        for section_name in ("channel", "probe", "waveform"):
+            section = getattr(result, section_name)
+            if section is not None and section.channel != channel:
+                raise ValueError(f"snapshot V2 {section_name} returned the wrong channel")
+        values = result.field_values()
+        readable = set(self.readable_fields)
+        conditional = set(self.conditionally_applicable_fields)
+        unavailable = set(result.unavailable_fields)
+        not_applicable = set(result.not_applicable_fields)
+        for field_name in SCOPE_SNAPSHOT_V2_FIELD_ORDER:
+            value = values[field_name]
+            has_value = value is not None
+            if field_name not in readable:
+                if has_value or field_name not in unavailable:
+                    raise ValueError(
+                        "snapshot V2 result provided a field outside the descriptor profile"
+                    )
+                continue
+            if field_name in conditional:
+                if not has_value and field_name not in not_applicable:
+                    raise ValueError(
+                        "snapshot V2 conditional fields must be marked not applicable"
+                    )
+                if has_value and (field_name in unavailable or field_name in not_applicable):
+                    raise ValueError(
+                        "snapshot V2 available conditional fields cannot have an availability path"
+                    )
+                continue
+            if not has_value or field_name in unavailable or field_name in not_applicable:
+                raise ValueError(
+                    "snapshot V2 non-conditional readable fields must have a value"
+                )
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeTraceProfile:
     fetchable_kinds: tuple[Literal["analog", "digital", "reference"], ...]
@@ -1225,6 +2873,13 @@ class ScopeDescriptorExtensions:
     screenshot_profile: ScopeScreenshotProfile | None = None
     acquisition_control_profile: ScopeAcquisitionControlProfile | None = None
     trace_profile: ScopeTraceProfile | None = None
+    waveform_binary_profile: ScopeWaveformBinaryProfile | None = None
+    snapshot_profile_v2: ScopeSnapshotProfileV2 | None = None
+    acquisition_status_profile_v2: ScopeAcquisitionStatusProfileV2 | None = None
+    measurement_statistics_profile_v2: ScopeMeasurementStatisticsProfileV2 | None = None
+    fft_status_profile_v2: ScopeFftStatusProfileV2 | None = None
+    cursor_readout_profile_v2: ScopeCursorReadoutProfileV2 | None = None
+    average_capture_profile_v2: ScopeAverageCaptureProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -1235,6 +2890,41 @@ class ScopeDescriptorExtensions:
                 ScopeAcquisitionControlProfile,
             ),
             ("trace_profile", self.trace_profile, ScopeTraceProfile),
+            (
+                "waveform_binary_profile",
+                self.waveform_binary_profile,
+                ScopeWaveformBinaryProfile,
+            ),
+            (
+                "snapshot_profile_v2",
+                self.snapshot_profile_v2,
+                ScopeSnapshotProfileV2,
+            ),
+            (
+                "acquisition_status_profile_v2",
+                self.acquisition_status_profile_v2,
+                ScopeAcquisitionStatusProfileV2,
+            ),
+            (
+                "measurement_statistics_profile_v2",
+                self.measurement_statistics_profile_v2,
+                ScopeMeasurementStatisticsProfileV2,
+            ),
+            (
+                "fft_status_profile_v2",
+                self.fft_status_profile_v2,
+                ScopeFftStatusProfileV2,
+            ),
+            (
+                "cursor_readout_profile_v2",
+                self.cursor_readout_profile_v2,
+                ScopeCursorReadoutProfileV2,
+            ),
+            (
+                "average_capture_profile_v2",
+                self.average_capture_profile_v2,
+                ScopeAverageCaptureProfileV2,
+            ),
         ):
             if value is not None and not isinstance(value, expected):
                 raise TypeError(f"{label} has an invalid type")
@@ -1276,6 +2966,74 @@ class ScopeScreenshotDriver(InstrumentDriver, Protocol):
 @runtime_checkable
 class ScopeAcquisitionRunStateDriver(InstrumentDriver, Protocol):
     def get_acquisition_run_state(self) -> ScopeAcquisitionRunState: ...
+
+
+@runtime_checkable
+class ScopeAcquisitionStatusDriverV2(InstrumentDriver, Protocol):
+    def get_acquisition_status_v2(
+        self,
+        *,
+        fields: tuple[ScopeAcquisitionStatusFieldV2, ...],
+    ) -> ScopeAcquisitionStatusV2: ...
+
+
+@runtime_checkable
+class ScopeAverageCaptureDriverV2(ScopeAcquisitionRunStateDriver, Protocol):
+    def snapshot_average_capture_state(
+        self,
+        fields: tuple[ScopeAverageCaptureField, ...],
+    ) -> ScopeAverageCaptureStateSnapshot: ...
+
+    def set_average_acquisition_type_v2(
+        self,
+        acquisition_type: str,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> None: ...
+
+    def get_average_configuration_v2(
+        self,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> ScopeAverageConfigurationV2: ...
+
+    def set_average_count_v2(
+        self,
+        average_count: int,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> None: ...
+
+    def acquire_average_single_v2(
+        self,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+        deadline: float,
+    ) -> ScopeAcquisitionCompletion: ...
+
+    def get_device_average_complete_v2(
+        self,
+        *,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> bool: ...
+
+    def fetch_average_waveform_bounded(
+        self,
+        channel: int,
+        *,
+        points: str,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> WaveformData: ...
+
+    def restore_average_capture_state(
+        self,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> ScopeAverageCaptureRestoreResult: ...
+
+    def verify_average_capture_state_restored(
+        self,
+        baseline: ScopeAverageCaptureBaseline,
+    ) -> ScopeAverageCaptureStateSnapshot: ...
 
 
 @runtime_checkable
@@ -1355,6 +3113,72 @@ class ScopeTraceDriver(
 
 
 @runtime_checkable
+class ScopeWaveformTransferRecoveryDriver(InstrumentDriver, Protocol):
+    def snapshot_waveform_transfer_state(
+        self,
+        fields: tuple[ScopeWaveformTransferField, ...],
+    ) -> ScopeWaveformTransferStateSnapshot: ...
+
+    def restore_waveform_transfer_state(
+        self,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> ScopeWaveformTransferRestoreResult: ...
+
+    def verify_waveform_transfer_state_restored(
+        self,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> ScopeWaveformTransferStateSnapshot: ...
+
+
+@runtime_checkable
+class ScopeBoundedWaveformFetchDriver(
+    ScopeWaveformTransferRecoveryDriver,
+    Protocol,
+):
+    def fetch_waveform_bounded(
+        self,
+        channel: int,
+        points: str = "dmax",
+        *,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> WaveformData: ...
+
+
+@runtime_checkable
+class ScopeBoundedWaveformCaptureDriver(
+    ScopeWaveformTransferRecoveryDriver,
+    Protocol,
+):
+    def capture_waveform_bounded(
+        self,
+        channel: int,
+        points: str = "dmax",
+        *,
+        time_range_s: float | None = None,
+        vertical_scale_v_per_div: float | None = None,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> WaveformData: ...
+
+
+@runtime_checkable
+class ScopeBoundedMultiWaveformCaptureDriver(
+    ScopeWaveformTransferRecoveryDriver,
+    Protocol,
+):
+    def capture_waveforms_bounded(
+        self,
+        channels: list[int],
+        points: str = "dmax",
+        *,
+        time_range_s: float | None = None,
+        vertical_scale_v_per_div: float | None = None,
+        on_channel_start: Callable[[int | None], None] | None = None,
+        on_waveform: Callable[[int, WaveformData], None] | None = None,
+        baseline: ScopeWaveformTransferBaseline,
+    ) -> dict[int, WaveformData]: ...
+
+
+@runtime_checkable
 class ScopeErrorDrainDriver(InstrumentDriver, Protocol):
     def drain_errors(self, *, max_records: int) -> ErrorDrainResult: ...
 
@@ -1362,5 +3186,19 @@ class ScopeErrorDrainDriver(InstrumentDriver, Protocol):
 __all__ = [
     name
     for name in globals()
-    if name.startswith("Scope") or name.startswith("Error") or name == "DriverErrorRecord"
+    if name.startswith("Scope")
+    or name.startswith("Error")
+    or name
+    in {
+        "SCOPE_AVERAGE_CAPTURE_FIELD_ORDER",
+        "SCOPE_AVERAGE_COUNT_MAX_V2",
+        "DriverErrorRecord",
+        "SCOPE_ACQUISITION_STATUS_V2_FIELD_ORDER",
+        "SCOPE_ACQUISITION_STATUS_V2_MAX_QUERIES",
+        "SCOPE_CURSOR_READOUT_V2_FIELD_ORDER",
+        "SCOPE_CURSOR_READOUT_V2_MAX_QUERIES",
+        "SCOPE_FFT_STATUS_V2_FIELD_ORDER",
+        "SCOPE_FFT_STATUS_V2_MAX_QUERIES",
+        "SCOPE_MEASUREMENT_STATISTICS_V2_MAX_QUERIES",
+    }
 ]

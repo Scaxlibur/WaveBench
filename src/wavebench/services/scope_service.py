@@ -3,12 +3,14 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import numpy as np
 
@@ -22,35 +24,59 @@ from wavebench.instruments.contracts import (
     ScopeAcquisitionStatusDriver,
     ScopeAverageCaptureDriver,
     ScopeAnalysisReadDriver,
+    ScopeChannelInputStateDriverV2,
+    ScopeCursorReadoutDriverV2,
     ScopeDriver,
     ScopeDigitalStatusDriver,
+    ScopeDigitalStatusDriverV2,
     ScopeDigitalWaveformDriver,
+    ScopeFftStatusDriverV2,
     ScopeHistoryTimestampsDriver,
     ScopeMeasurementStatisticsDriver,
+    ScopeMeasurementStatisticsDriverV2,
     ScopeSnapshotDriver,
+    ScopeSnapshotDriverV2,
 )
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.models import (
     ScopeAcquisitionStatus,
     ScopeAverageCaptureRequest,
     ScopeAverageCaptureResult,
+    ScopeChannelInputStateV2,
     ScopeCursorReadout,
+    ScopeCursorReadoutV2,
     ScopeDerivedWaveformMetadata,
     ScopeDigitalChannelStatus,
+    ScopeDigitalChannelStatusV2,
     ScopeDigitalWaveform,
     ScopeDigitalWaveformRequest,
     ScopeFftStatus,
+    ScopeFftStatusV2,
     ScopeHistoryTimestamps,
     ScopeMeasurementStatistics,
+    ScopeMeasurementStatisticsRequestV2,
+    ScopeMeasurementStatisticsV2,
     ScopeSnapshot,
+    ScopeSnapshotV2,
     WaveformData,
 )
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.instruments.scope_extensions import (
     ErrorCheckSpec,
     ScopeContinuousAcquisitionRequest,
+    ScopeAcquisitionStatusDriverV2,
+    ScopeAcquisitionStatusProfileV2,
+    ScopeAcquisitionStatusV2,
+    ScopeAverageCaptureProfileV2,
+    ScopeAverageCaptureRequestV2,
+    ScopeAverageCaptureResultV2,
+    ScopeCursorReadoutProfileV2,
+    ScopeFftStatusProfileV2,
+    ScopeMeasurementStatisticsProfileV2,
     ScopeScreenshotRequest,
+    ScopeSnapshotProfileV2,
     ScopeTraceRef,
+    ScopeWaveformBinaryProfile,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
@@ -61,7 +87,10 @@ from wavebench.services.scope_extension_service import (
     ScopeExtensionOperationResult,
     ScopeExtensionService,
 )
+from wavebench.services.scope_waveform_executor import BoundedWaveformExecutor
+from wavebench.services.scope_average_capture_executor import ScopeAverageCaptureExecutor
 from wavebench.transport.base import InstrumentTransport
+from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import (
     InstrumentSessionState,
     SessionHealth,
@@ -141,6 +170,29 @@ def assert_scope_high_impedance(
         f"scope CH{channel} coupling {normalized!r} is not recognized; refusing capture by default. "
         "Known high-impedance values: ACL, ACLimit, DCL, DCLimit. "
         f"/ 示波器 CH{channel} 耦合值 {normalized!r} 无法确认是否高阻，默认拒绝采集。"
+    )
+
+
+def assert_scope_input_state_safe(
+    state: ScopeChannelInputStateV2,
+    *,
+    allow_50ohm: bool = False,
+) -> ScopeChannelInputStateV2:
+    """Apply the V2 termination policy without changing any legacy capture route."""
+
+    if state.termination == "high_z":
+        return state
+    if state.termination == "50_ohm" and allow_50ohm is True:
+        return state
+    if state.termination == "50_ohm":
+        raise ConfigError(
+            f"scope CH{state.channel} input termination is 50 ohm; default use requires "
+            "high impedance. Pass --allow-50ohm only when the test setup explicitly "
+            "accepts the measured 50 ohm input."
+        )
+    raise ConfigError(
+        f"scope CH{state.channel} input termination is unknown; refusing use even when "
+        "--allow-50ohm was requested."
     )
 
 
@@ -351,6 +403,63 @@ class ScopeService(SessionStateAliasMixin):
         with self._scope_session() as scope:
             return cast(ScopeSnapshotDriver, scope).get_snapshot(channel)
 
+    def snapshot_v2(self, channel: int) -> ScopeSnapshotV2:
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise ConfigError("scope snapshot V2 channel must be a positive integer")
+        spec = self._require("scope.snapshot_v2", "scope.snapshot_v2")
+        profile = self._snapshot_v2_profile()
+        if profile is None:
+            raise ConfigError("scope snapshot V2 requires scope_extensions.snapshot_profile_v2")
+        with self._scope_session() as scope:
+            return self._execute_snapshot_v2(
+                cast(ScopeSnapshotDriverV2, scope),
+                channel=channel,
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_snapshot_v2(
+        self,
+        scope: ScopeSnapshotDriverV2,
+        *,
+        channel: int,
+        profile: ScopeSnapshotProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeSnapshotV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_snapshot_v2(channel, fields=profile.readable_fields)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.snapshot_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_snapshot_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_snapshot_v2(channel, fields=profile.readable_fields)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError("scope snapshot V2 exceeded its descriptor query budget")
+        try:
+            profile.validate_result(result, channel=channel)
+        except (TypeError, ValueError) as exc:
+            raise DataError(f"scope snapshot V2 driver returned an invalid result: {exc}") from exc
+        return result
+
     def status_summary(self, channel: int, *, strict: bool = False) -> ScopeStatusSummary:
         """Return a complete snapshot when available, otherwise a read-only partial summary."""
 
@@ -391,6 +500,69 @@ class ScopeService(SessionStateAliasMixin):
         with self._scope_session() as scope:
             return cast(ScopeAcquisitionStatusDriver, scope).get_acquisition_status()
 
+    def acquisition_status_v2(self) -> ScopeAcquisitionStatusV2:
+        spec = self._require(
+            "scope.acquisition_status_v2",
+            "scope.acquisition_status_v2",
+        )
+        profile = self._acquisition_status_v2_profile()
+        if profile is None:
+            raise ConfigError(
+                "scope acquisition status V2 requires "
+                "scope_extensions.acquisition_status_profile_v2"
+            )
+        with self._scope_session() as scope:
+            return self._execute_acquisition_status_v2(
+                cast(ScopeAcquisitionStatusDriverV2, scope),
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_acquisition_status_v2(
+        self,
+        scope: ScopeAcquisitionStatusDriverV2,
+        *,
+        profile: ScopeAcquisitionStatusProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeAcquisitionStatusV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_acquisition_status_v2(fields=profile.readable_fields)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.acquisition_status_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_acquisition_status_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_acquisition_status_v2(fields=profile.readable_fields)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError(
+                    "scope acquisition status V2 exceeded its descriptor query budget"
+                )
+        try:
+            profile.validate_result(result)
+        except (TypeError, ValueError) as exc:
+            raise DataError(
+                f"scope acquisition status V2 driver returned an invalid result: {exc}"
+            ) from exc
+        return result
+
     def capture_average(
         self,
         *,
@@ -424,6 +596,39 @@ class ScopeService(SessionStateAliasMixin):
                 )
             return cast(ScopeAverageCaptureDriver, scope).capture_average(request)
 
+    def capture_average_v2(
+        self,
+        request: ScopeAverageCaptureRequestV2,
+    ) -> ScopeAverageCaptureResultV2:
+        if not isinstance(request, ScopeAverageCaptureRequestV2):
+            raise ConfigError("scope average capture V2 request has an invalid type")
+        profile = self._average_capture_v2_profile()
+        if profile is None:
+            raise ConfigError(
+                "scope average capture V2 requires "
+                "scope_extensions.average_capture_profile_v2"
+            )
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"invalid scope average capture V2 request: {exc}") from exc
+        required = [
+            "scope.capture_average_v2",
+            "scope.idn",
+            "scope.acquisition_status_v2",
+            "scope.acquisition_run_state",
+            "scope.acquisition_control",
+            "scope.channel_input_state_v2",
+        ]
+        if self.config.scope.check_errors:
+            required.append("scope.error_drain_v1")
+        self._require("scope.capture_average_v2", *required)
+        with self._scope_session() as scope:
+            return self._average_capture_v2_executor(scope).execute(
+                request,
+                check_errors=self.config.scope.check_errors,
+            ).value
+
     def history_timestamps(self, channel: int) -> ScopeHistoryTimestamps:
         self._require("scope.history_timestamps", "scope.history_timestamps")
         with self._scope_session() as scope:
@@ -433,6 +638,18 @@ class ScopeService(SessionStateAliasMixin):
         self._require("scope.digital_status", "scope.digital_status")
         with self._scope_session() as scope:
             return cast(ScopeDigitalStatusDriver, scope).get_digital_status(channel)
+
+    def digital_status_v2(self, channel: int) -> ScopeDigitalChannelStatusV2:
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+            raise ConfigError("digital status V2 channel must be a non-negative integer")
+        self._require("scope.digital_status_v2", "scope.digital_status_v2")
+        with self._scope_session() as scope:
+            result = cast(ScopeDigitalStatusDriverV2, scope).get_digital_status_v2(channel)
+        if not isinstance(result, ScopeDigitalChannelStatusV2):
+            raise DataError("digital status V2 driver returned an invalid result")
+        if result.channel != channel:
+            raise DataError("digital status V2 driver returned the wrong channel")
+        return result
 
     def digital_waveform(
         self,
@@ -470,6 +687,80 @@ class ScopeService(SessionStateAliasMixin):
                 acquisition_stopped=acquisition_stopped,
             )
 
+    def measurement_statistics_v2(
+        self,
+        request: ScopeMeasurementStatisticsRequestV2,
+    ) -> ScopeMeasurementStatisticsV2:
+        if not isinstance(request, ScopeMeasurementStatisticsRequestV2):
+            raise ConfigError("measurement statistics V2 request has an invalid type")
+        spec = self._require(
+            "scope.measurement_statistics_v2",
+            "scope.measurement_statistics_v2",
+        )
+        profile = self._measurement_statistics_v2_profile()
+        if profile is None:
+            raise ConfigError(
+                "scope measurement statistics V2 requires "
+                "scope_extensions.measurement_statistics_profile_v2"
+            )
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"invalid measurement statistics V2 request: {exc}") from exc
+        with self._scope_session() as scope:
+            return self._execute_measurement_statistics_v2(
+                cast(ScopeMeasurementStatisticsDriverV2, scope),
+                request=request,
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_measurement_statistics_v2(
+        self,
+        scope: ScopeMeasurementStatisticsDriverV2,
+        *,
+        request: ScopeMeasurementStatisticsRequestV2,
+        profile: ScopeMeasurementStatisticsProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeMeasurementStatisticsV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_measurement_statistics_v2(request)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.measurement_statistics_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_measurement_statistics_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_measurement_statistics_v2(request)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError(
+                    "scope measurement statistics V2 exceeded its descriptor query budget"
+                )
+        try:
+            profile.validate_result(result, request=request)
+        except (TypeError, ValueError) as exc:
+            raise DataError(
+                f"scope measurement statistics V2 driver returned an invalid result: {exc}"
+            ) from exc
+        return result
+
     def math_waveform_metadata(self, math_index: int) -> ScopeDerivedWaveformMetadata:
         self._require("scope.math_metadata", "scope.math_metadata")
         with self._scope_session() as scope:
@@ -484,6 +775,163 @@ class ScopeService(SessionStateAliasMixin):
                 math_index,
                 configured_fft=configured_fft,
             )
+
+    def fft_status_v2(
+        self,
+        math_index: int,
+        *,
+        configured_fft: bool,
+    ) -> ScopeFftStatusV2:
+        if isinstance(math_index, bool) or not isinstance(math_index, int) or math_index < 1:
+            raise ConfigError("FFT status V2 math_index must be a positive integer")
+        if configured_fft is not True:
+            raise ConfigError("FFT status V2 requires configured_fft=True")
+        spec = self._require("scope.fft_status_v2", "scope.fft_status_v2")
+        profile = self._fft_status_v2_profile()
+        if profile is None:
+            raise ConfigError("scope FFT status V2 requires scope_extensions.fft_status_profile_v2")
+        with self._scope_session() as scope:
+            return self._execute_fft_status_v2(
+                cast(ScopeFftStatusDriverV2, scope),
+                math_index=math_index,
+                configured_fft=configured_fft,
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_fft_status_v2(
+        self,
+        scope: ScopeFftStatusDriverV2,
+        *,
+        math_index: int,
+        configured_fft: bool,
+        profile: ScopeFftStatusProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeFftStatusV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None:
+            result = scope.get_fft_status_v2(math_index, configured_fft=configured_fft)
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.fft_status_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_fft_status_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_fft_status_v2(math_index, configured_fft=configured_fft)
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError("scope FFT status V2 exceeded its descriptor query budget")
+        try:
+            profile.validate_result(result, math_index=math_index)
+        except (TypeError, ValueError) as exc:
+            raise DataError(f"scope FFT status V2 driver returned an invalid result: {exc}") from exc
+        return result
+
+    def cursor_readout_v2(
+        self,
+        cursor_index: int | None,
+        *,
+        configured_cursor: bool,
+    ) -> ScopeCursorReadoutV2:
+        if cursor_index is not None and (
+            isinstance(cursor_index, bool)
+            or not isinstance(cursor_index, int)
+            or cursor_index < 1
+        ):
+            raise ConfigError("cursor readout V2 cursor_index must be a positive integer or None")
+        if configured_cursor is not True:
+            raise ConfigError("cursor readout V2 requires configured_cursor=True")
+        spec = self._require("scope.cursor_readout_v2", "scope.cursor_readout_v2")
+        profile = self._cursor_readout_v2_profile()
+        if profile is None:
+            raise ConfigError(
+                "scope cursor readout V2 requires scope_extensions.cursor_readout_profile_v2"
+            )
+        try:
+            profile.validate_request(
+                cursor_index=cursor_index,
+                configured_cursor=configured_cursor,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"invalid cursor readout V2 request: {exc}") from exc
+        with self._scope_session() as scope:
+            return self._execute_cursor_readout_v2(
+                cast(ScopeCursorReadoutDriverV2, scope),
+                cursor_index=cursor_index,
+                configured_cursor=configured_cursor,
+                profile=profile,
+                spec=spec,
+            )
+
+    def _execute_cursor_readout_v2(
+        self,
+        scope: ScopeCursorReadoutDriverV2,
+        *,
+        cursor_index: int | None,
+        configured_cursor: bool,
+        profile: ScopeCursorReadoutProfileV2,
+        spec: OperationSpec,
+    ) -> ScopeCursorReadoutV2:
+        state = self.session_state
+        guarded_transport = (
+            self.transport if isinstance(self.transport, GuardedAuditedTransport) else None
+        )
+        query_calls_before = (
+            guarded_transport.counters.query_calls if guarded_transport is not None else None
+        )
+        if state is None and self.transport is not None:
+            raise ConfigError(
+                "scope cursor readout V2 requires a shared instrument session state"
+            )
+        if state is None:
+            result = scope.get_cursor_readout_v2(
+                cursor_index,
+                configured_cursor=configured_cursor,
+            )
+        else:
+            timeout_ms = self._operation_timeout_ms(spec)
+            coordinator = SessionTransactionCoordinator(state)
+            with coordinator.authorize_normal(
+                operation_id=spec.operation,
+                allowed_io=("query",),
+                fields=("scope.cursor_readout_v2",),
+                timeout_ms=timeout_ms,
+                max_steps=profile.max_queries,
+                context_id="scope_cursor_readout_v2",
+                correlation_id=uuid4().hex,
+                phase="main",
+                absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+            ):
+                result = scope.get_cursor_readout_v2(
+                    cursor_index,
+                    configured_cursor=configured_cursor,
+                )
+        if query_calls_before is not None and guarded_transport is not None:
+            query_calls = guarded_transport.counters.query_calls - query_calls_before
+            if query_calls > profile.max_queries:
+                raise DataError("scope cursor readout V2 exceeded its descriptor query budget")
+        try:
+            profile.validate_result(result, cursor_index=cursor_index)
+        except (TypeError, ValueError) as exc:
+            raise DataError(
+                f"scope cursor readout V2 driver returned an invalid result: {exc}"
+            ) from exc
+        return result
 
     def reference_waveform_metadata(
         self,
@@ -648,6 +1096,20 @@ class ScopeService(SessionStateAliasMixin):
         with self._scope_session() as scope:
             return scope.channel_coupling(channel)
 
+    def channel_input_state_v2(self, channel: int) -> ScopeChannelInputStateV2:
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise ConfigError("scope input-state channel must be a positive integer")
+        self._require("scope.channel_input_state_v2", "scope.channel_input_state_v2")
+        with self._scope_session() as scope:
+            result = cast(ScopeChannelInputStateDriverV2, scope).get_channel_input_state_v2(
+                channel
+            )
+        if not isinstance(result, ScopeChannelInputStateV2):
+            raise DataError("scope input-state V2 driver returned an invalid result")
+        if result.channel != channel:
+            raise DataError("scope input-state V2 driver returned the wrong channel")
+        return result
+
     def require_high_impedance(self, channel: int, *, allow_50ohm: bool = False) -> str:
         coupling = self.channel_coupling(channel)
         descriptor = self.descriptor or resolve_instrument_descriptor(
@@ -678,11 +1140,24 @@ class ScopeService(SessionStateAliasMixin):
             raise ConfigError("MVP-1 only supports waveform.format = 'real'")
         if self.config.waveform.byte_order.lower() != "lsbf":
             raise ConfigError("MVP-1 only supports waveform.byte_order = 'lsbf'")
+        bounded_profile = self._waveform_binary_profile()
         required = ["scope.fetch_waveform"]
-        if self.config.scope.check_errors:
+        if bounded_profile is not None:
+            required.append("scope.idn")
+            if self.config.scope.check_errors:
+                required.append("scope.error_drain_v1")
+        elif self.config.scope.check_errors:
             required.append("scope.errors")
         self._require("scope.fetch_waveform", *required)
         with self._scope_session() as scope:
+            if bounded_profile is not None:
+                result = self._bounded_waveform_executor(scope).fetch(
+                    channel=channel,
+                    points=self.config.waveform.points,
+                    check_errors=self.config.scope.check_errors,
+                )
+                assert isinstance(result.value, WaveformData)
+                return result.value
             self._session_preflight("scope.fetch_waveform", scope)
             return scope.fetch_waveform(
                 channel=channel,
@@ -753,6 +1228,120 @@ class ScopeService(SessionStateAliasMixin):
             )
         return "scope.screenshot"
 
+    def _waveform_binary_profile(self) -> ScopeWaveformBinaryProfile | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        return getattr(extensions, "waveform_binary_profile", None)
+
+    def _snapshot_v2_profile(self) -> ScopeSnapshotProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "snapshot_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeSnapshotProfileV2):
+            raise ConfigError("scope snapshot V2 descriptor profile has an invalid type")
+        return profile
+
+    def _acquisition_status_v2_profile(self) -> ScopeAcquisitionStatusProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "acquisition_status_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeAcquisitionStatusProfileV2):
+            raise ConfigError("scope acquisition status V2 descriptor profile has an invalid type")
+        if (
+            profile is not None
+            and "run_state" in profile.readable_fields
+            and "scope.acquisition_run_state" not in descriptor.capabilities
+        ):
+            raise ConfigError(
+                "scope acquisition status V2 profile reads run_state but the descriptor "
+                "does not declare scope.acquisition_run_state"
+            )
+        return profile
+
+    def _average_capture_v2_profile(self) -> ScopeAverageCaptureProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "average_capture_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeAverageCaptureProfileV2):
+            raise ConfigError("scope average capture V2 descriptor profile has an invalid type")
+        return profile
+
+    def _measurement_statistics_v2_profile(
+        self,
+    ) -> ScopeMeasurementStatisticsProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "measurement_statistics_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeMeasurementStatisticsProfileV2):
+            raise ConfigError("scope measurement statistics V2 descriptor profile has an invalid type")
+        return profile
+
+    def _fft_status_v2_profile(self) -> ScopeFftStatusProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "fft_status_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeFftStatusProfileV2):
+            raise ConfigError("scope FFT status V2 descriptor profile has an invalid type")
+        return profile
+
+    def _cursor_readout_v2_profile(self) -> ScopeCursorReadoutProfileV2 | None:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver,
+            expected_kind="scope",
+        )
+        extensions = getattr(descriptor, "scope_extensions", None)
+        profile = getattr(extensions, "cursor_readout_profile_v2", None)
+        if profile is not None and not isinstance(profile, ScopeCursorReadoutProfileV2):
+            raise ConfigError("scope cursor readout V2 descriptor profile has an invalid type")
+        return profile
+
+    def _bounded_waveform_executor(self, scope: object) -> BoundedWaveformExecutor:
+        if self.descriptor is None or self.session_state is None:
+            raise ConfigError(
+                "bounded waveform operations require a factory-owned descriptor and session"
+            )
+        return BoundedWaveformExecutor(
+            driver=scope,
+            descriptor=self.descriptor,
+            session_state=self.session_state,
+            connection_timeout_ms=self.config.connection.timeout_ms,
+            transport=self.transport if isinstance(self.transport, GuardedAuditedTransport) else None,
+        )
+
+    def _average_capture_v2_executor(self, scope: object) -> ScopeAverageCaptureExecutor:
+        if self.descriptor is None or self.session_state is None:
+            raise ConfigError(
+                "average capture V2 requires a factory-owned descriptor and session"
+            )
+        return ScopeAverageCaptureExecutor(
+            driver=scope,
+            descriptor=self.descriptor,
+            session_state=self.session_state,
+            connection_timeout_ms=self.config.connection.timeout_ms,
+            transport=self.transport if isinstance(self.transport, GuardedAuditedTransport) else None,
+        )
+
+    def _can_attempt_failure_screenshot(self) -> bool:
+        return self.session_state is None or self.session_state.health is not SessionHealth.POISONED
+
     def _waveform_metadata(self, waveform: WaveformData) -> dict[str, Any]:
         return {
             "header": {
@@ -801,6 +1390,9 @@ class ScopeService(SessionStateAliasMixin):
             "error": {"type": type(exc).__name__, "message": str(exc)},
             "files": {"commands": str(failed_dir / "commands.log")} if commands_log_path is not None else {},
         }
+        diagnostics = getattr(exc, "scope_operation_diagnostics", None)
+        if isinstance(diagnostics, Mapping):
+            partial_metadata["scope_operation_diagnostics"] = dict(diagnostics)
         if partial is not None:
             partial_metadata.update(rewrite_failed_paths(partial))
         (failed_dir / "metadata.partial.json").write_text(
@@ -809,8 +1401,11 @@ class ScopeService(SessionStateAliasMixin):
         )
 
     def capture_waveform(self, channel: int, label: str) -> CaptureResult:
+        bounded_profile = self._waveform_binary_profile()
         required = ["scope.idn", "scope.capture_waveform"]
-        if self.config.scope.check_errors:
+        if bounded_profile is not None and self.config.scope.check_errors:
+            required.append("scope.error_drain_v1")
+        elif self.config.scope.check_errors:
             required.append("scope.errors")
         if self.config.output.save_screenshot:
             required.append(self._legacy_capture_screenshot_capability())
@@ -837,17 +1432,29 @@ class ScopeService(SessionStateAliasMixin):
         screenshot_error: dict[str, str] | None = None
         try:
             with self._scope_session() as scope:
-                evidence = self._session_preflight("scope.capture", scope)
-                instrument_idn = evidence.get("scope.identity") or scope.idn()
-                capture_kwargs = {
-                    "channel": channel,
-                    "points": self.config.waveform.points,
-                    "check_errors": self.config.scope.check_errors,
-                    "time_range_s": self.config.waveform.time_range_s,
-                }
-                if self.config.waveform.vertical_scale_v_per_div is not None:
-                    capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
-                waveform = scope.capture_waveform(**capture_kwargs)
+                if bounded_profile is not None:
+                    result = self._bounded_waveform_executor(scope).capture_single(
+                        channel=channel,
+                        points=self.config.waveform.points,
+                        time_range_s=self.config.waveform.time_range_s,
+                        vertical_scale_v_per_div=self.config.waveform.vertical_scale_v_per_div,
+                        check_errors=self.config.scope.check_errors,
+                    )
+                    assert isinstance(result.value, WaveformData)
+                    waveform = result.value
+                    instrument_idn = result.identity
+                else:
+                    evidence = self._session_preflight("scope.capture", scope)
+                    instrument_idn = evidence.get("scope.identity") or scope.idn()
+                    capture_kwargs = {
+                        "channel": channel,
+                        "points": self.config.waveform.points,
+                        "check_errors": self.config.scope.check_errors,
+                        "time_range_s": self.config.waveform.time_range_s,
+                    }
+                    if self.config.waveform.vertical_scale_v_per_div is not None:
+                        capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
+                    waveform = scope.capture_waveform(**capture_kwargs)
                 screenshot_path, screenshot_error = self._write_screenshot_file(package_dir, scope)
         except Exception as exc:
             self._failed_capture_package(
@@ -889,8 +1496,11 @@ class ScopeService(SessionStateAliasMixin):
             raise ConfigError("at least one channel is required")
         if len(set(channels)) != len(channels):
             raise ConfigError("duplicate channels are not allowed")
+        bounded_profile = self._waveform_binary_profile()
         required = ["scope.idn", "scope.capture_waveforms"]
-        if self.config.scope.check_errors:
+        if bounded_profile is not None and self.config.scope.check_errors:
+            required.append("scope.error_drain_v1")
+        elif self.config.scope.check_errors:
             required.append("scope.errors")
         if self.config.output.save_screenshot:
             required.append(self._legacy_capture_screenshot_capability())
@@ -927,16 +1537,6 @@ class ScopeService(SessionStateAliasMixin):
                 scope = opened_scope
                 try:
                     stage = "identify"
-                    evidence = self._session_preflight("scope.capture_multiple", scope)
-                    instrument_idn = evidence.get("scope.identity") or scope.idn()
-                    capture_kwargs: dict[str, Any] = {
-                        "channels": channels,
-                        "points": self.config.waveform.points,
-                        "check_errors": self.config.scope.check_errors,
-                        "time_range_s": self.config.waveform.time_range_s,
-                    }
-                    if self.config.waveform.vertical_scale_v_per_div is not None:
-                        capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
 
                     def start_channel(channel: int | None) -> None:
                         nonlocal failed_channel, stage
@@ -961,9 +1561,33 @@ class ScopeService(SessionStateAliasMixin):
 
                     stage = "acquire"
                     failed_channel = None
-                    capture_kwargs["on_channel_start"] = start_channel
-                    capture_kwargs["on_waveform"] = save_waveform
-                    returned_waveforms = scope.capture_waveforms(**capture_kwargs)
+                    if bounded_profile is not None:
+                        result = self._bounded_waveform_executor(scope).capture_multiple(
+                            channels=channels,
+                            points=self.config.waveform.points,
+                            time_range_s=self.config.waveform.time_range_s,
+                            vertical_scale_v_per_div=self.config.waveform.vertical_scale_v_per_div,
+                            check_errors=self.config.scope.check_errors,
+                            on_channel_start=start_channel,
+                            on_waveform=save_waveform,
+                        )
+                        assert isinstance(result.value, dict)
+                        returned_waveforms = result.value
+                        instrument_idn = result.identity
+                    else:
+                        evidence = self._session_preflight("scope.capture_multiple", scope)
+                        instrument_idn = evidence.get("scope.identity") or scope.idn()
+                        capture_kwargs: dict[str, Any] = {
+                            "channels": channels,
+                            "points": self.config.waveform.points,
+                            "check_errors": self.config.scope.check_errors,
+                            "time_range_s": self.config.waveform.time_range_s,
+                        }
+                        if self.config.waveform.vertical_scale_v_per_div is not None:
+                            capture_kwargs["vertical_scale_v_per_div"] = self.config.waveform.vertical_scale_v_per_div
+                        capture_kwargs["on_channel_start"] = start_channel
+                        capture_kwargs["on_waveform"] = save_waveform
+                        returned_waveforms = scope.capture_waveforms(**capture_kwargs)
                     for channel in channels:
                         if channel not in waveforms:
                             save_waveform(channel, returned_waveforms[channel])
@@ -973,7 +1597,7 @@ class ScopeService(SessionStateAliasMixin):
                         package_dir, scope
                     )
                 except Exception:
-                    if self.config.output.save_screenshot:
+                    if self.config.output.save_screenshot and self._can_attempt_failure_screenshot():
                         screenshot_path, screenshot_error = self._write_screenshot_file(
                             package_dir, scope
                         )

@@ -28,10 +28,23 @@
 ## rfcs：接口提案与决策
 
 - [RFC 索引](rfcs/README.md)
+- [scope 可移植性 RFC-0001～RFC-0009 组合说明](rfcs/WaveBench_scope可移植性RFC组合说明.md)：
+  将九份外部插件提案转换为核心裁决；RFC-0001 和 RFC-0003 的早期入口由现有更严格合同取代，
+  RFC-0008 在 R1.3 基础上增加标准 waveform bounded opt-in，RFC-0002、RFC-0004 和 RFC-0005 已完成
+  核心只读状态 V2；snapshot V2 仍未发布，主包和插件均未 opt-in，也不修改 legacy API、CLI 或 artifact；
+  RFC-0006a、RFC-0007a 和 RFC-0007b 已完成核心实现但尚未发布；后两者分别提供纯文本 statistics
+  selector/profile 与静态 FFT status profile。0007c cursor 已完成 global/indexed addressing、双 source、单位、
+  availability、纯文本 budget 与无 CLI/artifact 的核心实现；0006b-0 已完成 core-only bounded transaction
+  内核，0006b 已完成单通道 `global_acquisition` 与设备完成位的核心模型、profile、factory gate、executor 和
+  Service 离线实现。RFC-0009 已为完成式 SINGLE control 追加 profile-gated mode-readback terminal STOP
+  proof，不开放 capture、average 或插件 capability。截图 V2 的全局预算为 `8388608/8388608/1/0`，
+  仍不自动授权插件采用；当前不新增插件 capability 或硬件工作。
 - [Source V2 能力、状态与复合输出安全 RFC](rfcs/WaveBench_source能力状态与复合输出安全RFC.md)：
   `Accepted R6`；核心 `0.8.24` 开发线已实现 P0、M1–M4、M4.5、C1、M5-A 至 M5-D 与 C2，
   M6-A、M6-B 与 M6-C 已完成核心离线合同；真实插件验收与发布审计仍按里程碑推进。
 - [transport 重放与 session 健康 RFC](rfcs/WaveBench_transport重放与session健康RFC.md)
+- [scope 通用扩展接口 RFC](rfcs/WaveBench_scope通用扩展接口RFC.md)：`Accepted R1.3`，定义 operation context、binary budget、截图、采集控制、trace、错误策略及恢复验证合同。
+- [标准波形有界二进制传输 RFC](rfcs/WaveBench_标准波形有界二进制传输RFC.md)：`Implemented R1（未发布）`，标准 waveform/capture 已具备对 R1.3 bounded binary context 的 descriptor opt-in 接入、恢复边界和新旧核心／插件兼容矩阵；外部插件仍需单独验收。
 
 ## contributing：开发和接入
 

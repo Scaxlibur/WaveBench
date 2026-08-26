@@ -112,6 +112,7 @@ class BinaryQueryLedger:
         "query_max_count",
         "resynchronization_max_bytes",
         "transport_trailing",
+        "required_framing",
         "_remaining_operation_bytes",
         "_remaining_query_count",
         "_discarded_bytes",
@@ -134,6 +135,7 @@ class BinaryQueryLedger:
         query_max_count: int,
         resynchronization_max_bytes: int,
         transport_trailing: bytes = b"",
+        required_framing: BinaryResponseFraming | None = None,
         ledger_id: str | None = None,
     ) -> None:
         self.context_id = _binding(context_id, label="context_id")
@@ -163,6 +165,13 @@ class BinaryQueryLedger:
         if len(transport_trailing) > 16:
             raise ValueError("transport_trailing cannot exceed 16 bytes")
         self.transport_trailing = transport_trailing
+        self.required_framing = (
+            BinaryResponseFraming(required_framing)
+            if required_framing is not None
+            else None
+        )
+        if self.required_framing is BinaryResponseFraming.MESSAGE and transport_trailing:
+            raise ValueError("message-framed ledgers cannot declare transport trailing bytes")
         self.ledger_id = _binding(ledger_id or uuid4().hex, label="ledger_id")
         self._remaining_operation_bytes = self.operation_max_bytes
         self._remaining_query_count = self.query_max_count
@@ -287,6 +296,9 @@ class BinaryQueryLedger:
                 "resynchronization_max_bytes": self.resynchronization_max_bytes,
                 "discarded_bytes": self._discarded_bytes,
                 "transport_trailing_bytes": len(self.transport_trailing),
+                "required_framing": (
+                    self.required_framing.value if self.required_framing is not None else None
+                ),
             }
 
     @property
@@ -482,6 +494,16 @@ def visa_message_boundary_supported(session: object) -> bool:
     if str(resource_class or "").upper() != "INSTR":
         return False
     return resource_name.startswith(("GPIB", "TCPIP", "USB", "VXI", "PXI"))
+
+
+def visa_binary_contract_supported(session: object) -> bool:
+    """Return whether a VISA handle can execute the core bounded-binary contract."""
+
+    return (
+        visa_message_boundary_supported(session)
+        and callable(getattr(session, "write", None))
+        and _has_low_level_visa_read(session)
+    )
 
 
 def query_visa_binary_response(

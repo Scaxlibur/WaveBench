@@ -81,7 +81,9 @@ class GuardedAuditedTransport:
     lease: ResourceLease | None = None
     release_lease_on_close: bool = True
     session_state: InstrumentSessionState = field(default_factory=InstrumentSessionState)
+    construction_latched: bool = False
     _closed: bool = field(default=False, init=False, repr=False)
+    _bounded_binary_backend_verified: bool = field(default=False, init=False, repr=False)
 
     def __setattr__(self, name: str, value: object) -> None:
         # A guard and its session state form one connection epoch.  Rebinding
@@ -93,6 +95,8 @@ class GuardedAuditedTransport:
 
     def __post_init__(self) -> None:
         self.access = normalize_access_mode(self.access, "access")
+        if not isinstance(self.construction_latched, bool):
+            raise TypeError("construction_latched must be bool")
 
     @property
     def resource(self) -> str:
@@ -196,6 +200,7 @@ class GuardedAuditedTransport:
         with self.session_state.transaction_lock:
             self._check_access("query_bin_block")
             self.counters.binary_query_calls += 1
+            self._check_construction_latch("query_bin_block")
             active = self.session_state._active_authorization()
             if active is not None and active.binary_budget is not None:
                 self.counters.blocked_binary_query_calls += 1
@@ -222,6 +227,7 @@ class GuardedAuditedTransport:
             framing = BinaryResponseFraming(framing)
             self._check_access("query_binary")
             self.counters.binary_query_calls += 1
+            self._check_construction_latch("query_binary")
             if replay is ReplayPolicy.READ_CONTINUATION_ONLY:
                 self.counters.blocked_binary_query_calls += 1
                 raise self._binary_preflight_error("binary_continuation_unsupported", replay)
@@ -233,6 +239,14 @@ class GuardedAuditedTransport:
             if active is None or not isinstance(active.binary_budget, BinaryQueryBudget):
                 self.counters.blocked_binary_query_calls += 1
                 raise self._binary_preflight_error("binary_budget_missing", replay)
+            if replay is not ReplayPolicy.NO_REPLAY:
+                self.counters.blocked_binary_query_calls += 1
+                raise self._binary_preflight_error("binary_replay_unsupported", replay)
+            budget = active.binary_budget
+            ledger = budget._ledger
+            if ledger.required_framing is not None and framing is not ledger.required_framing:
+                self.counters.blocked_binary_query_calls += 1
+                raise self._binary_preflight_error("binary_framing_profile_unsupported", replay)
             authorization = self._gate("query_binary")
             assert authorization is active
             remaining_ms = int(
@@ -242,8 +256,6 @@ class GuardedAuditedTransport:
                 self.counters.blocked_binary_query_calls += 1
                 raise self._deadline_preflight_error("query_binary", replay)
             effective_timeout_ms = min(authorization.io_timeout_ms, remaining_ms)
-            budget = active.binary_budget
-            ledger = budget._ledger
             try:
                 reservation = ledger.reserve(
                     budget,
@@ -403,6 +415,42 @@ class GuardedAuditedTransport:
                 "session": self.session_state.snapshot(),
             }
 
+    def _release_construction_latch(self) -> None:
+        """Release the factory-owned opt-in I/O latch after static validation."""
+
+        with self.session_state.transaction_lock:
+            if not self.construction_latched:
+                return
+            if self._closed or self.session_state.health is not SessionHealth.HEALTHY:
+                raise RuntimeError("cannot release construction latch on an unavailable transport")
+            self.construction_latched = False
+
+    def _mark_bounded_binary_backend_verified(self) -> None:
+        """Record the factory's successful bounded-binary backend conformance check."""
+
+        with self.session_state.transaction_lock:
+            if self._closed or self.session_state.health is not SessionHealth.HEALTHY:
+                raise RuntimeError("cannot verify bounded backend on an unavailable transport")
+            self._bounded_binary_backend_verified = True
+
+    def _has_verified_bounded_binary_backend(self) -> bool:
+        with self.session_state.transaction_lock:
+            return (
+                self._bounded_binary_backend_verified
+                and not self._closed
+                and self.session_state.health is SessionHealth.HEALTHY
+            )
+
+    def _mark_bounded_waveform_backend_verified(self) -> None:
+        """Compatibility alias for the former waveform-specific internal marker."""
+
+        self._mark_bounded_binary_backend_verified()
+
+    def _has_verified_bounded_waveform_backend(self) -> bool:
+        """Compatibility alias for the former waveform-specific internal predicate."""
+
+        return self._has_verified_bounded_binary_backend()
+
     def _check_access(self, operation: str, *, write: bool = False) -> None:
         if write and self.access != "read_write":
             if operation == "write":
@@ -424,6 +472,7 @@ class GuardedAuditedTransport:
         }:
             self.counters.blocked_session_io += 1
             raise self._session_denied(io_kind)
+        self._check_construction_latch(io_kind)
         try:
             authorization = self.session_state._consume_authorization(io_kind)
         except ValueError as exc:
@@ -433,6 +482,12 @@ class GuardedAuditedTransport:
             self.counters.blocked_session_io += 1
             raise self._session_denied(io_kind)
         return authorization
+
+    def _check_construction_latch(self, io_kind: str) -> None:
+        if not self.construction_latched:
+            return
+        self.counters.blocked_session_io += 1
+        raise self._construction_latch_error(io_kind)
 
     def _record_success(
         self,
@@ -526,6 +581,22 @@ class GuardedAuditedTransport:
             synchronization=Synchronization.PROVEN,
             attempts=0,
             reason_code="deadline_exhausted",
+            consumed_bytes=0,
+            discarded_bytes=0,
+        )
+
+    @staticmethod
+    def _construction_latch_error(io_kind: str) -> TransportIOError:
+        return TransportIOError(
+            "instrument I/O is blocked until factory construction validation completes",
+            operation=io_kind,
+            phase=TransportPhase.BEFORE_SEND,
+            replay_policy=ReplayPolicy.NO_REPLAY,
+            command_transmission=CommandTransmission.NOT_SENT,
+            response_progress=ResponseProgress.NONE,
+            synchronization=Synchronization.PROVEN,
+            attempts=0,
+            reason_code="factory_construction_pending",
             consumed_bytes=0,
             discarded_bytes=0,
         )
