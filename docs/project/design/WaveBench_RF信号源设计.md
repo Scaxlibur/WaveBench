@@ -2,7 +2,7 @@
 
 ## 文档定位
 
-本文定义独立 `rf_source` 领域合同，说明它为什么不能复用普通函数发生器的 `source` 合同，以及 Core 与仪器插件应如何分阶段实现。Core `0.8.25` 开发线已具备 M0 只读合同、M1 离线 CW 合同，并在推进 M2 的离线输出事务；生产环境仍只有经 A1 证据提升的只读能力。本文同时保留 M3–M4 的设计和 A1–A5 的实机证据门，不能把离线代码误写成已获准的真实仪器控制能力。
+本文定义独立 `rf_source` 领域合同，说明它为什么不能复用普通函数发生器的 `source` 合同，以及 Core 与仪器插件应如何分阶段实现。Core `0.8.25` 开发线已具备 M0 只读、M1 离线 CW 和 M2 离线输出合同；生产环境仍只有经 A1 证据提升的只读能力。本文同时保留 M3–M4 的设计和 A1–A5 的实机证据门，不能把离线代码误写成已获准的真实仪器控制能力。
 
 阅读顺序如下：
 
@@ -46,7 +46,7 @@ RIGOL DSG830 是第一个适配目标和手册验证样本，不是该领域的�
 
 - M0 已提供 `rf_source` plugin kind、配置、capability、model、driver Protocol、只读 Service／CLI／doctor、run status 和 artifact namespace。
 - M1 已提供 OFF-only CW 的 typed request／result、单次写入、独立 snapshot 回读、CLI、run step 和 artifact；它只供离线 fake descriptor 使用。
-- M2 正在完善端口级 RF ON/OFF 事务、ON safety preflight、一次性 OFF recovery、CLI、run step 和 artifact；它同样只供离线 fake descriptor 使用。
+- M2 已提供端口级 RF ON/OFF 事务、ON safety preflight、一次性 OFF recovery、CLI、run step 和 artifact；它同样只供离线 fake descriptor 使用。
 - 定义多 RF 输出端口的通用模型；首个 DSG830 适配器只声明一个端口。
 - 定义 CW 频率／dBm 功率配置、RF 输出控制、AM／FM／PM、Pulse、Step Sweep、arm／fire／stop 的标准 operation 合同。
 - 为每条写路径定义输入校验、RF OFF 配置前置条件、独立回读、状态异常失败关闭、fake transport 故障注入和包装测试要求。
@@ -337,7 +337,7 @@ wavebench rf-source sweep stop ...
 | --- | --- | --- | --- |
 | M0（生产只读） | `rf_source` kind、config、拓扑/profile、可观测 snapshot、Protocol、registry、doctor、只读 CLI 与 run status | 严格 snapshot parser；A1 后 production descriptor 声明只读 snapshot | descriptor 无 I/O；每个状态 query、解析和坏响应测试通过；A1 证据复核后仅提升 snapshot。 |
 | M1（离线完成） | CW request／result、OFF-only transaction、CLI、run step、artifact 与端口范围检查 | 频率／dBm 功率单次写入与独立回读 | output ON、活动调制／Pulse／Sweep 或越界请求时零写拒绝；结果不明无重试。 |
-| M2（离线进行中） | per-port 输出事务、安全预检、受 guard 的一次性 RF OFF recovery、CLI、run step 与 artifact | RF ON/OFF 单次写入；Core 负责独立 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF。 |
+| M2（离线完成） | per-port 输出事务、安全预检、受 guard 的一次性 RF OFF recovery、CLI、run step 与 artifact | RF ON/OFF 单次写入；Core 负责独立 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF。 |
 | M3 | 声明式 AM／FM／PM profile、typed request/result、CLI 与 run step | 内部 Sine 调制序列 | 输出未 OFF、profile 不支持或 postcondition 不符时零写拒绝。 |
 | M4 | 声明式 Pulse／Sweep profile、typed request/result、arm/fire/stop、CLI、run step 与 operation spec | 已声明 Pulse 与 Step Sweep 子集 | 错误模式、未声明 option、外部 trigger 或 fire 前置不满足时零写拒绝；fire／trigger 仅由 fake descriptor 覆盖。 |
 
