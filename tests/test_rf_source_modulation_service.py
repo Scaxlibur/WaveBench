@@ -42,7 +42,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfSweepState,
 )
 from wavebench.logging import CommandLogger
-from wavebench.services.rf_source_service import RfSourceService
+from wavebench.services.rf_source_service import RfModulationPostconditionError, RfSourceService
 from wavebench.transport.session import InstrumentSessionState, SessionHealth
 
 
@@ -499,6 +499,41 @@ def test_modulation_mismatch_is_not_retried_and_degrades_session() -> None:
         "snapshot",
         "modulation_snapshot",
     ]
+    assert service.session_state is not None
+    assert service.session_state.health is SessionHealth.UNCERTAIN
+
+
+def test_pm_postcondition_error_retains_typed_readback_without_relaxing_match() -> None:
+    request = RfModulationRequest(
+        port_id="rf_out",
+        kind=RfModulationKind.PM,
+        internal_frequency_hz=1_000.0,
+        phase_deviation_rad=2.0,
+    )
+    postcondition_rf = _rf_snapshot(modulation=RfModulationState.ENABLED)
+    postcondition_modulation = _modulation_snapshot(
+        kind=RfModulationKind.PM,
+        enabled=True,
+        value=1.25,
+    )
+    service, driver = _service(
+        [
+            _rf_snapshot(),
+            postcondition_rf,
+        ],
+        [
+            _modulation_snapshot(kind=RfModulationKind.PM, value=2.0),
+            postcondition_modulation,
+        ],
+    )
+
+    with pytest.raises(RfModulationPostconditionError, match="readback does not match") as raised:
+        service.configure_modulation(request)
+
+    assert raised.value.postcondition_snapshot is postcondition_rf
+    assert raised.value.postcondition_modulation_snapshot is postcondition_modulation
+    assert raised.value.postcondition_modulation_snapshot.phase_deviation_rad == 1.25
+    assert driver.requests == [request]
     assert service.session_state is not None
     assert service.session_state.health is SessionHealth.UNCERTAIN
 

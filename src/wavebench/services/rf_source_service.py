@@ -128,6 +128,27 @@ class _RfOutputTransaction:
     postcondition_snapshot: RfSourceSnapshot
 
 
+class RfModulationPostconditionError(ConfigError):
+    """Strict M3 postcondition failure with already-read typed evidence.
+
+    The exception never changes the fail-closed result.  It only retains the
+    snapshots that were independently read before the strict comparison failed,
+    so a private evidence harness can record redacted field-level diagnostics
+    without issuing another query on an uncertain session.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        postcondition_snapshot: RfSourceSnapshot,
+        postcondition_modulation_snapshot: RfModulationSnapshot,
+    ) -> None:
+        super().__init__(message)
+        self.postcondition_snapshot = postcondition_snapshot
+        self.postcondition_modulation_snapshot = postcondition_modulation_snapshot
+
+
 @dataclass
 class RfSourceService(SessionStateAliasMixin):
     """Open one configured RF source session for a bounded RF operation."""
@@ -362,13 +383,20 @@ class RfSourceService(SessionStateAliasMixin):
                         request.port_id,
                         request.kind,
                     )
-                    result = self._validate_modulation_postcondition(
-                        request,
-                        postcondition_snapshot,
-                        postcondition_modulation_snapshot,
-                        mode_profile,
-                        operation=operation,
-                    )
+                    try:
+                        result = self._validate_modulation_postcondition(
+                            request,
+                            postcondition_snapshot,
+                            postcondition_modulation_snapshot,
+                            mode_profile,
+                            operation=operation,
+                        )
+                    except ConfigError as exc:
+                        raise RfModulationPostconditionError(
+                            str(exc),
+                            postcondition_snapshot=postcondition_snapshot,
+                            postcondition_modulation_snapshot=postcondition_modulation_snapshot,
+                        ) from exc
                     return _RfModulationTransaction(
                         result=result,
                         preflight_snapshot=preflight_snapshot,
