@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
+import re
 import tomllib
 
 from .errors import ConfigError
@@ -100,6 +101,18 @@ class SourceConfig:
     access: AccessMode = "read_write"
     terminations: tuple["SourceTerminationConfig", ...] = ()
 
+
+@dataclass(frozen=True)
+class RfSourceConfig:
+    """Configuration isolated from the Vpp/channel-oriented source domain."""
+
+    driver: str
+    resource: str | None
+    options: dict[str, object] = field(default_factory=dict)
+    access: AccessMode = "read_write"
+    safety_ports: tuple["RfPortSafetyConfig", ...] = ()
+
+
 @dataclass(frozen=True)
 class PowerConfig:
     driver: str
@@ -167,6 +180,17 @@ class SourceTerminationConfig:
     kind: str
     minimum_ohm: float | None = None
     maximum_ohm: float | None = None
+
+
+@dataclass(frozen=True)
+class RfPortSafetyConfig:
+    """Static local safety declaration for one descriptor-defined RF port."""
+
+    port_id: str
+    minimum_frequency_hz: float
+    maximum_frequency_hz: float
+    maximum_power_dbm: float
+    actual_termination_ohm: float
 
 @dataclass(frozen=True)
 class TuiConfig:
@@ -266,6 +290,74 @@ def _source_terminations(raw: dict[str, object]) -> tuple[SourceTerminationConfi
     return tuple(parsed)
 
 
+_RF_PORT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,96}$")
+
+
+def _rf_source_safety_ports(raw: dict[str, object]) -> tuple[RfPortSafetyConfig, ...]:
+    safety = raw.get("safety", {})
+    if not isinstance(safety, dict):
+        raise ConfigError("rf_source.safety must be a TOML table")
+    values = safety.get("ports", [])
+    if not isinstance(values, list):
+        raise ConfigError("rf_source.safety.ports must be an array of TOML tables")
+
+    parsed: list[RfPortSafetyConfig] = []
+    for index, value in enumerate(values):
+        path = f"rf_source.safety.ports[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{path} must be a TOML table")
+        port_id = value.get("port_id")
+        if not isinstance(port_id, str) or _RF_PORT_ID.fullmatch(port_id) is None:
+            raise ConfigError(f"{path}.port_id must be a short safe port ID")
+        fields = (
+            "minimum_frequency_hz",
+            "maximum_frequency_hz",
+            "maximum_power_dbm",
+            "actual_termination_ohm",
+        )
+        missing = [name for name in fields if name not in value]
+        if missing:
+            raise ConfigError(f"{path} is missing required field(s): {', '.join(missing)}")
+        minimum_frequency_hz = _finite_number(
+            value["minimum_frequency_hz"],
+            path=f"{path}.minimum_frequency_hz",
+        )
+        maximum_frequency_hz = _finite_number(
+            value["maximum_frequency_hz"],
+            path=f"{path}.maximum_frequency_hz",
+        )
+        maximum_power_dbm = _finite_number(
+            value["maximum_power_dbm"],
+            path=f"{path}.maximum_power_dbm",
+        )
+        actual_termination_ohm = _finite_number(
+            value["actual_termination_ohm"],
+            path=f"{path}.actual_termination_ohm",
+        )
+        if minimum_frequency_hz <= 0:
+            raise ConfigError(f"{path}.minimum_frequency_hz must be > 0")
+        if maximum_frequency_hz < minimum_frequency_hz:
+            raise ConfigError(
+                f"{path}.maximum_frequency_hz must be >= {path}.minimum_frequency_hz"
+            )
+        if actual_termination_ohm <= 0:
+            raise ConfigError(f"{path}.actual_termination_ohm must be > 0")
+        parsed.append(
+            RfPortSafetyConfig(
+                port_id=port_id,
+                minimum_frequency_hz=minimum_frequency_hz,
+                maximum_frequency_hz=maximum_frequency_hz,
+                maximum_power_dbm=maximum_power_dbm,
+                actual_termination_ohm=actual_termination_ohm,
+            )
+        )
+    parsed.sort(key=lambda item: item.port_id)
+    port_ids = tuple(item.port_id for item in parsed)
+    if len(set(port_ids)) != len(port_ids):
+        raise ConfigError("rf_source.safety.ports port_id values must be unique")
+    return tuple(parsed)
+
+
 def _instrument_options(raw: dict, section: str) -> dict[str, object]:
     options = raw.get("options", {})
     if not isinstance(options, dict):
@@ -286,6 +378,8 @@ class WaveBenchConfig:
     quality: QualityConfig = QualityConfig()
     safety_limits: SafetyLimitsConfig = SafetyLimitsConfig()
     tui: TuiConfig = TuiConfig()
+    # Append-only: preserve the public positional layout of existing config fields.
+    rf_source: RfSourceConfig | None = None
 
     def with_connection_timeout_ms(self, timeout_ms: int) -> "WaveBenchConfig":
         if timeout_ms <= 0:
@@ -310,6 +404,7 @@ class WaveBenchConfig:
             quality=self.quality,
             safety_limits=self.safety_limits,
             tui=self.tui,
+            rf_source=self.rf_source,
         )
 
     def with_resource(self, resource: str) -> "WaveBenchConfig":
@@ -333,6 +428,7 @@ class WaveBenchConfig:
             quality=self.quality,
             safety_limits=self.safety_limits,
             tui=self.tui,
+            rf_source=self.rf_source,
         )
 
     def with_output_overrides(
@@ -364,6 +460,7 @@ class WaveBenchConfig:
             quality=self.quality,
             safety_limits=self.safety_limits,
             tui=self.tui,
+            rf_source=self.rf_source,
         )
 
     def with_waveform_overrides(
@@ -414,6 +511,7 @@ class WaveBenchConfig:
             quality=self.quality,
             safety_limits=self.safety_limits,
             tui=self.tui,
+            rf_source=self.rf_source,
         )
 
     def with_source_resource(self, resource: str) -> "WaveBenchConfig":
@@ -448,6 +546,7 @@ class WaveBenchConfig:
             quality=self.quality,
             safety_limits=self.safety_limits,
             tui=self.tui,
+            rf_source=self.rf_source,
         )
 
     def with_power_resource(self, resource: str) -> "WaveBenchConfig":
@@ -481,6 +580,7 @@ class WaveBenchConfig:
             quality=self.quality,
             safety_limits=self.safety_limits,
             tui=self.tui,
+            rf_source=self.rf_source,
         )
 
     def with_dmm_resource(self, resource: str) -> "WaveBenchConfig":
@@ -528,6 +628,34 @@ class WaveBenchConfig:
             quality=self.quality,
             safety_limits=self.safety_limits,
             tui=self.tui,
+            rf_source=self.rf_source,
+        )
+
+    def with_rf_source_resource(self, resource: str) -> "WaveBenchConfig":
+        rf_source = self.rf_source or RfSourceConfig(
+            driver="rigol.dsg830",
+            resource=None,
+        )
+        return WaveBenchConfig(
+            connection=self.connection,
+            scope=self.scope,
+            autoscale=self.autoscale,
+            waveform=self.waveform,
+            output=self.output,
+            source_path=self.source_path,
+            source=self.source,
+            power=self.power,
+            dmm=self.dmm,
+            quality=self.quality,
+            safety_limits=self.safety_limits,
+            tui=self.tui,
+            rf_source=RfSourceConfig(
+                driver=rf_source.driver,
+                resource=resource,
+                options=rf_source.options,
+                access=rf_source.access,
+                safety_ports=rf_source.safety_ports,
+            ),
         )
 
 def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
@@ -568,6 +696,21 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 options=_instrument_options(src, "source"),
                 access=normalize_access_mode(src.get("access", "read_write"), "source.access"),
                 terminations=_source_terminations(src),
+            )
+        rf_raw = raw.get("rf_source")
+        rf_source = None
+        if rf_raw is not None:
+            if not isinstance(rf_raw, dict):
+                raise ConfigError("rf_source must be a TOML table")
+            rf_source = RfSourceConfig(
+                driver=str(rf_raw.get("driver", "rigol.dsg830")),
+                resource=str(rf_raw["resource"]) if "resource" in rf_raw else None,
+                options=_instrument_options(rf_raw, "rf_source"),
+                access=normalize_access_mode(
+                    rf_raw.get("access", "read_write"),
+                    "rf_source.access",
+                ),
+                safety_ports=_rf_source_safety_ports(rf_raw),
             )
         pwr = raw.get("power")
         power = None
@@ -677,6 +820,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 log_max_lines=int(tui_raw.get("log_max_lines", 10_000)),
                 log_keep_lines_after_trim=int(tui_raw.get("log_keep_lines_after_trim", 1_000)),
             ),
+            rf_source=rf_source,
         )
     except KeyError as exc:
         raise ConfigError(f"missing required config key: {exc}") from exc
@@ -735,6 +879,8 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
             raise ConfigError("source.default_channel must be >= 1")
         if config.source.settle_ms_after_set_frequency < 0:
             raise ConfigError("source.settle_ms_after_set_frequency must be >= 0")
+    if config.rf_source is not None:
+        validate_instrument_reference(config.rf_source.driver, expected_kind="rf_source")
     if config.dmm is not None:
         validate_instrument_reference(config.dmm.driver, expected_kind="dmm")
         if config.dmm.backend.lower() not in {"serial", "lan", "visa", "pyvisa"}:

@@ -43,6 +43,23 @@ def test_source_output_spec_describes_mutation_and_restore_boundary() -> None:
     assert spec.as_dict()["required_capabilities"] == ["source.output"]
 
 
+def test_rf_source_m0_specs_are_read_only_and_exclusive() -> None:
+    identity = require_operation_spec("rf_source.idn")
+    snapshot = require_operation_spec("rf_source.snapshot")
+
+    assert identity.instrument_kind == "rf_source"
+    assert identity.required_capabilities == ("rf_source.idn",)
+    assert identity.effect == "observe"
+    assert identity.mutates is False
+    assert snapshot.instrument_kind == "rf_source"
+    assert snapshot.required_capabilities == ("rf_source.snapshot",)
+    assert snapshot.effect == "stateful_read"
+    assert snapshot.mutates is False
+    assert snapshot.lease_mode == "exclusive"
+    assert snapshot.restore_coverage == "none-read-only"
+    assert snapshot.error_check_minimum == "disabled"
+
+
 def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     pairs = (
         (

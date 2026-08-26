@@ -55,7 +55,9 @@ ErrorCheckMinimum = Literal["required", "if_supported", "disabled"]
 
 _EFFECTS = frozenset({"offline", "observe", "stateful_read", "write", "acquire"})
 _LEASE_MODES = frozenset({"none", "shared", "exclusive"})
-_INSTRUMENT_KINDS = frozenset({"scope", "source", "power", "dmm", "sweep_analyzer"})
+_INSTRUMENT_KINDS = frozenset(
+    {"scope", "source", "rf_source", "power", "dmm", "sweep_analyzer"}
+)
 _SESSION_PURPOSES = frozenset({"normal", "recovery", "verification", "lifecycle"})
 _ERROR_CHECK_MINIMUMS = frozenset({"required", "if_supported", "disabled"})
 
@@ -1019,6 +1021,22 @@ _BUILTIN_SPECS = (
     _spec("source.set_square_duty_cycle", "source", required_capabilities=("source.set_square_duty_cycle",), effect="write", changed_fields=("square_duty_cycle",), restore_coverage="basic", risk_flags=("signal_output", "state_drift")),
     _spec("source.arbitrary_probe", "source", required_capabilities=("source.arbitrary_probe",), effect="stateful_read"),
     _spec("source.arbitrary_upload", "source", required_capabilities=("source.arbitrary_upload",), effect="write", changed_fields=("arbitrary_payload",), risk_flags=("signal_output", "volatile_payload")),
+    _spec(
+        "rf_source.idn",
+        "rf_source",
+        required_capabilities=("rf_source.idn",),
+        effect="observe",
+    ),
+    _spec(
+        "rf_source.snapshot",
+        "rf_source",
+        required_capabilities=("rf_source.snapshot",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        error_check_minimum="disabled",
+        risk_flags=("state_dependent_query",),
+    ),
     _spec("power.idn", "power", required_capabilities=("power.idn",), effect="observe"),
     _spec("power.status", "power", required_capabilities=("power.status",), effect="stateful_read"),
     _spec("power.measurement", "power", required_capabilities=("power.measurement",), effect="stateful_read"),
