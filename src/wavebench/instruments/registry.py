@@ -22,6 +22,7 @@ from .capabilities import CAPABILITY_METHODS
 from .scope_extension_capabilities import validate_scope_descriptor
 from .source_conformance import validate_source_conformance_distribution
 from .source_extension_capabilities import validate_source_descriptor
+from .rf_source_capabilities import validate_rf_source_descriptor
 from .migrations import BUILTIN_MIGRATION_DISTRIBUTIONS
 
 ENTRY_POINT_GROUP = "wavebench.instruments"
@@ -211,6 +212,7 @@ def _validate_descriptor(
         )
     validate_scope_descriptor(descriptor)
     validate_source_descriptor(descriptor)
+    validate_rf_source_descriptor(descriptor)
     current = _version_tuple(__version__)
     if current < _version_tuple(descriptor.wavebench_min_version) or current >= _version_tuple(
         descriptor.wavebench_max_version
