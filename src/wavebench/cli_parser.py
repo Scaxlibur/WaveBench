@@ -667,6 +667,13 @@ def build_parser() -> argparse.ArgumentParser:
     rf_source_set_power.add_argument("--port", required=True)
     rf_source_set_power.add_argument("power_dbm", type=float)
     add_runtime_options(rf_source_set_power)
+    rf_source_output = rf_source_sub.add_parser(
+        "output",
+        help="Set one RF port output on or off after a safety-checked snapshot",
+    )
+    rf_source_output.add_argument("--port", required=True)
+    rf_source_output.add_argument("state", choices=["on", "off"])
+    add_runtime_options(rf_source_output)
 
     source_sub = source_parser.add_subparsers(dest="command", required=True)
 

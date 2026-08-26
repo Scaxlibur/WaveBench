@@ -24,6 +24,8 @@ ALLOWED_STEP_KINDS = {
     "rf_source.status",
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
+    "rf_source.output_enable",
+    "rf_source.output_disable",
     "source.set_freq",
     "source.arb_load",
     "source.set_func",
@@ -69,6 +71,8 @@ _REQUIRED_FIELDS = {
     "source.output": ("state",),
     "rf_source.set_frequency": ("port_id", "frequency_hz"),
     "rf_source.set_power_dbm": ("port_id", "power_dbm"),
+    "rf_source.output_enable": ("port_id",),
+    "rf_source.output_disable": ("port_id",),
     "source.basic_configure_v2": ("channel",),
     "source.output_enable_v2": ("channel",),
     "source.output_disable_v2": ("channel",),
@@ -178,6 +182,8 @@ _OPTIONAL_FIELDS = {
     "rf_source.status": {"on_failure"},
     "rf_source.set_frequency": {"on_failure"},
     "rf_source.set_power_dbm": {"on_failure"},
+    "rf_source.output_enable": {"on_failure"},
+    "rf_source.output_disable": {"on_failure"},
     "source.set_freq": {"channel", "on_failure"},
     "source.arb_load": {"channel", "offset_v", "sample_rate_hz", "max_points", "byte_order", "output_on", "on_failure"},
     "source.set_func": {"channel", "on_failure"},
@@ -239,6 +245,8 @@ _STEP_NOTES = {
     "rf_source.status": "Read a typed RF-source snapshot without changing output.",
     "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
+    "rf_source.output_enable": "Enable one RF port only after a fresh safety snapshot confirms the configured load, frequency, power, and inactive modulation, Pulse, Sweep, and blocking protection conditions.",
+    "rf_source.output_disable": "Disable one RF port and confirm OFF without requiring frequency, power, or protection readback.",
     "source.arb_load": "Upload a DG4202 arbitrary waveform from CSV/NPY using DATA:DAC VOLATILE; output remains unchanged unless output_on = true.",
     "source.set_freq": "Set fixed source frequency in Hz; config may force FIX mode first.",
     "source.set_func": "Set source waveform function, for example SIN or SQU.",
@@ -639,6 +647,8 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
     elif kind == "rf_source.set_power_dbm":
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         fields["power_dbm"] = _finite_float(fields["power_dbm"], f"{prefix}.power_dbm")
+    elif kind in {"rf_source.output_enable", "rf_source.output_disable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
     elif kind == "source.arb_load":
         fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
         fields["frequency_hz"] = _positive_float(fields["frequency_hz"], f"{prefix}.frequency_hz")

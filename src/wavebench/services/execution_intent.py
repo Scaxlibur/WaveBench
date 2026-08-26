@@ -26,6 +26,8 @@ _STEP_OPERATIONS = {
     "rf_source.status": "rf_source.snapshot",
     "rf_source.set_frequency": "rf_source.set_frequency",
     "rf_source.set_power_dbm": "rf_source.set_power_dbm",
+    "rf_source.output_enable": "rf_source.output_enable",
+    "rf_source.output_disable": "rf_source.output_disable",
     "source.arb_load": "source.arbitrary_upload",
     "source.set_freq": "source.set_frequency",
     "source.set_func": "source.set_function",

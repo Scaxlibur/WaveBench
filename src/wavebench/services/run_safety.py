@@ -24,6 +24,8 @@ EXECUTABLE_STEP_KINDS = {
     "rf_source.status",
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
+    "rf_source.output_enable",
+    "rf_source.output_disable",
     "source.set_freq",
     "source.arb_load",
     "source.set_func",

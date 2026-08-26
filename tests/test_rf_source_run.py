@@ -30,6 +30,9 @@ from wavebench.instruments.rf_source_extensions import (
     RfSourceSnapshot,
     RfSweepState,
     rf_source_cw_operation_artifact,
+    RfOutputRequest,
+    RfOutputResult,
+    rf_source_output_operation_artifact,
     rf_source_snapshot_operation_artifact,
 )
 from wavebench.logging import CommandLogger
@@ -73,6 +76,15 @@ def _cw_plan(directory: str, *, kind: str, field: str, value: float):
     path = Path(directory) / "plan.toml"
     path.write_text(
         f'[[steps]]\nkind = "{kind}"\nport_id = "rf_out"\n{field} = {value}\n',
+        encoding="utf-8",
+    )
+    return load_run_plan(path)
+
+
+def _output_plan(directory: str, *, kind: str):
+    path = Path(directory) / "plan.toml"
+    path.write_text(
+        f'[[steps]]\nkind = "{kind}"\nport_id = "rf_out"\n',
         encoding="utf-8",
     )
     return load_run_plan(path)
@@ -246,6 +258,29 @@ def test_rf_source_cw_steps_require_capability_before_opening_a_session() -> Non
     open_services.assert_not_called()
 
 
+def test_rf_source_cw_step_rejects_read_only_access_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory), logger=CommandLogger())
+        plan = _cw_plan(
+            directory,
+            kind="rf_source.set_frequency",
+            field="frequency_hz",
+            value=2_000_000.0,
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor(
+                "rf_source.idn",
+                "rf_source.snapshot",
+                "rf_source.cw_configure",
+            ),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="access policy 'read_only'"):
+                service.run(plan)
+
+    open_services.assert_not_called()
+
+
 def test_rf_source_cw_step_has_write_intent_and_separate_artifact_namespace() -> None:
     with TemporaryDirectory() as directory:
         plan = _cw_plan(
@@ -308,6 +343,101 @@ def test_rf_source_cw_step_has_write_intent_and_separate_artifact_namespace() ->
             run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
 
         rf_service.configure_cw_with_artifact.assert_called_once()
+        assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
+        run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
+        assert run_data["rf_source_operations"] == [artifact]
+
+
+def test_rf_source_output_step_requires_capability_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory, access="read_write"), logger=CommandLogger())
+        plan = _output_plan(directory, kind="rf_source.output_enable")
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor("rf_source.idn", "rf_source.snapshot"),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="rf_source.output"):
+                service.run(plan)
+
+    open_services.assert_not_called()
+
+
+def test_rf_source_output_step_rejects_read_only_access_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory), logger=CommandLogger())
+        plan = _output_plan(directory, kind="rf_source.output_disable")
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor(
+                "rf_source.idn",
+                "rf_source.snapshot",
+                "rf_source.output",
+            ),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="access policy 'read_only'"):
+                service.run(plan)
+
+    open_services.assert_not_called()
+
+
+def test_rf_source_output_step_has_write_intent_and_separate_artifact_namespace() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _output_plan(directory, kind="rf_source.output_enable")
+        config = _config(directory, access="read_write")
+        intent = build_execution_intent(plan, config)
+        assert intent.operations[0]["operation"] == "rf_source.output_enable"
+        assert intent.operations[0]["effect"] == "write"
+        assert intent.operations[0]["parameters"] == {"port_id": "rf_out"}
+
+        preflight = _snapshot()
+        postcondition = RfSourceSnapshot(
+            ports=(
+                RfPortSnapshot(
+                    port_id="rf_out",
+                    frequency_hz=RfObserved.value_of(1_000_000.0),
+                    power_dbm=RfObserved.value_of(-30.0),
+                    output_enabled=RfObserved.value_of(True),
+                    modulation=RfObserved.value_of(RfModulationState.DISABLED),
+                    pulse=RfObserved.value_of(RfPulseState.DISABLED),
+                    sweep=RfObserved.value_of(RfSweepState.DISABLED),
+                ),
+            ),
+            protection=RfObserved.value_of(RfProtectionStatus(active_codes=())),
+        )
+        request = RfOutputRequest(port_id="rf_out", enabled=True)
+        result_value = RfOutputResult(port_id="rf_out", enabled=True, write_completed=True)
+        artifact = rf_source_output_operation_artifact(
+            request=request,
+            result=result_value,
+            preflight_snapshot=preflight,
+            postcondition_snapshot=postcondition,
+        )
+        rf_service = SimpleNamespace(
+            set_output_with_artifact=Mock(return_value=(result_value, artifact)),
+            audit_snapshot=lambda: None,
+        )
+
+        class OfflineRfRunService(RunService):
+            @contextmanager
+            def _run_instrument_services(self, run_plan):
+                del run_plan
+                yield RunInstrumentServices(rf_source=rf_service)
+
+            def _run_safety_guards(self, run_plan, *, services=None):
+                del run_plan, services
+
+        descriptor = _descriptor(
+            "rf_source.idn",
+            "rf_source.snapshot",
+            "rf_source.output",
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=descriptor,
+        ):
+            run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
+
+        rf_service.set_output_with_artifact.assert_called_once_with(request)
         assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
         run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
         assert run_data["rf_source_operations"] == [artifact]

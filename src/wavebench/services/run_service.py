@@ -24,6 +24,7 @@ from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.instruments.rf_source_extensions import (
     RfCwRequest,
+    RfOutputRequest,
     rf_source_snapshot_operation_artifact,
 )
 from wavebench.instruments.source_extensions import (
@@ -57,6 +58,8 @@ from wavebench.logging import CommandLogger
 from wavebench.services.power_service import PowerService
 from wavebench.services.dmm_service import DmmService
 from wavebench.services.rf_source_service import RfSourceService
+from wavebench.services.access_policy import access_policy
+from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.frequency_response import (
     analyze_frequency_response_point,
     build_fit_document,
@@ -288,7 +291,28 @@ class RunService:
         reject_unsupported_steps(plan)
         self._check_frequency_response_baselines(plan)
         self._check_frequency_response_resumes(plan)
+        self._check_rf_source_access(plan)
         self._check_plan_capabilities(plan)
+
+    def _check_rf_source_access(self, plan: RunPlan) -> None:
+        """Reject RF operations by access policy before run lifecycle opens a session."""
+
+        operations = {
+            "rf_source.status": "rf_source.snapshot",
+            "rf_source.set_frequency": "rf_source.set_frequency",
+            "rf_source.set_power_dbm": "rf_source.set_power_dbm",
+            "rf_source.output_enable": "rf_source.output_enable",
+            "rf_source.output_disable": "rf_source.output_disable",
+        }
+        relevant = [operations[step.kind] for step in plan.steps if step.kind in operations]
+        if not relevant:
+            return
+        rf_source = self.config.rf_source
+        if rf_source is None:
+            raise ConfigError("rf_source resource is required by this run plan")
+        policy = access_policy(rf_source.access, "rf_source.access")
+        for operation in relevant:
+            policy.require(require_operation_spec(operation), operation=operation)
 
     def _check_frequency_response_resumes(self, plan: RunPlan) -> None:
         """Validate resume CSVs before any instrument session is opened."""
@@ -424,6 +448,8 @@ class RunService:
                 add("rf_source", "rf_source.snapshot")
             elif step.kind in {"rf_source.set_frequency", "rf_source.set_power_dbm"}:
                 add("rf_source", "rf_source.snapshot", "rf_source.cw_configure")
+            elif step.kind in {"rf_source.output_enable", "rf_source.output_disable"}:
+                add("rf_source", "rf_source.snapshot", "rf_source.output")
             elif step.kind == "source.set_freq":
                 add("source", "source.set_frequency")
                 source = self.config.source
@@ -1195,6 +1221,16 @@ class RunService:
                 RfCwRequest(
                     port_id=step.fields["port_id"],
                     power_dbm=step.fields["power_dbm"],
+                )
+            )
+            artifact = {"rf_source_operation": rf_source_operation}
+        elif step.kind in {"rf_source.output_enable", "rf_source.output_disable"}:
+            _, rf_source_operation = self._rf_source_service(
+                services=services
+            ).set_output_with_artifact(
+                RfOutputRequest(
+                    port_id=step.fields["port_id"],
+                    enabled=step.kind == "rf_source.output_enable",
                 )
             )
             artifact = {"rf_source_operation": rf_source_operation}
