@@ -349,6 +349,12 @@ M3 使用 `modulation_kind = "am" | "fm" | "pm"`，并且只接受与该模式�
 
 `rf_source.sweep_configure` 已进入当前 Core schema；DSG830 已在 A4 Step Sweep 证据复核后声明该 capability。请求只接受起止频率、点数和驻留时间，静态 profile 固定为 `STEP`／`FWD`／`RAMP`／`LIN`。Core 在写前和写后都要求 RF 输出、调制、Pulse、Sweep 关闭且无活动 protection；driver 配置后必须保持 Sweep disabled，并以独立 profile readback 逐字段确认。该 operation 没有 Level Sweep、arm、fire、`SWE:EXEC`、trigger、后面板接口或 RF 输出字段。Pulse trigger、Sweep arm／fire／stop 仍是目标合同。所有这些入口都必须显式指定 `port_id`，拥有独立 `OperationSpec` 与 `wavebench.rf_source.operation.v1` artifact，不得访问普通 source channel 或未声明端口。
 
+### A5 的离线合同边界
+
+外部 trigger／同步不能只在 `RfFeatureDirection.TRIGGER`、`FIRE` 或 `ARM` 已存在的前提下补充 driver 方法。新的 operation 必须先定义目标物理接口、方向、电气 profile、允许的模式、可读回状态、RF 能量前置条件和失败恢复语义；这些字段不能用自由 mapping 或普通 `source` 的 channel／Vpp 模型表示。
+
+在没有已确认后面板接线和电气边界的情况下，Core 只允许离线 typed contract、descriptor validator、fake transport、零写拒绝和 artifact 测试。它不声明 production capability、不创建外部接口默认值、不隐式触发设备，也不把 `rf_out` 的端接或 CH2 的输入设置用于推断 trigger／sync 端口。任何会使设备开始 Pulse 或 Sweep 的 fire／trigger operation 仍需独立的、一次性 safety 决定和 A5 实机证据。
+
 ## M0–M4 里程碑
 
 下表同时标出当前进度和交付边界。Core 与 DSG830 插件的依赖、完成条件和状态见[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。

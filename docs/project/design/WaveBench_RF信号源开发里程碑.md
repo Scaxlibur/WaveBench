@@ -125,6 +125,20 @@ Pulse trigger、Sweep arm／fire／stop、外部 trigger、后面板辅助输出
 
 每次证据记录必须独立于代码提交，且不能包含真实资源地址、序列号、原始响应或实验室专用配置。未恢复或无法确认最终 RF OFF 的验收不能用于提升 capability。
 
+### A5：外部 trigger／同步的进入条件（未开始）
+
+A5 从已核对的物理接口开始，不从某条 SCPI 命令或已有 `rf_out` 证据开始。一次验收只能覆盖一个明确目标，例如 Pulse 的 external trigger、Sweep period trigger 或 Sweep point trigger；不能把其中一项外推为其它 trigger、fire、同步或后面板辅助输出能力。
+
+| 项目 | 进入前必须明确的事实 |
+| --- | --- |
+| 目标行为 | 本次只验证的 trigger／sync 模式、目标仪器状态和成功判据。 |
+| 物理接线 | 每根线的源端设备／接口、目标设备／接口、线缆与转接件；必须明确是 trigger input、trigger output、sync/reference input、sync/reference output 还是 `rf_out`。 |
+| 电气兼容 | 信号类型、方向、逻辑或模拟属性、幅度／阈值、极性、脉宽、频率／时序、源／负载阻抗和终端方式，均以已核对的设备资料和实际接线为准。 |
+| 初始与恢复状态 | 初始 RF 输出、调制、Pulse、Sweep、protection 与后面板配置；失败后的恢复方式和最终 RF OFF 独立确认方式。 |
+| 观察方式 | 如使用示波器，只能作为补充观察；必须核对其输入与接线，且不能替代仪器端读回。CH2 的 50 Ω 声明仅适用于已确认的 RF 路径。 |
+
+在上述事实未明确前，不写入后面板配置，不发送 `*TRG`、`:TRIG:*`、`:SWE:EXEC` 或 `:PULM:OUT`，不切换 RF 输出，也不把外部接口视为安全。A5 的推荐开发顺序为：先完成单一路径的 Core typed contract、descriptor validator、fake driver 与零写拒绝测试；再实现私有 `read_only` 诊断；最后在已确认接线和电气边界下设计独立受控证据。production descriptor 仍须等待该证据逐项提升。
+
 ### A1：已完成的只读 snapshot 验收
 
 A1 已使用一次性、非 production 的本地 evidence harness 完成并经复核。当时没有临时将
