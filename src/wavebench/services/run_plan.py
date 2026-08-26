@@ -24,6 +24,7 @@ ALLOWED_STEP_KINDS = {
     "rf_source.status",
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
+    "rf_source.modulation_configure",
     "rf_source.output_enable",
     "rf_source.output_disable",
     "source.set_freq",
@@ -71,6 +72,11 @@ _REQUIRED_FIELDS = {
     "source.output": ("state",),
     "rf_source.set_frequency": ("port_id", "frequency_hz"),
     "rf_source.set_power_dbm": ("port_id", "power_dbm"),
+    "rf_source.modulation_configure": (
+        "port_id",
+        "modulation_kind",
+        "internal_frequency_hz",
+    ),
     "rf_source.output_enable": ("port_id",),
     "rf_source.output_disable": ("port_id",),
     "source.basic_configure_v2": ("channel",),
@@ -182,6 +188,12 @@ _OPTIONAL_FIELDS = {
     "rf_source.status": {"on_failure"},
     "rf_source.set_frequency": {"on_failure"},
     "rf_source.set_power_dbm": {"on_failure"},
+    "rf_source.modulation_configure": {
+        "depth_percent",
+        "frequency_deviation_hz",
+        "phase_deviation_rad",
+        "on_failure",
+    },
     "rf_source.output_enable": {"on_failure"},
     "rf_source.output_disable": {"on_failure"},
     "source.set_freq": {"channel", "on_failure"},
@@ -245,6 +257,7 @@ _STEP_NOTES = {
     "rf_source.status": "Read a typed RF-source snapshot without changing output.",
     "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
+    "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
     "rf_source.output_enable": "Enable one RF port only after a fresh safety snapshot confirms the configured load, frequency, power, and inactive modulation, Pulse, Sweep, and blocking protection conditions.",
     "rf_source.output_disable": "Disable one RF port and confirm OFF without requiring frequency, power, or protection readback.",
     "source.arb_load": "Upload a DG4202 arbitrary waveform from CSV/NPY using DATA:DAC VOLATILE; output remains unchanged unless output_on = true.",
@@ -647,6 +660,37 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
     elif kind == "rf_source.set_power_dbm":
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         fields["power_dbm"] = _finite_float(fields["power_dbm"], f"{prefix}.power_dbm")
+    elif kind == "rf_source.modulation_configure":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        modulation_kind = _non_empty_str(
+            fields["modulation_kind"],
+            f"{prefix}.modulation_kind",
+        ).lower()
+        value_fields = {
+            "am": "depth_percent",
+            "fm": "frequency_deviation_hz",
+            "pm": "phase_deviation_rad",
+        }
+        expected_value_field = value_fields.get(modulation_kind)
+        if expected_value_field is None:
+            raise ConfigError(f"{prefix}.modulation_kind must be one of am, fm, pm")
+        present_value_fields = [field for field in value_fields.values() if field in fields]
+        if present_value_fields != [expected_value_field]:
+            raise ConfigError(
+                f"{prefix} rf_source.modulation_configure requires only "
+                f"{expected_value_field} for modulation_kind {modulation_kind}"
+            )
+        fields[expected_value_field] = _finite_float(
+            fields[expected_value_field],
+            f"{prefix}.{expected_value_field}",
+        )
+        if fields[expected_value_field] < 0:
+            raise ConfigError(f"{prefix}.{expected_value_field} must be >= 0")
+        fields["modulation_kind"] = modulation_kind
+        fields["internal_frequency_hz"] = _positive_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
     elif kind in {"rf_source.output_enable", "rf_source.output_disable"}:
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
     elif kind == "source.arb_load":

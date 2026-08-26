@@ -87,7 +87,12 @@ from .instruments.scope_extensions import (
     ScopeTraceData,
     ScopeTraceRef,
 )
-from .instruments.rf_source_extensions import RfCwRequest, RfOutputRequest
+from .instruments.rf_source_extensions import (
+    RfCwRequest,
+    RfModulationKind,
+    RfModulationRequest,
+    RfOutputRequest,
+)
 from .mcp_http import (
     resolve_mcp_token,
     serve_mcp_http,
@@ -1554,6 +1559,29 @@ def _main(argv: list[str] | None = None) -> int:
                 result = service.configure_cw(
                     RfCwRequest(port_id=args.port, power_dbm=args.power_dbm)
                 )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "modulation":
+                modulation_kind = {
+                    "configure-am": RfModulationKind.AM,
+                    "configure-fm": RfModulationKind.FM,
+                    "configure-pm": RfModulationKind.PM,
+                }[args.modulation_command]
+                request_fields = {
+                    "port_id": args.port,
+                    "kind": modulation_kind,
+                    "internal_frequency_hz": args.internal_frequency_hz,
+                }
+                if modulation_kind is RfModulationKind.AM:
+                    request_fields["depth_percent"] = args.depth_percent
+                elif modulation_kind is RfModulationKind.FM:
+                    request_fields["frequency_deviation_hz"] = args.frequency_deviation_hz
+                else:
+                    request_fields["phase_deviation_rad"] = args.phase_deviation_rad
+                result = service.configure_modulation(RfModulationRequest(**request_fields))
                 if args.json:
                     _emit_json_result(_json_payload(result))
                 else:

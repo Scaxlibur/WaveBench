@@ -10,6 +10,9 @@ from wavebench.cli import _load_rf_source_service, build_parser, main
 from wavebench.instruments.rf_source_extensions import (
     RfCwRequest,
     RfCwResult,
+    RfModulationKind,
+    RfModulationRequest,
+    RfModulationResult,
     RfOutputRequest,
     RfOutputResult,
 )
@@ -29,6 +32,45 @@ def test_rf_source_parser_accepts_read_only_cw_and_output_commands() -> None:
     output = build_parser().parse_args(
         ["rf-source", "output", "--port", "rf_out", "on"]
     )
+    modulation_am = build_parser().parse_args(
+        [
+            "rf-source",
+            "modulation",
+            "configure-am",
+            "--port",
+            "rf_out",
+            "--depth-percent",
+            "50",
+            "--internal-frequency-hz",
+            "1000",
+        ]
+    )
+    modulation_fm = build_parser().parse_args(
+        [
+            "rf-source",
+            "modulation",
+            "configure-fm",
+            "--port",
+            "rf_out",
+            "--frequency-deviation-hz",
+            "10000",
+            "--internal-frequency-hz",
+            "1000",
+        ]
+    )
+    modulation_pm = build_parser().parse_args(
+        [
+            "rf-source",
+            "modulation",
+            "configure-pm",
+            "--port",
+            "rf_out",
+            "--phase-deviation-rad",
+            "1.5",
+            "--internal-frequency-hz",
+            "1000",
+        ]
+    )
 
     assert (identity.domain, identity.command) == ("rf-source", "idn")
     assert identity.config == "rf.toml"
@@ -42,6 +84,13 @@ def test_rf_source_parser_accepts_read_only_cw_and_output_commands() -> None:
     assert (output.domain, output.command) == ("rf-source", "output")
     assert output.port == "rf_out"
     assert output.state == "on"
+    assert (modulation_am.domain, modulation_am.command) == ("rf-source", "modulation")
+    assert modulation_am.modulation_command == "configure-am"
+    assert modulation_am.depth_percent == 50.0
+    assert modulation_fm.modulation_command == "configure-fm"
+    assert modulation_fm.frequency_deviation_hz == 10_000.0
+    assert modulation_pm.modulation_command == "configure-pm"
+    assert modulation_pm.phase_deviation_rad == 1.5
 
 
 def test_rf_source_cli_dispatches_identity_and_typed_snapshot() -> None:
@@ -129,6 +178,107 @@ def test_rf_source_cli_dispatches_each_output_request() -> None:
     assert service.set_output.call_args_list == [
         ((RfOutputRequest(port_id="rf_out", enabled=True),), {}),
         ((RfOutputRequest(port_id="rf_out", enabled=False),), {}),
+    ]
+
+
+def test_rf_source_cli_dispatches_each_internal_sine_modulation_request() -> None:
+    service = Mock()
+    service.configure_modulation.side_effect = [
+        RfModulationResult(
+            port_id="rf_out",
+            kind=RfModulationKind.AM,
+            depth_percent=50.0,
+            internal_frequency_hz=1_000.0,
+        ),
+        RfModulationResult(
+            port_id="rf_out",
+            kind=RfModulationKind.FM,
+            frequency_deviation_hz=10_000.0,
+            internal_frequency_hz=1_000.0,
+        ),
+        RfModulationResult(
+            port_id="rf_out",
+            kind=RfModulationKind.PM,
+            phase_deviation_rad=1.5,
+            internal_frequency_hz=1_000.0,
+        ),
+    ]
+
+    commands = (
+        [
+            "rf-source",
+            "modulation",
+            "configure-am",
+            "--port",
+            "rf_out",
+            "--depth-percent",
+            "50",
+            "--internal-frequency-hz",
+            "1000",
+        ],
+        [
+            "rf-source",
+            "modulation",
+            "configure-fm",
+            "--port",
+            "rf_out",
+            "--frequency-deviation-hz",
+            "10000",
+            "--internal-frequency-hz",
+            "1000",
+        ],
+        [
+            "rf-source",
+            "modulation",
+            "configure-pm",
+            "--port",
+            "rf_out",
+            "--phase-deviation-rad",
+            "1.5",
+            "--internal-frequency-hz",
+            "1000",
+        ],
+    )
+
+    with patch("wavebench.cli._load_rf_source_service", return_value=service):
+        for command in commands:
+            with redirect_stdout(io.StringIO()):
+                assert main(["--json", *command]) == 0
+
+    assert service.configure_modulation.call_args_list == [
+        (
+            (
+                RfModulationRequest(
+                    port_id="rf_out",
+                    kind=RfModulationKind.AM,
+                    depth_percent=50.0,
+                    internal_frequency_hz=1_000.0,
+                ),
+            ),
+            {},
+        ),
+        (
+            (
+                RfModulationRequest(
+                    port_id="rf_out",
+                    kind=RfModulationKind.FM,
+                    frequency_deviation_hz=10_000.0,
+                    internal_frequency_hz=1_000.0,
+                ),
+            ),
+            {},
+        ),
+        (
+            (
+                RfModulationRequest(
+                    port_id="rf_out",
+                    kind=RfModulationKind.PM,
+                    phase_deviation_rad=1.5,
+                    internal_frequency_hz=1_000.0,
+                ),
+            ),
+            {},
+        ),
     ]
 
 

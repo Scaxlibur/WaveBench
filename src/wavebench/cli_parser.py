@@ -675,6 +675,44 @@ def build_parser() -> argparse.ArgumentParser:
     rf_source_output.add_argument("state", choices=["on", "off"])
     add_runtime_options(rf_source_output)
 
+    rf_source_modulation = rf_source_sub.add_parser(
+        "modulation",
+        help="Configure one OFF RF port with bounded internal-sine AM, FM, or PM",
+    )
+    rf_source_modulation_sub = rf_source_modulation.add_subparsers(
+        dest="modulation_command",
+        required=True,
+    )
+    for command, value_option, help_text in (
+        ("configure-am", "depth-percent", "Configure internal-sine AM while RF output is OFF"),
+        (
+            "configure-fm",
+            "frequency-deviation-hz",
+            "Configure internal-sine FM while RF output is OFF",
+        ),
+        (
+            "configure-pm",
+            "phase-deviation-rad",
+            "Configure internal-sine PM while RF output is OFF",
+        ),
+    ):
+        rf_source_modulation_configure = rf_source_modulation_sub.add_parser(
+            command,
+            help=help_text,
+        )
+        rf_source_modulation_configure.add_argument("--port", required=True)
+        rf_source_modulation_configure.add_argument(
+            f"--{value_option}",
+            type=float,
+            required=True,
+        )
+        rf_source_modulation_configure.add_argument(
+            "--internal-frequency-hz",
+            type=float,
+            required=True,
+        )
+        add_runtime_options(rf_source_modulation_configure)
+
     source_sub = source_parser.add_subparsers(dest="command", required=True)
 
     source_idn = source_sub.add_parser("idn", help="Query source *IDN?")
