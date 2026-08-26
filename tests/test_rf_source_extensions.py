@@ -10,6 +10,7 @@ from wavebench.instruments.capabilities import CAPABILITY_METHODS, validate_decl
 from wavebench.instruments.rf_source_capabilities import (
     RF_SOURCE_CAPABILITY_METHODS,
     validate_rf_source_descriptor,
+    validate_rf_source_plugin_dependencies,
 )
 from wavebench.instruments.rf_source_extensions import (
     RF_SOURCE_CONTRACT_VERSION,
@@ -232,3 +233,31 @@ def test_rf_source_kind_requires_extensions_and_uses_append_only_field() -> None
         )
     with pytest.raises(ConfigError, match="require the rf_source.idn"):
         validate_rf_source_descriptor(replace(descriptor(), capabilities=("rf_source.snapshot",)))
+
+
+def test_rf_source_wheel_dependency_must_match_descriptor_interval() -> None:
+    value = descriptor()
+
+    validate_rf_source_plugin_dependencies(value, ("wavebench>=0.8.25,<0.9",))
+    validate_rf_source_plugin_dependencies(
+        value,
+        (
+            "wavebench>=0.8.25,<0.9,!=0.8.26",
+            'wavebench>=99; python_version < "3.0"',
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="explicitly include >=0.8.25,<0.9.0"):
+        validate_rf_source_plugin_dependencies(value, ("wavebench>=0.8,<0.9",))
+    with pytest.raises(ConfigError, match="expands or excludes"):
+        validate_rf_source_plugin_dependencies(
+            value,
+            ("wavebench>=0.8.25,<0.9,!=0.8.25",),
+        )
+    with pytest.raises(ConfigError, match="exactly one active"):
+        validate_rf_source_plugin_dependencies(
+            value,
+            ('wavebench>=0.8.25,<0.9; python_version < "3.0"',),
+        )
+    with pytest.raises(ConfigError, match="invalid Requires-Dist"):
+        validate_rf_source_plugin_dependencies(value, ("wavebench=>not-a-version",))

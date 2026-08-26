@@ -778,6 +778,7 @@ from wavebench.instruments.api import descriptor_from_entry_point
 from wavebench.instruments.registry import _validate_descriptor
 from wavebench.instruments.source_conformance import validate_source_conformance_distribution
 from wavebench.instruments.source_extension_capabilities import validate_source_plugin_dependencies
+from wavebench.instruments.rf_source_capabilities import validate_rf_source_plugin_dependencies
 
 (
     expected_name,
@@ -830,6 +831,10 @@ descriptor = descriptor.with_distribution(
 _validate_descriptor(descriptor, expected_kind=None)
 validate_source_conformance_distribution(descriptor, dist)
 validate_source_plugin_dependencies(
+    descriptor,
+    tuple(dist.metadata.get_all("Requires-Dist") or ()),
+)
+validate_rf_source_plugin_dependencies(
     descriptor,
     tuple(dist.metadata.get_all("Requires-Dist") or ()),
 )

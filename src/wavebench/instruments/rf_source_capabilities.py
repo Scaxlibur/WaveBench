@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from types import MappingProxyType
 from typing import Mapping
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from wavebench.errors import ConfigError
@@ -72,17 +74,53 @@ def validate_rf_source_plugin_dependencies(
     descriptor: object,
     dependencies: Iterable[str],
 ) -> None:
-    """Reserve a public dependency-validation hook for RF-source plugin wheels.
+    """Cross-check an RF-source descriptor against its wheel metadata."""
 
-    M0 only freezes the descriptor's version interval.  The general plugin
-    lifecycle already proves one active WaveBench dependency before entry-point
-    import; later RF-specific releases can tighten this hook without changing
-    the descriptor schema.
-    """
+    if getattr(descriptor, "kind", None) != "rf_source":
+        return
+    _validate_rf_source_version_range(descriptor)
 
-    del dependencies
-    if getattr(descriptor, "kind", None) == "rf_source":
-        _validate_rf_source_version_range(descriptor)
+    requirements: list[Requirement] = []
+    for dependency in dependencies:
+        if not isinstance(dependency, str):
+            raise ConfigError("RF source wheel dependency metadata must contain strings")
+        try:
+            requirement = Requirement(dependency)
+        except InvalidRequirement as exc:
+            raise ConfigError("RF source wheel has an invalid Requires-Dist entry") from exc
+        if canonicalize_name(requirement.name) == "wavebench" and (
+            requirement.marker is None or requirement.marker.evaluate()
+        ):
+            requirements.append(requirement)
+    if len(requirements) != 1:
+        raise ConfigError(
+            "RF source wheel must declare exactly one active WaveBench dependency for its descriptor"
+        )
+    requirement = requirements[0]
+
+    try:
+        minimum = Version(getattr(descriptor, "wavebench_min_version", ""))
+        maximum = Version(getattr(descriptor, "wavebench_max_version", ""))
+    except (InvalidVersion, TypeError) as exc:  # pragma: no cover - checked above
+        raise ConfigError("RF source descriptor versions must use valid PEP 440 syntax") from exc
+    specifiers = tuple(requirement.specifier)
+    has_floor = any(
+        item.operator == ">=" and Version(item.version) == minimum
+        for item in specifiers
+    )
+    has_ceiling = any(
+        item.operator == "<" and Version(item.version) == maximum
+        for item in specifiers
+    )
+    if not has_floor or not has_ceiling:
+        raise ConfigError(
+            "RF source wheel WaveBench dependency must explicitly include "
+            f">={minimum},<{maximum} to match the descriptor"
+        )
+    if minimum not in requirement.specifier or maximum in requirement.specifier:
+        raise ConfigError(
+            "RF source wheel WaveBench dependency expands or excludes its descriptor interval"
+        )
 
 
 def _validate_rf_source_version_range(descriptor: object) -> None:
