@@ -343,6 +343,10 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
             "get_rf_modulation_snapshot",
             "configure_rf_modulation",
         ),
+        "rf_source.modulation_disable": (
+            "get_rf_modulation_state",
+            "disable_rf_modulation",
+        ),
         "rf_source.output": ("set_rf_output",),
     }
     assert {key: CAPABILITY_METHODS[key] for key in RF_SOURCE_CAPABILITY_METHODS} == dict(
