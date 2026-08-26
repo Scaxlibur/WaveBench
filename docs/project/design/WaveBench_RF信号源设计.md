@@ -15,9 +15,9 @@
 
 | 范围 | 当前状态 | 边界 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | 已实现 `rf_source` kind、append-only descriptor extension、`[rf_source]`、M0 只读路径、M1 OFF-only CW、M2 端口输出和 M3 内部正弦 AM／FM／PM 的事务、CLI、run step 与 artifact。 | production capability 仍由各插件的实机证据逐项决定。 |
+| Core `0.8.25` 开发线 | 已实现 `rf_source` kind、append-only descriptor extension、`[rf_source]`、M0 只读路径、M1 OFF-only CW、M2 端口输出、M3 内部正弦 AM／FM／PM，以及仅用于受控恢复的调制关闭事务。 | production capability 仍由各插件的实机证据逐项决定。 |
 | DSG830 包 `0.2.0` | 已迁移为 `kind="rf_source"`，提供 `rf_out` 静态 topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP` 和内部正弦 AM／FM／PM 映射；A1／A2／A3 证据已经完成。 | production descriptor 声明 `rf_source.idn`、`rf_source.snapshot`、OFF-only `rf_source.cw_configure` 和受 safety 限制的 `rf_source.output`；M3／M4 写 capability 仍关闭。 |
-| 实机证据 | A1、A2、A3 已完成；A4、A5 未开始。 | DSG830 production descriptor 开放 snapshot、OFF-only CW 和端口级 output。 |
+| 实机证据 | A1、A2、A3 已完成；A4 已进入受控验证但尚无合格证据；A5 未开始。 | DSG830 production descriptor 开放 snapshot、OFF-only CW 和端口级 output。 |
 
 普通 `source` 仍是面向函数／任意波形发生器的 Vpp、offset、数字 channel 与波形模型。它不是 RF 领域的兼容别名。
 
@@ -216,6 +216,7 @@ Core 在调用目标 driver operation 前校验 request、access、descriptor �
 | `rf_source.cw_configure` | `configure_cw(request)` | 端口频率与 dBm 功率配置 |
 | `rf_source.output` | `set_rf_output(request)` | 单端口 RF ON/OFF |
 | `rf_source.modulation_configure` | `configure_rf_modulation(request)` | 已声明的 AM／FM／PM 配置 |
+| `rf_source.modulation_disable` | `disable_rf_modulation(request)` | 关闭一个已明确识别的调制模式与全局调制开关 |
 | `rf_source.pulse_configure` | `configure_rf_pulse(request)` | 已声明的 Pulse 配置 |
 | `rf_source.pulse_trigger` | `trigger_rf_pulse(request)` | 已声明的 Pulse 触发 |
 | `rf_source.sweep_configure` | `configure_rf_sweep(request)` | 已声明的 Sweep 配置 |
@@ -261,6 +262,12 @@ CW、调制、Pulse 与 Sweep 配置必须按以下顺序执行：
 6. 成功后返回类型化结果与脱敏 artifact。
 
 主写开始后遇到结果不明、写后 readback 失败或保护状态变化时，不重试同一写入。M1 CW 与 M3 调制配置不执行 RF OFF recovery，而是将 session 保持在更保守状态；只有 M2 的 RF ON 事务可在 session health 允许时最多执行一次目标端口 RF OFF 并独立回读。
+
+### 调制关闭与恢复
+
+`rf_source.modulation_disable` 是一个独立的、按模式寻址的写事务，不是 reset，也不等同于 RF 输出关闭。它只在目标 RF 输出为 OFF、Pulse/Sweep 已关闭、protection 清晰，并且状态明确表明仅请求的 AM、FM 或 PM 模式已启用时才发送关闭写入；随后必须用 RF snapshot 和调制状态回读确认全局调制及所有模式均已关闭。
+
+已一致关闭的状态以零写方式返回。混合模式、状态矛盾、未知状态或写后结果不明都会拒绝或使 session 降为不确定状态，不能改用宽泛关闭命令重试。该 operation 当前用于受控本地证据和恢复流程；生产 DSG830 descriptor 不因此新增 capability，也没有面向日常使用的 CLI 或 run step。
 
 RF ON 是独立 operation。其 preflight 必须确认：
 
@@ -341,12 +348,12 @@ Pulse、Sweep 和 trigger 的命令与 step 仍是目标合同，尚未进入当
 | M0（生产只读） | `rf_source` kind、config、拓扑/profile、可观测 snapshot、Protocol、registry、doctor、只读 CLI 与 run status | 严格 snapshot parser；A1 后 production descriptor 声明只读 snapshot | descriptor 无 I/O；每个状态 query、解析和坏响应测试通过；A1 证据复核后仅提升 snapshot。 |
 | M1（离线完成；DSG830 A3 已提升） | CW request／result、OFF-only transaction、CLI、run step、artifact 与端口范围检查 | 频率／dBm 功率单次写入与独立回读 | output ON、活动调制／Pulse／Sweep 或越界请求时零写拒绝；结果不明无重试；DSG830 仅在 A3 复核后声明 CW。 |
 | M2（离线完成；DSG830 A2 已提升） | per-port 输出事务、安全预检、受 guard 的一次性 RF OFF recovery、CLI、run step 与 artifact | RF ON/OFF 单次写入；Core 负责独立 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF；DSG830 仅在 A2 复核后声明 output。 |
-| M3（离线完成；A4 未开始） | 内部正弦 AM／FM／PM profile、typed request/result、调制 snapshot、Service、CLI、run step 与 artifact | 内部 Sine 调制序列与严格 readback | 输出未 OFF、任一模式已开启、profile 不支持、Pulse／Sweep／protection 冲突或 postcondition 不符时零写拒绝；production capability 等待 A4。 |
+| M3（离线完成；A4 受控验证中，尚未通过） | 内部正弦 AM／FM／PM profile、typed request/result、调制 snapshot、配置 Service／CLI／run step／artifact；按模式关闭仅用于本地证据与私有恢复 | 内部 Sine 调制序列、严格 readback、单模式 RF-OFF evidence harness 与受限恢复路径 | 输出未 OFF、任一模式已开启、profile 不支持、Pulse／Sweep／protection 冲突或 postcondition 不符时零写拒绝；production capability 等待 A4。 |
 | M4 | 声明式 Pulse／Sweep profile、typed request/result、arm/fire/stop、CLI、run step 与 operation spec | 已声明 Pulse 与 Step Sweep 子集 | 错误模式、未声明 option、外部 trigger 或 fire 前置不满足时零写拒绝；fire／trigger 仅由 fake descriptor 覆盖。 |
 
 M0–M4 只证明代码合同和 SCPI 映射。后续证据顺序固定为：A1 只读 snapshot，A2 RF OFF/ON，A3 CW 环回，A4 调制／Pulse／Sweep，A5 外部触发或同步接线。每项 evidence 绑定 capability、型号、固件、选件、端口、端接和最终 RF OFF 状态。
 
-DSG830 的 A1 已使 production descriptor 声明 `rf_source.snapshot`，A2 已使其声明 `rf_source.output`，A3 已使其声明 `rf_source.cw_configure`。A4、A5 仍分别是调制／Pulse／Sweep、外部 trigger／同步 capability 的实机提升门槛。未取得对应 evidence 时不得声明或提升其它 production descriptor capability。
+DSG830 的 A1 已使 production descriptor 声明 `rf_source.snapshot`，A2 已使其声明 `rf_source.output`，A3 已使其声明 `rf_source.cw_configure`。A4 的本地 RF-OFF 单模式 harness 已完成 fake 回归并进入受控硬件验证，但尚未取得可提升 capability 的合格证据；A4、A5 仍分别是调制／Pulse／Sweep、外部 trigger／同步 capability 的实机提升门槛。未取得对应 evidence 时不得声明或提升其它 production descriptor capability。
 
 ## 首个适配器：RIGOL DSG830
 
@@ -365,7 +372,7 @@ DSG830 只为通用合同提供第一组设备映射，不改变核心类型或�
 
 手册未给出可安全采用的 error queue 查询命令。因此 DSG830 不声明 `rf_source.errors`，所有写后判断依赖独立状态回读和 condition register。
 
-DSG830 的 production `descriptor()` 在 A1／A2／A3 完成后声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 与 `rf_source.output`。`get_rf_snapshot()` 可通过只读入口观察状态，`configure_cw()` 只可在目标输出 OFF 的完整 preflight 后写入一个频率或功率字段，`set_rf_output()` 只可在完整 safety preflight 后切换 `rf_out`。driver 已实现 M3 内部正弦 AM／FM／PM 的离线映射与 readback，但 production descriptor 在 A4 前不声明 `rf_source.modulation_configure`；严格 parser 与 A1／A2／A3 证据不开放调制、Pulse、Sweep、fire 或 trigger 控制。历史 `0.1.0` 的 `source.idn` 种子已迁移为当前 `0.2.0` 的 RF 包。
+DSG830 的 production `descriptor()` 在 A1／A2／A3 完成后声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 与 `rf_source.output`。`get_rf_snapshot()` 可通过只读入口观察状态，`configure_cw()` 只可在目标输出 OFF 的完整 preflight 后写入一个频率或功率字段，`set_rf_output()` 只可在完整 safety preflight 后切换 `rf_out`。driver 已实现 M3 内部正弦 AM／FM／PM 的离线映射、严格 readback 和按模式关闭；A4 harness 在配置读回后执行受限调制关闭，或以显式恢复模式将一个已知模式还原为关闭状态。两条路径均不读取 scope、不调用 RF output，且 production descriptor 在 A4 复核前不声明 `rf_source.modulation_configure` 或 `rf_source.modulation_disable`。严格 parser 与 A1／A2／A3 证据不开放调制、Pulse、Sweep、fire 或 trigger 控制。历史 `0.1.0` 的 `source.idn` 种子已迁移为当前 `0.2.0` 的 RF 包。
 
 ## 测试与发布边界
 
@@ -382,5 +389,5 @@ DSG830 的 production `descriptor()` 在 A1／A2／A3 完成后声明 `rf_source
 - 核心开发分支：`Scaxlibur/feat/rf-source-core`。
 - DSG830 插件开发分支：`Scaxlibur/feat/rf-source-dsg830`。
 - Core M0 提交：`8a746fb`、`6fa9c48`、`f3ae6d7`、`55474be`、`e8ff1be`、`cf53e14`；DSG830 M0 提交：`0c5c2bf`。
-- M0–M3 离线验证已完成；DSG830 A1 snapshot、A2 受控输出与 A3 CW 环回证据已通过，production 已提升 snapshot、`rf_source.output` 和 `rf_source.cw_configure`。A4–A5 尚未开始，不能据此提升调制、Pulse、Sweep 或 trigger capability。
+- M0–M3 离线验证已完成；DSG830 A1 snapshot、A2 受控输出与 A3 CW 环回证据已通过，production 已提升 snapshot、`rf_source.output` 和 `rf_source.cw_configure`。Core `ab4de10` 与插件 `36e1e8e` 增加按模式调制关闭与私有恢复路径；A4 已进入受控验证，但尚未取得可提升调制 capability 的合格证据。A4–A5 仍不能据此提升调制、Pulse、Sweep 或 trigger capability。
 - `tool-of-rei/` 是本地恢复上下文，已忽略；面向项目的设计文档保存在 `docs/project/design/`。

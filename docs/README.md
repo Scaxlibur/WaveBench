@@ -26,6 +26,10 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 - [配置文件格式](project/reference/WaveBench_配置文件格式.md)：TOML 查找顺序、字段和安全限制。
 - 仪器型号命令和编程手册由 [仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins) 维护；本仓库只记录 WaveBench 的接入边界。
 
+### 使用 RF 信号源
+
+`rf_source` 不复用普通 `source` 的 Vpp、offset 或数字 channel 模型。先从 [RF 信号源使用指南](project/guides/WaveBench_RF信号源使用指南.md) 确认当前 production capability 和端接声明；需要实现新型号或查看证据门时，再阅读[领域设计](project/design/WaveBench_RF信号源设计.md)与[开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)。
+
 ### 执行实验
 
 - [run plan 使用指南](project/guides/WaveBench_run_plan_使用指南.md)：模板、`run check`、`run verify`、执行、恢复和报告。
@@ -54,8 +58,6 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 - [设备抽象层](project/design/WaveBench_设备抽象层.md)
 - [多仪器流程设计](project/design/WaveBench_多仪器协同流程设计.md)
 - [sweep 状态保存与恢复](project/design/WaveBench_sweep状态恢复设计.md)
-- [RF 信号源领域设计](project/design/WaveBench_RF信号源设计.md)：当前 M0–M2 合同、OFF-only CW／端口级输出安全规则与后续写入边界。
-- [RF 信号源开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)：Core／DSG830 双仓库状态与 A1–A5 证据门；DSG830 已完成 A1／A2／A3，开放 `rf_source.cw_configure` 和 `rf_source.output` 写入。
 - [TUI 终端控制面板](project/guides/WaveBench_TUI终端控制面板.md)
 
 目录分类见 [project/README](project/README.md)。本页只负责入口，不把阶段记录当作当前使用说明。

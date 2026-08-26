@@ -22,7 +22,7 @@
 | 身份与状态 | 已开放 | 已开放 | `read_only` 可执行。 |
 | CW 频率／dBm 功率 | 已开放 | A3 后已开放 | 仅目标 RF 输出明确 OFF 时的单字段写入。 |
 | RF ON/OFF | 已开放 | A2 后已开放 | ON 需要完整端口 safety 配置与 fresh preflight。 |
-| 内部正弦 AM／FM／PM | M3 离线合同已完成 | 未开放 | A4 实机证据前，DSG830 会在 transport I/O 前拒绝该 capability。 |
+| 内部正弦 AM／FM／PM | M3 离线合同与受限恢复路径已完成 | 未开放 | A4 尚无合格实机证据前，DSG830 会在 transport I/O 前拒绝该 capability。 |
 | Pulse、Sweep、trigger | 未完成 | 未开放 | 不应尝试调用或绕过。 |
 
 生产 descriptor 是否声明 capability 是实际边界。Core 中存在 CLI、run step 或 driver 方法，不等于当前仪器已经获准执行该操作。
@@ -56,7 +56,20 @@ actual_termination_ohm = 50
 
 示例中的 `50` 只适用于已人工确认整个 RF 路径确实以 50 Ω 端接的场景。若 RF 直接接入示波器，示波器 CH2 已设为 50 Ω 只是必要信息之一；线缆、转接件、分配器和实际连接路径也必须一起核对。无法确认时，不应填写猜测值。
 
-网络发现只能帮助定位候选设备。候选资源仍须通过只读身份查询、型号核对和隔离配置复核；发现结果不自动写回配置，也不构成写入授权。
+网络发现只能帮助定位候选设备。先使用有界扫描，例如：
+
+```bash
+wavebench net discover \
+  --subnet 192.0.2.0/24 \
+  --ports 5025,5555,111 \
+  --timeout-ms 500 \
+  --workers 16 \
+  --max-hosts 256 \
+  --no-idn \
+  --no-visa
+```
+
+候选资源仍须通过只读身份查询、型号核对和隔离配置复核；发现结果不自动写回配置，也不构成写入授权。VXI-11 设备可能只表现为候选端口，未响应 socket `*IDN?` 不等于设备不可用。
 
 ## 当前生产操作
 
@@ -137,6 +150,8 @@ internal_frequency_hz = 1000
 M3 事务要求目标 RF 输出 OFF、AM／FM／PM 三种模式均处于 disabled、Pulse／Sweep disabled，且没有活动 protection condition。FM 与 PM 共享设备的当前选择位：在三种模式均关闭时，preflight 可以观察到另一种 FM／PM 选择，固定写入会明确选择目标类型；postcondition 必须确认已切换到目标类型。Core 用独立调制 snapshot 验证目标模式、源、波形、数值、内部频率、全局调制开关和 RF 输出仍然 OFF。写入结果不明或 postcondition 不匹配时不重试，session 会降为不确定状态。
 
 截至当前，DSG830 production descriptor 不声明 `rf_source.modulation_configure`。因此上述命令和 step 仅用于离线 fake descriptor、开发验证或未来已取得 A4 证据的插件；对当前 production DSG830 会在打开 transport 前被 capability 门拒绝。
+
+DSG830 源码 checkout 的 A4 harness 是开发验证工具，不是日常命令。它一次配置一个内部 Sine 模式，完成读回后立即执行同一模式的受限关闭事务，并在最终 snapshot 中确认 RF 输出与调制均已关闭。显式 `--recover` 只用于恢复「已明确识别的单一活动模式」，输出为私有恢复记录；两条路径都不读取 CH2、不调用 RF output，也不能改变 production capability。A4 已进入受控验证，但尚未取得可提升 capability 的合格证据。
 
 M2 的 RF ON 合同目前要求调制 disabled。即使未来 A4 仅提升 M3 配置 capability，也不能据此推导「已可在调制开启时输出 RF」。允许调制输出需要单独调整输出 safety 合同并取得相应实机证据；不得通过关闭门禁或原始 SCPI 先行绕过。
 

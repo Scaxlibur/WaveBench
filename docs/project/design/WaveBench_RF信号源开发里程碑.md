@@ -8,9 +8,9 @@
 
 | 范围 | 当前状态 | 说明 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | M0–M3 合同完成 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出和内部正弦 AM／FM／PM 的类型合同、Service、CLI、run 路径与 artifact；production 能力由各插件证据逐项决定。 |
-| DSG830 包 `0.2.0` | M0–M3 离线完成；A1、A2、A3 已完成 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP` 映射以及内部正弦 AM／FM／PM 映射；production descriptor 仅声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 和 `rf_source.output`。 |
-| 真实仪器证据 | A1、A2、A3 已完成；A4、A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW。 |
+| Core `0.8.25` 开发线 | M0–M3 合同完成 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出，以及内部正弦 AM／FM／PM 的类型合同、Service、CLI、run 路径与 artifact；按模式调制关闭仅用于本地证据与私有恢复。production 能力由各插件证据逐项决定。 |
+| DSG830 包 `0.2.0` | M0–M3 离线完成；A4 受控验证中，尚未通过 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP` 映射以及内部正弦 AM／FM／PM 映射；production descriptor 仅声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 和 `rf_source.output`。 |
+| 真实仪器证据 | A1、A2、A3 已完成；A4 尚无合格证据；A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW。 |
 
 ## 双仓库交付规则
 
@@ -20,7 +20,7 @@
 | 插件跟随 | DSG830 已迁移为 `kind="rf_source"`，并把 `Requires-Dist: wavebench` 与 descriptor 版本门同步为 `>=0.8.25,<0.9`；当前双仓库开发依赖匹配的 Core checkout／版本范围。 |
 | 测试隔离 | 后续 capability 可以只出现在 fake descriptor 中，用于离线测试；production descriptor 不得提前声明。 |
 | 证据提升 | capability 进入 production descriptor 前，必须有对应 A 级实机证据，记录型号、固件、选件、端口、端接和最终 RF OFF 状态。 |
-| 失败语义 | 不确定写入不重试；只有 session health 允许时，M2 才可最多执行一次目标端口 RF OFF recovery。 |
+| 失败语义 | 不确定写入不重试；只有 session health 允许时，M2 才可最多执行一次目标端口 RF OFF recovery。M3 配置失败后只允许在新的、独立预检 session 中使用按模式调制关闭事务恢复已知状态。 |
 
 ## 里程碑总览
 
@@ -30,7 +30,7 @@
 | M0 | 离线完成；A1 已完成 | `rf_source` 只读领域 | `rf_out` topology 与严格 snapshot parser | A1 复核后，生产包声明 `rf_source.idn` 和 `rf_source.snapshot`。 |
 | M1 | 离线完成；A3 已完成 | OFF-only CW 配置 | `:FREQ`／`:LEV` 映射与独立回读 | typed request／result、Service、CLI、run step、artifact、fake 测试与受控 A3 证据已完成；DSG830 production 已开放 `rf_source.cw_configure`。 |
 | M2 | 离线完成；A2 已完成 | RF 输出安全事务 | `:OUTP` ON/OFF 的单次映射；Core 独立 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次受 guard 的 OFF recovery；DSG830 production 已开放 `rf_source.output`。 |
-| M3 | 离线完成；A4 未开始 | 声明式内部正弦 AM／FM／PM profile、事务、CLI、run 与 artifact | 手册范围内的内部 Sine AM／FM／PM 映射与严格 readback | 只在 RF OFF、所有调制模式 disabled、profile 匹配且 postcondition 成立时写入；production capability 等待 A4。 |
+| M3 | 离线完成；A4 受控验证中，尚未通过 | 声明式内部正弦 AM／FM／PM profile、配置事务、CLI、run 与 artifact；按模式关闭仅用于本地证据与私有恢复 | 手册范围内的内部 Sine AM／FM／PM 映射、严格 readback、单模式 RF-OFF evidence harness 与私有恢复路径 | 只在 RF OFF、所有调制模式 disabled、profile 匹配且 postcondition 成立时写入；production capability 等待 A4。 |
 | M4 | 未开始 | Pulse／Step Sweep 合同 | 已声明子集、arm／fire／stop 映射 | trigger／fire 只能由专项安全规则与实机证据提升。 |
 
 ## Seed：历史种子包
@@ -85,15 +85,20 @@ Core 已冻结 `RfModulationModeProfile`、typed request／result、调制 snaps
 Sine AM／FM／PM：AM 使用 percent 深度，FM 使用 Hz 频偏，PM 使用 rad 相偏；每种模式都有独立的内部频率和静态范围。
 run plan 使用 `modulation_kind` 表示 AM／FM／PM，避免与步骤自身的 `kind` 键冲突，并且只能提供与该模式匹配的一个数值字段。
 
-DSG830 driver 已实现固定且无重试的内部正弦写入序列与严格 readback：读取全局调制状态、三种模式的 enable 状态、
-目标模式 source／waveform／数值／内部频率与 FM／PM 共享 mode type。当前类型与目标 FM／PM 不同但三种模式均 disabled 时，preflight 可继续，
+DSG830 driver 已实现固定且无重试的内部正弦写入序列与严格 readback：先读取全局调制状态、三种模式的 enable 状态，只有写后才读取目标 profile 的 source／waveform／数值／内部频率；这样不会因未启用的外部 profile 阻塞安全 preflight。
+FM／PM 的共享 mode type 会与被查询 profile 分开记录。当前类型与目标 FM／PM 不同但三种模式均 disabled 时，preflight 可继续，
 固定写入显式选择目标类型；postcondition 必须核对目标类型。M3 preflight 要求目标 RF 输出 OFF、AM／FM／PM
 均 disabled、Pulse／Sweep disabled 且无活动 protection condition；postcondition 要求 RF 仍 OFF、仅目标模式 enabled、全局调制
 开启且所有目标字段精确匹配。写入或 postcondition 结果不明时不重试，session 降为不确定状态。
 
+`rf_source.modulation_disable` 单独关闭一个已明确识别的 AM／FM／PM 模式和全局调制开关。它要求 RF OFF、Pulse／Sweep disabled、无活动 protection，且调制状态只包含请求模式；写后必须重新确认所有模式和全局调制均关闭。已一致关闭的状态不写入；混合、未知或矛盾状态在写入前拒绝。该 operation 当前只供 A4 本地证据与恢复流程使用，不进入 DSG830 production descriptor。
+
 production descriptor 的调制 capability 仍需要 A4 证据；离线 driver、fake descriptor、CLI 或 run step 的完整测试均不能替代它。
 当前 M2 的 RF ON 合同要求调制 disabled，因此 A4 即使仅提升 M3 配置 capability，也不授权在调制开启时输出 RF；该能力需要后续专门的
 输出安全合同与实机证据。
+
+DSG830 源码 checkout 已提供 A4 的独立本地 harness 和资源无关 setup 模板，并已进入受控硬件验证。一次运行只配置一个内部 Sine
+AM／FM／PM profile；成功路径在配置读回后执行同一模式的受限关闭事务，最终 snapshot 必须同时确认 RF OFF 和调制关闭。`--recover` 只用于把已知的单一活动模式恢复为关闭状态，输出为私有恢复记录，不是 A4 通过证据。两条路径都不读取 scope、不调用 RF output，也不做 output recovery。当前尚未取得可提升 `rf_source.modulation_configure` 的合格 A4 证据，不能外推为调制输出、CH2 信号、Pulse、Sweep 或 trigger 证据。
 
 ## M4：Pulse 与 Step Sweep
 
@@ -166,4 +171,4 @@ CH2 的 50 Ω 端接是在 setup 中明确声明的电气安全前提。scope �
 3. 已取得并复核 A1 的只读 snapshot 证据；DSG830 parser 已仅作为 `rf_source.snapshot` 暴露为 production capability。
 4. 已完成 M1／M2 的 fake descriptor 零写拒绝、postcondition 测试、guarded OFF recovery、Core CLI／run 路由和 DSG830 离线 SCPI 映射；A2 已通过并仅提升 `rf_source.output`。
 5. A3 已完成并将 `rf_source.cw_configure` 加入 production descriptor。M3 的离线合同、DSG830 映射、CLI、run 与 artifact 已完成，但 capability 继续等待 A4；M4 保持独立工作。
-6. A4 先验证 M3 的 RF-OFF 配置和独立 readback，再讨论任何允许调制开启时 RF 输出的专门安全合同；不得把当前 CH2 可见信号证据外推为调制输出证据。
+6. A4 已进入受控验证，但当前尚未取得可提升 capability 的合格记录。先完成 AM／FM／PM 各自的 RF-OFF 单模式配置、读回与关闭恢复证据，再讨论任何允许调制开启时 RF 输出的专门安全合同；不得把当前 CH2 可见信号证据外推为调制输出证据。
