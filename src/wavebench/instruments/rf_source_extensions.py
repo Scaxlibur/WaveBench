@@ -21,6 +21,7 @@ from .contracts import InstrumentDriver
 
 RF_SOURCE_CONTRACT_VERSION = "wavebench.rf_source.v1"
 RF_SOURCE_SNAPSHOT_SCHEMA = "wavebench.rf_source.snapshot.v1"
+RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA = "wavebench.rf_source.modulation_snapshot.v1"
 RF_SOURCE_OPERATION_ARTIFACT_SCHEMA = "wavebench.rf_source.operation.v1"
 RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION = "0.8.25"
 
@@ -118,6 +119,30 @@ class RfReasonCode(StrEnum):
 class RfModulationState(StrEnum):
     DISABLED = "disabled"
     ENABLED = "enabled"
+
+
+class RfModulationKind(StrEnum):
+    AM = "am"
+    FM = "fm"
+    PM = "pm"
+
+
+class RfModulationSource(StrEnum):
+    """The M3 contract intentionally exposes only the instrument-internal source."""
+
+    INTERNAL = "internal"
+
+
+class RfModulationWaveform(StrEnum):
+    """The M3 contract intentionally exposes only an internal sine waveform."""
+
+    SINE = "sine"
+
+
+class RfModulationValueUnit(StrEnum):
+    PERCENT = "percent"
+    HZ = "hz"
+    RAD = "rad"
 
 
 class RfPulseState(StrEnum):
@@ -303,6 +328,46 @@ class RfSourceSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class RfModulationModeProfile:
+    """One bounded, readable internal-sine modulation mode declaration."""
+
+    kind: RfModulationKind
+    value_unit: RfModulationValueUnit
+    value_min: float
+    value_max: float
+    internal_frequency_min_hz: float
+    internal_frequency_max_hz: float
+    source: RfModulationSource = RfModulationSource.INTERNAL
+    waveform: RfModulationWaveform = RfModulationWaveform.SINE
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, RfModulationKind):
+            raise ValueError("RF modulation mode kind has an invalid type")
+        if not isinstance(self.value_unit, RfModulationValueUnit):
+            raise ValueError("RF modulation mode value_unit has an invalid type")
+        if not isinstance(self.source, RfModulationSource):
+            raise ValueError("RF modulation mode source has an invalid type")
+        if not isinstance(self.waveform, RfModulationWaveform):
+            raise ValueError("RF modulation mode waveform has an invalid type")
+        _require_finite(self.value_min, "RF modulation mode value_min")
+        _require_finite(
+            self.value_max,
+            "RF modulation mode value_max",
+            minimum=self.value_min,
+        )
+        _require_finite(
+            self.internal_frequency_min_hz,
+            "RF modulation mode internal_frequency_min_hz",
+            minimum=0.0,
+        )
+        _require_finite(
+            self.internal_frequency_max_hz,
+            "RF modulation mode internal_frequency_max_hz",
+            minimum=self.internal_frequency_min_hz,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RfCwProfile:
     frequency_readable: bool
     power_readable: bool
@@ -331,9 +396,21 @@ class RfOutputProfile:
 @dataclass(frozen=True, slots=True)
 class RfModulationProfile:
     state_readable: bool
+    configuration_readable: bool = False
+    mode_profiles: tuple[RfModulationModeProfile, ...] = ()
 
     def __post_init__(self) -> None:
         _require_bool(self.state_readable, "RF modulation state_readable")
+        _require_bool(self.configuration_readable, "RF modulation configuration_readable")
+        if not isinstance(self.mode_profiles, tuple) or any(
+            not isinstance(profile, RfModulationModeProfile) for profile in self.mode_profiles
+        ):
+            raise ValueError("RF modulation mode_profiles have an invalid type")
+        kinds = tuple(profile.kind for profile in self.mode_profiles)
+        if len(set(kinds)) != len(kinds) or tuple(sorted(kinds, key=lambda item: item.value)) != kinds:
+            raise ValueError("RF modulation mode_profiles must be sorted and unique")
+        if self.configuration_readable and not self.state_readable:
+            raise ValueError("RF modulation configuration readback requires readable state")
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,6 +538,180 @@ class RfCwResult:
             _require_finite(self.power_dbm, "RF CW result power_dbm")
 
 
+def _validate_modulation_fields(
+    *,
+    kind: RfModulationKind,
+    depth_percent: float | None,
+    frequency_deviation_hz: float | None,
+    phase_deviation_rad: float | None,
+    label: str,
+) -> None:
+    if not isinstance(kind, RfModulationKind):
+        raise ValueError(f"{label} kind has an invalid type")
+    fields = {
+        RfModulationKind.AM: depth_percent,
+        RfModulationKind.FM: frequency_deviation_hz,
+        RfModulationKind.PM: phase_deviation_rad,
+    }
+    if sum(value is not None for value in fields.values()) != 1 or fields[kind] is None:
+        raise ValueError(f"{label} must set exactly the parameter for its modulation kind")
+    for field, value in fields.items():
+        if value is not None:
+            _require_finite(value, f"{label} {field.value} value", minimum=0.0)
+
+
+@dataclass(frozen=True, slots=True)
+class RfModulationRequest:
+    """One bounded internal-sine AM, FM, or PM configuration for one RF port."""
+
+    port_id: str
+    kind: RfModulationKind
+    internal_frequency_hz: float
+    depth_percent: float | None = None
+    frequency_deviation_hz: float | None = None
+    phase_deviation_rad: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF modulation request port_id")
+        _require_finite(
+            self.internal_frequency_hz,
+            "RF modulation request internal_frequency_hz",
+            minimum=0.0,
+        )
+        _validate_modulation_fields(
+            kind=self.kind,
+            depth_percent=self.depth_percent,
+            frequency_deviation_hz=self.frequency_deviation_hz,
+            phase_deviation_rad=self.phase_deviation_rad,
+            label="RF modulation request",
+        )
+
+    @property
+    def value(self) -> float:
+        value = {
+            RfModulationKind.AM: self.depth_percent,
+            RfModulationKind.FM: self.frequency_deviation_hz,
+            RfModulationKind.PM: self.phase_deviation_rad,
+        }[self.kind]
+        assert value is not None
+        return value
+
+    @property
+    def value_unit(self) -> RfModulationValueUnit:
+        return {
+            RfModulationKind.AM: RfModulationValueUnit.PERCENT,
+            RfModulationKind.FM: RfModulationValueUnit.HZ,
+            RfModulationKind.PM: RfModulationValueUnit.RAD,
+        }[self.kind]
+
+
+@dataclass(frozen=True, slots=True)
+class RfModulationResult:
+    """An internal-sine modulation request confirmed by typed readback."""
+
+    port_id: str
+    kind: RfModulationKind
+    internal_frequency_hz: float
+    depth_percent: float | None = None
+    frequency_deviation_hz: float | None = None
+    phase_deviation_rad: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF modulation result port_id")
+        _require_finite(
+            self.internal_frequency_hz,
+            "RF modulation result internal_frequency_hz",
+            minimum=0.0,
+        )
+        _validate_modulation_fields(
+            kind=self.kind,
+            depth_percent=self.depth_percent,
+            frequency_deviation_hz=self.frequency_deviation_hz,
+            phase_deviation_rad=self.phase_deviation_rad,
+            label="RF modulation result",
+        )
+
+    @property
+    def value(self) -> float:
+        value = {
+            RfModulationKind.AM: self.depth_percent,
+            RfModulationKind.FM: self.frequency_deviation_hz,
+            RfModulationKind.PM: self.phase_deviation_rad,
+        }[self.kind]
+        assert value is not None
+        return value
+
+    @property
+    def value_unit(self) -> RfModulationValueUnit:
+        return {
+            RfModulationKind.AM: RfModulationValueUnit.PERCENT,
+            RfModulationKind.FM: RfModulationValueUnit.HZ,
+            RfModulationKind.PM: RfModulationValueUnit.RAD,
+        }[self.kind]
+
+
+@dataclass(frozen=True, slots=True)
+class RfModulationSnapshot:
+    """Complete typed readback for one internal-sine modulation mode."""
+
+    port_id: str
+    kind: RfModulationKind
+    source: RfModulationSource
+    waveform: RfModulationWaveform
+    internal_frequency_hz: float
+    depth_percent: float | None = None
+    frequency_deviation_hz: float | None = None
+    phase_deviation_rad: float | None = None
+    enabled_modes: tuple[RfModulationKind, ...] = ()
+    global_enabled: bool = False
+    fault_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF modulation snapshot port_id")
+        if not isinstance(self.source, RfModulationSource):
+            raise ValueError("RF modulation snapshot source has an invalid type")
+        if not isinstance(self.waveform, RfModulationWaveform):
+            raise ValueError("RF modulation snapshot waveform has an invalid type")
+        _require_finite(
+            self.internal_frequency_hz,
+            "RF modulation snapshot internal_frequency_hz",
+            minimum=0.0,
+        )
+        _validate_modulation_fields(
+            kind=self.kind,
+            depth_percent=self.depth_percent,
+            frequency_deviation_hz=self.frequency_deviation_hz,
+            phase_deviation_rad=self.phase_deviation_rad,
+            label="RF modulation snapshot",
+        )
+        _require_enum_tuple(
+            self.enabled_modes,
+            RfModulationKind,
+            "RF modulation snapshot enabled_modes",
+            allow_empty=True,
+        )
+        _require_bool(self.global_enabled, "RF modulation snapshot global_enabled")
+        _require_token_tuple(self.fault_codes, "RF modulation snapshot fault_codes", allow_empty=True)
+
+    @property
+    def value(self) -> float:
+        value = {
+            RfModulationKind.AM: self.depth_percent,
+            RfModulationKind.FM: self.frequency_deviation_hz,
+            RfModulationKind.PM: self.phase_deviation_rad,
+        }[self.kind]
+        assert value is not None
+        return value
+
+    @property
+    def value_unit(self) -> RfModulationValueUnit:
+        return {
+            RfModulationKind.AM: RfModulationValueUnit.PERCENT,
+            RfModulationKind.FM: RfModulationValueUnit.HZ,
+            RfModulationKind.PM: RfModulationValueUnit.RAD,
+        }[self.kind]
+
+
 @dataclass(frozen=True, slots=True)
 class RfOutputRequest:
     """One explicit RF output state request for one descriptor-defined port."""
@@ -492,6 +743,14 @@ class RfSourceDriver(InstrumentDriver, Protocol):
     def get_rf_snapshot(self) -> RfSourceSnapshot: ...
 
     def configure_cw(self, request: RfCwRequest) -> None: ...
+
+    def get_rf_modulation_snapshot(
+        self,
+        port_id: str,
+        kind: RfModulationKind,
+    ) -> RfModulationSnapshot: ...
+
+    def configure_rf_modulation(self, request: RfModulationRequest) -> None: ...
 
     def set_rf_output(self, request: RfOutputRequest) -> None: ...
 
@@ -564,6 +823,16 @@ def rf_source_snapshot_document(snapshot: RfSourceSnapshot) -> dict[str, object]
     return {"schema": RF_SOURCE_SNAPSHOT_SCHEMA, **data}
 
 
+def rf_modulation_snapshot_document(snapshot: RfModulationSnapshot) -> dict[str, object]:
+    """Build a redacted document for one typed RF modulation readback."""
+
+    if not isinstance(snapshot, RfModulationSnapshot):
+        raise TypeError("snapshot must be RfModulationSnapshot")
+    data = rf_source_to_data(snapshot)
+    assert isinstance(data, dict)
+    return {"schema": RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA, **data}
+
+
 def rf_source_snapshot_operation_artifact(snapshot: RfSourceSnapshot) -> dict[str, object]:
     """Build a read-only snapshot artifact without transport-private values."""
 
@@ -606,6 +875,53 @@ def rf_source_cw_operation_artifact(
     }
 
 
+def rf_source_modulation_operation_artifact(
+    request: RfModulationRequest,
+    result: RfModulationResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    preflight_modulation_snapshot: RfModulationSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+    postcondition_modulation_snapshot: RfModulationSnapshot,
+) -> dict[str, object]:
+    """Build one redacted M3 modulation operation artifact from typed evidence."""
+
+    if not isinstance(request, RfModulationRequest):
+        raise TypeError("request must be RfModulationRequest")
+    if not isinstance(result, RfModulationResult):
+        raise TypeError("result must be RfModulationResult")
+    if (
+        request.port_id != result.port_id
+        or request.kind is not result.kind
+        or request.internal_frequency_hz != result.internal_frequency_hz
+        or request.value != result.value
+        or request.value_unit is not result.value_unit
+    ):
+        raise ValueError("RF modulation request and result must describe the same target")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(preflight_modulation_snapshot, RfModulationSnapshot):
+        raise TypeError("preflight_modulation_snapshot must be RfModulationSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_modulation_snapshot, RfModulationSnapshot):
+        raise TypeError("postcondition_modulation_snapshot must be RfModulationSnapshot")
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "rf_source.modulation_configure",
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "preflight_modulation_snapshot": rf_modulation_snapshot_document(
+            preflight_modulation_snapshot
+        ),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+        "postcondition_modulation_snapshot": rf_modulation_snapshot_document(
+            postcondition_modulation_snapshot
+        ),
+    }
+
+
 def rf_source_output_operation_artifact(
     request: RfOutputRequest,
     result: RfOutputResult,
@@ -639,6 +955,7 @@ def rf_source_output_operation_artifact(
 
 __all__ = [
     "RF_SOURCE_CONTRACT_VERSION",
+    "RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA",
     "RF_SOURCE_OPERATION_ARTIFACT_SCHEMA",
     "RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION",
     "RF_SOURCE_SNAPSHOT_SCHEMA",
@@ -650,8 +967,16 @@ __all__ = [
     "RfFeatureCapability",
     "RfFeatureDirection",
     "RfFeatureProfile",
+    "RfModulationKind",
+    "RfModulationModeProfile",
     "RfModulationProfile",
+    "RfModulationRequest",
+    "RfModulationResult",
+    "RfModulationSnapshot",
+    "RfModulationSource",
     "RfModulationState",
+    "RfModulationValueUnit",
+    "RfModulationWaveform",
     "RfObserved",
     "RfOutputPortProfile",
     "RfOutputProfile",
@@ -672,6 +997,8 @@ __all__ = [
     "rf_source_canonical_json",
     "rf_source_cw_operation_artifact",
     "rf_source_digest",
+    "rf_modulation_snapshot_document",
+    "rf_source_modulation_operation_artifact",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",
     "rf_source_output_operation_artifact",

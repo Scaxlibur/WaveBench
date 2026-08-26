@@ -18,6 +18,7 @@ from .rf_source_extensions import (
     RfCwProfile,
     RfFeature,
     RfFeatureDirection,
+    RfModulationProfile,
     RfOutputProfile,
     RfSourceDescriptorExtensions,
 )
@@ -28,6 +29,10 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "rf_source.idn": ("idn",),
         "rf_source.snapshot": ("get_rf_snapshot",),
         "rf_source.cw_configure": ("configure_cw",),
+        "rf_source.modulation_configure": (
+            "get_rf_modulation_snapshot",
+            "configure_rf_modulation",
+        ),
         "rf_source.output": ("set_rf_output",),
     }
 )
@@ -66,6 +71,8 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         raise ConfigError("rf_source descriptors require the rf_source.idn capability")
     if "rf_source.cw_configure" in rf_capabilities:
         _validate_cw_configure_feature(extensions)
+    if "rf_source.modulation_configure" in rf_capabilities:
+        _validate_modulation_configure_feature(extensions)
     if "rf_source.output" in rf_capabilities:
         _validate_output_feature(extensions)
     _validate_rf_source_version_range(descriptor)
@@ -114,6 +121,28 @@ def _validate_output_feature(extensions: RfSourceDescriptorExtensions) -> None:
         raise ConfigError("rf_source.output requires an RF output profile")
     if not feature.profile.output_readable:
         raise ConfigError("rf_source.output requires readable RF output state")
+
+
+def _validate_modulation_configure_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.MODULATION),
+        None,
+    )
+    if (
+        feature is None
+        or RfFeatureDirection.CONFIGURE not in feature.directions
+        or RfFeatureDirection.READ not in feature.directions
+    ):
+        raise ConfigError(
+            "rf_source.modulation_configure requires an RF modulation feature with "
+            "configure and read directions"
+        )
+    if not isinstance(feature.profile, RfModulationProfile):  # defensive: extensions validates this.
+        raise ConfigError("rf_source.modulation_configure requires an RF modulation profile")
+    if not feature.profile.configuration_readable or not feature.profile.mode_profiles:
+        raise ConfigError(
+            "rf_source.modulation_configure requires readable bounded modulation mode profiles"
+        )
 
 
 def validate_rf_source_plugin_dependencies(
