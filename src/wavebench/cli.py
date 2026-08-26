@@ -92,6 +92,8 @@ from .instruments.rf_source_extensions import (
     RfModulationKind,
     RfModulationRequest,
     RfOutputRequest,
+    RfPulseConfigureRequest,
+    RfPulsePolarity,
 )
 from .mcp_http import (
     resolve_mcp_token,
@@ -1582,6 +1584,20 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     request_fields["phase_deviation_rad"] = args.phase_deviation_rad
                 result = service.configure_modulation(RfModulationRequest(**request_fields))
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pulse":
+                result = service.configure_pulse(
+                    RfPulseConfigureRequest(
+                        port_id=args.port,
+                        period_s=args.period_s,
+                        width_s=args.width_s,
+                        polarity=RfPulsePolarity(args.polarity),
+                    )
+                )
                 if args.json:
                     _emit_json_result(_json_payload(result))
                 else:

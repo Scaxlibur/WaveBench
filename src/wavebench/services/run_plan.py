@@ -25,6 +25,7 @@ ALLOWED_STEP_KINDS = {
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
     "rf_source.modulation_configure",
+    "rf_source.pulse_configure",
     "rf_source.output_enable",
     "rf_source.output_disable",
     "source.set_freq",
@@ -77,6 +78,7 @@ _REQUIRED_FIELDS = {
         "modulation_kind",
         "internal_frequency_hz",
     ),
+    "rf_source.pulse_configure": ("port_id", "period_s", "width_s", "polarity"),
     "rf_source.output_enable": ("port_id",),
     "rf_source.output_disable": ("port_id",),
     "source.basic_configure_v2": ("channel",),
@@ -194,6 +196,7 @@ _OPTIONAL_FIELDS = {
         "phase_deviation_rad",
         "on_failure",
     },
+    "rf_source.pulse_configure": set(),
     "rf_source.output_enable": {"on_failure"},
     "rf_source.output_disable": {"on_failure"},
     "source.set_freq": {"channel", "on_failure"},
@@ -258,6 +261,7 @@ _STEP_NOTES = {
     "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
+    "rf_source.pulse_configure": "Configure one OFF RF port with a disabled internal single-pulse profile; it does not enable RF output or trigger a pulse.",
     "rf_source.output_enable": "Enable one RF port only after a fresh safety snapshot confirms the configured load, frequency, power, and inactive modulation, Pulse, Sweep, and blocking protection conditions.",
     "rf_source.output_disable": "Disable one RF port and confirm OFF without requiring frequency, power, or protection readback.",
     "source.arb_load": "Upload a DG4202 arbitrary waveform from CSV/NPY using DATA:DAC VOLATILE; output remains unchanged unless output_on = true.",
@@ -691,6 +695,18 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             fields["internal_frequency_hz"],
             f"{prefix}.internal_frequency_hz",
         )
+    elif kind == "rf_source.pulse_configure":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        period_s = _positive_float(fields["period_s"], f"{prefix}.period_s")
+        width_s = _positive_float(fields["width_s"], f"{prefix}.width_s")
+        if width_s >= period_s:
+            raise ConfigError(f"{prefix}.width_s must be less than period_s")
+        polarity = _non_empty_str(fields["polarity"], f"{prefix}.polarity").lower()
+        if polarity not in {"normal", "inverted"}:
+            raise ConfigError(f"{prefix}.polarity must be one of normal, inverted")
+        fields["period_s"] = period_s
+        fields["width_s"] = width_s
+        fields["polarity"] = polarity
     elif kind in {"rf_source.output_enable", "rf_source.output_disable"}:
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
     elif kind == "source.arb_load":

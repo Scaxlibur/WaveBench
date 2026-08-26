@@ -713,6 +713,28 @@ def build_parser() -> argparse.ArgumentParser:
         )
         add_runtime_options(rf_source_modulation_configure)
 
+    rf_source_pulse = rf_source_sub.add_parser(
+        "pulse",
+        help="Configure a bounded internal single-pulse profile while RF output is OFF",
+    )
+    rf_source_pulse_sub = rf_source_pulse.add_subparsers(
+        dest="pulse_command",
+        required=True,
+    )
+    rf_source_pulse_configure = rf_source_pulse_sub.add_parser(
+        "configure",
+        help="Configure a disabled internal single-pulse profile without triggering",
+    )
+    rf_source_pulse_configure.add_argument("--port", required=True)
+    rf_source_pulse_configure.add_argument("--period-s", type=float, required=True)
+    rf_source_pulse_configure.add_argument("--width-s", type=float, required=True)
+    rf_source_pulse_configure.add_argument(
+        "--polarity",
+        choices=["normal", "inverted"],
+        required=True,
+    )
+    add_runtime_options(rf_source_pulse_configure)
+
     source_sub = source_parser.add_subparsers(dest="command", required=True)
 
     source_idn = source_sub.add_parser("idn", help="Query source *IDN?")

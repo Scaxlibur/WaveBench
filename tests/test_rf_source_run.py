@@ -33,11 +33,18 @@ from wavebench.instruments.rf_source_extensions import (
     RfObserved,
     RfPortSnapshot,
     RfProtectionStatus,
+    RfPulseConfigureRequest,
+    RfPulseConfigureResult,
+    RfPulseMode,
+    RfPulsePolarity,
+    RfPulseSnapshot,
+    RfPulseSource,
     RfPulseState,
     RfSourceSnapshot,
     RfSweepState,
     rf_source_cw_operation_artifact,
     rf_source_modulation_operation_artifact,
+    rf_source_pulse_operation_artifact,
     RfOutputRequest,
     RfOutputResult,
     rf_source_output_operation_artifact,
@@ -113,6 +120,20 @@ def _modulation_plan(
         f'modulation_kind = "{modulation_kind}"\n'
         f"{value_field} = {value}\n"
         "internal_frequency_hz = 1000\n",
+        encoding="utf-8",
+    )
+    return load_run_plan(path)
+
+
+def _pulse_plan(directory: str):
+    path = Path(directory) / "plan.toml"
+    path.write_text(
+        "[[steps]]\n"
+        'kind = "rf_source.pulse_configure"\n'
+        'port_id = "rf_out"\n'
+        "period_s = 0.001\n"
+        "width_s = 0.0001\n"
+        'polarity = "inverted"\n',
         encoding="utf-8",
     )
     return load_run_plan(path)
@@ -516,6 +537,148 @@ def test_rf_source_modulation_step_has_write_intent_and_separate_artifact_namesp
             run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
 
         rf_service.configure_modulation_with_artifact.assert_called_once_with(request)
+        assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
+        run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
+        assert run_data["rf_source_operations"] == [artifact]
+
+
+def test_rf_source_pulse_plan_normalizes_the_disabled_internal_single_subset() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _pulse_plan(directory)
+        assert plan.steps[0].fields == {
+            "port_id": "rf_out",
+            "period_s": 0.001,
+            "width_s": 0.0001,
+            "polarity": "inverted",
+        }
+
+        invalid_width_path = Path(directory) / "invalid-width.toml"
+        invalid_width_path.write_text(
+            "[[steps]]\n"
+            'kind = "rf_source.pulse_configure"\n'
+            'port_id = "rf_out"\n'
+            "period_s = 0.001\n"
+            "width_s = 0.001\n"
+            'polarity = "normal"\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="width_s must be less than period_s"):
+            load_run_plan(invalid_width_path)
+
+        invalid_polarity_path = Path(directory) / "invalid-polarity.toml"
+        invalid_polarity_path.write_text(
+            "[[steps]]\n"
+            'kind = "rf_source.pulse_configure"\n'
+            'port_id = "rf_out"\n'
+            "period_s = 0.001\n"
+            "width_s = 0.0001\n"
+            'polarity = "external"\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="polarity must be one of normal, inverted"):
+            load_run_plan(invalid_polarity_path)
+
+
+def test_rf_source_pulse_step_requires_capability_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory, access="read_write"), logger=CommandLogger())
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor("rf_source.idn", "rf_source.snapshot"),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="rf_source.pulse_configure"):
+                service.run(_pulse_plan(directory))
+
+    open_services.assert_not_called()
+
+
+def test_rf_source_pulse_step_rejects_read_only_access_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory), logger=CommandLogger())
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor(
+                "rf_source.idn",
+                "rf_source.snapshot",
+                "rf_source.pulse_configure",
+            ),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="access policy 'read_only'"):
+                service.run(_pulse_plan(directory))
+
+    open_services.assert_not_called()
+
+
+def test_rf_source_pulse_step_has_write_intent_and_separate_artifact_namespace() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _pulse_plan(directory)
+        config = _config(directory, access="read_write")
+        intent = build_execution_intent(plan, config)
+        assert intent.operations[0]["operation"] == "rf_source.pulse_configure"
+        assert intent.operations[0]["effect"] == "write"
+        assert intent.operations[0]["parameters"] == {
+            "port_id": "rf_out",
+            "period_s": 0.001,
+            "width_s": 0.0001,
+            "polarity": "inverted",
+        }
+
+        request = RfPulseConfigureRequest(
+            port_id="rf_out",
+            period_s=0.001,
+            width_s=0.0001,
+            polarity=RfPulsePolarity.INVERTED,
+        )
+        result_value = RfPulseConfigureResult(
+            port_id="rf_out",
+            period_s=0.001,
+            width_s=0.0001,
+            polarity=RfPulsePolarity.INVERTED,
+        )
+        preflight_snapshot = _snapshot()
+        postcondition_snapshot = _snapshot()
+        postcondition_pulse_snapshot = RfPulseSnapshot(
+            port_id="rf_out",
+            source=RfPulseSource.INTERNAL,
+            mode=RfPulseMode.SINGLE,
+            period_s=0.001,
+            width_s=0.0001,
+            polarity=RfPulsePolarity.INVERTED,
+            state=RfPulseState.DISABLED,
+        )
+        artifact = rf_source_pulse_operation_artifact(
+            request=request,
+            result=result_value,
+            preflight_snapshot=preflight_snapshot,
+            postcondition_snapshot=postcondition_snapshot,
+            postcondition_pulse_snapshot=postcondition_pulse_snapshot,
+        )
+        rf_service = SimpleNamespace(
+            configure_pulse_with_artifact=Mock(return_value=(result_value, artifact)),
+            audit_snapshot=lambda: None,
+        )
+
+        class OfflineRfRunService(RunService):
+            @contextmanager
+            def _run_instrument_services(self, run_plan):
+                del run_plan
+                yield RunInstrumentServices(rf_source=rf_service)
+
+            def _run_safety_guards(self, run_plan, *, services=None):
+                del run_plan, services
+
+        descriptor = _descriptor(
+            "rf_source.idn",
+            "rf_source.snapshot",
+            "rf_source.pulse_configure",
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=descriptor,
+        ):
+            run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
+
+        rf_service.configure_pulse_with_artifact.assert_called_once_with(request)
         assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
         run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
         assert run_data["rf_source_operations"] == [artifact]

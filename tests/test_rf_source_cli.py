@@ -15,10 +15,13 @@ from wavebench.instruments.rf_source_extensions import (
     RfModulationResult,
     RfOutputRequest,
     RfOutputResult,
+    RfPulseConfigureRequest,
+    RfPulseConfigureResult,
+    RfPulsePolarity,
 )
 
 
-def test_rf_source_parser_accepts_read_only_cw_and_output_commands() -> None:
+def test_rf_source_parser_accepts_cw_modulation_pulse_and_output_commands() -> None:
     identity = build_parser().parse_args(
         ["rf-source", "idn", "--config", "rf.toml", "--resource", "TCPIP::rf::INSTR"]
     )
@@ -71,6 +74,21 @@ def test_rf_source_parser_accepts_read_only_cw_and_output_commands() -> None:
             "1000",
         ]
     )
+    pulse = build_parser().parse_args(
+        [
+            "rf-source",
+            "pulse",
+            "configure",
+            "--port",
+            "rf_out",
+            "--period-s",
+            "0.001",
+            "--width-s",
+            "0.0001",
+            "--polarity",
+            "inverted",
+        ]
+    )
 
     assert (identity.domain, identity.command) == ("rf-source", "idn")
     assert identity.config == "rf.toml"
@@ -91,6 +109,14 @@ def test_rf_source_parser_accepts_read_only_cw_and_output_commands() -> None:
     assert modulation_fm.frequency_deviation_hz == 10_000.0
     assert modulation_pm.modulation_command == "configure-pm"
     assert modulation_pm.phase_deviation_rad == 1.5
+    assert (pulse.domain, pulse.command, pulse.pulse_command) == (
+        "rf-source",
+        "pulse",
+        "configure",
+    )
+    assert pulse.period_s == 0.001
+    assert pulse.width_s == 0.0001
+    assert pulse.polarity == "inverted"
 
 
 def test_rf_source_cli_dispatches_identity_and_typed_snapshot() -> None:
@@ -280,6 +306,51 @@ def test_rf_source_cli_dispatches_each_internal_sine_modulation_request() -> Non
             {},
         ),
     ]
+
+
+def test_rf_source_cli_dispatches_disabled_internal_single_pulse_request() -> None:
+    service = Mock()
+    service.configure_pulse.return_value = RfPulseConfigureResult(
+        port_id="rf_out",
+        period_s=0.001,
+        width_s=0.0001,
+        polarity=RfPulsePolarity.INVERTED,
+    )
+
+    stdout = io.StringIO()
+    with patch("wavebench.cli._load_rf_source_service", return_value=service), redirect_stdout(stdout):
+        assert main(
+            [
+                "--json",
+                "rf-source",
+                "pulse",
+                "configure",
+                "--port",
+                "rf_out",
+                "--period-s",
+                "0.001",
+                "--width-s",
+                "0.0001",
+                "--polarity",
+                "inverted",
+            ]
+        ) == 0
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"] == {
+        "port_id": "rf_out",
+        "period_s": 0.001,
+        "width_s": 0.0001,
+        "polarity": "inverted",
+    }
+    service.configure_pulse.assert_called_once_with(
+        RfPulseConfigureRequest(
+            port_id="rf_out",
+            period_s=0.001,
+            width_s=0.0001,
+            polarity=RfPulsePolarity.INVERTED,
+        )
+    )
 
 
 def test_rf_source_resource_override_does_not_touch_source_config() -> None:
