@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     scope_parser = subparsers.add_parser("scope", help="Oscilloscope commands")
     source_parser = subparsers.add_parser("source", help="Signal generator commands")
+    rf_source_parser = subparsers.add_parser("rf-source", help="RF signal source commands")
     power_parser = subparsers.add_parser("power", help="Power supply commands")
     dmm_parser = subparsers.add_parser("dmm", help="Digital multimeter commands")
     sweep_parser = subparsers.add_parser("sweep", help="Source/scope sweep commands")
@@ -96,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capability_explain.add_argument(
         "--kind",
-        choices=("scope", "source", "power", "dmm"),
+        choices=("scope", "source", "rf_source", "power", "dmm"),
         default=None,
         help="Instrument kind when selecting a configured driver / 仪器类型",
     )
@@ -153,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plugin_list.add_argument(
         "--kind",
-        choices=("scope", "source", "power", "dmm"),
+        choices=("scope", "source", "rf_source", "power", "dmm"),
         default=None,
         help="Filter plugins by instrument kind / 按仪器类型过滤",
     )
@@ -643,6 +644,15 @@ def build_parser() -> argparse.ArgumentParser:
     protection_set.add_argument("--ocp-threshold", type=float, default=None)
     protection_set.add_argument("--ocp", choices=["on", "off"], default=None)
     add_runtime_options(protection_set)
+
+    rf_source_sub = rf_source_parser.add_subparsers(dest="command", required=True)
+    rf_source_idn = rf_source_sub.add_parser("idn", help="Query RF source *IDN?")
+    add_runtime_options(rf_source_idn)
+    rf_source_status = rf_source_sub.add_parser(
+        "status",
+        help="Query a typed, read-only RF source snapshot",
+    )
+    add_runtime_options(rf_source_status)
 
     source_sub = source_parser.add_subparsers(dest="command", required=True)
 

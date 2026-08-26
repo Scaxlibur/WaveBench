@@ -195,6 +195,15 @@ def _doctor_targets(config: WaveBenchConfig) -> list[DoctorTarget]:
                 expected_idn_tokens=_driver_expected_tokens(config.source.driver),
             )
         )
+    if config.rf_source is not None:
+        targets.append(
+            DoctorTarget(
+                name="rf_source",
+                driver=config.rf_source.driver,
+                resource=config.rf_source.resource,
+                expected_idn_tokens=_driver_expected_tokens(config.rf_source.driver),
+            )
+        )
     if config.power is not None:
         targets.append(
             DoctorTarget(

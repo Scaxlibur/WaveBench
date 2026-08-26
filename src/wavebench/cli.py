@@ -99,6 +99,7 @@ from .plugins.registry import build_plugin_registry, has_doctor_errors, plugin_d
 from .plugins.scpi import has_scpi_doctor_errors, load_scpi_plugin, probe_scpi_plugin, scpi_plugin_doctor_records
 from .services.scope_service import ScopeService
 from .services.source_service import SourceService
+from .services.rf_source_service import RfSourceService
 from .services.power_service import PowerService
 from .services.dmm_service import DmmService
 from .services.run_plan import format_run_plan_schema, load_run_plan
@@ -195,6 +196,13 @@ def _load_source_service(args: argparse.Namespace) -> SourceService:
     if probe_timeout_ms is not None:
         config = config.with_connection_timeout_ms(probe_timeout_ms)
     return SourceService(config=config, logger=CommandLogger())
+
+
+def _load_rf_source_service(args: argparse.Namespace) -> RfSourceService:
+    config = load_config(args.config)
+    if args.resource:
+        config = config.with_rf_source_resource(args.resource)
+    return RfSourceService(config=config, logger=CommandLogger())
 
 
 def _load_power_service(args: argparse.Namespace) -> PowerService:
@@ -1519,6 +1527,18 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "set-duty":
                 _print_source_status(service.set_square_duty_cycle(channel=args.channel, duty_percent=args.duty_percent))
+                return 0
+        if args.domain == "rf-source":
+            service = _load_rf_source_service(args)
+            if args.command == "idn":
+                print(service.idn())
+                return 0
+            if args.command == "status":
+                result = service.snapshot()
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
                 return 0
         if args.domain == "sweep":
             service = _load_sweep_service(args)
