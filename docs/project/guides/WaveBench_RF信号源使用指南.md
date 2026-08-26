@@ -110,7 +110,7 @@ rf_source.trigger_status
 
 它读取 Pulse trigger mode、external trigger edge、external gate polarity、Sweep mode、Sweep period trigger 与 Sweep point trigger 的封闭类型化状态。该操作是 `stateful_read`，不读取普通 RF snapshot，不发送 setter、RF 输出、`*TRG`、`:SWE:EXEC` 或后面板配置命令。
 
-入口仍由 `rf_source.trigger_snapshot` capability 和目标端口的 `TRIGGER / READ` profile 门控。DSG830 当前 production descriptor 不声明该 capability，因此日常配置会在建立 session 前被拒绝。它只适用于非 production 的离线测试 descriptor 或后续私有零写诊断；`rf_out` 表示受这些配置影响的 RF 输出，不是物理 trigger／sync connector。外部 trigger、arm／fire、后面板接口和同步仍需明确物理接线、电气边界与 A5 证据。
+入口仍由 `rf_source.trigger_snapshot` capability 和目标端口的 `TRIGGER / READ` profile 门控。DSG830 当前 production descriptor 不声明该 capability，因此日常配置会在建立 session 前被拒绝。它只适用于非 production 的离线测试 descriptor 或源码 checkout 中的私有零写诊断；后者保持 `read_only`、禁用读重试，成功预算为 22 次 query 与零 write。`rf_out` 表示受这些配置影响的 RF 输出，不是物理 trigger／sync connector。外部 trigger、arm／fire、后面板接口和同步仍需明确物理接线、电气边界与 A5 证据。
 
 ## run plan 中的 RF 步骤
 
