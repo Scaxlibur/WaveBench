@@ -8,9 +8,9 @@
 
 | 范围 | 当前状态 | 说明 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | M0–M3 合同完成；M4 Pulse 离线完成 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出、内部正弦 AM／FM／PM，以及 internal／single Pulse 的类型合同、Service、CLI、run 路径与 artifact；按模式调制关闭仅用于本地证据与私有恢复。production 能力由各插件证据逐项决定。 |
-| DSG830 包 `0.2.0` | M0–M3 离线完成；M4 Pulse 离线完成；A4 的 AM、FM 已通过，PM 待定位 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP`、内部正弦 AM／FM／PM 和 internal／single Pulse 映射；production descriptor 仅声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 和 `rf_source.output`。 |
-| 真实仪器证据 | A1、A2、A3 已完成；A4 的 AM、FM 已通过，PM 尚无合格证据；A4 Pulse 工具待实机执行；A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW。 |
+| Core `0.8.25` 开发线 | M0–M3 合同完成；M4 Pulse 已提升 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出、内部正弦 AM／FM／PM，以及 internal／single Pulse 的类型合同、Service、CLI、run 路径与 artifact；按模式调制关闭仅用于本地证据与私有恢复。production 能力由各插件证据逐项决定。 |
+| DSG830 包 `0.2.0` | M0–M3 离线完成；M4 Pulse 的 A4 已通过；A4 的 AM、FM 已通过，PM 待定位 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP`、内部正弦 AM／FM／PM 和 internal／single Pulse 映射；production descriptor 声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output` 和 `rf_source.pulse_configure`。 |
+| 真实仪器证据 | A1、A2、A3、A4 Pulse 已完成；A4 的 AM、FM 已通过，PM 尚无合格证据；A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW，A4 Pulse 提升 OFF-only Pulse 配置。 |
 
 ## 双仓库交付规则
 
@@ -31,7 +31,7 @@
 | M1 | 离线完成；A3 已完成 | OFF-only CW 配置 | `:FREQ`／`:LEV` 映射与独立回读 | typed request／result、Service、CLI、run step、artifact、fake 测试与受控 A3 证据已完成；DSG830 production 已开放 `rf_source.cw_configure`。 |
 | M2 | 离线完成；A2 已完成 | RF 输出安全事务 | `:OUTP` ON/OFF 的单次映射；Core 独立 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次受 guard 的 OFF recovery；DSG830 production 已开放 `rf_source.output`。 |
 | M3 | 离线完成；A4 的 AM、FM 已通过，PM 待定位 | 声明式内部正弦 AM／FM／PM profile、配置事务、CLI、run 与 artifact；按模式关闭仅用于本地证据与私有恢复 | 手册范围内的内部 Sine AM／FM／PM 映射、严格 readback、单模式 RF-OFF evidence harness 与私有恢复路径 | 只在 RF OFF、所有调制模式 disabled、profile 匹配且 postcondition 成立时写入；production capability 等待完整 A4。 |
-| M4（Pulse） | 离线完成；A4 Pulse 待实机执行 | internal／single Pulse profile、OFF-only 配置事务、CLI、run 与 artifact | `:PULM:SOUR INT`、`:PULM:MODE SING`、period／width／polarity，固定以 `:PULM:STAT OFF` 收尾 | 初始或写后 RF 输出、调制、Pulse、Sweep、protection 不满足时拒绝；不触发、不使用后面板 Pulse I/O；production capability 等待证据。 |
+| M4（Pulse） | 离线完成；A4 Pulse 已通过 | internal／single Pulse profile、OFF-only 配置事务、CLI、run 与 artifact | `:PULM:SOUR INT`、`:PULM:MODE SING`、period／width／polarity，固定以 `:PULM:STAT OFF` 收尾 | 初始或写后 RF 输出、调制、Pulse、Sweep、protection 不满足时拒绝；不触发、不使用后面板 Pulse I/O；DSG830 production 已开放 `rf_source.pulse_configure`。 |
 | M4（Step Sweep） | 未开始 | frequency-only Step Sweep 合同 | 待实现 | trigger／fire 只能由专项安全规则与实机证据提升。 |
 
 ## Seed：历史种子包
@@ -107,7 +107,7 @@ M4 当前先完成 Pulse，再处理 frequency-only Step Sweep。`RfPortSnapshot
 
 Pulse 只覆盖 `rf_out` 的 internal／single 子集。request 只包含 period、width 和 polarity；Core 在写入前要求 RF 输出、调制、Pulse、Sweep 均关闭且无活动 protection，写后独立读回 internal／single、全部请求字段和 Pulse 关闭状态。driver 的固定 sequence 以 `:PULM:STAT OFF` 收尾。它不控制 `:PULM:OUT`、RF 输出或任何 trigger，失败时不重试、不追加恢复 setter。
 
-源码 checkout 的 `tools/a4_pulse_evidence.py` 与资源无关的 setup 模板为实机证据提供受控入口。静态预检要求独立 `read_only` RF 配置、关闭读重试、精确的 production descriptor 和 50 Ω 端接声明；显式 `--execute` 才在内存中建立临时 `read_write` descriptor。成功路径固定为初始 snapshot、一次 Pulse 配置、独立配置读回和最终 snapshot，预期 38 次 query、6 次配置 write，并确认 RF 与 Pulse 仍关闭。`--diagnose` 保持 `read_only`，固定 22 次 query、零 write。两种模式都不读取 scope、不使用 CH1／CH2、不发送 trigger，证据以 `0600` 保存且不包含资源或原始响应。
+源码 checkout 的 `tools/a4_pulse_evidence.py` 与资源无关的 setup 模板完成了 A4 Pulse 受控验收。静态预检要求独立 `read_only` RF 配置、关闭读重试、精确的 production descriptor 和 50 Ω 端接声明；显式 `--execute` 才在内存中建立临时 `read_write` descriptor。两种已声明 polarity 都通过初始 snapshot、一次 Pulse 配置、独立配置读回和最终 snapshot，均为 38 次 query、6 次配置 write，并确认 RF 与 Pulse 仍关闭。`--diagnose` 保持 `read_only`，固定 22 次 query、零 write。两种模式都不读取 scope、不使用 CH1／CH2、不发送 trigger，证据以 `0600` 保存且不包含资源或原始响应。证据复核后，DSG830 production descriptor 已声明 `rf_source.pulse_configure`；historical harness 现在会拒绝重跑。
 
 Step Sweep、Pulse trigger、外部 trigger、后面板辅助输出、参考时钟和同步仍未实现。fake descriptor 可以覆盖后续 trigger／fire 事务；production descriptor 只有在 A4 或 A5 对应证据具备后才能声明相关 capability。
 

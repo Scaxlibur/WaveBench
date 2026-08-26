@@ -23,7 +23,7 @@
 | CW 频率／dBm 功率 | 已开放 | A3 后已开放 | 仅目标 RF 输出明确 OFF 时的单字段写入。 |
 | RF ON/OFF | 已开放 | A2 后已开放 | ON 需要完整端口 safety 配置与 fresh preflight。 |
 | 内部正弦 AM／FM／PM | M3 离线合同与受限恢复路径已完成 | 未开放 | A4 尚无覆盖三种模式的完整合格证据前，DSG830 会在 transport I/O 前拒绝该 capability。 |
-| Pulse | M4 离线合同、CLI／run 与受控 evidence harness 已完成 | 未开放 | 当前只限 internal／single 配置并强制保持 Pulse OFF；production descriptor 会拒绝。 |
+| Pulse | M4 离线合同与受控 evidence 已完成 | A4 Pulse 后已开放 | 当前只限 internal／single 配置并强制保持 Pulse OFF；需要 `read_write` 与 fresh OFF-only preflight。 |
 | Sweep、trigger | 未完成 | 未开放 | 不应尝试调用或绕过。 |
 
 生产 descriptor 是否声明 capability 是实际边界。Core 中存在 CLI、run step 或 driver 方法，不等于当前仪器已经获准执行该操作。
@@ -88,6 +88,7 @@ wavebench rf-source set-frequency --config wavebench.toml --port rf_out 1000000
 wavebench rf-source set-power --config wavebench.toml --port rf_out -40
 wavebench rf-source output --config wavebench.toml --port rf_out on
 wavebench rf-source output --config wavebench.toml --port rf_out off
+wavebench rf-source pulse configure --config wavebench.toml --port rf_out --period-s 0.001 --width-s 0.0001 --polarity normal
 ```
 
 `output on` 不是普通 setter。它会在写入前重新读取 RF 状态，确认频率、功率、实际端接、调制、Pulse、Sweep 和 protection 均满足安全合同。任何关键状态缺失或不一致都会在 ON 前拒绝；不应依赖先前一次成功查询。
@@ -114,6 +115,13 @@ port_id = "rf_out"
 [[steps]]
 kind = "rf_source.output_disable"
 port_id = "rf_out"
+
+[[steps]]
+kind = "rf_source.pulse_configure"
+port_id = "rf_out"
+period_s = 0.001
+width_s = 0.0001
+polarity = "normal"
 ```
 
 先运行 `wavebench run check`，再运行只读的 `wavebench run verify`。只有在接线、端接、输出状态和设备身份均已复核时，才执行 `wavebench run plan`。运行计划不会把普通 source 的 restore 或 Vpp safety 规则套用到 RF 端口。
@@ -165,9 +173,9 @@ wavebench rf-source pulse configure --port PORT_ID --period-s SECONDS --width-s 
 rf_source.pulse_configure
 ```
 
-当前 DSG830 production descriptor 不声明 `rf_source.pulse_configure`，因此普通 CLI 或 run plan 会在打开 transport 前拒绝。这一限制是预期行为，不应通过临时 descriptor 或原始 SCPI 绕过。
+DSG830 production descriptor 已声明 `rf_source.pulse_configure`。普通 CLI 或 run plan 仍要求 `read_write`、目标 RF 输出／调制／Pulse／Sweep 关闭、无活动 protection，以及 descriptor 声明的 internal／single profile；任何条件不满足都会在写入前拒绝。
 
-源码 checkout 的 `tools/a4_pulse_evidence.py` 是专门的受控验证工具。它只接受 internal／single、period、width 和 polarity，并在每次配置后保持 Pulse OFF；初始、写后和最终状态都要求 RF 输出、调制、Pulse、Sweep 关闭且无活动 protection。它不调用 RF output、不使用后面板 Pulse I/O、不发送 trigger、不读取 CH1／CH2。`--diagnose` 保持 `read_only` 且零写，`--execute` 才允许一次受审计的配置写入。两种记录均不构成生产 capability 提升，直至实机证据完成并经复核。
+源码 checkout 的 `tools/a4_pulse_evidence.py` 是已完成的受控验收工具。它只接受 internal／single、period、width 和 polarity，并在每次配置后保持 Pulse OFF；初始、写后和最终状态都要求 RF 输出、调制、Pulse、Sweep 关闭且无活动 protection。它不调用 RF output、不使用后面板 Pulse I/O、不发送 trigger、不读取 CH1／CH2。`--diagnose` 保持 `read_only` 且零写，`--execute` 才允许一次受审计的配置写入。两种 polarity 的证据均通过并经复核，DSG830 已开放该 capability；historical harness 在提升后会拒绝重跑。
 
 ## 上机前检查清单
 
