@@ -1058,6 +1058,23 @@ _BUILTIN_SPECS = (
         safe_alternatives=("rf_source.snapshot",),
     ),
     _spec(
+        "rf_source.modulation_configure",
+        "rf_source",
+        required_capabilities=("rf_source.snapshot", "rf_source.modulation_configure"),
+        effect="write",
+        changed_fields=(
+            "rf_source.modulation.kind",
+            "rf_source.modulation.source",
+            "rf_source.modulation.waveform",
+            "rf_source.modulation.value",
+            "rf_source.modulation.internal_frequency_hz",
+            "rf_source.modulation.enabled",
+        ),
+        restore_coverage="none",
+        risk_flags=("rf_output_must_be_off", "modulation_state", "state_drift"),
+        safe_alternatives=("rf_source.snapshot",),
+    ),
+    _spec(
         "rf_source.output_enable",
         "rf_source",
         required_capabilities=("rf_source.snapshot", "rf_source.output"),
