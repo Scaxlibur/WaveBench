@@ -22,6 +22,7 @@ from wavebench.errors import (
 )
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.instruments.rf_source_extensions import rf_source_snapshot_operation_artifact
 from wavebench.instruments.source_extensions import (
     PatchAction,
     PatchValue,
@@ -52,6 +53,7 @@ from wavebench.instruments.source_extensions import (
 from wavebench.logging import CommandLogger
 from wavebench.services.power_service import PowerService
 from wavebench.services.dmm_service import DmmService
+from wavebench.services.rf_source_service import RfSourceService
 from wavebench.services.frequency_response import (
     analyze_frequency_response_point,
     build_fit_document,
@@ -142,6 +144,8 @@ class RunInstrumentServices:
         compare=False,
         repr=False,
     )
+    # Append-only: retain the positional layout of existing run service bundles.
+    rf_source: RfSourceService | None = None
 
     def audit_snapshot(self) -> dict[str, Any] | None:
         """Return transport-native counters without deriving them from logs."""
@@ -152,6 +156,7 @@ class RunInstrumentServices:
             ("source", self.source),
             ("power", self.power),
             ("dmm", self.dmm),
+            ("rf_source", self.rf_source),
         ):
             if service is None:
                 continue
@@ -238,6 +243,17 @@ class RunService:
                     instrument="source",
                     resource=source.resource,
                     idn=self._source_service().idn(),
+                )
+            )
+        if "rf_source" in instruments:
+            rf_source = self.config.rf_source
+            if rf_source is None or not rf_source.resource:
+                raise ConfigError("rf_source resource is required by this run plan")
+            records.append(
+                RunPreflightRecord(
+                    instrument="rf_source",
+                    resource=rf_source.resource,
+                    idn=self._rf_source_service().idn(),
                 )
             )
         if "power" in instruments:
@@ -401,6 +417,8 @@ class RunService:
                     ensure_calibration_dependencies()
             elif step.kind == "source.status":
                 add("source", "source.status")
+            elif step.kind == "rf_source.status":
+                add("rf_source", "rf_source.snapshot")
             elif step.kind == "source.set_freq":
                 add("source", "source.set_frequency")
                 source = self.config.source
@@ -567,6 +585,7 @@ class RunService:
 
             records: list[RunStepRecord] = []
             source_operations: list[dict[str, Any]] = []
+            rf_source_operations: list[dict[str, Any]] = []
             run_json_path = run_dir / "run.json"
             summary_csv_path = run_dir / "summary.csv"
             restore_state: list[RestorableSourceState] | None = None
@@ -588,6 +607,10 @@ class RunService:
             def append_source_operation_artifact(value: object) -> None:
                 if isinstance(value, dict):
                     source_operations.append(value)
+
+            def append_rf_source_operation_artifact(value: object) -> None:
+                if isinstance(value, dict):
+                    rf_source_operations.append(value)
 
             def refresh_provenance() -> None:
                 instrument_io = services.audit_snapshot()
@@ -627,6 +650,7 @@ class RunService:
                     restore_error=restore_error,
                     provenance=provenance,
                     source_operations=source_operations,
+                    rf_source_operations=rf_source_operations,
                 )
 
             services.close_reporters.append(report_close_errors)
@@ -674,9 +698,15 @@ class RunService:
                     append_source_operation_artifact(
                         record.artifact.get("source_operation")
                     )
+                    append_rf_source_operation_artifact(
+                        record.artifact.get("rf_source_operation")
+                    )
                     if step_failure is not None:
                         append_source_operation_artifact(
                             getattr(step_failure, "source_operation_artifact", None)
+                        )
+                        append_rf_source_operation_artifact(
+                            getattr(step_failure, "rf_source_operation_artifact", None)
                         )
                     safety_gate = self._safety_gate_for_step(plan, step)
                     gate_triggered = safety_gate["enabled"] and record.status in {
@@ -776,6 +806,7 @@ class RunService:
                     restore_error=restore_error,
                     provenance=provenance,
                     source_operations=source_operations,
+                    rf_source_operations=rf_source_operations,
                 )
                 if restore_error is not None:
                     raise ConfigError(
@@ -792,6 +823,9 @@ class RunService:
                     failure = exc.cause
                 append_source_operation_artifact(
                     getattr(failure, "source_operation_artifact", None)
+                )
+                append_rf_source_operation_artifact(
+                    getattr(failure, "rf_source_operation_artifact", None)
                 )
                 restore_error = restore_source_state(
                     restore_state,
@@ -815,6 +849,7 @@ class RunService:
                     restore_error=restore_error,
                     provenance=provenance,
                     source_operations=source_operations,
+                    rf_source_operations=rf_source_operations,
                 )
                 if isinstance(exc, _FrequencyResponseExecutionError):
                     raise failure from None
@@ -869,6 +904,7 @@ class RunService:
                     restore_error=restore_error,
                     provenance=provenance,
                     source_operations=source_operations,
+                    rf_source_operations=rf_source_operations,
                 )
                 raise ConfigError("run plan source state restore failed: " + restore_error["message"])
 
@@ -886,6 +922,7 @@ class RunService:
                 restore_error=None,
                 provenance=provenance,
                 source_operations=source_operations,
+                rf_source_operations=rf_source_operations,
             )
             result = RunResult(
                 run_dir=run_dir,
@@ -1133,6 +1170,9 @@ class RunService:
         elif step.kind == "source.status":
             status = self._source_service(services=services).status(channel=step.fields.get("channel"))
             artifact = {"source_status": _status_payload(status)}
+        elif step.kind == "rf_source.status":
+            snapshot = self._rf_source_service(services=services).snapshot()
+            artifact = {"rf_source_operation": rf_source_snapshot_operation_artifact(snapshot)}
         elif step.kind == "source.basic_configure_v2":
             fields = step.fields
             _, source_operation = self._source_service(services=services).configure_basic_v2(
@@ -2475,6 +2515,7 @@ class RunService:
             source: SourceService | None = None
             power: PowerService | None = None
             dmm: DmmService | None = None
+            rf_source: RfSourceService | None = None
             source_guard = SourceStateGuard()
             power_guard = PowerStateGuard()
 
@@ -2567,6 +2608,28 @@ class RunService:
                     session_state=bootstrap.session_state,
                     lease=dmm_lease,
                 )
+            if "rf_source" in instruments:
+                logger = CommandLogger()
+                rf_source_config = self.config.rf_source
+                if rf_source_config is None or not rf_source_config.resource:
+                    raise ConfigError("rf_source resource is required by this run plan")
+                rf_source_lease = lease_for(rf_source_config.resource)
+                bootstrap = RfSourceService(
+                    config=self.config,
+                    logger=logger,
+                    lease=rf_source_lease,
+                )
+                session = bootstrap.open_session()
+                stack.callback(close_session, session, "rf_source", bootstrap.transport)
+                rf_source = RfSourceService(
+                    config=self.config,
+                    logger=logger,
+                    session=session,
+                    descriptor=bootstrap.descriptor,
+                    transport=bootstrap.transport,
+                    session_state=bootstrap.session_state,
+                    lease=rf_source_lease,
+                )
 
             yield RunInstrumentServices(
                 scope=scope,
@@ -2574,13 +2637,14 @@ class RunService:
                 power=power,
                 dmm=dmm,
                 close_errors=close_errors,
+                rf_source=rf_source,
             )
 
     def _plan_resource_values(self, instruments: set[str]) -> list[str]:
         resources: list[str] = []
         if "scope" in instruments:
             resources.append(self.config.connection.resource)
-        for kind in ("source", "power", "dmm"):
+        for kind in ("source", "rf_source", "power", "dmm"):
             if kind not in instruments:
                 continue
             section = getattr(self.config, kind)
@@ -2598,6 +2662,15 @@ class RunService:
         if services is not None and services.source is not None:
             return services.source
         return SourceService(config=self.config, logger=CommandLogger())
+
+    def _rf_source_service(
+        self,
+        *,
+        services: RunInstrumentServices | None = None,
+    ) -> RfSourceService:
+        if services is not None and services.rf_source is not None:
+            return services.rf_source
+        return RfSourceService(config=self.config, logger=CommandLogger())
 
     def _dmm_service(self, *, services: RunInstrumentServices | None = None) -> DmmService:
         if services is not None and services.dmm is not None:

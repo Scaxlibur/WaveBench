@@ -23,6 +23,7 @@ _STEP_OPERATIONS = {
     "scope.capture": "scope.capture",
     "sweep.frequency_response": "scope.capture_waveforms",
     "source.status": "source.status",
+    "rf_source.status": "rf_source.snapshot",
     "source.arb_load": "source.arbitrary_upload",
     "source.set_freq": "source.set_frequency",
     "source.set_func": "source.set_function",

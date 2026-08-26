@@ -21,6 +21,7 @@ EXECUTABLE_STEP_KINDS = {
     "scope.capture",
     "sweep.frequency_response",
     "source.status",
+    "rf_source.status",
     "source.set_freq",
     "source.arb_load",
     "source.set_func",

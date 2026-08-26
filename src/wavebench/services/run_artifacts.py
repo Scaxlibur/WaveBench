@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from wavebench.errors import ensure_error_envelope
+from wavebench.instruments.rf_source_extensions import RF_SOURCE_OPERATION_ARTIFACT_SCHEMA
 from wavebench.instruments.source_extensions import SOURCE_OPERATION_ARTIFACT_SCHEMA
 from wavebench.services.run_plan import RunPlan
 from wavebench.services.source_state import RestorableSourceState
@@ -70,6 +71,32 @@ def _validated_source_operations(
     return source_operations
 
 
+def _validated_rf_source_operations(
+    rf_source_operations: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Accept only schema-labelled RF-source operation artifacts."""
+
+    if rf_source_operations is None:
+        return None
+    if not isinstance(rf_source_operations, list) or any(
+        not isinstance(item, dict) for item in rf_source_operations
+    ):
+        raise TypeError("rf_source_operations must be a list of operation artifact objects")
+    if not rf_source_operations:
+        return None
+    for artifact in rf_source_operations:
+        if artifact.get("schema") != RF_SOURCE_OPERATION_ARTIFACT_SCHEMA:
+            raise ValueError("RF source operation artifact has an unsupported schema")
+        operation = artifact.get("operation")
+        if (
+            not isinstance(operation, str)
+            or not operation.startswith("rf_source.")
+            or operation.strip() != operation
+        ):
+            raise ValueError("RF source operation artifact must have a trimmed rf_source.* operation")
+    return rf_source_operations
+
+
 def write_run_files(
     *,
     plan: RunPlan,
@@ -82,6 +109,7 @@ def write_run_files(
     restore_error: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
     source_operations: list[dict[str, Any]] | None = None,
+    rf_source_operations: list[dict[str, Any]] | None = None,
 ) -> None:
     run_data: dict[str, Any] = {
         "status": status,
@@ -127,6 +155,9 @@ def write_run_files(
     validated_source_operations = _validated_source_operations(source_operations)
     if validated_source_operations is not None:
         run_data["source_operations"] = validated_source_operations
+    validated_rf_source_operations = _validated_rf_source_operations(rf_source_operations)
+    if validated_rf_source_operations is not None:
+        run_data["rf_source_operations"] = validated_rf_source_operations
     run_json_path.write_text(
         json.dumps(run_data, indent=2, ensure_ascii=False),
         encoding="utf-8",
