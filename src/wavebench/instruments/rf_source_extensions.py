@@ -22,7 +22,7 @@ from .contracts import InstrumentDriver
 RF_SOURCE_CONTRACT_VERSION = "wavebench.rf_source.v1"
 RF_SOURCE_SNAPSHOT_SCHEMA = "wavebench.rf_source.snapshot.v1"
 RF_SOURCE_OPERATION_ARTIFACT_SCHEMA = "wavebench.rf_source.operation.v1"
-RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION = "0.8.24"
+RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION = "0.8.25"
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,96}$")
 

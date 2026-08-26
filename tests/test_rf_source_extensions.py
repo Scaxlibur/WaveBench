@@ -102,7 +102,7 @@ def descriptor(**changes: object) -> InstrumentDescriptor:
         option_specs=(),
         permissions=("instrument.io",),
         factory=lambda context: RfDriver(),
-        wavebench_min_version="0.8.24",
+        wavebench_min_version="0.8.25",
         wavebench_max_version="0.9.0",
         rf_source_extensions=extensions(),
     )
