@@ -203,7 +203,7 @@ rf_source.sweep_configure
 
 该子集固定为 `STEP`／`FWD`／`RAMP`／`LIN`，请求只包含起止频率、点数和驻留时间。写前与写后均要求 RF 输出、调制、Pulse、Sweep 关闭且无活动 protection；写后独立读回所有 profile 字段，并要求 Sweep 仍为 disabled。DSG830 driver 固定以 `:SWE:STAT OFF` 收尾，不会发送 `:SWE:EXEC`、任意 `:TRIG:*`、Level Sweep、RF 输出或后面板接口命令。
 
-这不是 production 使用授权。DSG830 production descriptor 尚未声明 `rf_source.sweep_configure`，当前 CLI 和 run plan 对该设备会在打开 transport 前被 capability 门拒绝。专项 evidence harness、实机证据和后续 descriptor 提升完成前，Step Sweep 不上机；CH2 的 50 Ω 端接不改变这一边界。
+这不是 production 使用授权。DSG830 源码 checkout 已提供 `tools/a4_step_sweep_evidence.py` 和无资源 setup 模板：`--diagnose` 保持 `read_only`，固定 25 次查询、零写入；显式 `--execute` 才允许一次受审计的配置，成功路径固定为 41 次查询、9 条 Step Sweep 配置写入。两条路径都不读取 Scope、不操作 RF output、arm、fire 或 trigger。该工具已通过 fake 回归，但尚无实机证据。DSG830 production descriptor 仍未声明 `rf_source.sweep_configure`，当前 CLI 和 run plan 对该设备会在打开 transport 前被 capability 门拒绝；除专项 evidence harness 的明示授权外，Step Sweep 不通过普通 CLI 或 run plan 上机。CH2 的 50 Ω 端接不改变这一边界。
 
 ## 上机前检查清单
 
