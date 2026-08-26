@@ -251,6 +251,7 @@ class RfSweepTriggerMode(StrEnum):
 class RfFeature(StrEnum):
     CW = "cw"
     MODULATION = "modulation"
+    MODULATED_OUTPUT = "modulated_output"
     OUTPUT = "output"
     PULSE = "pulse"
     SWEEP = "sweep"
@@ -512,6 +513,30 @@ class RfModulationProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class RfModulatedOutputProfile:
+    """Bounded profiles that may enable an already modulated RF output.
+
+    This is separate from :class:`RfOutputProfile`: ordinary RF output control
+    remains valid only while modulation is disabled. A descriptor must opt in
+    only after independent evidence covers the active modulation state, output
+    limits, and recovery behavior.
+    """
+
+    maximum_power_dbm: float
+    mode_profiles: tuple[RfModulationModeProfile, ...]
+
+    def __post_init__(self) -> None:
+        _require_finite(self.maximum_power_dbm, "RF modulated-output maximum_power_dbm")
+        if not isinstance(self.mode_profiles, tuple) or not self.mode_profiles or any(
+            not isinstance(profile, RfModulationModeProfile) for profile in self.mode_profiles
+        ):
+            raise ValueError("RF modulated-output mode_profiles have an invalid type")
+        kinds = tuple(profile.kind for profile in self.mode_profiles)
+        if len(set(kinds)) != len(kinds) or tuple(sorted(kinds, key=lambda item: item.value)) != kinds:
+            raise ValueError("RF modulated-output mode_profiles must be sorted and unique")
+
+
+@dataclass(frozen=True, slots=True)
 class RfPulseProfile:
     state_readable: bool
     configuration_readable: bool = False
@@ -713,6 +738,7 @@ RfFeatureProfile: TypeAlias = (
     RfCwProfile
     | RfOutputProfile
     | RfModulationProfile
+    | RfModulatedOutputProfile
     | RfPulseProfile
     | RfSweepProfile
     | RfTriggerProfile
@@ -721,6 +747,7 @@ RfFeatureProfile: TypeAlias = (
 _FEATURE_PROFILE_TYPES: dict[RfFeature, type[RfFeatureProfile]] = {
     RfFeature.CW: RfCwProfile,
     RfFeature.MODULATION: RfModulationProfile,
+    RfFeature.MODULATED_OUTPUT: RfModulatedOutputProfile,
     RfFeature.OUTPUT: RfOutputProfile,
     RfFeature.PULSE: RfPulseProfile,
     RfFeature.SWEEP: RfSweepProfile,
@@ -934,6 +961,53 @@ class RfModulationResult:
             RfModulationKind.FM: RfModulationValueUnit.HZ,
             RfModulationKind.PM: RfModulationValueUnit.RAD,
         }[self.kind]
+
+
+@dataclass(frozen=True, slots=True)
+class RfModulatedOutputRequest:
+    """Enable one RF output only for an exactly read-back modulation profile.
+
+    The operation never configures modulation. The embedded request is the
+    caller's explicit assertion of the already active internal-sine profile
+    that must be read back before and after the one RF-ON write.
+    """
+
+    modulation: RfModulationRequest
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.modulation, RfModulationRequest):
+            raise ValueError("RF modulated-output request requires RfModulationRequest")
+
+    @property
+    def port_id(self) -> str:
+        return self.modulation.port_id
+
+    @property
+    def kind(self) -> RfModulationKind:
+        return self.modulation.kind
+
+
+@dataclass(frozen=True, slots=True)
+class RfModulatedOutputResult:
+    """A modulated RF-output enable confirmed by independent readback."""
+
+    modulation: RfModulationResult
+    write_completed: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.modulation, RfModulationResult):
+            raise ValueError("RF modulated-output result requires RfModulationResult")
+        _require_bool(self.write_completed, "RF modulated-output result write_completed")
+        if self.write_completed is not True:
+            raise ValueError("RF modulated-output enable must complete one RF-ON write")
+
+    @property
+    def port_id(self) -> str:
+        return self.modulation.port_id
+
+    @property
+    def kind(self) -> RfModulationKind:
+        return self.modulation.kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -1578,6 +1652,60 @@ def rf_source_modulation_operation_artifact(
     }
 
 
+def rf_source_modulated_output_operation_artifact(
+    request: RfModulatedOutputRequest,
+    result: RfModulatedOutputResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    preflight_modulation_snapshot: RfModulationSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+    postcondition_modulation_snapshot: RfModulationSnapshot,
+) -> dict[str, object]:
+    """Build typed evidence for one separate modulated RF-output enable.
+
+    The artifact records the declared active profile both before and after the
+    one RF-ON write. It intentionally does not claim that RF OFF or modulation
+    disable was restored; those are separate operations and evidence.
+    """
+
+    if not isinstance(request, RfModulatedOutputRequest):
+        raise TypeError("request must be RfModulatedOutputRequest")
+    if not isinstance(result, RfModulatedOutputResult):
+        raise TypeError("result must be RfModulatedOutputResult")
+    modulation_request = request.modulation
+    modulation_result = result.modulation
+    if (
+        modulation_request.port_id != modulation_result.port_id
+        or modulation_request.kind is not modulation_result.kind
+        or modulation_request.internal_frequency_hz != modulation_result.internal_frequency_hz
+        or modulation_request.value != modulation_result.value
+        or modulation_request.value_unit is not modulation_result.value_unit
+    ):
+        raise ValueError("RF modulated-output request and result must describe the same target")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(preflight_modulation_snapshot, RfModulationSnapshot):
+        raise TypeError("preflight_modulation_snapshot must be RfModulationSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_modulation_snapshot, RfModulationSnapshot):
+        raise TypeError("postcondition_modulation_snapshot must be RfModulationSnapshot")
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "rf_source.modulated_output_enable",
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "preflight_modulation_snapshot": rf_modulation_snapshot_document(
+            preflight_modulation_snapshot
+        ),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+        "postcondition_modulation_snapshot": rf_modulation_snapshot_document(
+            postcondition_modulation_snapshot
+        ),
+    }
+
+
 def rf_source_modulation_disable_operation_artifact(
     request: RfModulationDisableRequest,
     result: RfModulationDisableResult,
@@ -1751,6 +1879,9 @@ __all__ = [
     "RfModulationDisableRequest",
     "RfModulationDisableResult",
     "RfModulationModeProfile",
+    "RfModulatedOutputProfile",
+    "RfModulatedOutputRequest",
+    "RfModulatedOutputResult",
     "RfModulationProfile",
     "RfModulationRequest",
     "RfModulationResult",
@@ -1806,6 +1937,7 @@ __all__ = [
     "rf_sweep_snapshot_document",
     "rf_trigger_snapshot_document",
     "rf_source_modulation_disable_operation_artifact",
+    "rf_source_modulated_output_operation_artifact",
     "rf_source_modulation_operation_artifact",
     "rf_source_pulse_operation_artifact",
     "rf_source_sweep_operation_artifact",

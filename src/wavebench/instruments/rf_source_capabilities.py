@@ -18,6 +18,7 @@ from .rf_source_extensions import (
     RfCwProfile,
     RfFeature,
     RfFeatureDirection,
+    RfModulatedOutputProfile,
     RfModulationProfile,
     RfOutputProfile,
     RfPulseProfile,
@@ -41,6 +42,10 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "rf_source.modulation_disable": (
             "get_rf_modulation_state",
             "disable_rf_modulation",
+        ),
+        "rf_source.modulated_output_enable": (
+            "get_rf_modulation_snapshot",
+            "set_rf_output",
         ),
         "rf_source.pulse_configure": (
             "get_rf_pulse_snapshot",
@@ -94,6 +99,16 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         _validate_modulation_configure_feature(extensions)
     if "rf_source.modulation_disable" in rf_capabilities:
         _validate_modulation_disable_feature(extensions)
+    if "rf_source.modulated_output_enable" in rf_capabilities:
+        if "rf_source.output" not in rf_capabilities:
+            raise ConfigError(
+                "rf_source.modulated_output_enable requires the rf_source.output capability"
+            )
+        if "rf_source.modulation_configure" not in rf_capabilities:
+            raise ConfigError(
+                "rf_source.modulated_output_enable requires the rf_source.modulation_configure capability"
+            )
+        _validate_modulated_output_enable_feature(extensions)
     if "rf_source.pulse_configure" in rf_capabilities:
         _validate_pulse_configure_feature(extensions)
     if "rf_source.sweep_configure" in rf_capabilities:
@@ -203,6 +218,86 @@ def _validate_modulation_disable_feature(extensions: RfSourceDescriptorExtension
         raise ConfigError("rf_source.modulation_disable requires an RF modulation profile")
     if not feature.profile.state_readable:
         raise ConfigError("rf_source.modulation_disable requires readable RF modulation state")
+
+
+def _validate_modulated_output_enable_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    output_feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.OUTPUT),
+        None,
+    )
+    modulation_feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.MODULATION),
+        None,
+    )
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.MODULATED_OUTPUT),
+        None,
+    )
+    if (
+        output_feature is None
+        or RfFeatureDirection.ENABLE not in output_feature.directions
+        or RfFeatureDirection.DISABLE not in output_feature.directions
+        or not isinstance(output_feature.profile, RfOutputProfile)
+        or not output_feature.profile.output_readable
+    ):
+        raise ConfigError(
+            "rf_source.modulated_output_enable requires a readable base RF output profile"
+        )
+    if (
+        modulation_feature is None
+        or RfFeatureDirection.CONFIGURE not in modulation_feature.directions
+        or RfFeatureDirection.READ not in modulation_feature.directions
+        or not isinstance(modulation_feature.profile, RfModulationProfile)
+        or not modulation_feature.profile.configuration_readable
+        or not modulation_feature.profile.mode_profiles
+    ):
+        raise ConfigError(
+            "rf_source.modulated_output_enable requires a readable configurable modulation profile"
+        )
+    if (
+        feature is None
+        or RfFeatureDirection.ENABLE not in feature.directions
+        or not isinstance(feature.profile, RfModulatedOutputProfile)
+    ):
+        raise ConfigError(
+            "rf_source.modulated_output_enable requires a modulated-output feature with enable direction"
+        )
+    if not set(feature.port_ids) <= set(output_feature.port_ids):
+        raise ConfigError(
+            "rf_source.modulated_output_enable ports must also declare the base output feature"
+        )
+    if not set(feature.port_ids) <= set(modulation_feature.port_ids):
+        raise ConfigError(
+            "rf_source.modulated_output_enable ports must also declare the modulation feature"
+        )
+    base_profiles = {
+        profile.kind: profile for profile in modulation_feature.profile.mode_profiles
+    }
+    for profile in feature.profile.mode_profiles:
+        base_profile = base_profiles.get(profile.kind)
+        if base_profile is None:
+            raise ConfigError(
+                "rf_source.modulated_output_enable profile must be declared by modulation"
+            )
+        if (
+            profile.source is not base_profile.source
+            or profile.waveform is not base_profile.waveform
+            or profile.value_unit is not base_profile.value_unit
+            or profile.value_min < base_profile.value_min
+            or profile.value_max > base_profile.value_max
+            or profile.internal_frequency_min_hz < base_profile.internal_frequency_min_hz
+            or profile.internal_frequency_max_hz > base_profile.internal_frequency_max_hz
+        ):
+            raise ConfigError(
+                "rf_source.modulated_output_enable profile must be a subset of modulation"
+            )
+    topology = {port.port_id: port for port in extensions.topology.ports}
+    for port_id in feature.port_ids:
+        port = topology[port_id]
+        if not port.power_min_dbm <= feature.profile.maximum_power_dbm <= port.power_max_dbm:
+            raise ConfigError(
+                "rf_source.modulated_output_enable maximum_power_dbm must be within each port range"
+            )
 
 
 def _validate_pulse_configure_feature(extensions: RfSourceDescriptorExtensions) -> None:
