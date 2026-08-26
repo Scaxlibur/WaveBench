@@ -584,7 +584,7 @@ run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`sourc
 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
 
-### RF 信号源 M0–M2（DSG830 production 已含 A2 output）
+### RF 信号源 M0–M2（DSG830 production 已含 A2 output 与 A3 CW）
 
 `rf_source` 是独立于 `source` 的 kind，不能使用 `source_extensions`、Vpp、数字 channel 或普通 source
 能力。descriptor 必须同时满足以下静态条件：
@@ -603,7 +603,7 @@ capability 的高级配置保持 V1。插件不得把 capability 注册视为
 | --- | --- | --- |
 | `rf_source.idn` | `idn` | `wavebench rf-source idn`、doctor IDN target |
 | `rf_source.snapshot` | `get_rf_snapshot` | `wavebench rf-source status`、`rf_source.status` run step |
-| `rf_source.cw_configure` | `configure_cw` | `rf-source set-frequency`／`set-power`、对应 run step；OFF-only 离线合同 |
+| `rf_source.cw_configure` | `configure_cw` | `rf-source set-frequency`／`set-power`、对应 run step；OFF-only 合同，DSG830 经 A3 复核后已提升 |
 | `rf_source.output` | `set_rf_output` | `rf-source output`、`rf_source.output_enable`／`output_disable` run step；端口级 ON/OFF，受 capability、access、profile 和 fresh safety preflight 共同门禁 |
 
 `RfSourceDriver`、`RfSourceSnapshot`、`RfSourceDescriptorExtensions` 和相关类型均从

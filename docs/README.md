@@ -54,8 +54,8 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 - [设备抽象层](project/design/WaveBench_设备抽象层.md)
 - [多仪器流程设计](project/design/WaveBench_多仪器协同流程设计.md)
 - [sweep 状态保存与恢复](project/design/WaveBench_sweep状态恢复设计.md)
-- [RF 信号源领域设计](project/design/WaveBench_RF信号源设计.md)：当前 M0–M2 合同、端口级输出安全规则与后续写入边界。
-- [RF 信号源开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)：Core／DSG830 双仓库状态与 A1–A5 证据门；DSG830 已完成 A1／A2，仅开放 `rf_source.output` 写入。
+- [RF 信号源领域设计](project/design/WaveBench_RF信号源设计.md)：当前 M0–M2 合同、OFF-only CW／端口级输出安全规则与后续写入边界。
+- [RF 信号源开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)：Core／DSG830 双仓库状态与 A1–A5 证据门；DSG830 已完成 A1／A2／A3，开放 `rf_source.cw_configure` 和 `rf_source.output` 写入。
 - [TUI 终端控制面板](project/guides/WaveBench_TUI终端控制面板.md)
 
 目录分类见 [project/README](project/README.md)。本页只负责入口，不把阶段记录当作当前使用说明。
