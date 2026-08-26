@@ -24,6 +24,7 @@ RF_SOURCE_SNAPSHOT_SCHEMA = "wavebench.rf_source.snapshot.v1"
 RF_SOURCE_MODULATION_STATE_SCHEMA = "wavebench.rf_source.modulation_state.v1"
 RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA = "wavebench.rf_source.modulation_snapshot.v1"
 RF_SOURCE_PULSE_SNAPSHOT_SCHEMA = "wavebench.rf_source.pulse_snapshot.v1"
+RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA = "wavebench.rf_source.sweep_snapshot.v1"
 RF_SOURCE_OPERATION_ARTIFACT_SCHEMA = "wavebench.rf_source.operation.v1"
 RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION = "0.8.25"
 
@@ -49,6 +50,21 @@ def _require_finite(
 ) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
         raise ValueError(f"{label} must be finite")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{label} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{label} must be <= {maximum}")
+
+
+def _require_integer(
+    value: object,
+    label: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} must be an integer")
     if minimum is not None and value < minimum:
         raise ValueError(f"{label} must be >= {minimum}")
     if maximum is not None and value > maximum:
@@ -181,6 +197,22 @@ class RfPulsePolarity(StrEnum):
 class RfSweepState(StrEnum):
     DISABLED = "disabled"
     ENABLED = "enabled"
+
+
+class RfSweepType(StrEnum):
+    STEP = "step"
+
+
+class RfSweepDirection(StrEnum):
+    FORWARD = "forward"
+
+
+class RfSweepShape(StrEnum):
+    RAMP = "ramp"
+
+
+class RfSweepSpacing(StrEnum):
+    LINEAR = "linear"
 
 
 class RfFeature(StrEnum):
@@ -514,9 +546,83 @@ class RfPulseModeProfile:
 @dataclass(frozen=True, slots=True)
 class RfSweepProfile:
     state_readable: bool
+    configuration_readable: bool = False
+    mode_profiles: tuple["RfSweepModeProfile", ...] = ()
 
     def __post_init__(self) -> None:
         _require_bool(self.state_readable, "RF sweep state_readable")
+        _require_bool(self.configuration_readable, "RF sweep configuration_readable")
+        if not isinstance(self.mode_profiles, tuple) or any(
+            not isinstance(profile, RfSweepModeProfile) for profile in self.mode_profiles
+        ):
+            raise ValueError("RF sweep mode_profiles have an invalid type")
+        identities = tuple(
+            (
+                profile.sweep_type.value,
+                profile.direction.value,
+                profile.shape.value,
+                profile.spacing.value,
+            )
+            for profile in self.mode_profiles
+        )
+        if len(set(identities)) != len(identities) or tuple(sorted(identities)) != identities:
+            raise ValueError("RF sweep mode_profiles must be sorted and unique")
+        if self.configuration_readable and not self.state_readable:
+            raise ValueError("RF sweep configuration readback requires readable state")
+
+
+@dataclass(frozen=True, slots=True)
+class RfSweepModeProfile:
+    """One bounded frequency-only Step Sweep profile that remains disabled."""
+
+    sweep_type: RfSweepType
+    direction: RfSweepDirection
+    shape: RfSweepShape
+    spacing: RfSweepSpacing
+    frequency_min_hz: float
+    frequency_max_hz: float
+    points_min: int
+    points_max: int
+    dwell_min_s: float
+    dwell_max_s: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sweep_type, RfSweepType):
+            raise ValueError("RF sweep mode type has an invalid type")
+        if not isinstance(self.direction, RfSweepDirection):
+            raise ValueError("RF sweep mode direction has an invalid type")
+        if not isinstance(self.shape, RfSweepShape):
+            raise ValueError("RF sweep mode shape has an invalid type")
+        if not isinstance(self.spacing, RfSweepSpacing):
+            raise ValueError("RF sweep mode spacing has an invalid type")
+        if self.sweep_type is not RfSweepType.STEP:
+            raise ValueError("RF sweep mode profiles must use Step Sweep")
+        if self.direction is not RfSweepDirection.FORWARD:
+            raise ValueError("RF sweep mode profiles must use the forward direction")
+        if self.shape is not RfSweepShape.RAMP:
+            raise ValueError("RF sweep mode profiles must use ramp shape")
+        if self.spacing is not RfSweepSpacing.LINEAR:
+            raise ValueError("RF sweep mode profiles must use linear spacing")
+        _require_finite(self.frequency_min_hz, "RF sweep mode frequency_min_hz", minimum=0.0)
+        _require_finite(
+            self.frequency_max_hz,
+            "RF sweep mode frequency_max_hz",
+            minimum=self.frequency_min_hz,
+        )
+        _require_integer(self.points_min, "RF sweep mode points_min", minimum=2)
+        _require_integer(
+            self.points_max,
+            "RF sweep mode points_max",
+            minimum=self.points_min,
+        )
+        _require_finite(self.dwell_min_s, "RF sweep mode dwell_min_s", minimum=0.0)
+        _require_finite(
+            self.dwell_max_s,
+            "RF sweep mode dwell_max_s",
+            minimum=self.dwell_min_s,
+        )
+        if self.dwell_min_s <= 0.0:
+            raise ValueError("RF sweep mode dwell_min_s must be positive")
 
 
 RfFeatureProfile: TypeAlias = (
@@ -967,6 +1073,105 @@ class RfPulseSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class RfSweepConfigureRequest:
+    """One RF-OFF frequency-only Step Sweep configuration for one RF port.
+
+    The descriptor supplies the fixed Step／forward／ramp／linear profile. This
+    request deliberately has no level, trigger, arm, fire, or output field.
+    """
+
+    port_id: str
+    start_frequency_hz: float
+    stop_frequency_hz: float
+    points: int
+    dwell_s: float
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF sweep configure request port_id")
+        _require_finite(
+            self.start_frequency_hz,
+            "RF sweep configure request start_frequency_hz",
+            minimum=0.0,
+        )
+        _require_finite(
+            self.stop_frequency_hz,
+            "RF sweep configure request stop_frequency_hz",
+            minimum=0.0,
+        )
+        if self.start_frequency_hz >= self.stop_frequency_hz:
+            raise ValueError("RF sweep configure request start_frequency_hz must be less than stop_frequency_hz")
+        _require_integer(self.points, "RF sweep configure request points", minimum=2)
+        _require_finite(self.dwell_s, "RF sweep configure request dwell_s", minimum=0.0)
+        if self.dwell_s <= 0.0:
+            raise ValueError("RF sweep configure request dwell_s must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class RfSweepConfigureResult:
+    """A bounded Step Sweep configuration confirmed while Sweep remains disabled."""
+
+    port_id: str
+    start_frequency_hz: float
+    stop_frequency_hz: float
+    points: int
+    dwell_s: float
+
+    def __post_init__(self) -> None:
+        RfSweepConfigureRequest(
+            port_id=self.port_id,
+            start_frequency_hz=self.start_frequency_hz,
+            stop_frequency_hz=self.stop_frequency_hz,
+            points=self.points,
+            dwell_s=self.dwell_s,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RfSweepSnapshot:
+    """Complete typed readback for one frequency-only Step Sweep profile."""
+
+    port_id: str
+    sweep_type: RfSweepType
+    direction: RfSweepDirection
+    shape: RfSweepShape
+    spacing: RfSweepSpacing
+    start_frequency_hz: float
+    stop_frequency_hz: float
+    points: int
+    dwell_s: float
+    state: RfSweepState
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF sweep snapshot port_id")
+        if not isinstance(self.sweep_type, RfSweepType):
+            raise ValueError("RF sweep snapshot sweep_type has an invalid type")
+        if not isinstance(self.direction, RfSweepDirection):
+            raise ValueError("RF sweep snapshot direction has an invalid type")
+        if not isinstance(self.shape, RfSweepShape):
+            raise ValueError("RF sweep snapshot shape has an invalid type")
+        if not isinstance(self.spacing, RfSweepSpacing):
+            raise ValueError("RF sweep snapshot spacing has an invalid type")
+        _require_finite(
+            self.start_frequency_hz,
+            "RF sweep snapshot start_frequency_hz",
+            minimum=0.0,
+        )
+        _require_finite(
+            self.stop_frequency_hz,
+            "RF sweep snapshot stop_frequency_hz",
+            minimum=0.0,
+        )
+        if self.start_frequency_hz >= self.stop_frequency_hz:
+            raise ValueError("RF sweep snapshot start_frequency_hz must be less than stop_frequency_hz")
+        _require_integer(self.points, "RF sweep snapshot points", minimum=2)
+        _require_finite(self.dwell_s, "RF sweep snapshot dwell_s", minimum=0.0)
+        if self.dwell_s <= 0.0:
+            raise ValueError("RF sweep snapshot dwell_s must be positive")
+        if not isinstance(self.state, RfSweepState):
+            raise ValueError("RF sweep snapshot state has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
 class RfOutputRequest:
     """One explicit RF output state request for one descriptor-defined port."""
 
@@ -1013,6 +1218,10 @@ class RfSourceDriver(InstrumentDriver, Protocol):
     def get_rf_pulse_snapshot(self, port_id: str) -> RfPulseSnapshot: ...
 
     def configure_rf_pulse(self, request: RfPulseConfigureRequest) -> None: ...
+
+    def get_rf_sweep_snapshot(self, port_id: str) -> RfSweepSnapshot: ...
+
+    def configure_rf_sweep(self, request: RfSweepConfigureRequest) -> None: ...
 
     def set_rf_output(self, request: RfOutputRequest) -> None: ...
 
@@ -1115,6 +1324,16 @@ def rf_pulse_snapshot_document(snapshot: RfPulseSnapshot) -> dict[str, object]:
     data = rf_source_to_data(snapshot)
     assert isinstance(data, dict)
     return {"schema": RF_SOURCE_PULSE_SNAPSHOT_SCHEMA, **data}
+
+
+def rf_sweep_snapshot_document(snapshot: RfSweepSnapshot) -> dict[str, object]:
+    """Build a redacted document for one typed RF Step Sweep readback."""
+
+    if not isinstance(snapshot, RfSweepSnapshot):
+        raise TypeError("snapshot must be RfSweepSnapshot")
+    data = rf_source_to_data(snapshot)
+    assert isinstance(data, dict)
+    return {"schema": RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA, **data}
 
 
 def rf_source_snapshot_operation_artifact(snapshot: RfSourceSnapshot) -> dict[str, object]:
@@ -1285,6 +1504,45 @@ def rf_source_pulse_operation_artifact(
     }
 
 
+def rf_source_sweep_operation_artifact(
+    request: RfSweepConfigureRequest,
+    result: RfSweepConfigureResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+    postcondition_sweep_snapshot: RfSweepSnapshot,
+) -> dict[str, object]:
+    """Build redacted typed evidence for one disabled Step Sweep configuration."""
+
+    if not isinstance(request, RfSweepConfigureRequest):
+        raise TypeError("request must be RfSweepConfigureRequest")
+    if not isinstance(result, RfSweepConfigureResult):
+        raise TypeError("result must be RfSweepConfigureResult")
+    if (
+        request.port_id != result.port_id
+        or request.start_frequency_hz != result.start_frequency_hz
+        or request.stop_frequency_hz != result.stop_frequency_hz
+        or request.points != result.points
+        or request.dwell_s != result.dwell_s
+    ):
+        raise ValueError("RF sweep request and result must describe the same target")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_sweep_snapshot, RfSweepSnapshot):
+        raise TypeError("postcondition_sweep_snapshot must be RfSweepSnapshot")
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "rf_source.sweep_configure",
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+        "postcondition_sweep_snapshot": rf_sweep_snapshot_document(postcondition_sweep_snapshot),
+    }
+
+
 def rf_source_output_operation_artifact(
     request: RfOutputRequest,
     result: RfOutputResult,
@@ -1322,6 +1580,7 @@ __all__ = [
     "RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA",
     "RF_SOURCE_OPERATION_ARTIFACT_SCHEMA",
     "RF_SOURCE_PULSE_SNAPSHOT_SCHEMA",
+    "RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA",
     "RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION",
     "RF_SOURCE_SNAPSHOT_SCHEMA",
     "RfAvailability",
@@ -1368,16 +1627,26 @@ __all__ = [
     "RfSourceSnapshot",
     "RfSourceTopology",
     "RfSweepProfile",
+    "RfSweepConfigureRequest",
+    "RfSweepConfigureResult",
+    "RfSweepDirection",
+    "RfSweepModeProfile",
+    "RfSweepShape",
+    "RfSweepSnapshot",
+    "RfSweepSpacing",
     "RfSweepState",
+    "RfSweepType",
     "rf_source_canonical_json",
     "rf_source_cw_operation_artifact",
     "rf_source_digest",
     "rf_modulation_snapshot_document",
     "rf_modulation_state_snapshot_document",
     "rf_pulse_snapshot_document",
+    "rf_sweep_snapshot_document",
     "rf_source_modulation_disable_operation_artifact",
     "rf_source_modulation_operation_artifact",
     "rf_source_pulse_operation_artifact",
+    "rf_source_sweep_operation_artifact",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",
     "rf_source_output_operation_artifact",

@@ -137,6 +137,33 @@ def test_rf_source_pulse_configure_spec_keeps_rf_and_pulse_off() -> None:
     assert configure.safe_alternatives == ("rf_source.snapshot",)
 
 
+def test_rf_source_sweep_configure_spec_keeps_rf_and_sweep_off() -> None:
+    configure = require_operation_spec("rf_source.sweep_configure")
+
+    assert configure.instrument_kind == "rf_source"
+    assert configure.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.sweep_configure",
+    )
+    assert configure.effect == "write"
+    assert configure.changed_fields == (
+        "rf_source.sweep.type",
+        "rf_source.sweep.direction",
+        "rf_source.sweep.shape",
+        "rf_source.sweep.spacing",
+        "rf_source.sweep.start_frequency_hz",
+        "rf_source.sweep.stop_frequency_hz",
+        "rf_source.sweep.points",
+        "rf_source.sweep.dwell_s",
+        "rf_source.sweep.state",
+    )
+    assert configure.restore_coverage == "none"
+    assert "rf_output_must_be_off" in configure.risk_flags
+    assert "sweep_disabled" in configure.risk_flags
+    assert "trigger" not in configure.risk_flags
+    assert configure.safe_alternatives == ("rf_source.snapshot",)
+
+
 def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     pairs = (
         (

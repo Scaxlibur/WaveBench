@@ -22,6 +22,7 @@ from .rf_source_extensions import (
     RfOutputProfile,
     RfPulseProfile,
     RfSourceDescriptorExtensions,
+    RfSweepProfile,
 )
 
 
@@ -42,6 +43,10 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "rf_source.pulse_configure": (
             "get_rf_pulse_snapshot",
             "configure_rf_pulse",
+        ),
+        "rf_source.sweep_configure": (
+            "get_rf_sweep_snapshot",
+            "configure_rf_sweep",
         ),
         "rf_source.output": ("set_rf_output",),
     }
@@ -87,6 +92,8 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         _validate_modulation_disable_feature(extensions)
     if "rf_source.pulse_configure" in rf_capabilities:
         _validate_pulse_configure_feature(extensions)
+    if "rf_source.sweep_configure" in rf_capabilities:
+        _validate_sweep_configure_feature(extensions)
     if "rf_source.output" in rf_capabilities:
         _validate_output_feature(extensions)
     _validate_rf_source_version_range(descriptor)
@@ -197,6 +204,27 @@ def _validate_pulse_configure_feature(extensions: RfSourceDescriptorExtensions) 
     if not feature.profile.configuration_readable or not feature.profile.mode_profiles:
         raise ConfigError(
             "rf_source.pulse_configure requires readable bounded RF pulse mode profiles"
+        )
+
+
+def _validate_sweep_configure_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.SWEEP),
+        None,
+    )
+    if (
+        feature is None
+        or RfFeatureDirection.CONFIGURE not in feature.directions
+        or RfFeatureDirection.READ not in feature.directions
+    ):
+        raise ConfigError(
+            "rf_source.sweep_configure requires an RF Sweep feature with configure and read directions"
+        )
+    if not isinstance(feature.profile, RfSweepProfile):  # defensive: extensions validates this.
+        raise ConfigError("rf_source.sweep_configure requires an RF Sweep profile")
+    if not feature.profile.configuration_readable or not feature.profile.mode_profiles:
+        raise ConfigError(
+            "rf_source.sweep_configure requires readable bounded RF Sweep mode profiles"
         )
 
 
