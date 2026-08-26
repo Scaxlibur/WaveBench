@@ -23,7 +23,8 @@
 | CW 频率／dBm 功率 | 已开放 | A3 后已开放 | 仅目标 RF 输出明确 OFF 时的单字段写入。 |
 | RF ON/OFF | 已开放 | A2 后已开放 | ON 需要完整端口 safety 配置与 fresh preflight。 |
 | 内部正弦 AM／FM／PM | M3 离线合同与受限恢复路径已完成 | 未开放 | A4 尚无覆盖三种模式的完整合格证据前，DSG830 会在 transport I/O 前拒绝该 capability。 |
-| Pulse、Sweep、trigger | 未完成 | 未开放 | 不应尝试调用或绕过。 |
+| Pulse | M4 离线合同、CLI／run 与受控 evidence harness 已完成 | 未开放 | 当前只限 internal／single 配置并强制保持 Pulse OFF；production descriptor 会拒绝。 |
+| Sweep、trigger | 未完成 | 未开放 | 不应尝试调用或绕过。 |
 
 生产 descriptor 是否声明 capability 是实际边界。Core 中存在 CLI、run step 或 driver 方法，不等于当前仪器已经获准执行该操作。
 
@@ -155,12 +156,25 @@ DSG830 源码 checkout 的 A4 harness 是开发验证工具，不是日常命令
 
 M2 的 RF ON 合同目前要求调制 disabled。即使未来 A4 仅提升 M3 配置 capability，也不能据此推导「已可在调制开启时输出 RF」。允许调制输出需要单独调整输出 safety 合同并取得相应实机证据；不得通过关闭门禁或原始 SCPI 先行绕过。
 
+## M4：受控 Pulse 配置合同
+
+Core 已提供下列离线入口：
+
+```text
+wavebench rf-source pulse configure --port PORT_ID --period-s SECONDS --width-s SECONDS --polarity normal|inverted
+rf_source.pulse_configure
+```
+
+当前 DSG830 production descriptor 不声明 `rf_source.pulse_configure`，因此普通 CLI 或 run plan 会在打开 transport 前拒绝。这一限制是预期行为，不应通过临时 descriptor 或原始 SCPI 绕过。
+
+源码 checkout 的 `tools/a4_pulse_evidence.py` 是专门的受控验证工具。它只接受 internal／single、period、width 和 polarity，并在每次配置后保持 Pulse OFF；初始、写后和最终状态都要求 RF 输出、调制、Pulse、Sweep 关闭且无活动 protection。它不调用 RF output、不使用后面板 Pulse I/O、不发送 trigger、不读取 CH1／CH2。`--diagnose` 保持 `read_only` 且零写，`--execute` 才允许一次受审计的配置写入。两种记录均不构成生产 capability 提升，直至实机证据完成并经复核。
+
 ## 上机前检查清单
 
 1. 使用网络发现和只读身份查询确认候选设备，再在隔离配置中复核资源与型号。
 2. 从 `read_only` 开始；只有本次确实需要、且 production descriptor 已声明的操作才使用 `read_write`。
 3. 核对 `rf_out` 的实际端接、频率范围和功率上限。示波器的 CH2 50 Ω 输入不能替代整条路径核对。
 4. 在任何写入前读取 RF snapshot，确认 RF 输出 OFF；完成后独立确认最终 RF OFF。
-5. M3/A4 阶段不使用 raw SCPI、不执行 reset、preset、错误队列、外部调制、Pulse、Sweep、trigger 或 scope 自动量程。
+5. 日常 M3／M4 操作不使用 raw SCPI，不执行 reset、preset、错误队列、外部调制、后面板 Pulse I/O、Sweep、trigger 或 scope 自动量程。A4 Pulse 仅可通过专用受控 harness 执行。
 
 需要实现新型号或提升 capability 时，继续阅读 [RF 信号源领域设计](../design/WaveBench_RF信号源设计.md)、[RF 信号源开发里程碑](../design/WaveBench_RF信号源开发里程碑.md) 和对应插件的型号级里程碑。
