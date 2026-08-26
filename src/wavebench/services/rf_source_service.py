@@ -38,6 +38,13 @@ from wavebench.instruments.rf_source_extensions import (
     RfOutputResult,
     RfPortSnapshot,
     RfProtectionStatus,
+    RfPulseConfigureRequest,
+    RfPulseConfigureResult,
+    RfPulseMode,
+    RfPulseModeProfile,
+    RfPulseProfile,
+    RfPulseSnapshot,
+    RfPulseSource,
     RfPulseState,
     RfSourceDescriptorExtensions,
     RfSourceDriver,
@@ -47,6 +54,7 @@ from wavebench.instruments.rf_source_extensions import (
     rf_source_modulation_disable_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_output_operation_artifact,
+    rf_source_pulse_operation_artifact,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
@@ -85,6 +93,14 @@ class _RfModulationDisableTransaction:
     preflight_modulation_state: RfModulationStateSnapshot
     postcondition_snapshot: RfSourceSnapshot
     postcondition_modulation_state: RfModulationStateSnapshot
+
+
+@dataclass(frozen=True)
+class _RfPulseTransaction:
+    result: RfPulseConfigureResult
+    preflight_snapshot: RfSourceSnapshot
+    postcondition_snapshot: RfSourceSnapshot
+    postcondition_pulse_snapshot: RfPulseSnapshot
 
 
 @dataclass(frozen=True)
@@ -454,6 +470,85 @@ class RfSourceService(SessionStateAliasMixin):
                         )
                     raise
 
+    def configure_pulse(self, request: RfPulseConfigureRequest) -> RfPulseConfigureResult:
+        return self._configure_pulse_transaction(request).result
+
+    def configure_pulse_with_artifact(
+        self,
+        request: RfPulseConfigureRequest,
+    ) -> tuple[RfPulseConfigureResult, dict[str, object]]:
+        """Apply one RF-OFF internal single-pulse profile with typed evidence."""
+
+        transaction = self._configure_pulse_transaction(request)
+        return (
+            transaction.result,
+            rf_source_pulse_operation_artifact(
+                request,
+                transaction.result,
+                preflight_snapshot=transaction.preflight_snapshot,
+                postcondition_snapshot=transaction.postcondition_snapshot,
+                postcondition_pulse_snapshot=transaction.postcondition_pulse_snapshot,
+            ),
+        )
+
+    def _configure_pulse_transaction(
+        self,
+        request: RfPulseConfigureRequest,
+    ) -> _RfPulseTransaction:
+        """Configure one disabled internal single-pulse profile without triggering.
+
+        The initial M4 slice intentionally cannot arm or trigger a pulse. It
+        configures timing and polarity while the target RF output, pulse state,
+        modulation, and Sweep are all OFF, then requires the pulse to remain
+        disabled after independent profile readback. A failed main write or
+        postcondition is never retried and leaves the session uncertain.
+        """
+
+        if not isinstance(request, RfPulseConfigureRequest):
+            raise ConfigError("rf_source pulse configuration requires RfPulseConfigureRequest")
+        operation = "rf_source.pulse_configure"
+        self._require(operation, "rf_source.snapshot", "rf_source.pulse_configure")
+        mode_profile = self._validate_pulse_descriptor(request, operation)
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            with session_state.transaction_lock:
+                if session_state.health is not SessionHealth.HEALTHY:
+                    raise ConfigError(f"{operation} requires a healthy session")
+                preflight_snapshot = rf_source.get_rf_snapshot()
+                self._validate_pulse_preflight(
+                    request,
+                    preflight_snapshot,
+                    operation=operation,
+                )
+                main_entered = False
+                try:
+                    main_entered = True
+                    rf_source.configure_rf_pulse(request)
+                    postcondition_snapshot = rf_source.get_rf_snapshot()
+                    postcondition_pulse_snapshot = rf_source.get_rf_pulse_snapshot(request.port_id)
+                    result = self._validate_pulse_postcondition(
+                        request,
+                        postcondition_snapshot,
+                        postcondition_pulse_snapshot,
+                        mode_profile,
+                        operation=operation,
+                    )
+                    return _RfPulseTransaction(
+                        result=result,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        postcondition_pulse_snapshot=postcondition_pulse_snapshot,
+                    )
+                except BaseException:
+                    if main_entered and session_state.health is SessionHealth.HEALTHY:
+                        session_state.degrade(
+                            SessionHealth.UNCERTAIN,
+                            reason="rf_pulse_postcondition_unverified",
+                        )
+                    raise
+
     def set_output(self, request: RfOutputRequest) -> RfOutputResult:
         return self._set_output_transaction(request).result
 
@@ -816,6 +911,123 @@ class RfSourceService(SessionStateAliasMixin):
             if not port_profile.power_min_dbm <= request.power_dbm <= port_profile.power_max_dbm:
                 raise ConfigError(f"{operation} request power_dbm is outside the descriptor range")
         return port_profile, profile
+
+    def _validate_pulse_descriptor(
+        self,
+        request: RfPulseConfigureRequest,
+        operation: str,
+    ) -> RfPulseModeProfile:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.rf_source_extensions
+        if not isinstance(extensions, RfSourceDescriptorExtensions):
+            raise ConfigError(f"{operation} requires validated rf_source_extensions")
+        if not any(port.port_id == request.port_id for port in extensions.topology.ports):
+            raise ConfigError(f"{operation} references an undeclared RF port")
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.PULSE),
+            None,
+        )
+        if (
+            feature is None
+            or RfFeatureDirection.CONFIGURE not in feature.directions
+            or RfFeatureDirection.READ not in feature.directions
+            or request.port_id not in feature.port_ids
+            or not isinstance(feature.profile, RfPulseProfile)
+            or not feature.profile.configuration_readable
+        ):
+            raise ConfigError(
+                f"{operation} requires a readable configurable pulse profile for the target port"
+            )
+        mode_profile = next(
+            (
+                item
+                for item in feature.profile.mode_profiles
+                if item.source is RfPulseSource.INTERNAL and item.mode is RfPulseMode.SINGLE
+            ),
+            None,
+        )
+        if mode_profile is None:
+            raise ConfigError(f"{operation} requires an internal single-pulse profile")
+        if request.polarity not in mode_profile.polarities:
+            raise ConfigError(f"{operation} request polarity is outside the descriptor profile")
+        if not mode_profile.period_min_s <= request.period_s <= mode_profile.period_max_s:
+            raise ConfigError(f"{operation} request period_s is outside the descriptor range")
+        if not mode_profile.width_min_s <= request.width_s <= mode_profile.width_max_s:
+            raise ConfigError(f"{operation} request width_s is outside the descriptor range")
+        if request.width_s > request.period_s - mode_profile.minimum_off_time_s:
+            raise ConfigError(f"{operation} request width_s violates the descriptor minimum off time")
+        return mode_profile
+
+    def _validate_pulse_preflight(
+        self,
+        request: RfPulseConfigureRequest,
+        snapshot: RfSourceSnapshot,
+        *,
+        operation: str,
+    ) -> RfPortSnapshot:
+        port = self._snapshot_port(snapshot, request.port_id, operation=operation)
+        output_enabled = self._observed_value(
+            port.output_enabled,
+            f"{operation} requires a readable RF output state",
+        )
+        if output_enabled is not False:
+            raise ConfigError(f"{operation} requires target RF output OFF")
+        modulation = self._observed_value(
+            port.modulation,
+            f"{operation} requires a readable modulation state",
+        )
+        if modulation is not RfModulationState.DISABLED:
+            raise ConfigError(f"{operation} requires modulation disabled")
+        pulse = self._observed_value(
+            port.pulse,
+            f"{operation} requires a readable Pulse state",
+        )
+        if pulse is not RfPulseState.DISABLED:
+            raise ConfigError(f"{operation} requires Pulse disabled")
+        sweep = self._observed_value(
+            port.sweep,
+            f"{operation} requires a readable Sweep state",
+        )
+        if sweep is not RfSweepState.DISABLED:
+            raise ConfigError(f"{operation} requires Sweep disabled")
+        protection = self._observed_value(
+            snapshot.protection,
+            f"{operation} requires a readable protection state",
+        )
+        if not isinstance(protection, RfProtectionStatus):
+            raise ConfigError(f"{operation} requires a valid protection state")
+        if protection.active_codes:
+            raise ConfigError(f"{operation} requires no active protection condition")
+        return port
+
+    def _validate_pulse_postcondition(
+        self,
+        request: RfPulseConfigureRequest,
+        snapshot: RfSourceSnapshot,
+        pulse_snapshot: RfPulseSnapshot,
+        mode_profile: RfPulseModeProfile,
+        *,
+        operation: str,
+    ) -> RfPulseConfigureResult:
+        self._validate_pulse_preflight(request, snapshot, operation=operation)
+        if pulse_snapshot.port_id != request.port_id:
+            raise ConfigError(f"{operation} pulse snapshot does not match the requested port")
+        if pulse_snapshot.source is not mode_profile.source or pulse_snapshot.mode is not mode_profile.mode:
+            raise ConfigError(f"{operation} postcondition requires the declared internal single-pulse profile")
+        if pulse_snapshot.state is not RfPulseState.DISABLED:
+            raise ConfigError(f"{operation} postcondition requires Pulse disabled")
+        if (
+            pulse_snapshot.period_s != request.period_s
+            or pulse_snapshot.width_s != request.width_s
+            or pulse_snapshot.polarity is not request.polarity
+        ):
+            raise ConfigError(f"{operation} pulse readback does not match request")
+        return RfPulseConfigureResult(
+            port_id=request.port_id,
+            period_s=request.period_s,
+            width_s=request.width_s,
+            polarity=request.polarity,
+        )
 
     def _validate_modulation_descriptor(
         self,

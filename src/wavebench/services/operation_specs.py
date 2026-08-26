@@ -1093,6 +1093,23 @@ _BUILTIN_SPECS = (
         safe_alternatives=("rf_source.snapshot",),
     ),
     _spec(
+        "rf_source.pulse_configure",
+        "rf_source",
+        required_capabilities=("rf_source.snapshot", "rf_source.pulse_configure"),
+        effect="write",
+        changed_fields=(
+            "rf_source.pulse.source",
+            "rf_source.pulse.mode",
+            "rf_source.pulse.period_s",
+            "rf_source.pulse.width_s",
+            "rf_source.pulse.polarity",
+            "rf_source.pulse.state",
+        ),
+        restore_coverage="none",
+        risk_flags=("rf_output_must_be_off", "pulse_state", "state_drift"),
+        safe_alternatives=("rf_source.snapshot",),
+    ),
+    _spec(
         "rf_source.output_enable",
         "rf_source",
         required_capabilities=("rf_source.snapshot", "rf_source.output"),

@@ -114,6 +114,29 @@ def test_rf_source_modulation_disable_spec_requires_state_evidence_and_keeps_rf_
     assert disable.safe_alternatives == ("rf_source.snapshot",)
 
 
+def test_rf_source_pulse_configure_spec_keeps_rf_and_pulse_off() -> None:
+    configure = require_operation_spec("rf_source.pulse_configure")
+
+    assert configure.instrument_kind == "rf_source"
+    assert configure.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.pulse_configure",
+    )
+    assert configure.effect == "write"
+    assert configure.changed_fields == (
+        "rf_source.pulse.source",
+        "rf_source.pulse.mode",
+        "rf_source.pulse.period_s",
+        "rf_source.pulse.width_s",
+        "rf_source.pulse.polarity",
+        "rf_source.pulse.state",
+    )
+    assert configure.restore_coverage == "none"
+    assert "rf_output_must_be_off" in configure.risk_flags
+    assert "pulse_state" in configure.risk_flags
+    assert configure.safe_alternatives == ("rf_source.snapshot",)
+
+
 def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     pairs = (
         (

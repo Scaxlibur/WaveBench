@@ -23,6 +23,7 @@ RF_SOURCE_CONTRACT_VERSION = "wavebench.rf_source.v1"
 RF_SOURCE_SNAPSHOT_SCHEMA = "wavebench.rf_source.snapshot.v1"
 RF_SOURCE_MODULATION_STATE_SCHEMA = "wavebench.rf_source.modulation_state.v1"
 RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA = "wavebench.rf_source.modulation_snapshot.v1"
+RF_SOURCE_PULSE_SNAPSHOT_SCHEMA = "wavebench.rf_source.pulse_snapshot.v1"
 RF_SOURCE_OPERATION_ARTIFACT_SCHEMA = "wavebench.rf_source.operation.v1"
 RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION = "0.8.25"
 
@@ -160,6 +161,21 @@ class RfModulationValueUnit(StrEnum):
 class RfPulseState(StrEnum):
     DISABLED = "disabled"
     ENABLED = "enabled"
+
+
+class RfPulseSource(StrEnum):
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
+class RfPulseMode(StrEnum):
+    SINGLE = "single"
+    TRAIN = "train"
+
+
+class RfPulsePolarity(StrEnum):
+    NORMAL = "normal"
+    INVERTED = "inverted"
 
 
 class RfSweepState(StrEnum):
@@ -432,9 +448,67 @@ class RfModulationProfile:
 @dataclass(frozen=True, slots=True)
 class RfPulseProfile:
     state_readable: bool
+    configuration_readable: bool = False
+    mode_profiles: tuple["RfPulseModeProfile", ...] = ()
 
     def __post_init__(self) -> None:
         _require_bool(self.state_readable, "RF pulse state_readable")
+        _require_bool(self.configuration_readable, "RF pulse configuration_readable")
+        if not isinstance(self.mode_profiles, tuple) or any(
+            not isinstance(profile, RfPulseModeProfile) for profile in self.mode_profiles
+        ):
+            raise ValueError("RF pulse mode_profiles have an invalid type")
+        identities = tuple((profile.source.value, profile.mode.value) for profile in self.mode_profiles)
+        if len(set(identities)) != len(identities) or tuple(sorted(identities)) != identities:
+            raise ValueError("RF pulse mode_profiles must be sorted and unique")
+        if self.configuration_readable and not self.state_readable:
+            raise ValueError("RF pulse configuration readback requires readable state")
+
+
+@dataclass(frozen=True, slots=True)
+class RfPulseModeProfile:
+    """One bounded pulse profile that can be configured while RF remains OFF."""
+
+    source: RfPulseSource
+    mode: RfPulseMode
+    polarities: tuple[RfPulsePolarity, ...]
+    period_min_s: float
+    period_max_s: float
+    width_min_s: float
+    width_max_s: float
+    minimum_off_time_s: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, RfPulseSource):
+            raise ValueError("RF pulse mode source has an invalid type")
+        if not isinstance(self.mode, RfPulseMode):
+            raise ValueError("RF pulse mode has an invalid type")
+        if self.source is not RfPulseSource.INTERNAL:
+            raise ValueError("RF pulse mode profiles must use the internal source")
+        if self.mode is not RfPulseMode.SINGLE:
+            raise ValueError("RF pulse mode profiles must use the single mode")
+        _require_enum_tuple(self.polarities, RfPulsePolarity, "RF pulse mode polarities")
+        _require_finite(self.period_min_s, "RF pulse mode period_min_s", minimum=0.0)
+        _require_finite(
+            self.period_max_s,
+            "RF pulse mode period_max_s",
+            minimum=self.period_min_s,
+        )
+        _require_finite(self.width_min_s, "RF pulse mode width_min_s", minimum=0.0)
+        _require_finite(
+            self.width_max_s,
+            "RF pulse mode width_max_s",
+            minimum=self.width_min_s,
+        )
+        _require_finite(
+            self.minimum_off_time_s,
+            "RF pulse mode minimum_off_time_s",
+            minimum=0.0,
+        )
+        if self.minimum_off_time_s <= 0.0:
+            raise ValueError("RF pulse mode minimum_off_time_s must be positive")
+        if self.period_max_s < self.width_min_s + self.minimum_off_time_s:
+            raise ValueError("RF pulse mode ranges cannot satisfy the minimum off time")
 
 
 @dataclass(frozen=True, slots=True)
@@ -810,6 +884,89 @@ class RfModulationSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class RfPulseConfigureRequest:
+    """One RF-OFF internal single-pulse configuration for one RF port.
+
+    The descriptor supplies the fixed source and mode; this request only
+    carries bounded timing and polarity fields. It deliberately has no trigger,
+    external-port, or pulse-output field.
+    """
+
+    port_id: str
+    period_s: float
+    width_s: float
+    polarity: RfPulsePolarity
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF pulse configure request port_id")
+        _require_finite(self.period_s, "RF pulse configure request period_s", minimum=0.0)
+        _require_finite(self.width_s, "RF pulse configure request width_s", minimum=0.0)
+        if self.period_s <= 0.0:
+            raise ValueError("RF pulse configure request period_s must be positive")
+        if self.width_s <= 0.0:
+            raise ValueError("RF pulse configure request width_s must be positive")
+        if self.width_s >= self.period_s:
+            raise ValueError("RF pulse configure request width_s must be less than period_s")
+        if not isinstance(self.polarity, RfPulsePolarity):
+            raise ValueError("RF pulse configure request polarity has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
+class RfPulseConfigureResult:
+    """A bounded RF pulse configuration confirmed by independent readback."""
+
+    port_id: str
+    period_s: float
+    width_s: float
+    polarity: RfPulsePolarity
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF pulse configure result port_id")
+        _require_finite(self.period_s, "RF pulse configure result period_s", minimum=0.0)
+        _require_finite(self.width_s, "RF pulse configure result width_s", minimum=0.0)
+        if self.period_s <= 0.0:
+            raise ValueError("RF pulse configure result period_s must be positive")
+        if self.width_s <= 0.0:
+            raise ValueError("RF pulse configure result width_s must be positive")
+        if self.width_s >= self.period_s:
+            raise ValueError("RF pulse configure result width_s must be less than period_s")
+        if not isinstance(self.polarity, RfPulsePolarity):
+            raise ValueError("RF pulse configure result polarity has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
+class RfPulseSnapshot:
+    """Complete typed readback for one pulse profile on one RF port."""
+
+    port_id: str
+    source: RfPulseSource
+    mode: RfPulseMode
+    period_s: float
+    width_s: float
+    polarity: RfPulsePolarity
+    state: RfPulseState
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF pulse snapshot port_id")
+        if not isinstance(self.source, RfPulseSource):
+            raise ValueError("RF pulse snapshot source has an invalid type")
+        if not isinstance(self.mode, RfPulseMode):
+            raise ValueError("RF pulse snapshot mode has an invalid type")
+        _require_finite(self.period_s, "RF pulse snapshot period_s", minimum=0.0)
+        _require_finite(self.width_s, "RF pulse snapshot width_s", minimum=0.0)
+        if self.period_s <= 0.0:
+            raise ValueError("RF pulse snapshot period_s must be positive")
+        if self.width_s <= 0.0:
+            raise ValueError("RF pulse snapshot width_s must be positive")
+        if self.width_s >= self.period_s:
+            raise ValueError("RF pulse snapshot width_s must be less than period_s")
+        if not isinstance(self.polarity, RfPulsePolarity):
+            raise ValueError("RF pulse snapshot polarity has an invalid type")
+        if not isinstance(self.state, RfPulseState):
+            raise ValueError("RF pulse snapshot state has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
 class RfOutputRequest:
     """One explicit RF output state request for one descriptor-defined port."""
 
@@ -852,6 +1009,10 @@ class RfSourceDriver(InstrumentDriver, Protocol):
     def configure_rf_modulation(self, request: RfModulationRequest) -> None: ...
 
     def disable_rf_modulation(self, request: RfModulationDisableRequest) -> None: ...
+
+    def get_rf_pulse_snapshot(self, port_id: str) -> RfPulseSnapshot: ...
+
+    def configure_rf_pulse(self, request: RfPulseConfigureRequest) -> None: ...
 
     def set_rf_output(self, request: RfOutputRequest) -> None: ...
 
@@ -944,6 +1105,16 @@ def rf_modulation_state_snapshot_document(
     data = rf_source_to_data(snapshot)
     assert isinstance(data, dict)
     return {"schema": RF_SOURCE_MODULATION_STATE_SCHEMA, **data}
+
+
+def rf_pulse_snapshot_document(snapshot: RfPulseSnapshot) -> dict[str, object]:
+    """Build a redacted document for one typed RF pulse readback."""
+
+    if not isinstance(snapshot, RfPulseSnapshot):
+        raise TypeError("snapshot must be RfPulseSnapshot")
+    data = rf_source_to_data(snapshot)
+    assert isinstance(data, dict)
+    return {"schema": RF_SOURCE_PULSE_SNAPSHOT_SCHEMA, **data}
 
 
 def rf_source_snapshot_operation_artifact(snapshot: RfSourceSnapshot) -> dict[str, object]:
@@ -1076,6 +1247,44 @@ def rf_source_modulation_disable_operation_artifact(
     }
 
 
+def rf_source_pulse_operation_artifact(
+    request: RfPulseConfigureRequest,
+    result: RfPulseConfigureResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+    postcondition_pulse_snapshot: RfPulseSnapshot,
+) -> dict[str, object]:
+    """Build redacted typed evidence for one RF-OFF pulse configuration."""
+
+    if not isinstance(request, RfPulseConfigureRequest):
+        raise TypeError("request must be RfPulseConfigureRequest")
+    if not isinstance(result, RfPulseConfigureResult):
+        raise TypeError("result must be RfPulseConfigureResult")
+    if (
+        request.port_id != result.port_id
+        or request.period_s != result.period_s
+        or request.width_s != result.width_s
+        or request.polarity is not result.polarity
+    ):
+        raise ValueError("RF pulse request and result must describe the same target")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_pulse_snapshot, RfPulseSnapshot):
+        raise TypeError("postcondition_pulse_snapshot must be RfPulseSnapshot")
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "rf_source.pulse_configure",
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+        "postcondition_pulse_snapshot": rf_pulse_snapshot_document(postcondition_pulse_snapshot),
+    }
+
+
 def rf_source_output_operation_artifact(
     request: RfOutputRequest,
     result: RfOutputResult,
@@ -1112,6 +1321,7 @@ __all__ = [
     "RF_SOURCE_MODULATION_STATE_SCHEMA",
     "RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA",
     "RF_SOURCE_OPERATION_ARTIFACT_SCHEMA",
+    "RF_SOURCE_PULSE_SNAPSHOT_SCHEMA",
     "RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION",
     "RF_SOURCE_SNAPSHOT_SCHEMA",
     "RfAvailability",
@@ -1144,6 +1354,13 @@ __all__ = [
     "RfProtectionConditionPolicy",
     "RfProtectionStatus",
     "RfPulseProfile",
+    "RfPulseConfigureRequest",
+    "RfPulseConfigureResult",
+    "RfPulseMode",
+    "RfPulseModeProfile",
+    "RfPulsePolarity",
+    "RfPulseSnapshot",
+    "RfPulseSource",
     "RfPulseState",
     "RfReasonCode",
     "RfSourceDescriptorExtensions",
@@ -1157,8 +1374,10 @@ __all__ = [
     "rf_source_digest",
     "rf_modulation_snapshot_document",
     "rf_modulation_state_snapshot_document",
+    "rf_pulse_snapshot_document",
     "rf_source_modulation_disable_operation_artifact",
     "rf_source_modulation_operation_artifact",
+    "rf_source_pulse_operation_artifact",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",
     "rf_source_output_operation_artifact",

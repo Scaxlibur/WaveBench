@@ -20,6 +20,7 @@ from .rf_source_extensions import (
     RfFeatureDirection,
     RfModulationProfile,
     RfOutputProfile,
+    RfPulseProfile,
     RfSourceDescriptorExtensions,
 )
 
@@ -37,6 +38,10 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "rf_source.modulation_disable": (
             "get_rf_modulation_state",
             "disable_rf_modulation",
+        ),
+        "rf_source.pulse_configure": (
+            "get_rf_pulse_snapshot",
+            "configure_rf_pulse",
         ),
         "rf_source.output": ("set_rf_output",),
     }
@@ -80,6 +85,8 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         _validate_modulation_configure_feature(extensions)
     if "rf_source.modulation_disable" in rf_capabilities:
         _validate_modulation_disable_feature(extensions)
+    if "rf_source.pulse_configure" in rf_capabilities:
+        _validate_pulse_configure_feature(extensions)
     if "rf_source.output" in rf_capabilities:
         _validate_output_feature(extensions)
     _validate_rf_source_version_range(descriptor)
@@ -170,6 +177,27 @@ def _validate_modulation_disable_feature(extensions: RfSourceDescriptorExtension
         raise ConfigError("rf_source.modulation_disable requires an RF modulation profile")
     if not feature.profile.state_readable:
         raise ConfigError("rf_source.modulation_disable requires readable RF modulation state")
+
+
+def _validate_pulse_configure_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.PULSE),
+        None,
+    )
+    if (
+        feature is None
+        or RfFeatureDirection.CONFIGURE not in feature.directions
+        or RfFeatureDirection.READ not in feature.directions
+    ):
+        raise ConfigError(
+            "rf_source.pulse_configure requires an RF pulse feature with configure and read directions"
+        )
+    if not isinstance(feature.profile, RfPulseProfile):  # defensive: extensions validates this.
+        raise ConfigError("rf_source.pulse_configure requires an RF pulse profile")
+    if not feature.profile.configuration_readable or not feature.profile.mode_profiles:
+        raise ConfigError(
+            "rf_source.pulse_configure requires readable bounded RF pulse mode profiles"
+        )
 
 
 def validate_rf_source_plugin_dependencies(
