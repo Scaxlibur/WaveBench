@@ -25,6 +25,7 @@
 | 内部正弦 AM／FM／PM | 已开放 | A4 后已开放 | 只在 RF OFF 下配置。AM 为 `0–100 %`，FM 为 `0.1 Hz–1 MHz`，PM 的 production profile 精确为 `1.25 rad`；三种模式的内部频率均为 `10 Hz–100 kHz`。调制开启时的 RF 输出仍未开放。 |
 | Pulse | M4 离线合同与受控 evidence 已完成 | A4 Pulse 后已开放 | 当前只限 internal／single 配置并强制保持 Pulse OFF；需要 `read_write` 与 fresh OFF-only preflight。 |
 | frequency-only Step Sweep | M4 合同、CLI、run step、artifact 与 A4 证据已完成 | A4 Step Sweep 后已开放 | 仅固定 `STEP`／`FWD`／`RAMP`／`LIN`，配置后 Sweep 仍保持关闭；需要 `read_write`、匹配 profile 与 fresh OFF-only preflight。 |
+| 逻辑 trigger configuration 读取 | A5-0 离线合同完成 | 未开放 | `rf-source trigger status`／`rf_source.trigger_status` 需要独立 capability 和 `TRIGGER / READ` profile；当前 DSG830 production descriptor 会拒绝该请求。它不读取或配置物理 trigger／sync 接口。 |
 | trigger、arm／fire、Level Sweep | 未完成 | 未开放 | 不应尝试调用或绕过。 |
 
 生产 descriptor 是否声明 capability 是实际边界。Core 中存在 CLI、run step 或 driver 方法，不等于当前仪器已经获准执行该操作。
@@ -97,6 +98,19 @@ wavebench rf-source sweep configure --config wavebench.toml --port rf_out --star
 ```
 
 `output on` 不是普通 setter。它会在写入前重新读取 RF 状态，确认频率、功率、实际端接、调制、Pulse、Sweep 和 protection 均满足安全合同。任何关键状态缺失或不一致都会在 ON 前拒绝；不应依赖先前一次成功查询。
+
+## A5-0：逻辑 trigger configuration 读取
+
+Core 已提供下列只读入口：
+
+```text
+wavebench rf-source trigger status --port PORT_ID
+rf_source.trigger_status
+```
+
+它读取 Pulse trigger mode、external trigger edge、external gate polarity、Sweep mode、Sweep period trigger 与 Sweep point trigger 的封闭类型化状态。该操作是 `stateful_read`，不读取普通 RF snapshot，不发送 setter、RF 输出、`*TRG`、`:SWE:EXEC` 或后面板配置命令。
+
+入口仍由 `rf_source.trigger_snapshot` capability 和目标端口的 `TRIGGER / READ` profile 门控。DSG830 当前 production descriptor 不声明该 capability，因此日常配置会在建立 session 前被拒绝。它只适用于非 production 的离线测试 descriptor 或后续私有零写诊断；`rf_out` 表示受这些配置影响的 RF 输出，不是物理 trigger／sync connector。外部 trigger、arm／fire、后面板接口和同步仍需明确物理接线、电气边界与 A5 证据。
 
 ## run plan 中的 RF 步骤
 

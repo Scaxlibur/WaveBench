@@ -8,9 +8,9 @@
 
 | 范围 | 当前状态 | 说明 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | M0–M4 合同完成；已提升的范围由插件 descriptor 决定 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出、内部正弦 AM／FM／PM，以及 internal／single Pulse 与 frequency-only Step Sweep 的类型合同、Service、CLI、run 路径与 artifact；按模式调制关闭仅用于本地证据与私有恢复。 |
-| DSG830 包 `0.2.0` | M0–M3、M4 Pulse 与 Step Sweep 的 A4 均已通过并提升；A5 未开始 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP`、内部正弦 AM／FM／PM、internal／single Pulse 与 frequency-only Step Sweep 映射；production descriptor 声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 和 `rf_source.sweep_configure`。 |
-| 真实仪器证据 | A1、A2、A3、A4 调制／Pulse／Step Sweep 已完成；A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW，A4 分别提升 RF-OFF 调制、OFF-only Pulse 与保持 Sweep disabled 的 Step Sweep 配置。调制证据不提升调制开启时的 RF 输出。 |
+| Core `0.8.25` 开发线 | M0–M4 与 A5-0 离线只读合同完成；已提升的范围由插件 descriptor 决定 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出、内部正弦 AM／FM／PM、internal／single Pulse、frequency-only Step Sweep，以及逻辑 trigger configuration 的只读类型、Service、CLI、run 和 artifact；按模式调制关闭仅用于本地证据与私有恢复。 |
+| DSG830 包 `0.2.0` | M0–M3、M4 Pulse 与 Step Sweep 的 A4 均已通过并提升；A5-0 映射已完成，物理 A5 未开始 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP`、内部正弦 AM／FM／PM、internal／single Pulse、frequency-only Step Sweep 与六条固定 trigger configuration query 映射；production descriptor 声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 和 `rf_source.sweep_configure`，不声明 `rf_source.trigger_snapshot`。 |
+| 真实仪器证据 | A1、A2、A3、A4 调制／Pulse／Step Sweep 已完成；物理 A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW，A4 分别提升 RF-OFF 调制、OFF-only Pulse 与保持 Sweep disabled 的 Step Sweep 配置。A5-0 不产生 production capability，也不提升调制开启时的 RF 输出。 |
 
 ## 双仓库交付规则
 
@@ -33,6 +33,7 @@
 | M3 | A4 已通过并提升 | 声明式内部正弦 AM／FM／PM profile、配置事务、CLI、run 与 artifact；按模式关闭仅用于本地证据与私有恢复 | 手册范围内的内部 Sine AM／FM／PM 映射、严格 readback、单模式 RF-OFF evidence harness 与私有恢复路径 | 只在 RF OFF、所有调制模式 disabled、profile 匹配且 postcondition 成立时写入；DSG830 production 已开放 `rf_source.modulation_configure`。PM 的 production profile 固定为 `1.25 rad`。 |
 | M4（Pulse） | 离线完成；A4 Pulse 已通过 | internal／single Pulse profile、OFF-only 配置事务、CLI、run 与 artifact | `:PULM:SOUR INT`、`:PULM:MODE SING`、period／width／polarity，固定以 `:PULM:STAT OFF` 收尾 | 初始或写后 RF 输出、调制、Pulse、Sweep、protection 不满足时拒绝；不触发、不使用后面板 Pulse I/O；DSG830 production 已开放 `rf_source.pulse_configure`。 |
 | M4（Step Sweep） | A4 已完成并提升 | frequency-only Step Sweep 合同、CLI、run、artifact 与本地 evidence harness | `:SWE:TYPE STEP`、`:SWE:DIR FWD`、`RAMP`／`LIN`、起止频率、点数、驻留时间，固定以 `:SWE:STAT OFF` 收尾 | 初始或写后 RF 输出、调制、Pulse、Sweep、protection 不满足时拒绝；不写 `:SWE:EXEC`、trigger、Level Sweep 或 RF 输出；DSG830 production 已开放 `rf_source.sweep_configure`。 |
+| A5-0 | 离线完成；不属于物理 A5 证据 | `RfTriggerProfile`、`RfTriggerSnapshot`、`rf_source.trigger_snapshot`、只读 Service／CLI／run／artifact | `:PULM:TRIG:MODE?`、external edge／gate query、Sweep mode／period／point trigger query 与严格 enum parser | 只使用 `TRIGGER / READ` profile 和非 production descriptor；固定 query 顺序、零 write、未知值失败关闭。它不定义物理 connector，不发送 trigger，也不提升 production capability。 |
 
 ## Seed：历史种子包
 
@@ -125,7 +126,13 @@ Pulse trigger、Sweep arm／fire／stop、外部 trigger、后面板辅助输出
 
 每次证据记录必须独立于代码提交，且不能包含真实资源地址、序列号、原始响应或实验室专用配置。未恢复或无法确认最终 RF OFF 的验收不能用于提升 capability。
 
-### A5：外部 trigger／同步的进入条件（未开始）
+### A5-0：逻辑 trigger configuration 读取（离线完成）
+
+A5-0 是物理 A5 之前的只读基础，不验证外部 trigger／同步接线。Core 已增加 `RfTriggerProfile` 和 `RfTriggerSnapshot`，以封闭 enum 表示 Pulse trigger mode、external trigger edge、external gate polarity、Sweep mode、Sweep period trigger 与 Sweep point trigger。`rf_source.trigger_snapshot`、`wavebench rf-source trigger status --port PORT_ID` 与 `rf_source.trigger_status` 都要求目标端口的 `TRIGGER / READ` profile；操作为 `stateful_read`，不读取普通 RF snapshot、不写入、不触发且不做 recovery。
+
+DSG830 driver 已用六条固定 query 读取该逻辑 configuration，并对别名和未知响应执行严格解析。production descriptor 仍不声明 `rf_source.trigger_snapshot` 或 `TRIGGER` feature；因此普通 DSG830 配置会在 session 建立前拒绝该入口。`port_id` 只表示这些设置影响的 RF 输出，不表示物理 trigger／sync connector，也不从 CH2 的 50 Ω 或 `rf_out` 的 dBm 参考推导电气条件。
+
+### A5：外部 trigger／同步的进入条件（物理验收未开始）
 
 A5 从已核对的物理接口开始，不从某条 SCPI 命令或已有 `rf_out` 证据开始。一次验收只能覆盖一个明确目标，例如 Pulse 的 external trigger、Sweep period trigger 或 Sweep point trigger；不能把其中一项外推为其它 trigger、fire、同步或后面板辅助输出能力。
 
@@ -137,7 +144,7 @@ A5 从已核对的物理接口开始，不从某条 SCPI 命令或已有 `rf_out
 | 初始与恢复状态 | 初始 RF 输出、调制、Pulse、Sweep、protection 与后面板配置；失败后的恢复方式和最终 RF OFF 独立确认方式。 |
 | 观察方式 | 如使用示波器，只能作为补充观察；必须核对其输入与接线，且不能替代仪器端读回。CH2 的 50 Ω 声明仅适用于已确认的 RF 路径。 |
 
-在上述事实未明确前，不写入后面板配置，不发送 `*TRG`、`:TRIG:*`、`:SWE:EXEC` 或 `:PULM:OUT`，不切换 RF 输出，也不把外部接口视为安全。A5 的推荐开发顺序为：先完成单一路径的 Core typed contract、descriptor validator、fake driver 与零写拒绝测试；再实现私有 `read_only` 诊断；最后在已确认接线和电气边界下设计独立受控证据。production descriptor 仍须等待该证据逐项提升。
+在上述事实未明确前，不写入后面板配置，不发送 `*TRG`、`:TRIG:*`、`:SWE:EXEC` 或 `:PULM:OUT`，不切换 RF 输出，也不把外部接口视为安全。A5 的推荐开发顺序为：先完成 A5-0 的逻辑 configuration readback、Core profile／artifact、DSG830 严格 parser 与 fake transport 零写回归；再实现保持原始 `read_only` 配置的私有零写诊断；最后在已确认接线和电气边界下，对一个明确的物理路径设计独立受控证据。production descriptor 仍须等待该证据逐项提升。
 
 ### A1：已完成的只读 snapshot 验收
 

@@ -169,6 +169,7 @@ class RfFeature(StrEnum):
     MODULATION = "modulation"
     PULSE = "pulse"
     SWEEP = "sweep"
+    TRIGGER = "trigger"
 
 
 class RfFeatureDirection(StrEnum):
@@ -201,7 +202,7 @@ class RfSourceDescriptorExtensions:
 
 每个 protection policy 的 `code` 必须非空且唯一。Core 以 policy 集合识别已知 condition；只有 `blocks_output_enable=False` 的已知 active code 可以不阻断 RF ON。不存在 policy 的 active code 必须拒绝 RF ON。
 
-`RfFeatureProfile` 是 `RfCwProfile`、`RfOutputProfile`、`RfModulationProfile`、`RfPulseProfile` 或 `RfSweepProfile` 的封闭联合。每种 profile 只描述所属 feature 的模式、方向、可读回字段和数值范围；不能用自由 mapping、SCPI 字符串或厂商回调扩展安全语义。
+`RfFeatureProfile` 是 `RfCwProfile`、`RfOutputProfile`、`RfModulationProfile`、`RfPulseProfile`、`RfSweepProfile` 或 `RfTriggerProfile` 的封闭联合。`RfTriggerProfile` 只描述可读取的逻辑 Pulse／Sweep trigger configuration 值；它不表示物理 trigger／sync 接口、方向、电平或端接。每种 profile 只描述所属 feature 的模式、方向、可读回字段和数值范围；不能用自由 mapping、SCPI 字符串或厂商回调扩展安全语义。
 
 每个 `RfFeatureCapability` 必须指定 feature、direction、适用端口、静态限制和可读回字段。静态 profile 只能收紧设备支持范围，不能授权未声明的 operation。`rf_source.pulse_trigger` 对应 `PULSE / TRIGGER`；`rf_source.sweep_fire` 对应 `SWEEP / FIRE`；其他 operation 也必须在 M0–M4 的 descriptor validator 中有唯一映射。
 
@@ -213,6 +214,7 @@ Core 在调用目标 driver operation 前校验 request、access、descriptor �
 | --- | --- | --- |
 | `rf_source.idn` | `idn()` | 身份查询 |
 | `rf_source.snapshot` | `get_rf_snapshot()` | 只读完整快照 |
+| `rf_source.trigger_snapshot` | `get_rf_trigger_snapshot(port_id)` | 只读逻辑 Pulse／Sweep trigger configuration；不表示物理 trigger connector。 |
 | `rf_source.cw_configure` | `configure_cw(request)` | 端口频率与 dBm 功率配置 |
 | `rf_source.output` | `set_rf_output(request)` | 单端口 RF ON/OFF |
 | `rf_source.modulation_configure` | `configure_rf_modulation(request)` | 已声明的 AM／FM／PM 配置 |
@@ -294,6 +296,10 @@ wavebench rf-source idn
 wavebench rf-source status
 rf_source.status
 
+# A5-0 离线只读：需要声明 rf_source.trigger_snapshot 的非 production descriptor
+wavebench rf-source trigger status --port PORT_ID
+rf_source.trigger_status
+
 # 生产 M1：仅在已完成 A3 的插件上，且必须同时具备 read_write、CW capability 和 OFF-only preflight
 wavebench rf-source set-frequency --port PORT_ID HZ
 wavebench rf-source set-power --port PORT_ID DBM
@@ -306,7 +312,7 @@ rf_source.output_enable
 rf_source.output_disable
 ```
 
-`rf-source status` 和 `rf_source.status` 均要求 descriptor 声明 `rf_source.snapshot`；缺少该 capability 时，Core 会在打开 transport 前拒绝请求。`doctor` 仅新增 `rf_source` 的 `*IDN?` target；它不读取运行状态、不改变访问模式，也不打开 RF 输出。
+`rf-source status` 和 `rf_source.status` 均要求 descriptor 声明 `rf_source.snapshot`；缺少该 capability 时，Core 会在打开 transport 前拒绝请求。`rf-source trigger status` 和 `rf_source.trigger_status` 要求独立的 `rf_source.trigger_snapshot` capability，以及目标 `port_id` 的 `TRIGGER / READ` profile；它们是 `stateful_read`，不读取普通 RF snapshot、不执行 recovery、不写入或触发。DSG830 当前 production descriptor 未声明该 capability，因此该命令会在打开 session 前拒绝。`doctor` 仅新增 `rf_source` 的 `*IDN?` target；它不读取运行状态、不改变访问模式，也不打开 RF 输出。
 
 M1 的每个 run step 都要求 `port_id` 与一个有限数值；M2 的每个 run step 都要求 `port_id`，并产生脱敏的 preflight／postcondition snapshot artifact。所有三类 step 使用独立的 `wavebench.rf_source.operation.v1` artifact namespace。DSG830 已由 A3 声明 `rf_source.cw_configure`，并由 A2 声明 `rf_source.output`；M1 仅在 `read_write`、目标端口明确 OFF 与完整 OFF-only preflight 同时成立时可执行，M2 还要求完整端口 safety 配置和 fresh preflight。
 
@@ -353,7 +359,7 @@ M3 使用 `modulation_kind = "am" | "fm" | "pm"`，并且只接受与该模式�
 
 外部 trigger／同步不能只在 `RfFeatureDirection.TRIGGER`、`FIRE` 或 `ARM` 已存在的前提下补充 driver 方法。新的 operation 必须先定义目标物理接口、方向、电气 profile、允许的模式、可读回状态、RF 能量前置条件和失败恢复语义；这些字段不能用自由 mapping 或普通 `source` 的 channel／Vpp 模型表示。
 
-在没有已确认后面板接线和电气边界的情况下，Core 只允许离线 typed contract、descriptor validator、fake transport、零写拒绝和 artifact 测试。它不声明 production capability、不创建外部接口默认值、不隐式触发设备，也不把 `rf_out` 的端接或 CH2 的输入设置用于推断 trigger／sync 端口。任何会使设备开始 Pulse 或 Sweep 的 fire／trigger operation 仍需独立的、一次性 safety 决定和 A5 实机证据。
+在没有已确认后面板接线和电气边界的情况下，Core 只允许离线 typed contract、descriptor validator、fake transport、零写拒绝和 artifact 测试。A5-0 已在该范围内增加 `RfTriggerProfile`、`RfTriggerSnapshot`、`rf_source.trigger_snapshot`、`rf-source trigger status` 与 `rf_source.trigger_status`；它固定读取逻辑 Pulse／Sweep trigger configuration，不把 `port_id` 解释为物理 trigger／sync connector。它不声明 production capability、不创建外部接口默认值、不隐式触发设备，也不把 `rf_out` 的端接或 CH2 的输入设置用于推断 trigger／sync 端口。任何会使设备开始 Pulse 或 Sweep 的 fire／trigger operation 仍需独立的、一次性 safety 决定和 A5 实机证据。
 
 ## M0–M4 里程碑
 
@@ -389,7 +395,7 @@ DSG830 只为通用合同提供第一组设备映射，不改变核心类型或�
 
 手册未给出可安全采用的 error queue 查询命令。因此 DSG830 不声明 `rf_source.errors`，所有写后判断依赖独立状态回读和 condition register。
 
-DSG830 的 production `descriptor()` 在 A1／A2／A3／A4 调制／Pulse／Step Sweep 完成后声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 与 `rf_source.sweep_configure`。`get_rf_snapshot()` 可通过只读入口观察状态，`configure_cw()` 只可在目标输出 OFF 的完整 preflight 后写入一个频率或功率字段，`set_rf_output()` 只可在完整 safety preflight 后切换 `rf_out`。M3 覆盖 RF-OFF 的内部正弦 AM／FM／PM，严格 readback 后由 A4 harness 执行受限调制关闭；PM production profile 固定为 `1.25 rad`，`rf_source.modulation_disable` 仍不进入 descriptor。M4 Pulse 固定 internal／single、period／width／polarity，并以 `:PULM:STAT OFF` 收尾；两种极性已通过受控实机配置、读回与最终 RF-OFF 验证。M4 Step Sweep 固定为仅配置的 `STEP`／`FWD`／`RAMP`／`LIN` 映射与严格 readback，并以 `:SWE:STAT OFF` 收尾；它不写 `:SWE:EXEC`、trigger、Level Sweep 或 RF 输出。历史 A4 harness 在对应 descriptor 提升后拒绝重跑；普通 M3／Pulse／Step Sweep 使用必须经 production descriptor、`read_write` access 与完整 OFF-only preflight。既有证据不开放调制输出、Sweep fire 或 trigger 控制。历史 `0.1.0` 的 `source.idn` 种子已迁移为当前 `0.2.0` 的 RF 包。
+DSG830 的 production `descriptor()` 在 A1／A2／A3／A4 调制／Pulse／Step Sweep 完成后声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 与 `rf_source.sweep_configure`。`get_rf_snapshot()` 可通过只读入口观察状态，`get_rf_trigger_snapshot()` 仅以固定 query 读取逻辑 trigger configuration，且不进入 production descriptor；`configure_cw()` 只可在目标输出 OFF 的完整 preflight 后写入一个频率或功率字段，`set_rf_output()` 只可在完整 safety preflight 后切换 `rf_out`。M3 覆盖 RF-OFF 的内部正弦 AM／FM／PM，严格 readback 后由 A4 harness 执行受限调制关闭；PM production profile 固定为 `1.25 rad`，`rf_source.modulation_disable` 仍不进入 descriptor。M4 Pulse 固定 internal／single、period／width／polarity，并以 `:PULM:STAT OFF` 收尾；两种极性已通过受控实机配置、读回与最终 RF-OFF 验证。M4 Step Sweep 固定为仅配置的 `STEP`／`FWD`／`RAMP`／`LIN` 映射与严格 readback，并以 `:SWE:STAT OFF` 收尾；它不写 `:SWE:EXEC`、trigger、Level Sweep 或 RF 输出。历史 A4 harness 在对应 descriptor 提升后拒绝重跑；普通 M3／Pulse／Step Sweep 使用必须经 production descriptor、`read_write` access 与完整 OFF-only preflight。既有证据不开放调制输出、Sweep fire、后面板配置或 trigger 控制。历史 `0.1.0` 的 `source.idn` 种子已迁移为当前 `0.2.0` 的 RF 包。
 
 ## 测试与发布边界
 
