@@ -116,7 +116,10 @@ capability 门禁。验收使用一次性、非 production 的本地 evidence ha
 3. 禁止 `*RST`、错误队列、RF OFF/ON、频率／功率／调制／Pulse／Sweep setter、trigger、capture 和任何
    `write`／`write_bytes`。A1 失败时不在该只读流程中尝试 recovery OFF。
 4. 本地证据只保存 A1 标签、时间、Core／插件版本、canonical driver、脱敏的型号／固件／选件信息、`rf_out`
-   的类型化 snapshot、session 结果和 guard audit 摘要。不得保存资源、序列号、完整 IDN、原始响应或命令日志。
+   的类型化 snapshot、已人工确认的实际端接、session 结果和 guard audit 摘要。隔离 TOML 的
+   `[a1_evidence]` 必须显式记录端口、有限正数端接和已确认的选件列表；firmware 从同一次 `*IDN?` 的
+   受限字段提取，不新增查询。不得从连接器标签、scope coupling 或型号名称推导端接，也不得保存资源、
+   序列号、完整 IDN、原始响应或命令日志。
 5. 成功条件为：parser 完整成功、目标 RF 输出明确为 OFF、session 健康且关闭成功、audit 显示
    `access=read_only`、query 数量与预期一致、所有写计数和 `instrument_mutation_writes` 均为零。输出为 ON、
    状态未知、保护／解析异常、session 异常或关闭失败均为未通过，不能提升 capability。
