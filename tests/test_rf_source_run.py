@@ -20,6 +20,8 @@ from wavebench.config import (
 )
 from wavebench.errors import ConfigError
 from wavebench.instruments.rf_source_extensions import (
+    RfCwRequest,
+    RfCwResult,
     RfModulationState,
     RfObserved,
     RfPortSnapshot,
@@ -27,6 +29,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfPulseState,
     RfSourceSnapshot,
     RfSweepState,
+    rf_source_cw_operation_artifact,
     rf_source_snapshot_operation_artifact,
 )
 from wavebench.logging import CommandLogger
@@ -36,7 +39,7 @@ from wavebench.services.run_plan import STEP_SCHEMAS, load_run_plan
 from wavebench.services.run_service import RunInstrumentServices, RunService
 
 
-def _config(directory: str) -> WaveBenchConfig:
+def _config(directory: str, *, access: str = "read_only") -> WaveBenchConfig:
     return WaveBenchConfig(
         connection=ConnectionConfig("lan", "TCPIP::scope::INSTR", 1_000, 1_000),
         scope=ScopeConfig("rtm2032", None, 1, False, True),
@@ -55,7 +58,7 @@ def _config(directory: str) -> WaveBenchConfig:
         rf_source=RfSourceConfig(
             driver="example.rf1",
             resource="TCPIP::rf::INSTR",
-            access="read_only",
+            access=access,  # type: ignore[arg-type]
         ),
     )
 
@@ -63,6 +66,15 @@ def _config(directory: str) -> WaveBenchConfig:
 def _plan(directory: str):
     path = Path(directory) / "plan.toml"
     path.write_text('[[steps]]\nkind = "rf_source.status"\n', encoding="utf-8")
+    return load_run_plan(path)
+
+
+def _cw_plan(directory: str, *, kind: str, field: str, value: float):
+    path = Path(directory) / "plan.toml"
+    path.write_text(
+        f'[[steps]]\nkind = "{kind}"\nport_id = "rf_out"\n{field} = {value}\n',
+        encoding="utf-8",
+    )
     return load_run_plan(path)
 
 
@@ -213,3 +225,89 @@ def test_rf_source_operation_artifacts_are_validated_in_a_separate_root_namespac
                     {"schema": "wavebench.rf_source.operation.v1", "operation": "source.status"}
                 ],
             )
+
+
+def test_rf_source_cw_steps_require_capability_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory, access="read_write"), logger=CommandLogger())
+        plan = _cw_plan(
+            directory,
+            kind="rf_source.set_frequency",
+            field="frequency_hz",
+            value=2_000_000.0,
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor("rf_source.idn", "rf_source.snapshot"),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="rf_source.cw_configure"):
+                service.run(plan)
+
+    open_services.assert_not_called()
+
+
+def test_rf_source_cw_step_has_write_intent_and_separate_artifact_namespace() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _cw_plan(
+            directory,
+            kind="rf_source.set_power_dbm",
+            field="power_dbm",
+            value=-10.0,
+        )
+        config = _config(directory, access="read_write")
+        intent = build_execution_intent(plan, config)
+        assert intent.operations[0]["operation"] == "rf_source.set_power_dbm"
+        assert intent.operations[0]["effect"] == "write"
+        assert intent.operations[0]["parameters"] == {"port_id": "rf_out", "power_dbm": -10.0}
+
+        preflight = _snapshot()
+        postcondition = RfSourceSnapshot(
+            ports=(
+                RfPortSnapshot(
+                    port_id="rf_out",
+                    frequency_hz=RfObserved.value_of(1_000_000.0),
+                    power_dbm=RfObserved.value_of(-10.0),
+                    output_enabled=RfObserved.value_of(False),
+                    modulation=RfObserved.value_of(RfModulationState.DISABLED),
+                    pulse=RfObserved.value_of(RfPulseState.DISABLED),
+                    sweep=RfObserved.value_of(RfSweepState.DISABLED),
+                ),
+            ),
+            protection=RfObserved.value_of(RfProtectionStatus(active_codes=())),
+        )
+        result_value = RfCwResult(port_id="rf_out", power_dbm=-10.0)
+        artifact = rf_source_cw_operation_artifact(
+            request=RfCwRequest(port_id="rf_out", power_dbm=-10.0),
+            result=result_value,
+            preflight_snapshot=preflight,
+            postcondition_snapshot=postcondition,
+        )
+        rf_service = SimpleNamespace(
+            configure_cw_with_artifact=Mock(return_value=(result_value, artifact)),
+            audit_snapshot=lambda: None,
+        )
+
+        class OfflineRfRunService(RunService):
+            @contextmanager
+            def _run_instrument_services(self, run_plan):
+                del run_plan
+                yield RunInstrumentServices(rf_source=rf_service)
+
+            def _run_safety_guards(self, run_plan, *, services=None):
+                del run_plan, services
+
+        descriptor = _descriptor(
+            "rf_source.idn",
+            "rf_source.snapshot",
+            "rf_source.cw_configure",
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=descriptor,
+        ):
+            run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
+
+        rf_service.configure_cw_with_artifact.assert_called_once()
+        assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
+        run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
+        assert run_data["rf_source_operations"] == [artifact]

@@ -22,7 +22,10 @@ from wavebench.errors import (
 )
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
-from wavebench.instruments.rf_source_extensions import rf_source_snapshot_operation_artifact
+from wavebench.instruments.rf_source_extensions import (
+    RfCwRequest,
+    rf_source_snapshot_operation_artifact,
+)
 from wavebench.instruments.source_extensions import (
     PatchAction,
     PatchValue,
@@ -419,6 +422,8 @@ class RunService:
                 add("source", "source.status")
             elif step.kind == "rf_source.status":
                 add("rf_source", "rf_source.snapshot")
+            elif step.kind in {"rf_source.set_frequency", "rf_source.set_power_dbm"}:
+                add("rf_source", "rf_source.snapshot", "rf_source.cw_configure")
             elif step.kind == "source.set_freq":
                 add("source", "source.set_frequency")
                 source = self.config.source
@@ -1173,6 +1178,26 @@ class RunService:
         elif step.kind == "rf_source.status":
             snapshot = self._rf_source_service(services=services).snapshot()
             artifact = {"rf_source_operation": rf_source_snapshot_operation_artifact(snapshot)}
+        elif step.kind == "rf_source.set_frequency":
+            _, rf_source_operation = self._rf_source_service(
+                services=services
+            ).configure_cw_with_artifact(
+                RfCwRequest(
+                    port_id=step.fields["port_id"],
+                    frequency_hz=step.fields["frequency_hz"],
+                )
+            )
+            artifact = {"rf_source_operation": rf_source_operation}
+        elif step.kind == "rf_source.set_power_dbm":
+            _, rf_source_operation = self._rf_source_service(
+                services=services
+            ).configure_cw_with_artifact(
+                RfCwRequest(
+                    port_id=step.fields["port_id"],
+                    power_dbm=step.fields["power_dbm"],
+                )
+            )
+            artifact = {"rf_source_operation": rf_source_operation}
         elif step.kind == "source.basic_configure_v2":
             fields = step.fields
             _, source_operation = self._source_service(services=services).configure_basic_v2(

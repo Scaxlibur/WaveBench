@@ -22,6 +22,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfObserved,
     RfCwProfile,
     RfCwRequest,
+    RfCwResult,
     RfFeature,
     RfFeatureCapability,
     RfFeatureDirection,
@@ -388,3 +389,16 @@ def test_cw_configuration_mismatch_or_write_failure_is_not_retried() -> None:
     assert failed_driver.calls == ["snapshot", "configure_cw"]
     assert failed_service.session_state is not None
     assert failed_service.session_state.health is SessionHealth.UNCERTAIN
+
+
+def test_cw_configuration_with_artifact_preserves_pre_and_postcondition_snapshots() -> None:
+    request = RfCwRequest(port_id="rf_out", power_dbm=-10.0)
+    service, driver = _cw_service([_snapshot(), _snapshot(power_dbm=-10.0)])
+
+    result, artifact = service.configure_cw_with_artifact(request)
+
+    assert result == RfCwResult(port_id="rf_out", power_dbm=-10.0)
+    assert driver.requests == [request]
+    assert artifact["operation"] == "rf_source.set_power_dbm"
+    assert artifact["preflight_snapshot"]["ports"][0]["power_dbm"]["value"] == -30.0
+    assert artifact["postcondition_snapshot"]["ports"][0]["power_dbm"]["value"] == -10.0

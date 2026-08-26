@@ -24,6 +24,8 @@ _STEP_OPERATIONS = {
     "sweep.frequency_response": "scope.capture_waveforms",
     "source.status": "source.status",
     "rf_source.status": "rf_source.snapshot",
+    "rf_source.set_frequency": "rf_source.set_frequency",
+    "rf_source.set_power_dbm": "rf_source.set_power_dbm",
     "source.arb_load": "source.arbitrary_upload",
     "source.set_freq": "source.set_frequency",
     "source.set_func": "source.set_function",

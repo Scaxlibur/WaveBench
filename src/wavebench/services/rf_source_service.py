@@ -29,6 +29,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfSourceDriver,
     RfSourceSnapshot,
     RfSweepState,
+    rf_source_cw_operation_artifact,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
@@ -37,6 +38,13 @@ from wavebench.services.resource_lease import ResourceLease
 from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.transport.base import InstrumentTransport
 from wavebench.transport.session import InstrumentSessionState, SessionHealth
+
+
+@dataclass(frozen=True)
+class _RfCwTransaction:
+    result: RfCwResult
+    preflight_snapshot: RfSourceSnapshot
+    postcondition_snapshot: RfSourceSnapshot
 
 
 @dataclass
@@ -133,6 +141,26 @@ class RfSourceService(SessionStateAliasMixin):
                 return rf_source.get_rf_snapshot()
 
     def configure_cw(self, request: RfCwRequest) -> RfCwResult:
+        return self._configure_cw_transaction(request).result
+
+    def configure_cw_with_artifact(
+        self,
+        request: RfCwRequest,
+    ) -> tuple[RfCwResult, dict[str, object]]:
+        """Apply M1 CW once and retain typed pre/postcondition evidence."""
+
+        transaction = self._configure_cw_transaction(request)
+        return (
+            transaction.result,
+            rf_source_cw_operation_artifact(
+                request,
+                transaction.result,
+                preflight_snapshot=transaction.preflight_snapshot,
+                postcondition_snapshot=transaction.postcondition_snapshot,
+            ),
+        )
+
+    def _configure_cw_transaction(self, request: RfCwRequest) -> _RfCwTransaction:
         """Apply one OFF-only CW field and independently confirm the result.
 
         M1 deliberately permits exactly one write per call.  It does not retry a
@@ -169,12 +197,17 @@ class RfSourceService(SessionStateAliasMixin):
                     main_entered = True
                     rf_source.configure_cw(request)
                     postcondition_snapshot = rf_source.get_rf_snapshot()
-                    return self._validate_cw_postcondition(
+                    result = self._validate_cw_postcondition(
                         request,
                         postcondition_snapshot,
                         port_profile,
                         cw_profile,
                         operation=operation,
+                    )
+                    return _RfCwTransaction(
+                        result=result,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
                     )
                 except BaseException:
                     if main_entered and session_state.health is SessionHealth.HEALTHY:

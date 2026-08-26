@@ -38,6 +38,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfSweepState,
     rf_source_snapshot_document,
     rf_source_snapshot_operation_artifact,
+    rf_source_cw_operation_artifact,
 )
 
 
@@ -233,6 +234,39 @@ def test_rf_snapshot_document_and_artifact_are_structured_and_redacted() -> None
         "operation": "rf_source.snapshot",
         "snapshot": document,
     }
+
+
+def test_rf_cw_operation_artifact_uses_typed_pre_and_postcondition_evidence() -> None:
+    request = RfCwRequest(port_id="rf_out", frequency_hz=2_000_000.0)
+    result = RfCwResult(port_id="rf_out", frequency_hz=2_000_000.0)
+    preflight = snapshot()
+    postcondition = RfSourceSnapshot(
+        ports=(
+            RfPortSnapshot(
+                port_id="rf_out",
+                frequency_hz=RfObserved.value_of(2_000_000.0),
+                power_dbm=RfObserved.value_of(-30.0),
+                output_enabled=RfObserved.value_of(False),
+                modulation=RfObserved.value_of(RfModulationState.DISABLED),
+                pulse=RfObserved.value_of(RfPulseState.DISABLED),
+                sweep=RfObserved.value_of(RfSweepState.DISABLED),
+            ),
+        ),
+        protection=RfObserved.value_of(RfProtectionStatus(active_codes=())),
+    )
+
+    artifact = rf_source_cw_operation_artifact(
+        request,
+        result,
+        preflight_snapshot=preflight,
+        postcondition_snapshot=postcondition,
+    )
+
+    assert artifact["schema"] == RF_SOURCE_OPERATION_ARTIFACT_SCHEMA
+    assert artifact["operation"] == "rf_source.set_frequency"
+    assert artifact["request"]["frequency_hz"] == 2_000_000.0
+    assert artifact["result"]["frequency_hz"] == 2_000_000.0
+    assert "resource" not in str(artifact)
 
 
 def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:

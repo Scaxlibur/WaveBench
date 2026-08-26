@@ -300,7 +300,7 @@ wavebench rf-source set-frequency --port PORT_ID HZ
 wavebench rf-source set-power --port PORT_ID DBM
 ```
 
-M1 的 run step、artifact，以及 M2–M4 的写入 CLI 和 run step 仍是设计合同，尚未进入当前 run schema：
+M1 的 run step 为 `rf_source.set_frequency` 与 `rf_source.set_power_dbm`，每个 step 都要求 `port_id` 与一个有限数值，并写入脱敏的 preflight／postcondition snapshot artifact。它们与 CLI 一样仍受 production capability 门禁；DSG830 的 production descriptor 不声明 `rf_source.cw_configure`。M2–M4 的写入 CLI 和 run step 仍是设计合同，尚未进入当前 run schema：
 
 ```text
 wavebench rf-source output --port PORT_ID on|off

@@ -546,6 +546,38 @@ def rf_source_snapshot_operation_artifact(snapshot: RfSourceSnapshot) -> dict[st
     }
 
 
+def rf_source_cw_operation_artifact(
+    request: RfCwRequest,
+    result: RfCwResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+) -> dict[str, object]:
+    """Build one redacted M1 CW operation artifact from typed evidence."""
+
+    if not isinstance(request, RfCwRequest):
+        raise TypeError("request must be RfCwRequest")
+    if not isinstance(result, RfCwResult):
+        raise TypeError("result must be RfCwResult")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    operation = (
+        "rf_source.set_frequency"
+        if request.frequency_hz is not None
+        else "rf_source.set_power_dbm"
+    )
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": operation,
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+    }
+
+
 __all__ = [
     "RF_SOURCE_CONTRACT_VERSION",
     "RF_SOURCE_OPERATION_ARTIFACT_SCHEMA",
@@ -577,6 +609,7 @@ __all__ = [
     "RfSweepProfile",
     "RfSweepState",
     "rf_source_canonical_json",
+    "rf_source_cw_operation_artifact",
     "rf_source_digest",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",
