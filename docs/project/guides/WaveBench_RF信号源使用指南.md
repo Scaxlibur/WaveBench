@@ -22,7 +22,7 @@
 | 身份与状态 | 已开放 | 已开放 | `read_only` 可执行。 |
 | CW 频率／dBm 功率 | 已开放 | A3 后已开放 | 仅目标 RF 输出明确 OFF 时的单字段写入。 |
 | RF ON/OFF | 已开放 | A2 后已开放 | ON 需要完整端口 safety 配置与 fresh preflight。 |
-| 内部正弦 AM／FM／PM | M3 离线合同与受限恢复路径已完成 | 未开放 | A4 尚无覆盖三种模式的完整合格证据前，DSG830 会在 transport I/O 前拒绝该 capability。 |
+| 内部正弦 AM／FM／PM | 已开放 | A4 后已开放 | 只在 RF OFF 下配置。AM 为 `0–100 %`，FM 为 `0.1 Hz–1 MHz`，PM 的 production profile 精确为 `1.25 rad`；三种模式的内部频率均为 `10 Hz–100 kHz`。调制开启时的 RF 输出仍未开放。 |
 | Pulse | M4 离线合同与受控 evidence 已完成 | A4 Pulse 后已开放 | 当前只限 internal／single 配置并强制保持 Pulse OFF；需要 `read_write` 与 fresh OFF-only preflight。 |
 | frequency-only Step Sweep | M4 合同、CLI、run step、artifact 与 A4 证据已完成 | A4 Step Sweep 后已开放 | 仅固定 `STEP`／`FWD`／`RAMP`／`LIN`，配置后 Sweep 仍保持关闭；需要 `read_write`、匹配 profile 与 fresh OFF-only preflight。 |
 | trigger、arm／fire、Level Sweep | 未完成 | 未开放 | 不应尝试调用或绕过。 |
@@ -82,11 +82,14 @@ wavebench rf-source idn --config wavebench.toml
 wavebench rf-source status --config wavebench.toml
 ```
 
-在 production descriptor 已声明对应 capability、配置为 `read_write` 且所有 preflight 条件满足时，DSG830 可以执行受限的 CW、RF 输出、Pulse 和 Step Sweep 配置操作：
+在 production descriptor 已声明对应 capability、配置为 `read_write` 且所有 preflight 条件满足时，DSG830 可以执行受限的 CW、内部正弦调制、RF 输出、Pulse 和 Step Sweep 配置操作：
 
 ```bash
 wavebench rf-source set-frequency --config wavebench.toml --port rf_out 1000000
 wavebench rf-source set-power --config wavebench.toml --port rf_out -40
+wavebench rf-source modulation configure-am --config wavebench.toml --port rf_out --depth-percent 25 --internal-frequency-hz 1000
+wavebench rf-source modulation configure-fm --config wavebench.toml --port rf_out --frequency-deviation-hz 10000 --internal-frequency-hz 1000
+wavebench rf-source modulation configure-pm --config wavebench.toml --port rf_out --phase-deviation-rad 1.25 --internal-frequency-hz 1000
 wavebench rf-source output --config wavebench.toml --port rf_out on
 wavebench rf-source output --config wavebench.toml --port rf_out off
 wavebench rf-source pulse configure --config wavebench.toml --port rf_out --period-s 0.001 --width-s 0.0001 --polarity normal
@@ -174,11 +177,11 @@ internal_frequency_hz = 1000
 
 M3 事务要求目标 RF 输出 OFF、AM／FM／PM 三种模式均处于 disabled、Pulse／Sweep disabled，且没有活动 protection condition。FM 与 PM 共享设备的当前选择位：在三种模式均关闭时，preflight 可以观察到另一种 FM／PM 选择，固定写入会明确选择目标类型；postcondition 必须确认已切换到目标类型。Core 用独立调制 snapshot 验证目标模式、源、波形、数值、内部频率、全局调制开关和 RF 输出仍然 OFF。写入结果不明或 postcondition 不匹配时不重试，session 会降为不确定状态。
 
-截至当前，DSG830 production descriptor 不声明 `rf_source.modulation_configure`。因此上述命令和 step 仅用于离线 fake descriptor、开发验证或未来已取得 A4 证据的插件；对当前 production DSG830 会在打开 transport 前被 capability 门拒绝。
+DSG830 production descriptor 已声明 `rf_source.modulation_configure`。它只接受 descriptor 中的内部 Sine profile：AM `0–100 %`、FM `0.1 Hz–1 MHz`、PM 精确 `1.25 rad`，内部频率均为 `10 Hz–100 kHz`。超出该 production profile 的请求会在仪器 I/O 前拒绝；不能把 driver 的离线映射范围当作当前设备的写入授权。
 
-DSG830 源码 checkout 的 A4 harness 是开发验证工具，不是日常命令。它一次配置一个内部 Sine 模式，完成读回后立即执行同一模式的受限关闭事务，并在最终 snapshot 中确认 RF 输出与调制均已关闭。显式 `--recover` 只用于恢复「已明确识别的单一活动模式」，输出为私有恢复记录；两条路径都不读取 CH2、不调用 RF output，也不能改变 production capability。显式 `--diagnose` 保留原始 `read_only` 配置，只读取初始／最终 RF snapshot 与指定模式 profile，并要求 transport audit 为零写；它只生成私有诊断记录。A4 的 AM、FM RF-OFF 序列已通过；PM 仍有严格读回不匹配，故整体调制 capability 尚未提升。
+DSG830 源码 checkout 的 A4 harness 是已完成的开发验收工具，不是日常命令。它一次配置一个内部 Sine 模式，完成读回后立即执行同一模式的受限关闭事务，并在最终 snapshot 中确认 RF 输出与调制均已关闭。显式 `--recover` 只用于恢复「已明确识别的单一活动模式」，输出为私有恢复记录；两条路径都不读取 CH2、不调用 RF output，也不能改变 production capability。显式 `--diagnose` 保留原始 `read_only` 配置，只读取初始／最终 RF snapshot 与指定模式 profile，并要求 transport audit 为零写；它只生成私有诊断记录。AM／FM／PM 的 RF-OFF 序列均已通过；PM 的 production profile 因严格读回证据而固定为 `1.25 rad`。
 
-M2 的 RF ON 合同目前要求调制 disabled。即使未来 A4 仅提升 M3 配置 capability，也不能据此推导「已可在调制开启时输出 RF」。允许调制输出需要单独调整输出 safety 合同并取得相应实机证据；不得通过关闭门禁或原始 SCPI 先行绕过。
+M2 的 RF ON 合同目前要求调制 disabled。M3 已提升的配置 capability 不能据此推导「已可在调制开启时输出 RF」。允许调制输出需要单独调整输出 safety 合同并取得相应实机证据；不得通过关闭门禁或原始 SCPI 先行绕过。
 
 ## M4：受控 Pulse 与 Step Sweep 配置合同
 

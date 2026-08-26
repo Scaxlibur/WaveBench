@@ -19,7 +19,7 @@ WaveBench 优先解决以下问题：
 | 信号源 | DG4000 / DG4202 的状态、基本波形、频率、幅度、输出和任意波上传 | 不提供通用波形编辑器或跨厂商抽象 |
 | 电源 | DP800 的状态、保护、设定值和显式输出控制 | `power set` 与 `power output` 是独立动作 |
 | 万用表 | DM3000 / DM3058 的常用读数和部分连接方式 | 型号、接口和测量函数以当前 driver 为准 |
-| RF 信号源 | M0–M4 插件领域：身份查询、类型化 snapshot、OFF-only CW、端口级输出、内部正弦调制合同、Pulse 与 Step Sweep 配置、CLI 与对应 run step | 不复用普通 source；DSG830 已完成 A1／A2／A3／A4 Pulse／A4 Step Sweep，声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、受 safety 限制的 `rf_source.output`、`rf_source.pulse_configure` 和 `rf_source.sweep_configure`；M3 capability 仍需覆盖 PM 的 A4 证据 |
+| RF 信号源 | M0–M4 插件领域：身份查询、类型化 snapshot、OFF-only CW、端口级输出、内部正弦调制、Pulse 与 Step Sweep 配置、CLI 与对应 run step | 不复用普通 source；DSG830 已完成 A1／A2／A3／A4 调制／Pulse／Step Sweep，声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、受 safety 限制的 `rf_source.output`、RF-OFF `rf_source.modulation_configure`、`rf_source.pulse_configure` 和 `rf_source.sweep_configure`；PM production profile 仅为 `1.25 rad`，调制输出仍未开放 |
 | run plan | source、rf_source、power、scope、dmm、sleep 和频响步骤；包含检查、预检、恢复和质量判断 | 不保证多仪器同步采样；RF 输出仍受 capability、access 和端口 safety 限制 |
 | 报告与产物 | CSV、NPY、JSON metadata、命令记录、静态 HTML 报告和 report index | 报告读取已有产物，不代替实时采集 |
 | TUI | 电源、万用表和信号源的实验性终端面板 | 不负责 run plan 编辑、完整波形查看或插件管理 |
@@ -29,7 +29,7 @@ WaveBench 优先解决以下问题：
 
 RF 信号源不是当前 `source` 的别名。`rf_source` 使用 `port_id`、dBm、RF 输出、端接和 protection 状态，不复用 Vpp、offset、数字 channel 或波形模型。
 
-当前 Core 已提供 M0–M4 合同。DSG830 已凭 A1 证据开放 production snapshot、凭 A2 证据开放具有完整端口 safety 配置的 `rf_source.output`、凭 A3 证据开放 OFF-only `rf_source.cw_configure`，并凭 A4 Pulse／Step Sweep 证据开放保持 disabled 的 `rf_source.pulse_configure` 与 `rf_source.sweep_configure`。M3 内部正弦调制已完成离线合同与 driver 映射，但 capability 仍等待覆盖 PM 的 A4 证据；trigger、Sweep execute／fire 与 Level Sweep 继续等待对应 A5 或独立证据。具体合同见[RF 信号源领域设计](WaveBench_RF信号源设计.md)，日常操作见[RF 信号源使用指南](../guides/WaveBench_RF信号源使用指南.md)，实现顺序见[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
+当前 Core 已提供 M0–M4 合同。DSG830 已凭 A1 证据开放 production snapshot、凭 A2 证据开放具有完整端口 safety 配置的 `rf_source.output`、凭 A3 证据开放 OFF-only `rf_source.cw_configure`，并凭 A4 调制／Pulse／Step Sweep 证据开放 RF-OFF `rf_source.modulation_configure`、保持 disabled 的 `rf_source.pulse_configure` 与 `rf_source.sweep_configure`。M3 的 PM production profile 固定为 `1.25 rad`，而 M2 的 RF ON 合同仍要求调制 disabled；trigger、Sweep execute／fire 与 Level Sweep 继续等待对应 A5 或独立证据。具体合同见[RF 信号源领域设计](WaveBench_RF信号源设计.md)，日常操作见[RF 信号源使用指南](../guides/WaveBench_RF信号源使用指南.md)，实现顺序见[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
 
 ## 推荐工作顺序
 

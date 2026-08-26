@@ -66,7 +66,7 @@ step 的 `OperationSpec`。`run plan --intent` 会在取得资源租约、打开
 
 ## RF 信号源步骤
 
-RF 使用独立的 `rf_source.*` step，不使用普通 `source` 的 channel、Vpp、restore 或 safety 语义。当前 DSG830 production descriptor 已开放只读状态、OFF-only CW、受 safety 限制的 RF 输出、internal／single Pulse 和保持 Sweep disabled 的 frequency-only Step Sweep 配置：
+RF 使用独立的 `rf_source.*` step，不使用普通 `source` 的 channel、Vpp、restore 或 safety 语义。当前 DSG830 production descriptor 已开放只读状态、OFF-only CW、RF-OFF 内部正弦调制、受 safety 限制的 RF 输出、internal／single Pulse 和保持 Sweep disabled 的 frequency-only Step Sweep 配置：
 
 ```toml
 [[steps]]
@@ -116,7 +116,7 @@ frequency_deviation_hz = 10000
 internal_frequency_hz = 1000
 ```
 
-`modulation_kind` 为 `am`、`fm` 或 `pm`，分别只能使用 `depth_percent`、`frequency_deviation_hz` 或 `phase_deviation_rad`。它只覆盖内部 Sine，要求 RF OFF、所有调制模式 disabled、Pulse／Sweep disabled 和无活动 protection condition。当前 DSG830 production descriptor 尚未声明调制 capability，因此该步骤会在 transport I/O 前拒绝；它仅用于离线或未来 A4 已提升的插件。不要把它与 `rf_source.output_enable` 拼成「调制输出」流程，当前 ON 合同要求调制 disabled。
+`modulation_kind` 为 `am`、`fm` 或 `pm`，分别只能使用 `depth_percent`、`frequency_deviation_hz` 或 `phase_deviation_rad`。它只覆盖内部 Sine，要求 RF OFF、所有调制模式 disabled、Pulse／Sweep disabled 和无活动 protection condition。DSG830 production descriptor 已声明调制 capability，profile 为 AM `0–100 %`、FM `0.1 Hz–1 MHz`、PM 精确 `1.25 rad`，且内部频率均为 `10 Hz–100 kHz`。不要把它与 `rf_source.output_enable` 拼成「调制输出」流程：当前 ON 合同要求调制 disabled。
 
 RF 的配置、端接判断、CLI 与 A4 边界见 [RF 信号源使用指南](WaveBench_RF信号源使用指南.md)。
 

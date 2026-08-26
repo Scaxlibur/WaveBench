@@ -87,19 +87,23 @@ wavebench rf-source status --config wavebench.toml
 wavebench rf-source set-frequency --port PORT_ID HZ --config wavebench.toml
 wavebench rf-source set-power --port PORT_ID DBM --config wavebench.toml
 wavebench rf-source output --port PORT_ID on|off --config wavebench.toml
+wavebench rf-source modulation configure-am --port PORT_ID --depth-percent PERCENT --internal-frequency-hz HZ --config wavebench.toml
+wavebench rf-source modulation configure-fm --port PORT_ID --frequency-deviation-hz HZ --internal-frequency-hz HZ --config wavebench.toml
+wavebench rf-source modulation configure-pm --port PORT_ID --phase-deviation-rad RAD --internal-frequency-hz HZ --config wavebench.toml
 wavebench rf-source pulse configure --port PORT_ID --period-s SECONDS --width-s SECONDS --polarity normal|inverted --config wavebench.toml
 wavebench rf-source sweep configure --port PORT_ID --start-frequency-hz START --stop-frequency-hz STOP --points COUNT --dwell-s SECONDS --config wavebench.toml
 wavebench capability explain rf_source.snapshot --driver rigol.dsg830 --kind rf_source --access read_only
 wavebench capability explain rf_source.output_enable --driver rigol.dsg830 --kind rf_source --access read_write
+wavebench capability explain rf_source.modulation_configure --driver rigol.dsg830 --kind rf_source --access read_write
 ```
 
 `rf-source idn` 要求 descriptor 声明 `rf_source.idn`。`rf-source status` 要求
-`rf_source.snapshot`，并在缺少 capability 时于 transport I/O 前拒绝。DSG830 已完成 A1／A2／A3、A4 Pulse 和 A4 Step Sweep，并在
-production descriptor 中声明只读 capability、`rf_source.cw_configure`、`rf_source.output`、`rf_source.pulse_configure` 与 `rf_source.sweep_configure`；其他插件仍可能被该门禁拒绝。它不表示可以改用 raw
+`rf_source.snapshot`，并在缺少 capability 时于 transport I/O 前拒绝。DSG830 已完成 A1／A2／A3 与 A4 调制／Pulse／Step Sweep，并在
+production descriptor 中声明只读 capability、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 与 `rf_source.sweep_configure`；其他插件仍可能被该门禁拒绝。它不表示可以改用 raw
 SCPI。M1 的 `set-frequency` 与 `set-power` 还要求 `rf_source.cw_configure`、`read_write` 访问、已声明的
 CW profile 和完整的 OFF-only preflight。M2 的 `output` 要求 `rf_source.output`、
 `read_write` 访问、可读 output profile 和端口级 safety preflight；ON 还要求确认端接、频率、功率、调制、Pulse、Sweep 和 protection。
-DSG830 对 OFF-only CW、端口级 ON/OFF、internal／single Pulse 与固定 profile 的 Step Sweep 配置开放 production 写入；缺少 `read_write`、对应 profile 或 fresh preflight 时仍在写入前拒绝。Pulse 与 Step Sweep 配置完成后分别保持 Pulse／Sweep disabled；它们不提供 trigger、execute、arm、fire、Level Sweep 或 list。调制 capability 仍未开放。
+DSG830 对 OFF-only CW、RF-OFF 内部正弦调制、端口级 ON/OFF、internal／single Pulse 与固定 profile 的 Step Sweep 配置开放 production 写入；缺少 `read_write`、对应 profile 或 fresh preflight 时仍在写入前拒绝。调制 profile 的 PM 固定为 `1.25 rad`，且当前 RF ON 合同要求调制 disabled。Pulse 与 Step Sweep 配置完成后分别保持 Pulse／Sweep disabled；它们不提供 `modulation_disable`、trigger、execute、arm、fire、Level Sweep 或 list。
 
 已声明对应写 capability 的插件还可以配置跨通道关系：
 

@@ -584,7 +584,7 @@ run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`sourc
 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
 
-### RF 信号源 M0–M4（DSG830 production 已含 A2 output、A3 CW、A4 Pulse 与 Step Sweep）
+### RF 信号源 M0–M4（DSG830 production 已含 A2 output、A3 CW、A4 调制／Pulse／Step Sweep）
 
 `rf_source` 是独立于 `source` 的 kind，不能使用 `source_extensions`、Vpp、数字 channel 或普通 source
 能力。descriptor 必须同时满足以下静态条件：
@@ -607,7 +607,7 @@ capability 的高级配置保持 V1。插件不得把 capability 注册视为
 | `rf_source.idn` | `idn` | `wavebench rf-source idn`、doctor IDN target |
 | `rf_source.snapshot` | `get_rf_snapshot` | `wavebench rf-source status`、`rf_source.status` run step |
 | `rf_source.cw_configure` | `configure_cw` | `rf-source set-frequency`／`set-power`、对应 run step；OFF-only 合同，DSG830 经 A3 复核后已提升 |
-| `rf_source.modulation_configure` | `get_rf_modulation_snapshot`、`configure_rf_modulation` | `rf-source modulation configure-am`／`configure-fm`／`configure-pm`、`rf_source.modulation_configure` run step；内部 Sine、RF OFF、无重试合同，DSG830 仍等待 A4 |
+| `rf_source.modulation_configure` | `get_rf_modulation_snapshot`、`configure_rf_modulation` | `rf-source modulation configure-am`／`configure-fm`／`configure-pm`、`rf_source.modulation_configure` run step；内部 Sine、RF OFF、无重试合同，DSG830 经 A4 复核后已提升。AM `0–100 %`、FM `0.1 Hz–1 MHz`、PM 精确 `1.25 rad`，均为 `10 Hz–100 kHz` 内部频率。 |
 | `rf_source.modulation_disable` | `get_rf_modulation_state`、`disable_rf_modulation` | 仅用于受控本地证据与恢复；DSG830 不声明 production capability |
 | `rf_source.pulse_configure` | `get_rf_pulse_snapshot`、`configure_rf_pulse` | `rf-source pulse configure`、`rf_source.pulse_configure` run step；internal／single、RF OFF，配置后保持 Pulse disabled，DSG830 经 A4 Pulse 复核后已提升 |
 | `rf_source.sweep_configure` | `get_rf_sweep_snapshot`、`configure_rf_sweep` | `rf-source sweep configure`、`rf_source.sweep_configure` run step；固定 `STEP`／`FWD`／`RAMP`／`LIN`、RF OFF，配置后保持 Sweep disabled，DSG830 经 A4 Step Sweep 复核后已提升 |
