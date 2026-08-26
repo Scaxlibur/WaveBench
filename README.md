@@ -114,13 +114,13 @@ wavebench tui --fake
 | 信号源 | RIGOL DG4000/DG4202 | 基本波形、频率控制、扫频和任意波上传 | 主包能力 |
 | 电源 | RIGOL DP800 | 状态、保护、设定值和输出控制 | 主包能力 |
 | 万用表 | RIGOL DM3000/DM3058 | 常用读数、功能和部分量程/触发状态 | 主包能力 |
-| run plan | source、power、scope、dmm、sleep、频响步骤 | 多仪器编排、质量检查和恢复 | 主入口 |
+| run plan | source、rf_source、power、scope、dmm、sleep、频响步骤 | 多仪器编排、质量检查和恢复 | 主入口 |
 | TUI | 电源、万用表、信号源面板 | 人工查看和少量控制 | 实验性 |
 | 插件 | `wavebench.instruments` 外部 driver | 添加或替换特定仪器实现 | 可选 |
 
 详细的能力边界和参数见 [文档总览](docs/README.md)、[项目文档分类](docs/project/README.md) 及 `docs/project/reference/` 下的参考页。
 
-RF 信号源采用独立于普通 `source` 的领域模型。Core `0.8.25` 已提供 M0–M2 合同；DSG830 已完成 A1 只读快照、A2 受控输出和 A3 CW 环回证据，production descriptor 开放 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 和 `rf_source.output`。CW 只覆盖目标 RF OFF 时的单字段频率／dBm 功率写入，输出只覆盖具有完整 safety 配置的 `rf_out` ON/OFF；调制、Pulse、Sweep 和触发仍由后续证据门控制。设计与下一步见[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](docs/project/design/WaveBench_RF信号源开发里程碑.md)。
+RF 信号源采用独立于普通 `source` 的领域模型。Core `0.8.25` 已提供 M0–M3 合同；DSG830 已完成 A1 只读快照、A2 受控输出和 A3 CW 环回证据，production descriptor 开放 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 和 `rf_source.output`。CW 只覆盖目标 RF OFF 时的单字段频率／dBm 功率写入，输出只覆盖具有完整 safety 配置的 `rf_out` ON/OFF。M3 的内部正弦 AM／FM／PM 已完成离线合同与 driver 映射，但 production capability 仍等待 A4；Pulse、Sweep 和触发也仍由后续证据门控制。日常使用见 [RF 信号源使用指南](docs/project/guides/WaveBench_RF信号源使用指南.md)，设计与下一步见 [RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md) 和 [RF 信号源开发里程碑](docs/project/design/WaveBench_RF信号源开发里程碑.md)。
 
 ## 三条常用路径
 

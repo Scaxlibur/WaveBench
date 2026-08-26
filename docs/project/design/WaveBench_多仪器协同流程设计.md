@@ -258,7 +258,7 @@ sleep
 
 `source.set_duty` 对 DG4202 使用 `:SOUR<n>:FUNC:SQU:DCYC <percent>`，参数单位是百分比，范围限制为 `0 < duty_percent < 100`。
 
-RF 信号源不属于本节的 `source.*` step，也不能借用其中的 channel、Vpp、restore 或 safety gate 语义。当前 Core 已在 `run schema` 中提供 `rf_source.status`、`rf_source.output_enable` 和 `rf_source.output_disable`：它们使用独立的类型化 RF artifact，并分别要求 snapshot 或 output capability。DSG830 已完成 A1／A2，production descriptor 声明 `rf_source.snapshot` 和受 safety 限制的 `rf_source.output`，因此 status 可在 `read_only` session 中读取快照，输出 step 仅在 `read_write`、完整端口 safety 配置与 fresh preflight 同时成立时执行。频率、功率与 M3／M4 capability 仍未开放。详见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
+RF 信号源不属于本节的 `source.*` step，也不能借用其中的 channel、Vpp、restore 或 safety gate 语义。当前 Core 已在 `run schema` 中提供 `rf_source.status`、CW 频率／功率步骤、`rf_source.output_enable`／`rf_source.output_disable` 和 M3 的 `rf_source.modulation_configure`；它们使用独立的类型化 RF artifact。DSG830 已完成 A1／A2／A3，production descriptor 声明 `rf_source.snapshot`、`rf_source.cw_configure` 和受 safety 限制的 `rf_source.output`，因此 status 可在 `read_only` session 中读取快照，CW 与输出步骤仅在 `read_write`、相应 capability 和 fresh preflight 同时成立时执行。M3 已完成离线合同但 production capability 仍等待 A4；Pulse、Sweep 和 trigger 仍未开放。详见[RF 信号源使用指南](../guides/WaveBench_RF信号源使用指南.md)、[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
 
 `scope.capture` 可以额外声明：
 

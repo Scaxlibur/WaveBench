@@ -6,6 +6,7 @@
 
 - [CLI 形态](guides/WaveBench_CLI形态.md)
 - [run plan 使用指南](guides/WaveBench_run_plan_使用指南.md)
+- [RF 信号源使用指南](guides/WaveBench_RF信号源使用指南.md)：独立 RF 配置、当前 production 边界、M3 离线入口与上机前检查。
 - [可安装仪器插件用户指南](guides/WaveBench_可安装仪器插件.md)
 - [TUI 终端控制面板](guides/WaveBench_TUI终端控制面板.md)
 - [HTTP MCP 只读接口](guides/WaveBench_HTTP_MCP_只读接口.md)
@@ -24,7 +25,7 @@
 - [设备抽象层](design/WaveBench_设备抽象层.md)
 - [多仪器流程设计](design/WaveBench_多仪器协同流程设计.md)
 - [sweep 状态保存与恢复](design/WaveBench_sweep状态恢复设计.md)
-- [RF 信号源领域设计](design/WaveBench_RF信号源设计.md)：M0–M2 合同、已开放的端口级输出边界、后续写入设计与安全规则。
+- [RF 信号源领域设计](design/WaveBench_RF信号源设计.md)：M0–M3 合同、已开放的 CW／端口输出边界、后续写入设计与安全规则。
 - [RF 信号源开发里程碑](design/WaveBench_RF信号源开发里程碑.md)：Core 与 DSG830 插件的同步状态、依赖和 A1–A5 实机证据门。
 
 ## rfcs：接口提案与决策
