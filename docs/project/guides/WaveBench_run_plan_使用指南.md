@@ -66,7 +66,7 @@ step 的 `OperationSpec`。`run plan --intent` 会在取得资源租约、打开
 
 ## RF 信号源步骤
 
-RF 使用独立的 `rf_source.*` step，不使用普通 `source` 的 channel、Vpp、restore 或 safety 语义。当前 DSG830 production descriptor 已开放只读状态、OFF-only CW 和受 safety 限制的 RF 输出：
+RF 使用独立的 `rf_source.*` step，不使用普通 `source` 的 channel、Vpp、restore 或 safety 语义。当前 DSG830 production descriptor 已开放只读状态、OFF-only CW、受 safety 限制的 RF 输出、internal／single Pulse 和保持 Sweep disabled 的 frequency-only Step Sweep 配置：
 
 ```toml
 [[steps]]
@@ -86,9 +86,24 @@ port_id = "rf_out"
 [[steps]]
 kind = "rf_source.output_disable"
 port_id = "rf_out"
+
+[[steps]]
+kind = "rf_source.pulse_configure"
+port_id = "rf_out"
+period_s = 0.001
+width_s = 0.0001
+polarity = "normal"
+
+[[steps]]
+kind = "rf_source.sweep_configure"
+port_id = "rf_out"
+start_frequency_hz = 1000000
+stop_frequency_hz = 2000000
+points = 11
+dwell_s = 0.02
 ```
 
-CW 步骤要求 RF 输出明确 OFF，且调制、Pulse、Sweep 与 protection 没有冲突。`rf_source.output_enable` 还会检查每端口安全配置、实际端接、频率、功率和 fresh snapshot；不满足时会在 ON 前拒绝。RF operation 的类型化 artifact 写入 `run.json.rf_source_operations`。
+CW、Pulse 和 Step Sweep 配置均要求 RF 输出明确 OFF，且调制、Pulse、Sweep 与 protection 没有冲突。Pulse 只支持 internal／single，配置后保持 disabled；Step Sweep 固定为 `STEP`／`FWD`／`RAMP`／`LIN`，不 arm、fire、trigger、execute、配置 Level Sweep 或切换 RF 输出，配置后保持 disabled。`rf_source.output_enable` 还会检查每端口安全配置、实际端接、频率、功率和 fresh snapshot；不满足时会在 ON 前拒绝。RF operation 的类型化 artifact 写入 `run.json.rf_source_operations`。
 
 Core 已在 schema 中提供 M3 的 `rf_source.modulation_configure`：
 

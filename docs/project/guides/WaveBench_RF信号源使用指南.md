@@ -24,7 +24,7 @@
 | RF ON/OFF | 已开放 | A2 后已开放 | ON 需要完整端口 safety 配置与 fresh preflight。 |
 | 内部正弦 AM／FM／PM | M3 离线合同与受限恢复路径已完成 | 未开放 | A4 尚无覆盖三种模式的完整合格证据前，DSG830 会在 transport I/O 前拒绝该 capability。 |
 | Pulse | M4 离线合同与受控 evidence 已完成 | A4 Pulse 后已开放 | 当前只限 internal／single 配置并强制保持 Pulse OFF；需要 `read_write` 与 fresh OFF-only preflight。 |
-| frequency-only Step Sweep | M4 离线合同、CLI、run step 与 artifact 已完成 | 未开放 | 仅固定 `STEP`／`FWD`／`RAMP`／`LIN`，配置后 Sweep 仍保持关闭；当前 DSG830 会在 transport I/O 前拒绝该 capability。 |
+| frequency-only Step Sweep | M4 合同、CLI、run step、artifact 与 A4 证据已完成 | A4 Step Sweep 后已开放 | 仅固定 `STEP`／`FWD`／`RAMP`／`LIN`，配置后 Sweep 仍保持关闭；需要 `read_write`、匹配 profile 与 fresh OFF-only preflight。 |
 | trigger、arm／fire、Level Sweep | 未完成 | 未开放 | 不应尝试调用或绕过。 |
 
 生产 descriptor 是否声明 capability 是实际边界。Core 中存在 CLI、run step 或 driver 方法，不等于当前仪器已经获准执行该操作。
@@ -82,7 +82,7 @@ wavebench rf-source idn --config wavebench.toml
 wavebench rf-source status --config wavebench.toml
 ```
 
-在 production descriptor 已声明对应 capability、配置为 `read_write` 且所有 preflight 条件满足时，DSG830 可以执行受限的 CW 和 RF 输出操作：
+在 production descriptor 已声明对应 capability、配置为 `read_write` 且所有 preflight 条件满足时，DSG830 可以执行受限的 CW、RF 输出、Pulse 和 Step Sweep 配置操作：
 
 ```bash
 wavebench rf-source set-frequency --config wavebench.toml --port rf_out 1000000
@@ -90,6 +90,7 @@ wavebench rf-source set-power --config wavebench.toml --port rf_out -40
 wavebench rf-source output --config wavebench.toml --port rf_out on
 wavebench rf-source output --config wavebench.toml --port rf_out off
 wavebench rf-source pulse configure --config wavebench.toml --port rf_out --period-s 0.001 --width-s 0.0001 --polarity normal
+wavebench rf-source sweep configure --config wavebench.toml --port rf_out --start-frequency-hz 1000000 --stop-frequency-hz 2000000 --points 11 --dwell-s 0.02
 ```
 
 `output on` 不是普通 setter。它会在写入前重新读取 RF 状态，确认频率、功率、实际端接、调制、Pulse、Sweep 和 protection 均满足安全合同。任何关键状态缺失或不一致都会在 ON 前拒绝；不应依赖先前一次成功查询。
@@ -125,7 +126,7 @@ width_s = 0.0001
 polarity = "normal"
 ```
 
-`rf_source.sweep_configure` 已进入 schema，但当前只用于离线 fake descriptor、开发验证或未来取得专项证据的插件：
+`rf_source.sweep_configure` 已进入 schema，并在 DSG830 的 A4 Step Sweep 证据复核后成为受限生产操作：
 
 ```toml
 [[steps]]
@@ -137,7 +138,7 @@ points = 11
 dwell_s = 0.02
 ```
 
-它只配置 frequency-only Step Sweep，不会 arm、fire、触发、执行 `SWE:EXEC`、切换 RF 输出或配置 Level Sweep。当前 DSG830 production descriptor 未声明 `rf_source.sweep_configure`，因此不应将这段 plan 用于该设备的日常上机操作。
+它只配置 frequency-only Step Sweep，不会 arm、fire、触发、执行 `SWE:EXEC`、切换 RF 输出或配置 Level Sweep。DSG830 使用这段 plan 时仍须为 `read_write`，并通过 capability、profile 和 fresh OFF-only preflight；配置完成后必须读回 Sweep disabled。
 
 先运行 `wavebench run check`，再运行只读的 `wavebench run verify`。只有在接线、端接、输出状态和设备身份均已复核时，才执行 `wavebench run plan`。运行计划不会把普通 source 的 restore 或 Vpp safety 规则套用到 RF 端口。
 
@@ -181,7 +182,7 @@ M2 的 RF ON 合同目前要求调制 disabled。即使未来 A4 仅提升 M3 �
 
 ## M4：受控 Pulse 与 Step Sweep 配置合同
 
-Core 已提供下列离线入口：
+Core 已提供下列生产入口；DSG830 已声明相应 capability：
 
 ```text
 wavebench rf-source pulse configure --port PORT_ID --period-s SECONDS --width-s SECONDS --polarity normal|inverted
@@ -203,7 +204,7 @@ rf_source.sweep_configure
 
 该子集固定为 `STEP`／`FWD`／`RAMP`／`LIN`，请求只包含起止频率、点数和驻留时间。写前与写后均要求 RF 输出、调制、Pulse、Sweep 关闭且无活动 protection；写后独立读回所有 profile 字段，并要求 Sweep 仍为 disabled。DSG830 driver 固定以 `:SWE:STAT OFF` 收尾，不会发送 `:SWE:EXEC`、任意 `:TRIG:*`、Level Sweep、RF 输出或后面板接口命令。
 
-这不是 production 使用授权。DSG830 源码 checkout 已提供 `tools/a4_step_sweep_evidence.py` 和无资源 setup 模板：`--diagnose` 保持 `read_only`，固定 25 次查询、零写入；显式 `--execute` 才允许一次受审计的配置，成功路径固定为 41 次查询、9 条 Step Sweep 配置写入。两条路径都不读取 Scope、不操作 RF output、arm、fire 或 trigger。该工具已通过 fake 回归，但尚无实机证据。DSG830 production descriptor 仍未声明 `rf_source.sweep_configure`，当前 CLI 和 run plan 对该设备会在打开 transport 前被 capability 门拒绝；除专项 evidence harness 的明示授权外，Step Sweep 不通过普通 CLI 或 run plan 上机。CH2 的 50 Ω 端接不改变这一边界。
+DSG830 源码 checkout 的 `tools/a4_step_sweep_evidence.py` 与无资源 setup 模板完成了专项实机验收：`--diagnose` 保持 `read_only`，固定 25 次查询、零写入；显式 `--execute` 才允许一次受审计的配置，成功路径固定为 41 次查询、9 条 Step Sweep 配置写入。两条路径都不读取 Scope、不操作 RF output、arm、fire 或 trigger。诊断与受控配置均通过，最终独立复核 RF 输出、调制、Pulse、Sweep 关闭且无活动 protection，因此 DSG830 production descriptor 声明 `rf_source.sweep_configure`。该生产范围仍只限配置且保持 Sweep disabled；CH2 的 50 Ω 端接不改变 execute、trigger 或 RF 输出的边界。
 
 ## 上机前检查清单
 
@@ -211,6 +212,6 @@ rf_source.sweep_configure
 2. 从 `read_only` 开始；只有本次确实需要、且 production descriptor 已声明的操作才使用 `read_write`。
 3. 核对 `rf_out` 的实际端接、频率范围和功率上限。示波器的 CH2 50 Ω 输入不能替代整条路径核对。
 4. 在任何写入前读取 RF snapshot，确认 RF 输出 OFF；完成后独立确认最终 RF OFF。
-5. 日常 M3／M4 操作不使用 raw SCPI，不执行 reset、preset、错误队列、外部调制、后面板 Pulse I/O、未获证据的 Step Sweep、trigger 或 scope 自动量程。A4 Pulse 仅可通过专用受控 harness 执行。
+5. 日常 M3／M4 操作不使用 raw SCPI，不执行 reset、preset、错误队列、外部调制、后面板 Pulse I/O、Step Sweep execute、trigger 或 scope 自动量程。Pulse 与 Step Sweep 只使用 descriptor 已声明的受限配置入口。
 
 需要实现新型号或提升 capability 时，继续阅读 [RF 信号源领域设计](../design/WaveBench_RF信号源设计.md)、[RF 信号源开发里程碑](../design/WaveBench_RF信号源开发里程碑.md) 和对应插件的型号级里程碑。

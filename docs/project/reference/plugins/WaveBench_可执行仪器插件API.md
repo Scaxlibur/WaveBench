@@ -584,19 +584,20 @@ run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`sourc
 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
 
-### RF 信号源 M0–M3（DSG830 production 已含 A2 output 与 A3 CW）
+### RF 信号源 M0–M4（DSG830 production 已含 A2 output、A3 CW、A4 Pulse 与 Step Sweep）
 
 `rf_source` 是独立于 `source` 的 kind，不能使用 `source_extensions`、Vpp、数字 channel 或普通 source
 能力。descriptor 必须同时满足以下静态条件：
 
 - 只声明 `rf_source.*` capability，且至少包含 `rf_source.idn`；当前 Core 识别
-  `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.modulation_configure` 和 `rf_source.output`。
+  `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.modulation_configure`、`rf_source.modulation_disable`、`rf_source.pulse_configure`、`rf_source.sweep_configure` 和 `rf_source.output`。
 - 提供 `rf_source_extensions`，其 contract version、拓扑、端口 ID、feature 和 protection policy 必须通过
   Core 校验。
 - 声明 `rf_source.cw_configure` 时，CW feature 必须有 `CONFIGURE` direction 和至少一个可配置字段；声明
   `rf_source.output` 时，output feature 必须同时有 `ENABLE`／`DISABLE` direction 与可读 output state。
 - 声明 `rf_source.modulation_configure` 时，Modulation feature 必须同时有 `CONFIGURE`／`READ` direction、
   `configuration_readable = true`，并至少声明一个内部 Sine `RfModulationModeProfile`。profile 的模式、值单位、值范围和内部频率范围必须与 driver 的严格 readback 一致。
+- 声明 `rf_source.pulse_configure` 或 `rf_source.sweep_configure` 时，对应 feature 必须同时有 `CONFIGURE`／`READ` direction、可读 configuration state 和有界的 mode profile；Pulse 与 Sweep 的配置方法必须在独立 readback 后保持 disabled。
 - `wavebench_min_version` 不低于 `0.8.25`，并且小于 `wavebench_max_version`。
 - 打包检查时，wheel 必须有且仅有一条生效的 `wavebench` 依赖，并显式使用与 descriptor 相同的
   `>=wavebench_min_version,<wavebench_max_version` 区间。
@@ -607,13 +608,16 @@ capability 的高级配置保持 V1。插件不得把 capability 注册视为
 | `rf_source.snapshot` | `get_rf_snapshot` | `wavebench rf-source status`、`rf_source.status` run step |
 | `rf_source.cw_configure` | `configure_cw` | `rf-source set-frequency`／`set-power`、对应 run step；OFF-only 合同，DSG830 经 A3 复核后已提升 |
 | `rf_source.modulation_configure` | `get_rf_modulation_snapshot`、`configure_rf_modulation` | `rf-source modulation configure-am`／`configure-fm`／`configure-pm`、`rf_source.modulation_configure` run step；内部 Sine、RF OFF、无重试合同，DSG830 仍等待 A4 |
+| `rf_source.modulation_disable` | `get_rf_modulation_state`、`disable_rf_modulation` | 仅用于受控本地证据与恢复；DSG830 不声明 production capability |
+| `rf_source.pulse_configure` | `get_rf_pulse_snapshot`、`configure_rf_pulse` | `rf-source pulse configure`、`rf_source.pulse_configure` run step；internal／single、RF OFF，配置后保持 Pulse disabled，DSG830 经 A4 Pulse 复核后已提升 |
+| `rf_source.sweep_configure` | `get_rf_sweep_snapshot`、`configure_rf_sweep` | `rf-source sweep configure`、`rf_source.sweep_configure` run step；固定 `STEP`／`FWD`／`RAMP`／`LIN`、RF OFF，配置后保持 Sweep disabled，DSG830 经 A4 Step Sweep 复核后已提升 |
 | `rf_source.output` | `set_rf_output` | `rf-source output`、`rf_source.output_enable`／`output_disable` run step；端口级 ON/OFF，受 capability、access、profile 和 fresh safety preflight 共同门禁 |
 
 `RfSourceDriver`、`RfSourceSnapshot`、`RfSourceDescriptorExtensions` 和相关类型均从
 `wavebench.instruments` 导入。`rf_source.snapshot` 缺失时，status 入口会在 transport I/O 前拒绝；实现
-`get_rf_snapshot()` 本身不会形成隐式 capability。M1／M2／M3 的 CLI 与 run step 也是 capability、access、
-profile 和 fresh safety preflight 的共同门禁；实现 `configure_cw()`、`configure_rf_modulation()` 或 `set_rf_output()` 本身不会形成隐式
-capability。M3 request 只能选择内部 Sine AM／FM／PM 中的一种，并分别使用 percent、Hz 或 rad 值字段；对共享 FM／PM 选择位的设备，snapshot 必须将当前选择与被查询 profile 分开表示，preflight 只能在所有模式关闭时接受不同选择，postcondition 必须确认目标选择。driver 不得扩展外部 source、其它波形、IQ、Pulse、Sweep 或 raw SCPI passthrough。production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md)
+`get_rf_snapshot()` 本身不会形成隐式 capability。M1／M2／M3／M4 的 CLI 与 run step 也是 capability、access、
+profile 和 fresh preflight 的共同门禁；实现 `configure_cw()`、`configure_rf_modulation()`、`configure_rf_pulse()`、`configure_rf_sweep()` 或 `set_rf_output()` 本身不会形成隐式
+capability。M3 request 只能选择内部 Sine AM／FM／PM 中的一种，并分别使用 percent、Hz 或 rad 值字段；对共享 FM／PM 选择位的设备，snapshot 必须将当前选择与被查询 profile 分开表示，preflight 只能在所有模式关闭时接受不同选择，postcondition 必须确认目标选择。driver 不得扩展外部 source、其它波形、IQ、Pulse trigger、Sweep execute／fire、Level Sweep、list 或 raw SCPI passthrough。production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md)
 的 A 级实机证据逐项提升，不能由 descriptor 静态校验或 fake transport 测试替代。
 
 ### Power、DMM 和 sweep analyzer

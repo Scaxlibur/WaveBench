@@ -449,10 +449,8 @@ actual_termination_ohm = 50
 `[rf_source]` 是独立于普通 `[source]` 的 RF 信号源配置。它使用 plugin descriptor 的稳定
 `port_id`、Hz 和 dBm，不存在 `default_channel`、Vpp 或波形字段。M0 提供
 `wavebench rf-source idn` 与 `wavebench rf-source status`；后者要求 production descriptor 声明
-`rf_source.snapshot`。M1 的频率／功率 CLI 和 M2 的输出 CLI 都要求对应 capability、`read_write` 访问和
-fresh safety preflight。DSG830 已完成 A1／A2，声明 `rf_source.idn`、`rf_source.snapshot` 与
-`rf_source.output`：status 可在已配置的只读 session 中执行，端口 ON/OFF 还要求切换为 `read_write` 并提供
-完整安全配置。CW 与其它写 CLI 仍会在打开 transport 前被 capability 门禁拒绝，直到对应 A 级证据提升。
+`rf_source.snapshot`。M1 的频率／功率 CLI、M4 的 Pulse／Step Sweep 配置和 M2 的输出 CLI 都要求对应 capability、`read_write` 访问和
+fresh preflight；M2 的端口 ON/OFF 还要求完整安全配置。DSG830 已完成 A1／A2／A3／A4 Pulse／A4 Step Sweep，声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.pulse_configure` 与 `rf_source.sweep_configure`：status 可在已配置的只读 session 中执行，端口 ON/OFF 还要求切换为 `read_write` 并提供完整安全配置。Pulse 与 Step Sweep 配置分别保持 Pulse／Sweep disabled；调制、trigger、Sweep execute／fire 与 Level Sweep 仍由 capability 门禁拒绝。
 
 字段说明：
 
