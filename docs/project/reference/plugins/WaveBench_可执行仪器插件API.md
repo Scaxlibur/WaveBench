@@ -584,15 +584,17 @@ run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`sourc
 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
 
-### RF 信号源 M0
+### RF 信号源 M0–M2（production 当前仅 M0）
 
 `rf_source` 是独立于 `source` 的 kind，不能使用 `source_extensions`、Vpp、数字 channel 或普通 source
 能力。descriptor 必须同时满足以下静态条件：
 
-- 只声明 `rf_source.*` capability，且至少包含 `rf_source.idn`；当前 Core 只识别
-  `rf_source.idn` 和 `rf_source.snapshot`。
+- 只声明 `rf_source.*` capability，且至少包含 `rf_source.idn`；当前 Core 识别
+  `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure` 和 `rf_source.output`。
 - 提供 `rf_source_extensions`，其 contract version、拓扑、端口 ID、feature 和 protection policy 必须通过
   Core 校验。
+- 声明 `rf_source.cw_configure` 时，CW feature 必须有 `CONFIGURE` direction 和至少一个可配置字段；声明
+  `rf_source.output` 时，output feature 必须同时有 `ENABLE`／`DISABLE` direction 与可读 output state。
 - `wavebench_min_version` 不低于 `0.8.25`，并且小于 `wavebench_max_version`。
 - 打包检查时，wheel 必须有且仅有一条生效的 `wavebench` 依赖，并显式使用与 descriptor 相同的
   `>=wavebench_min_version,<wavebench_max_version` 区间。
@@ -601,12 +603,15 @@ capability 的高级配置保持 V1。插件不得把 capability 注册视为
 | --- | --- | --- |
 | `rf_source.idn` | `idn` | `wavebench rf-source idn`、doctor IDN target |
 | `rf_source.snapshot` | `get_rf_snapshot` | `wavebench rf-source status`、`rf_source.status` run step |
+| `rf_source.cw_configure` | `configure_cw` | `rf-source set-frequency`／`set-power`、对应 run step；OFF-only 离线合同 |
+| `rf_source.output` | `set_rf_output` | `rf-source output`、`rf_source.output_enable`／`output_disable` run step；端口级离线合同 |
 
 `RfSourceDriver`、`RfSourceSnapshot`、`RfSourceDescriptorExtensions` 和相关类型均从
 `wavebench.instruments` 导入。`rf_source.snapshot` 缺失时，status 入口会在 transport I/O 前拒绝；实现
-`get_rf_snapshot()` 本身不会形成隐式 capability。M0 没有 RF 写 capability 或写入 CLI／run step。后续
-production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md) 的
-A 级实机证据逐项提升，不能由 descriptor 静态校验或 fake transport 测试替代。
+`get_rf_snapshot()` 本身不会形成隐式 capability。M1／M2 的 CLI 与 run step 也是 capability、access、
+profile 和 fresh safety preflight 的共同门禁；实现 `configure_cw()` 或 `set_rf_output()` 本身不会形成隐式
+capability。production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md)
+的 A 级实机证据逐项提升，不能由 descriptor 静态校验或 fake transport 测试替代。
 
 ### Power、DMM 和 sweep analyzer
 

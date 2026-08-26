@@ -8,8 +8,8 @@
 
 | 范围 | 当前状态 | 说明 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | M0 离线完成 | 已有 `rf_source` kind、配置、只读 Service／CLI／doctor、`rf_source.status` run 路径、artifact 和 descriptor extension；未实现 RF 写入事务。 |
-| DSG830 包 `0.2.0` | M0 离线完成；A1 已完成 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology 与严格 snapshot parser；production descriptor 声明只读 `rf_source.idn` 与 `rf_source.snapshot`。 |
+| Core `0.8.25` 开发线 | M0、M1 离线完成；M2 离线进行中 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW 事务，以及端口输出事务的 Core 合同、CLI、run 路径与 artifact；production 仍只读。 |
+| DSG830 包 `0.2.0` | M0、M1 离线完成；M2 离线进行中；A1 已完成 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser 与离线 `:FREQ`／`:LEV`／`:OUTP` 映射；production descriptor 声明只读 `rf_source.idn` 与 `rf_source.snapshot`。 |
 | 真实仪器证据 | A1 已完成；A2–A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 仅提升 `rf_source.snapshot`。 |
 
 ## 双仓库交付规则
@@ -28,8 +28,8 @@
 | --- | --- | --- | --- | --- |
 | Seed | 历史完成 | 无 RF Core 改动 | `0.1.0` 的旧 `source.idn` 种子、无 I/O descriptor、包装与 fake 测试 | 已由 M0 迁移取代，不代表 RF 支持。 |
 | M0 | 离线完成；A1 已完成 | `rf_source` 只读领域 | `rf_out` topology 与严格 snapshot parser | A1 复核后，生产包声明 `rf_source.idn` 和 `rf_source.snapshot`。 |
-| M1 | 离线进行中 | OFF-only CW 配置 | `:FREQ`／`:LEV` 映射与独立回读 | 已有 typed request／result、Service、CLI、run step、artifact 和 fake 测试；production capability 仍关闭，完整离线验收仍待完成。 |
-| M2 | 未开始 | RF 输出安全事务 | `:OUTP` ON/OFF 及 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次 OFF recovery。 |
+| M1 | 离线完成 | OFF-only CW 配置 | `:FREQ`／`:LEV` 映射与独立回读 | typed request／result、Service、CLI、run step、artifact 和 fake 测试已完成；production capability 仍关闭。 |
+| M2 | 离线进行中 | RF 输出安全事务 | `:OUTP` ON/OFF 的单次映射；Core 独立 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次受 guard 的 OFF recovery；production capability 仍关闭。 |
 | M3 | 未开始 | 声明式 AM／FM／PM | 已声明的内部 Sine 调制子集 | 只在 OFF 状态、profile 匹配且 postcondition 成立时写入。 |
 | M4 | 未开始 | Pulse／Step Sweep 合同 | 已声明子集、arm／fire／stop 映射 | trigger／fire 只能由专项安全规则与实机证据提升。 |
 
@@ -68,15 +68,15 @@ DSG830 `0.1.0` 种子包只包含 `*IDN?`、`close()`、无 I/O descriptor、包
 
 ## M1：OFF-only CW 配置
 
-Core 已在离线开发中加入单字段 `RfCwRequest`／result、`rf_source.set_frequency`／`rf_source.set_power_dbm` OperationSpec、端口范围检查、OFF-only Service 事务、CLI、run step 与带 preflight／postcondition snapshot 的 artifact。所有 CW 写入前必须确认目标 RF 输出为 OFF，且调制、Pulse、Sweep 与 protection 状态没有冲突。完整离线验收仍待完成。
+Core 已在离线开发中加入单字段 `RfCwRequest`／result、`rf_source.set_frequency`／`rf_source.set_power_dbm` OperationSpec、端口范围检查、OFF-only Service 事务、CLI、run step 与带 preflight／postcondition snapshot 的 artifact。所有 CW 写入前必须确认目标 RF 输出为 OFF，且调制、Pulse、Sweep 与 protection 状态没有冲突。离线 fake／guarded transport 验收已完成，production capability 仍关闭。
 
 DSG830 driver 已在离线测试中实现已冻结的 `:FREQ` 与 `:LEV` 单次写映射；Core 负责独立 snapshot 回读。输出 ON、越界、缺失安全关键状态或 readback 不确定时，必须零写拒绝或停止后续写入；production descriptor 仍不声明 CW write capability，直到 A3。
 
 ## M2：RF 输出安全事务
 
-Core 添加每端口安全预检、`rf_source.output_enable`／`rf_source.output_disable`、端接匹配检查、blocking protection policy 和 run safety gate 的 `rf_source_ports`。RF OFF 不依赖频率、功率、端接或 protection readback；RF ON 必须逐项满足所有前置条件。
+Core 正在离线完善 `RfOutputRequest`／result、`rf_source.output_enable`／`rf_source.output_disable` OperationSpec、descriptor 输出 profile 校验、每端口 safety 预检、CLI、run schema／intent／dispatch 与带 preflight／postcondition snapshot 的 artifact。RF ON 必须确认完整 safety 配置、端接匹配、频率与 dBm 功率范围、已关闭的调制／Pulse／Sweep，以及只含已知非阻断项的 protection。RF OFF 不依赖频率、功率、端接或 protection readback。
 
-DSG830 driver 实现 `:OUTP ON|OFF` 与独立 readback。ON 结果不明、写后 readback 失败或 protection 变化时，不重试 ON；只有 session health 允许时，才最多发送一次目标端口 OFF 并回读。production descriptor 直到 A2 后才可声明 output capability。
+ON 结果不明、写后 readback 失败或 protection 变化时，Core 不重试 ON，而是将 session 降为不确定状态；仅在受 guard 的 recovery 预算内最多发送一次同端口 OFF，并独立回读 OFF。OFF 写入或其 readback 结果不明时不重试，session 降为 poisoned。DSG830 driver 只实现离线 `:OUTP ON|OFF` 单次映射，Core 负责所有 snapshot readback 与 recovery；production descriptor 直到 A2 后才可声明 `rf_source.output`。
 
 ## M3：调制
 
@@ -130,5 +130,5 @@ A1 已使用一次性、非 production 的本地 evidence harness 完成并经�
 1. 已完成 Core M0 的 kind、descriptor、配置、只读 Service／CLI 与 run status 全链路。
 2. 已在匹配的 Core `0.8.25` 开发线上迁移 DSG830 的 descriptor、依赖区间、topology 与 snapshot parser；正式 wheel 验收等待 Core 发布版本。
 3. 已取得并复核 A1 的只读 snapshot 证据；DSG830 parser 已仅作为 `rf_source.snapshot` 暴露为 production capability。
-4. 正在用 fake descriptor 完成 M1 的零写拒绝与 postcondition 测试，并实现 DSG830 的对应离线 SCPI 映射；随后单独推进 M2 的 safety preflight 与 recovery。
+4. 已完成 M1 的 fake descriptor 零写拒绝、postcondition 测试和 DSG830 离线 SCPI 映射；正在以 fake／guarded transport 完成 M2 的 safety preflight、OFF recovery 与 run 路由。
 5. 取得 A2、A3 证据后，按 capability 而非按「整台仪器已支持」逐项提升 production descriptor；M3／M4 保持独立工作。

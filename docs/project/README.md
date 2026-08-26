@@ -24,8 +24,8 @@
 - [设备抽象层](design/WaveBench_设备抽象层.md)
 - [多仪器流程设计](design/WaveBench_多仪器协同流程设计.md)
 - [sweep 状态保存与恢复](design/WaveBench_sweep状态恢复设计.md)
-- [RF 信号源领域设计](design/WaveBench_RF信号源设计.md)：当前 M0 只读合同、后续写入设计与安全边界。
-- [RF 信号源开发里程碑](design/WaveBench_RF信号源开发里程碑.md)：Core 与 DSG830 插件的当前状态、依赖和 A1–A5 实机证据门。
+- [RF 信号源领域设计](design/WaveBench_RF信号源设计.md)：生产只读边界、M1／M2 离线合同、后续写入设计与安全规则。
+- [RF 信号源开发里程碑](design/WaveBench_RF信号源开发里程碑.md)：Core 与 DSG830 插件的同步状态、依赖和 A1–A5 实机证据门。
 
 ## rfcs：接口提案与决策
 

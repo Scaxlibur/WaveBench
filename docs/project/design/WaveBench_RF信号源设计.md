@@ -2,7 +2,7 @@
 
 ## 文档定位
 
-本文定义独立 `rf_source` 领域合同，说明它为什么不能复用普通函数发生器的 `source` 合同，以及 Core 与仪器插件应如何分阶段实现。Core `0.8.25` 开发线已经实现 M0 的只读合同；本文同时保留 M1–M4 的写入设计和 A1–A5 的实机证据门，不能将后两者误写成当前能力。
+本文定义独立 `rf_source` 领域合同，说明它为什么不能复用普通函数发生器的 `source` 合同，以及 Core 与仪器插件应如何分阶段实现。Core `0.8.25` 开发线已具备 M0 只读合同、M1 离线 CW 合同，并在推进 M2 的离线输出事务；生产环境仍只有经 A1 证据提升的只读能力。本文同时保留 M3–M4 的设计和 A1–A5 的实机证据门，不能把离线代码误写成已获准的真实仪器控制能力。
 
 阅读顺序如下：
 
@@ -15,13 +15,13 @@
 
 | 范围 | 当前状态 | 边界 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | 已实现 `rf_source` kind、append-only descriptor extension、`[rf_source]`、`rf_source.idn`／`rf_source.snapshot` 合同、只读 Service／CLI／doctor、`rf_source.status` run step 和独立 artifact。 | M0 只读能力；没有 RF 写入事务或 RF safety gate。 |
-| DSG830 包 `0.2.0` | 已迁移为 `kind="rf_source"`，提供 `rf_out` 静态 topology 与严格 snapshot parser；A1 只读证据已经完成。 | production descriptor 声明 `rf_source.idn` 与 `rf_source.snapshot`；没有 RF 写 capability。 |
+| Core `0.8.25` 开发线 | 已实现 `rf_source` kind、append-only descriptor extension、`[rf_source]`、M0 只读路径、M1 OFF-only CW 事务，以及 M2 的离线端口输出事务、CLI、run step 与 artifact。 | 生产可用能力仍是 M0 只读；M1／M2 只能由 fake descriptor 覆盖。 |
+| DSG830 包 `0.2.0` | 已迁移为 `kind="rf_source"`，提供 `rf_out` 静态 topology、严格 snapshot parser、离线 `:FREQ`／`:LEV`／`:OUTP` 映射；A1 只读证据已经完成。 | production descriptor 仅声明 `rf_source.idn` 与 `rf_source.snapshot`；没有 RF 写 capability。 |
 | 实机证据 | A1 已完成；A2–A5 尚未形成可提升 capability 的记录。 | DSG830 production descriptor 不能声明任何写 capability。 |
 
 普通 `source` 仍是面向函数／任意波形发生器的 Vpp、offset、数字 channel 与波形模型。它不是 RF 领域的兼容别名。
 
-除明确标为「当前 M0」或「已完成 A1」的内容外，本文中的 M1–M4、production 写 capability 与 A2–A5 均为目标合同或证据门；不得将它们写成当前可控制真实仪器的能力。
+除明确标为「生产只读」「离线已完成」或「离线进行中」的内容外，本文中的 M3–M4、production 写 capability 与 A2–A5 均为目标合同或证据门。M1／M2 的离线实现也不得写成当前可控制真实仪器的能力。
 
 ## 术语与证据级别
 
@@ -45,6 +45,8 @@ RIGOL DSG830 是第一个适配目标和手册验证样本，不是该领域的�
 ### 目标交付
 
 - M0 已提供 `rf_source` plugin kind、配置、capability、model、driver Protocol、只读 Service／CLI／doctor、run status 和 artifact namespace。
+- M1 已提供 OFF-only CW 的 typed request／result、单次写入、独立 snapshot 回读、CLI、run step 和 artifact；它只供离线 fake descriptor 使用。
+- M2 正在完善端口级 RF ON/OFF 事务、ON safety preflight、一次性 OFF recovery、CLI、run step 和 artifact；它同样只供离线 fake descriptor 使用。
 - 定义多 RF 输出端口的通用模型；首个 DSG830 适配器只声明一个端口。
 - 定义 CW 频率／dBm 功率配置、RF 输出控制、AM／FM／PM、Pulse、Step Sweep、arm／fire／stop 的标准 operation 合同。
 - 为每条写路径定义输入校验、RF OFF 配置前置条件、独立回读、状态异常失败关闭、fake transport 故障注入和包装测试要求。
@@ -275,35 +277,45 @@ Sweep arm 是 OFF-only 准备 operation，必须保持目标端口 RF OFF。Swee
 
 ## Service、CLI、doctor 与 run plan
 
-### 当前 M0
+### 当前已实现的入口
 
-`RfSourceService` 当前负责 `rf_source.idn` 与 `rf_source.snapshot` 的 capability、access、资源租约、session health 和类型化 snapshot。driver 只执行已冻结的设备动作，CLI 不直接生成 SCPI。
-
-当前命令和 run 入口为：
+`RfSourceService` 统一负责 capability、access、资源租约、session health 和类型化 snapshot；driver 只执行已冻结的设备动作，CLI 不直接生成 SCPI。当前入口按能力层次分为三组：
 
 ```text
+# 生产只读：DSG830 已由 A1 提升
 wavebench rf-source idn
 wavebench rf-source status
 rf_source.status
-```
 
-`rf-source status` 和 `rf_source.status` 均要求 descriptor 声明 `rf_source.snapshot`；缺少该 capability 时，Core 会在打开 transport 前拒绝请求。当前 `rf_source.status` 产生独立的 `wavebench.rf_source.operation.v1` snapshot artifact。`doctor` 仅新增 `rf_source` 的 `*IDN?` target；它不读取运行状态、不改变访问模式，也不打开 RF 输出。
-
-DSG830 已完成 A1，因此 production descriptor 可通过 Core 的 status 路径读取只读 snapshot。该提升只覆盖固定的状态 query，不授权频率、功率、RF 输出、调制、Pulse、Sweep、fire 或 trigger 控制。
-
-### M1–M4 目标
-
-M1 已注册以下 OFF-only CW CLI；它们仍受 descriptor capability、`read_write` access、CW profile 和 fresh snapshot preflight 共同门控。DSG830 的 production descriptor 没有 `rf_source.cw_configure`，因此这些命令不能控制已联网的 DSG830。
-
-```text
+# 离线 M1：必须同时具备 read_write、CW capability 和 OFF-only preflight
 wavebench rf-source set-frequency --port PORT_ID HZ
 wavebench rf-source set-power --port PORT_ID DBM
+rf_source.set_frequency
+rf_source.set_power_dbm
+
+# 离线 M2：必须同时具备 read_write、output capability 和端口级 safety preflight
+wavebench rf-source output --port PORT_ID on|off
+rf_source.output_enable
+rf_source.output_disable
 ```
 
-M1 的 run step 为 `rf_source.set_frequency` 与 `rf_source.set_power_dbm`，每个 step 都要求 `port_id` 与一个有限数值，并写入脱敏的 preflight／postcondition snapshot artifact。它们与 CLI 一样仍受 production capability 门禁；DSG830 的 production descriptor 不声明 `rf_source.cw_configure`。M2–M4 的写入 CLI 和 run step 仍是设计合同，尚未进入当前 run schema：
+`rf-source status` 和 `rf_source.status` 均要求 descriptor 声明 `rf_source.snapshot`；缺少该 capability 时，Core 会在打开 transport 前拒绝请求。`doctor` 仅新增 `rf_source` 的 `*IDN?` target；它不读取运行状态、不改变访问模式，也不打开 RF 输出。
+
+M1 的每个 run step 都要求 `port_id` 与一个有限数值；M2 的每个 run step 都要求 `port_id`，并产生脱敏的 preflight／postcondition snapshot artifact。所有三类 step 使用独立的 `wavebench.rf_source.operation.v1` artifact namespace。DSG830 production descriptor 不声明 `rf_source.cw_configure` 或 `rf_source.output`，因此 M1／M2 CLI 和 run step 不能对已联网的 DSG830 发送写入。
+
+### M1、M2 的离线写入合同
+
+M1 是 OFF-only CW 配置：目标端口必须明确为 OFF，调制、Pulse、Sweep 与 protection 不得冲突；每次调用只写一个频率或 dBm 字段，并用独立 snapshot 回读确认。写后结果不明时不重试。
+
+M2 是端口级输出事务。RF ON 必须确认完整 safety 配置、实际端接与 dBm 参考阻抗一致、频率与 dBm 功率处于设备和实验室配置范围内、调制／Pulse／Sweep 都关闭，并且 protection 仅含已知的非阻断状态。RF OFF 只依赖目标输出状态，不要求频率、功率、端接或 protection 可读。ON 写入或其 readback 结果不明时，session 降为不确定状态，并且只在受 guard 的 recovery 预算内最多执行一次同端口 OFF 和 OFF 回读；OFF 写入结果不明时不重试，session 降为 poisoned。
+
+上述合同只由 fake descriptor 和 fake／guarded transport 验证。A2、A3 之前不得把它们纳入 DSG830 production descriptor，也不得把人工确认的实验室端接当作写入授权。
+
+### M3–M4 目标
+
+M3–M4 的写入 CLI 和 run step 仍是设计合同，尚未进入当前 run schema：
 
 ```text
-wavebench rf-source output --port PORT_ID on|off
 wavebench rf-source modulation configure-am ...
 wavebench rf-source modulation configure-fm ...
 wavebench rf-source modulation configure-pm ...
@@ -315,19 +327,7 @@ wavebench rf-source sweep fire ...
 wavebench rf-source sweep stop ...
 ```
 
-```text
-rf_source.output_disable
-rf_source.output_enable
-rf_source.modulation_configure
-rf_source.pulse_configure
-rf_source.pulse_trigger
-rf_source.sweep_configure
-rf_source.sweep_arm
-rf_source.sweep_fire
-rf_source.sweep_stop
-```
-
-这些目标 step 都必须显式指定 `port_id`，拥有独立 `OperationSpec` 与 `wavebench.rf_source.operation.v1` artifact。M2 的 run safety gate 将独立处理 `rf_source.*`：失败时只针对已知受影响端口请求 RF OFF，不访问普通 source channel，也不操作外部 trigger、Pulse In/Out 或其他未声明端口。
+这些目标 step 都必须显式指定 `port_id`，拥有独立 `OperationSpec` 与 `wavebench.rf_source.operation.v1` artifact。它们不得访问普通 source channel，也不操作外部 trigger、Pulse In/Out 或其他未声明端口。
 
 ## M0–M4 里程碑
 
@@ -335,9 +335,9 @@ rf_source.sweep_stop
 
 | 里程碑 | 通用核心交付 | 首个适配器离线交付 | 离线验证标准 |
 | --- | --- | --- | --- |
-| M0（当前） | `rf_source` kind、config、拓扑/profile、可观测 snapshot、Protocol、registry、doctor、只读 CLI 与 run status | 严格 snapshot parser；A1 后 production descriptor 声明只读 snapshot | descriptor 无 I/O；每个状态 query、解析和坏响应测试通过；A1 证据复核后仅提升 snapshot。 |
-| M1 | CW request／result、OFF-only transaction、CLI、run step、artifact 与端口范围检查 | 频率／dBm 功率写后回读 | output ON、活动调制／Pulse／Sweep 或越界请求时零写拒绝；结果不明无重试。 |
-| M2 | per-port 输出事务、安全预检、RF OFF recovery | RF ON/OFF 写后 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF。 |
+| M0（生产只读） | `rf_source` kind、config、拓扑/profile、可观测 snapshot、Protocol、registry、doctor、只读 CLI 与 run status | 严格 snapshot parser；A1 后 production descriptor 声明只读 snapshot | descriptor 无 I/O；每个状态 query、解析和坏响应测试通过；A1 证据复核后仅提升 snapshot。 |
+| M1（离线完成） | CW request／result、OFF-only transaction、CLI、run step、artifact 与端口范围检查 | 频率／dBm 功率单次写入与独立回读 | output ON、活动调制／Pulse／Sweep 或越界请求时零写拒绝；结果不明无重试。 |
+| M2（离线进行中） | per-port 输出事务、安全预检、受 guard 的一次性 RF OFF recovery、CLI、run step 与 artifact | RF ON/OFF 单次写入；Core 负责独立 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF。 |
 | M3 | 声明式 AM／FM／PM profile、typed request/result、CLI 与 run step | 内部 Sine 调制序列 | 输出未 OFF、profile 不支持或 postcondition 不符时零写拒绝。 |
 | M4 | 声明式 Pulse／Sweep profile、typed request/result、arm/fire/stop、CLI、run step 与 operation spec | 已声明 Pulse 与 Step Sweep 子集 | 错误模式、未声明 option、外部 trigger 或 fire 前置不满足时零写拒绝；fire／trigger 仅由 fake descriptor 覆盖。 |
 
@@ -368,7 +368,7 @@ DSG830 的 production `descriptor()` 在 A1 完成后声明 `rf_source.idn` 与 
 
 - 所有公共 model、profile 与 request 在实现前先有边界、非有限数、布尔值、未知枚举和不匹配端口的失败测试。
 - 所有 Service 写路径先有零写拒绝与写后回读失败测试，再实现最小 transaction。
-- `StatefulRfTransport` 模拟严格 query、单次写入、忽略写入、写前异常、写后 query 异常、protection 变化与 session health。
+- `StatefulRfTransport` 与 guarded fake transport 模拟严格 query、单次写入、忽略写入、写前异常、写后 query 异常、protection 变化、recovery 预算与 session health。
 - driver 测试精确断言 SCPI 命令、值格式、query 顺序、写入次数与 postcondition；不以 fake 的调用次数代替外部可见状态断言。
 - 默认测试不扫描端口、不读取本地实验室配置、不连接仪器、不执行真实 SCPI。
 - 核心验证包括聚焦 pytest、完整 pytest、ruff 和 `git diff --check`；插件额外包括包级 pytest、ruff、wheel/package check 与安装 dry-run。

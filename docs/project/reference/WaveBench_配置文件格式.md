@@ -170,13 +170,13 @@ ensure_fix_mode_on_set_frequency = true
 settle_ms_after_set_frequency = 500
 access = "read_write"
 
-# RF M0 是独立的只读域；当前建议显式使用 read_only。
+# DSG830 production 当前只开放 M0 只读；read_only 是默认安全选择。
 [rf_source]
 driver = "rigol.dsg830"
 resource = "TCPIP::192.0.2.13::INSTR"
 access = "read_only"
 
-# 该静态声明为后续能量操作预留；M0 不会使用它执行写入。
+# M2 的离线 ON preflight 会消费该静态证据；它不授予 production 写入能力。
 [[rf_source.safety.ports]]
 port_id = "rf_out"
 minimum_frequency_hz = 9000
@@ -447,23 +447,26 @@ actual_termination_ohm = 50
 ```
 
 `[rf_source]` 是独立于普通 `[source]` 的 RF 信号源配置。它使用 plugin descriptor 的稳定
-`port_id`、Hz 和 dBm，不存在 `default_channel`、Vpp 或波形字段。当前 M0 可使用
-`wavebench rf-source idn`；`wavebench rf-source status` 还要求 production descriptor 声明
-`rf_source.snapshot`。DSG830 已完成 A1，并声明 `rf_source.idn` 和 `rf_source.snapshot`，所以可在
-已配置的只读 session 中执行 status；其他未声明 snapshot 的插件仍会在打开 transport 前被拒绝。
+`port_id`、Hz 和 dBm，不存在 `default_channel`、Vpp 或波形字段。M0 提供
+`wavebench rf-source idn` 与 `wavebench rf-source status`；后者要求 production descriptor 声明
+`rf_source.snapshot`。M1 的频率／功率 CLI 和 M2 的输出 CLI 已有离线路由，但还分别要求对应 capability、
+`read_write` 访问和 fresh safety preflight。DSG830 已完成 A1，并只声明 `rf_source.idn` 与
+`rf_source.snapshot`，所以可在已配置的只读 session 中执行 status；任何写 CLI 都会在打开 transport 前被
+拒绝，直到对应 A 级证据提升 capability。
 
 字段说明：
 
 - `driver`：已安装 RF 插件的 canonical driver ID；默认值是 `rigol.dsg830`，但只有已安装插件才可解析。
 - `resource`：RF 信号源的 VISA 资源串；可由 `rf-source` 命令的 `--resource` 临时覆盖。
-- `access`：沿用通用访问策略。M0 只需 `read_only`，实际写 capability 发布前不应配置或依赖 `read_write`。
+- `access`：沿用通用访问策略。`read_only` 是 production 状态查询的默认选择；`read_write` 本身不授予写入，
+  还必须同时具备对应 descriptor capability、profile、fresh safety preflight 和实机证据。
 - `options`：可选的插件私有配置表；公开配置不要放入真实资源之外的凭据或实验室专有数据。
 
 `[[rf_source.safety.ports]]` 是按端口声明的本地静态安全证据。每项必须提供唯一 `port_id`、有限的
 `minimum_frequency_hz`、`maximum_frequency_hz`、`maximum_power_dbm` 和正数
 `actual_termination_ohm`；最大频率不得小于最小频率。它不改变仪器显示的负载设置，也不会把 dBm
-换算为 Vpp。M0 只解析和校验该声明，尚不执行 RF 写入或 safety gate；后续能量相关 capability 才会
-使用它进行准入判断。
+换算为 Vpp。M2 的离线 RF ON 事务会使用它进行准入判断；production descriptor 缺少 output capability 时，
+该事务仍会在打开 transport 前拒绝。
 
 RF 的 capability、A1–A5 证据门和 DSG830 的当前 production 边界见
 [RF 信号源领域设计](../design/WaveBench_RF信号源设计.md)和
