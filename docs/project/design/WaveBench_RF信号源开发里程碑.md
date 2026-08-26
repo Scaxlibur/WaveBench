@@ -171,4 +171,4 @@ CH2 的 50 Ω 端接是在 setup 中明确声明的电气安全前提。scope �
 3. 已取得并复核 A1 的只读 snapshot 证据；DSG830 parser 已仅作为 `rf_source.snapshot` 暴露为 production capability。
 4. 已完成 M1／M2 的 fake descriptor 零写拒绝、postcondition 测试、guarded OFF recovery、Core CLI／run 路由和 DSG830 离线 SCPI 映射；A2 已通过并仅提升 `rf_source.output`。
 5. A3 已完成并将 `rf_source.cw_configure` 加入 production descriptor。M3 的离线合同、DSG830 映射、CLI、run 与 artifact 已完成，但 capability 继续等待 A4；M4 保持独立工作。
-6. A4 的 AM、FM RF-OFF 单模式配置、读回与关闭恢复证据已通过；PM 仍需定位严格读回不匹配的设备或固件条件。完成 PM 的合格证据前，不讨论任何允许调制开启时 RF 输出的专门安全合同，也不得把当前 CH2 可见信号证据外推为调制输出证据。
+6. A4 的 AM、FM RF-OFF 单模式配置、读回与关闭恢复证据已通过；PM 仍需定位严格读回不匹配的设备或固件条件。源码 checkout 的 `--diagnose` 模式保留 `read_only` 配置，只读取初始／最终 RF snapshot 与指定模式 profile，并以零写审计保存私有诊断记录。该记录不构成 A4 capability 提升证据。完成 PM 的合格证据前，不讨论任何允许调制开启时 RF 输出的专门安全合同，也不得把当前 CH2 可见信号证据外推为调制输出证据。
