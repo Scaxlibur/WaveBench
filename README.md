@@ -7,7 +7,7 @@
 
 WaveBench 是一个用 Python 编写的实验室自动测量台，面向电子设计竞赛调试和日常实验。它把仪器控制、实验步骤和采集证据放在同一条命令链中，支持先离线检查 plan，再决定是否连接硬件。
 
-当前仓库开发线为 `0.8.24`，最新稳定 tag 为 `v0.8.0`。不同版本的命令和能力可能不同，以对应 tag 中的文档为准。
+当前仓库开发线为 `0.8.25`，最新稳定 tag 为 `v0.8.0`。不同版本的命令和能力可能不同，以对应 tag 中的文档为准。
 
 ## 🌟 特别鸣谢
 
@@ -119,6 +119,8 @@ wavebench tui --fake
 | 插件 | `wavebench.instruments` 外部 driver | 添加或替换特定仪器实现 | 可选 |
 
 详细的能力边界和参数见 [文档总览](docs/README.md)、[项目文档分类](docs/project/README.md) 及 `docs/project/reference/` 下的参考页。
+
+RF 信号源采用独立于普通 `source` 的领域模型。Core `0.8.25` 已提供 M0 只读合同；DSG830 插件的 production descriptor 暂仅开放 `rf_source.idn`，尚未通过 A1 snapshot 实机证据，也没有 RF 写入能力。设计与下一步见[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](docs/project/design/WaveBench_RF信号源开发里程碑.md)。
 
 ## 三条常用路径
 

@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · 中文
 
-WaveBench 是一个用 Python 编写的实验室自动测量台，提供 CLI、实验性 TUI、显式 run plan、采集包和离线报告。当前开发线为 `0.8.24`，最新稳定 tag 为 `v0.8.0`。版本变化见 [更新日志](../CHANGELOG.md)；旧版本原始文档可切换到对应 Git tag 查看。
+WaveBench 是一个用 Python 编写的实验室自动测量台，提供 CLI、实验性 TUI、显式 run plan、采集包和离线报告。当前开发线为 `0.8.25`，最新稳定 tag 为 `v0.8.0`。版本变化见 [更新日志](../CHANGELOG.md)；旧版本原始文档可切换到对应 Git tag 查看。
 
 > [!WARNING]
 > 部分命令会连接并控制真实仪器。示例会区分离线检查、连接读取和硬件写入；执行写入前，应确认接线和限制值。
@@ -54,6 +54,8 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 - [设备抽象层](project/design/WaveBench_设备抽象层.md)
 - [多仪器流程设计](project/design/WaveBench_多仪器协同流程设计.md)
 - [sweep 状态保存与恢复](project/design/WaveBench_sweep状态恢复设计.md)
+- [RF 信号源领域设计](project/design/WaveBench_RF信号源设计.md)：当前 M0 与后续写入合同的边界。
+- [RF 信号源开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)：Core／DSG830 双仓库状态与 A1–A5 证据门。
 - [TUI 终端控制面板](project/guides/WaveBench_TUI终端控制面板.md)
 
 目录分类见 [project/README](project/README.md)。本页只负责入口，不把阶段记录当作当前使用说明。

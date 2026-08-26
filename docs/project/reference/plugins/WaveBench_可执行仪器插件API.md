@@ -120,7 +120,7 @@ def descriptor() -> InstrumentDescriptor:
 | 字段 | 核心强制 | 接口约定和用途 |
 | --- | --- | --- |
 | `driver_id` | 非空、无首尾空白；外置插件必须与 entry point 名一致 | 使用小写 ASCII canonical ID，推荐 `vendor.model` 形式；发布后不得复用给其他设备族 |
-| `kind` | 配置解析时必须与目标槽位一致 | 只能是 `scope`、`source`、`power`、`dmm` 或 `sweep_analyzer` |
+| `kind` | 配置解析时必须与目标槽位一致 | 只能是 `scope`、`source`、`rf_source`、`power`、`dmm` 或 `sweep_analyzer` |
 | `display_name` | 仅要求构造参数存在 | 面向用户的简短名称，不承担型号匹配 |
 | `manufacturer` | 仅要求构造参数存在 | 使用厂商正式名称 |
 | `models` | 至少包含一项 | 每项应为非空型号名称；不要把营销系列名当作已验证型号 |
@@ -141,6 +141,7 @@ def descriptor() -> InstrumentDescriptor:
 | `config_fields` | 当前只展示；为空时由 `option_specs` 推导 `options.<name>` | 只列出用户实际可配置的字段，不代表核心会按此字段授权 |
 | `scope_extensions` | 仅允许 scope descriptor 使用，类型必须为 `ScopeDescriptorExtensions` | 为 R1.3 capability 提供静态截图、采集控制、trace、标准 waveform bounded profile 和 average capture V2 profile；旧插件保持 `None` |
 | `source_extensions` | 仅允许 source descriptor 使用，类型必须为 `SourceDescriptorExtensions` | 为 `source.snapshot_v2` 及各已声明的 Source V2 写 capability 提供 topology、feature profile 和查询合同；旧插件保持 `None` |
+| `rf_source_extensions` | `rf_source` descriptor 必须提供，且其它 kind 不得提供；类型必须为 `RfSourceDescriptorExtensions` | M0 的独立 RF topology、feature 和 protection policy；该字段 append-only，旧插件保持 `None` |
 
 ### `scope_coupling_policy`
 
@@ -582,6 +583,30 @@ run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`sourc
 声明任一 ARB V2 capability 时，V1 `upload_arbitrary_waveform` 也在本地文件读取和仪器 I/O 前拒绝。其余尚无对应 V2
 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
+
+### RF 信号源 M0
+
+`rf_source` 是独立于 `source` 的 kind，不能使用 `source_extensions`、Vpp、数字 channel 或普通 source
+能力。descriptor 必须同时满足以下静态条件：
+
+- 只声明 `rf_source.*` capability，且至少包含 `rf_source.idn`；当前 Core 只识别
+  `rf_source.idn` 和 `rf_source.snapshot`。
+- 提供 `rf_source_extensions`，其 contract version、拓扑、端口 ID、feature 和 protection policy 必须通过
+  Core 校验。
+- `wavebench_min_version` 不低于 `0.8.25`，并且小于 `wavebench_max_version`。
+- 打包检查时，wheel 必须有且仅有一条生效的 `wavebench` 依赖，并显式使用与 descriptor 相同的
+  `>=wavebench_min_version,<wavebench_max_version` 区间。
+
+| capability | 必须可调用的方法 | 当前 Core 入口 |
+| --- | --- | --- |
+| `rf_source.idn` | `idn` | `wavebench rf-source idn`、doctor IDN target |
+| `rf_source.snapshot` | `get_rf_snapshot` | `wavebench rf-source status`、`rf_source.status` run step |
+
+`RfSourceDriver`、`RfSourceSnapshot`、`RfSourceDescriptorExtensions` 和相关类型均从
+`wavebench.instruments` 导入。`rf_source.snapshot` 缺失时，status 入口会在 transport I/O 前拒绝；实现
+`get_rf_snapshot()` 本身不会形成隐式 capability。M0 没有 RF 写 capability 或写入 CLI／run step。后续
+production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md) 的
+A 级实机证据逐项提升，不能由 descriptor 静态校验或 fake transport 测试替代。
 
 ### Power、DMM 和 sweep analyzer
 

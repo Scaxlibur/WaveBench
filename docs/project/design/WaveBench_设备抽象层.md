@@ -27,7 +27,7 @@ class Instrument:
 
 ### Metadata 与可执行插件分层
 
-`wavebench.drivers` V1 继续提供只读 metadata；`wavebench.instruments` V2 提供可信的可执行 driver factory。Service 只依赖 `ScopeDriver` / `SourceDriver` / `PowerDriver` / `DmmDriver` contracts，并通过统一 registry/factory 创建内置或外部 driver。
+`wavebench.drivers` V1 继续提供只读 metadata；`wavebench.instruments` V2 提供可信的可执行 driver factory。当前 Service 依赖 `ScopeDriver` / `SourceDriver` / `RfSourceDriver` / `PowerDriver` / `DmmDriver` contracts，并通过统一 registry/factory 创建内置或外部 driver。
 
 插件只负责设备差异。核心继续掌握 resource、transport factory、安全限制、Service、run plan 和 artifact。未选中的第三方插件默认不导入；`plugin ... --load` 才会显式加载并诊断全部可执行 descriptor。
 
@@ -247,6 +247,14 @@ Service 层可以按以下顺序组合这些动作：
 ```text
 设置信号 → 等待稳定 → 采集波形 → 保存数据 → 计算指标
 ```
+
+## RF 信号源：当前 M0 与后续阶段
+
+上述 `SignalGenerator` 示例只描述普通函数／任意波形发生器。RF 信号源以频率、dBm 功率、RF 输出和稳定 `port_id` 为主，不能把它映射为普通 `SourceDriver` 的 Vpp、offset、数字 channel 或波形接口。
+
+当前 M0 已实现独立 model、`RfSourceDriver` Protocol、只读 Service、`rf-source idn`／`rf-source status` 和 `rf_source.status` run step。当前只读 Service 仍受 capability、access、资源租约与 session health 约束；descriptor 未声明 `rf_source.snapshot` 时，status 会在 transport I/O 前被拒绝。
+
+M1–M4 的安全预检、写入 transaction 与写入 run step 尚未实现。设计与里程碑分别见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
 
 ## 早期目录示意
 

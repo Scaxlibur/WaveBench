@@ -252,6 +252,8 @@ sleep
 
 `source.set_duty` 对 DG4202 使用 `:SOUR<n>:FUNC:SQU:DCYC <percent>`，参数单位是百分比，范围限制为 `0 < duty_percent < 100`。
 
+RF 信号源不属于本节的 `source.*` step，也不能借用其中的 channel、Vpp、restore 或 safety gate 语义。当前 Core M0 已在 `run schema` 中提供只读 `rf_source.status`：它使用独立的类型化 snapshot artifact，并要求 descriptor 声明 `rf_source.snapshot`。DSG830 production descriptor 在 A1 前未声明该 capability，因此不会打开 transport 执行 status。M1–M4 的频率、功率、输出和端口级 RF OFF safety gate 仍未进入 run schema。详见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
+
 `scope.capture` 可以额外声明：
 
 ```toml

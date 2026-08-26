@@ -88,7 +88,7 @@ wavebench scope capture --channel 2
 
 ## 仪器访问策略
 
-`[scope]`、`[source]`、`[power]` 和 `[dmm]` 都支持 `access` 字段。该字段只控制
+`[scope]`、`[source]`、`[rf_source]`、`[power]` 和 `[dmm]` 都支持 `access` 字段。该字段只控制
 WaveBench 发起的仪器操作，不会修改配置文件，也不会替代操作系统或仪器自身的权限控制。
 
 ```toml
@@ -169,6 +169,20 @@ check_errors = true
 ensure_fix_mode_on_set_frequency = true
 settle_ms_after_set_frequency = 500
 access = "read_write"
+
+# RF M0 是独立的只读域；当前建议显式使用 read_only。
+[rf_source]
+driver = "rigol.dsg830"
+resource = "TCPIP::192.0.2.13::INSTR"
+access = "read_only"
+
+# 该静态声明为后续能量操作预留；M0 不会使用它执行写入。
+[[rf_source.safety.ports]]
+port_id = "rf_out"
+minimum_frequency_hz = 9000
+maximum_frequency_hz = 3000000000
+maximum_power_dbm = -20
+actual_termination_ohm = 50
 
 [power]
 driver = "dp800"
@@ -415,6 +429,45 @@ maximum_ohm = 50.5
 
 实际端接与仪器显示的 `HiZ`、`50 Ω` 或其它 load setting 是不同事实。配置项只声明实验台已确认的
 外部端接；未配置不会被核心根据显示负载自动推断。
+
+## `[rf_source]`
+
+```toml
+[rf_source]
+driver = "rigol.dsg830"
+resource = "TCPIP::192.0.2.13::INSTR"
+access = "read_only"
+
+[[rf_source.safety.ports]]
+port_id = "rf_out"
+minimum_frequency_hz = 9000
+maximum_frequency_hz = 3000000000
+maximum_power_dbm = -20
+actual_termination_ohm = 50
+```
+
+`[rf_source]` 是独立于普通 `[source]` 的 RF 信号源配置。它使用 plugin descriptor 的稳定
+`port_id`、Hz 和 dBm，不存在 `default_channel`、Vpp 或波形字段。当前 M0 可使用
+`wavebench rf-source idn`；`wavebench rf-source status` 还要求 production descriptor 声明
+`rf_source.snapshot`。DSG830 在 A1 实机证据前仅声明 `rf_source.idn`，因此 status 会在打开
+transport 前被拒绝。
+
+字段说明：
+
+- `driver`：已安装 RF 插件的 canonical driver ID；默认值是 `rigol.dsg830`，但只有已安装插件才可解析。
+- `resource`：RF 信号源的 VISA 资源串；可由 `rf-source` 命令的 `--resource` 临时覆盖。
+- `access`：沿用通用访问策略。M0 只需 `read_only`，实际写 capability 发布前不应配置或依赖 `read_write`。
+- `options`：可选的插件私有配置表；公开配置不要放入真实资源之外的凭据或实验室专有数据。
+
+`[[rf_source.safety.ports]]` 是按端口声明的本地静态安全证据。每项必须提供唯一 `port_id`、有限的
+`minimum_frequency_hz`、`maximum_frequency_hz`、`maximum_power_dbm` 和正数
+`actual_termination_ohm`；最大频率不得小于最小频率。它不改变仪器显示的负载设置，也不会把 dBm
+换算为 Vpp。M0 只解析和校验该声明，尚不执行 RF 写入或 safety gate；后续能量相关 capability 才会
+使用它进行准入判断。
+
+RF 的 capability、A1–A5 证据门和 DSG830 的当前 production 边界见
+[RF 信号源领域设计](../design/WaveBench_RF信号源设计.md)和
+[RF 信号源开发里程碑](../design/WaveBench_RF信号源开发里程碑.md)。
 
 ## `[power]`
 
