@@ -144,7 +144,7 @@ A5 从已核对的物理接口开始，不从某条 SCPI 命令或已有 `rf_out
 | 初始与恢复状态 | 初始 RF 输出、调制、Pulse、Sweep、protection 与后面板配置；失败后的恢复方式和最终 RF OFF 独立确认方式。 |
 | 观察方式 | 如使用示波器，只能作为补充观察；必须核对其输入与接线，且不能替代仪器端读回。CH2 的 50 Ω 声明仅适用于已确认的 RF 路径。 |
 
-在上述事实未明确前，不写入后面板配置，不发送 `*TRG`、`:TRIG:*`、`:SWE:EXEC` 或 `:PULM:OUT`，不切换 RF 输出，也不把外部接口视为安全。A5 的推荐开发顺序为：先完成 A5-0 的逻辑 configuration readback、Core profile／artifact、DSG830 严格 parser、fake transport 零写回归，以及保持原始 `read_only` 配置的私有零写 harness；再在隔离配置中执行该 harness 的只读诊断并复核私有证据；最后在已确认接线和电气边界下，对一个明确的物理路径设计独立受控证据。production descriptor 仍须等待该证据逐项提升。
+在上述事实未明确前，不写入后面板配置，不发送 `*TRG`、`:TRIG:*`、`:SWE:EXEC` 或 `:PULM:OUT`，不切换 RF 输出，也不把外部接口视为安全。A5 的推荐开发顺序为：先完成 A5-0 的逻辑 configuration readback、Core profile／artifact、DSG830 严格 parser、fake transport 零写回归，以及保持原始 `read_only` 配置的私有零写 harness；隔离诊断已完成 22 次 query、零 write、最终 RF OFF 和健康关闭复核；最后在已确认接线和电气边界下，对一个明确的物理路径设计独立受控证据。production descriptor 仍须等待该证据逐项提升。
 
 ### A1：已完成的只读 snapshot 验收
 
