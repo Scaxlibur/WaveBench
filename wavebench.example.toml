@@ -177,14 +177,16 @@ settle_ms_after_set_frequency = 500
 
 
 # RF signal sources use an independent domain: Hz and dBm on stable port IDs,
-# not the Vpp/channel model above.  The M0 commands are read-only only.
-# Install the matching RF plugin before enabling this section.
+# not the Vpp/channel model above. `read_only` remains the safe default for
+# identity/status. Install the matching RF plugin before enabling this section.
 # [rf_source]
 # driver = "rigol.dsg830"
 # resource = "TCPIP::192.0.2.13::INSTR"
 # access = "read_only"
 
-# Future RF energy operations require one complete local declaration per port.
+# DSG830 A2 output ON/OFF additionally requires `access = "read_write"`, its
+# production `rf_source.output` capability, and one complete local declaration
+# per port. CW frequency/power writes remain separately gated.
 # `actual_termination_ohm` is the physical termination evidence; it is not a
 # display-load setting and WaveBench never converts dBm to Vpp.
 # [[rf_source.safety.ports]]

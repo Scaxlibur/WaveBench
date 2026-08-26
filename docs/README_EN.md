@@ -59,7 +59,7 @@ For the terminal UI, install `.[tui]` and run `wavebench tui --fake`. The fake m
 - Install or develop plugins: [plugin user guide](project/guides/WaveBench_可安装仪器插件.md) and [plugin development guide](project/contributing/WaveBench_插件开发指南.md)
 - TUI and read-only HTTP MCP: [TUI](project/guides/WaveBench_TUI终端控制面板.md) and [HTTP MCP](project/guides/WaveBench_HTTP_MCP_只读接口.md)
 - Example plans and their hardware boundaries: [plans README](../plans/README.md)
-- RF-source domain and milestones: [design](project/design/WaveBench_RF信号源设计.md) and [milestones](project/design/WaveBench_RF信号源开发里程碑.md). Core M0 is read-only; DSG830 A1 evidence permits production identity and read-only snapshot, while RF writes remain gated.
+- RF-source domain and milestones: [design](project/design/WaveBench_RF信号源设计.md) and [milestones](project/design/WaveBench_RF信号源开发里程碑.md). Core provides M0–M2 contracts; DSG830 A1/A2 evidence permits production identity, snapshot, and safety-gated `rf_source.output` ON/OFF, while CW and later RF writes remain gated.
 
 Most detailed pages are currently maintained in Chinese. Commands, identifiers, and schemas should match across languages.
 

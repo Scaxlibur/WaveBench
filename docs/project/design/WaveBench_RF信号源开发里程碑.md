@@ -8,9 +8,9 @@
 
 | 范围 | 当前状态 | 说明 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | M0、M1、M2 离线完成 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW 事务，以及端口输出事务的 Core 合同、CLI、run 路径与 artifact；production 仍只读。 |
-| DSG830 包 `0.2.0` | M0、M1、M2 离线完成；A1 已完成 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser 与离线 `:FREQ`／`:LEV`／`:OUTP` 映射；production descriptor 声明只读 `rf_source.idn` 与 `rf_source.snapshot`。 |
-| 真实仪器证据 | A1 已完成；A2–A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 仅提升 `rf_source.snapshot`。 |
+| Core `0.8.25` 开发线 | M0、M1、M2 合同完成 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW 事务，以及端口输出事务的 Core 合同、CLI、run 路径与 artifact；production 能力由各插件证据逐项决定。 |
+| DSG830 包 `0.2.0` | M0、M1、M2 离线完成；A1、A2 已完成 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser 与 `:FREQ`／`:LEV`／`:OUTP` 映射；production descriptor 声明 `rf_source.idn`、`rf_source.snapshot` 和 `rf_source.output`。 |
+| 真实仪器证据 | A1、A2 已完成；A3–A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 仅提升端口级 output。 |
 
 ## 双仓库交付规则
 
@@ -29,7 +29,7 @@
 | Seed | 历史完成 | 无 RF Core 改动 | `0.1.0` 的旧 `source.idn` 种子、无 I/O descriptor、包装与 fake 测试 | 已由 M0 迁移取代，不代表 RF 支持。 |
 | M0 | 离线完成；A1 已完成 | `rf_source` 只读领域 | `rf_out` topology 与严格 snapshot parser | A1 复核后，生产包声明 `rf_source.idn` 和 `rf_source.snapshot`。 |
 | M1 | 离线完成 | OFF-only CW 配置 | `:FREQ`／`:LEV` 映射与独立回读 | typed request／result、Service、CLI、run step、artifact 和 fake 测试已完成；production capability 仍关闭。 |
-| M2 | 离线完成 | RF 输出安全事务 | `:OUTP` ON/OFF 的单次映射；Core 独立 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次受 guard 的 OFF recovery；production capability 仍关闭。 |
+| M2 | 离线完成；A2 已完成 | RF 输出安全事务 | `:OUTP` ON/OFF 的单次映射；Core 独立 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次受 guard 的 OFF recovery；DSG830 production 已开放 `rf_source.output`。 |
 | M3 | 未开始 | 声明式 AM／FM／PM | 已声明的内部 Sine 调制子集 | 只在 OFF 状态、profile 匹配且 postcondition 成立时写入。 |
 | M4 | 未开始 | Pulse／Step Sweep 合同 | 已声明子集、arm／fire／stop 映射 | trigger／fire 只能由专项安全规则与实机证据提升。 |
 
@@ -58,7 +58,7 @@ DSG830 `0.1.0` 种子包只包含 `*IDN?`、`close()`、无 I/O descriptor、包
 - 已将种子 package 迁移到 `kind="rf_source"`、`rf_source.*` 和 `[rf_source]`。
 - 已声明一个稳定端口 `rf_out`、手册范围和设备 dBm 参考阻抗。
 - 已实现严格 snapshot parser，分别覆盖正常响应、未知响应、坏响应与 protection condition；A1 后可由 production 的只读状态入口消费。
-- A1 已提升 `rf_source.snapshot`；后续 M1–M4 capability 仍只能存在于 fake descriptor 或离线 driver 测试中。
+- A1 已提升 `rf_source.snapshot`；A2 已将 M2 的 `rf_source.output` 提升到 DSG830 production descriptor。M1 的 CW capability 与 M3／M4 capability 仍只能存在于 fake descriptor 或离线 driver 测试中。
 
 ### 离线完成条件
 
@@ -76,7 +76,7 @@ DSG830 driver 已在离线测试中实现已冻结的 `:FREQ` 与 `:LEV` 单次�
 
 Core 已在离线环境中完成 `RfOutputRequest`／result、`rf_source.output_enable`／`rf_source.output_disable` OperationSpec、descriptor 输出 profile 校验、每端口 safety 预检、CLI、run schema／intent／dispatch 与带 preflight／postcondition snapshot 的 artifact。RF ON 必须确认完整 safety 配置、端接匹配、频率与 dBm 功率范围、已关闭的调制／Pulse／Sweep，以及只含已知非阻断项的 protection。RF OFF 不依赖频率、功率、端接或 protection readback。
 
-ON 结果不明、写后 readback 失败或 protection 变化时，Core 不重试 ON，而是将 session 降为不确定状态；仅在受 guard 的 recovery 预算内最多发送一次同端口 OFF，并独立回读 OFF。OFF 写入或其 readback 结果不明时不重试，session 降为 poisoned。DSG830 driver 只实现离线 `:OUTP ON|OFF` 单次映射，Core 负责所有 snapshot readback 与 recovery；production descriptor 直到 A2 后才可声明 `rf_source.output`。
+ON 结果不明、写后 readback 失败或 protection 变化时，Core 不重试 ON，而是将 session 降为不确定状态；仅在受 guard 的 recovery 预算内最多发送一次同端口 OFF，并独立回读 OFF。OFF 写入或其 readback 结果不明时不重试，session 降为 poisoned。DSG830 driver 使用单次 `:OUTP ON|OFF` 映射，Core 负责所有 snapshot readback 与 recovery；A2 已通过并将 `rf_source.output` 加入 production descriptor，不提升 CW 或后续 capability。
 
 ## M3：调制
 
@@ -125,10 +125,18 @@ A1 已使用一次性、非 production 的本地 evidence harness 完成并经�
 
 本次证据已由人工复核，并在对应插件补丁中把 `rf_source.snapshot` 加入 DSG830 production descriptor。该提升不包含任何 RF 写 capability。
 
+### A2：已完成的受控 RF 输出验收
+
+A2 使用一次性、非 production 的本地 evidence harness 完成并经复核。验收前使用有界网络发现确定候选资源，随后只在隔离 TOML 中使用已复核的 RF 和 scope 资源；发现结果、资源地址、序列号、原始响应、命令与波形均不进入证据。RF 配置与 scope 配置在静态预检阶段均保持 `read_only`，读重试关闭；只有显式执行阶段才在内存中创建受限的 write session。
+
+主序列确认初始 RF OFF、一次 RF ON、独立 readback、一次 RF OFF 和独立 readback。启用前的 fresh snapshot 同时验证端口安全配置、实际端接、频率、功率、调制、Pulse、Sweep 和 protection。若 ON 的结果不明，Core 最多执行一次受授权的 OFF recovery；若 OFF transaction 已开始但结果不明，不重试。验收记录确认最终 RF OFF、关闭成功和无结果不明的 guard audit。scope 对 CH1／CH2 的当前缓冲区观察作为补充，CH2 的 50 Ω 输入由独立配置明确确认，不替代 RF readback。
+
+该证据已将 DSG830 的 `rf_source.output` 加入 production descriptor。普通 CLI 和 run step 仍必须使用 `read_write`、完整端口 safety 配置和 fresh preflight；A3 之前不得开放 `rf_source.cw_configure`。
+
 ## 推荐实施顺序
 
 1. 已完成 Core M0 的 kind、descriptor、配置、只读 Service／CLI 与 run status 全链路。
 2. 已在匹配的 Core `0.8.25` 开发线上迁移 DSG830 的 descriptor、依赖区间、topology 与 snapshot parser；正式 wheel 验收等待 Core 发布版本。
 3. 已取得并复核 A1 的只读 snapshot 证据；DSG830 parser 已仅作为 `rf_source.snapshot` 暴露为 production capability。
-4. 已完成 M1／M2 的 fake descriptor 零写拒绝、postcondition 测试、guarded OFF recovery、Core CLI／run 路由和 DSG830 离线 SCPI 映射；后续仅在获得授权后单独评审 A2。
-5. 取得 A2、A3 证据后，按 capability 而非按「整台仪器已支持」逐项提升 production descriptor；M3／M4 保持独立工作。
+4. 已完成 M1／M2 的 fake descriptor 零写拒绝、postcondition 测试、guarded OFF recovery、Core CLI／run 路由和 DSG830 离线 SCPI 映射；A2 已通过并仅提升 `rf_source.output`。
+5. 取得 A3 及后续证据后，继续按 capability 而非按「整台仪器已支持」逐项提升 production descriptor；M3／M4 保持独立工作。

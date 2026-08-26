@@ -248,13 +248,13 @@ Service 层可以按以下顺序组合这些动作：
 设置信号 → 等待稳定 → 采集波形 → 保存数据 → 计算指标
 ```
 
-## RF 信号源：当前 M0 与后续阶段
+## RF 信号源：当前 M0–M2 与后续阶段
 
 上述 `SignalGenerator` 示例只描述普通函数／任意波形发生器。RF 信号源以频率、dBm 功率、RF 输出和稳定 `port_id` 为主，不能把它映射为普通 `SourceDriver` 的 Vpp、offset、数字 channel 或波形接口。
 
-当前 M0 已实现独立 model、`RfSourceDriver` Protocol、只读 Service、`rf-source idn`／`rf-source status` 和 `rf_source.status` run step。当前只读 Service 仍受 capability、access、资源租约与 session health 约束；descriptor 未声明 `rf_source.snapshot` 时，status 会在 transport I/O 前被拒绝。
+当前 Core 已实现独立 model、`RfSourceDriver` Protocol、只读 Service、OFF-only CW transaction、端口级输出 transaction、`rf-source idn`／`rf-source status`／`rf-source output` 和对应的 run step。所有入口仍受 capability、access、资源租约与 session health 约束；descriptor 未声明所需 capability 时，会在 transport I/O 前被拒绝。
 
-M1–M4 的安全预检、写入 transaction 与写入 run step 尚未实现。设计与里程碑分别见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
+DSG830 已由 A1／A2 将 snapshot 和受 safety 限制的 `rf_source.output` 提升到 production。CW 写入仍待 A3，调制、Pulse、Sweep 与 trigger 仍待后续实现和对应证据。设计与里程碑分别见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
 
 ## 早期目录示意
 

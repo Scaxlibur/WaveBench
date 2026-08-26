@@ -2,7 +2,7 @@
 
 ## 文档定位
 
-本文定义独立 `rf_source` 领域合同，说明它为什么不能复用普通函数发生器的 `source` 合同，以及 Core 与仪器插件应如何分阶段实现。Core `0.8.25` 开发线已具备 M0 只读、M1 离线 CW 和 M2 离线输出合同；生产环境仍只有经 A1 证据提升的只读能力。本文同时保留 M3–M4 的设计和 A1–A5 的实机证据门，不能把离线代码误写成已获准的真实仪器控制能力。
+本文定义独立 `rf_source` 领域合同，说明它为什么不能复用普通函数发生器的 `source` 合同，以及 Core 与仪器插件应如何分阶段实现。Core `0.8.25` 开发线已具备 M0 只读、M1 OFF-only CW 和 M2 端口输出合同；DSG830 已凭 A1／A2 证据开放 snapshot 与受 safety 限制的 output。本文同时保留 M3–M4 的设计和 A3–A5 的实机证据门，不能把离线代码误写成已获准的真实仪器控制能力。
 
 阅读顺序如下：
 
@@ -15,13 +15,13 @@
 
 | 范围 | 当前状态 | 边界 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | 已实现 `rf_source` kind、append-only descriptor extension、`[rf_source]`、M0 只读路径、M1 OFF-only CW 事务，以及 M2 的离线端口输出事务、CLI、run step 与 artifact。 | 生产可用能力仍是 M0 只读；M1／M2 只能由 fake descriptor 覆盖。 |
-| DSG830 包 `0.2.0` | 已迁移为 `kind="rf_source"`，提供 `rf_out` 静态 topology、严格 snapshot parser、离线 `:FREQ`／`:LEV`／`:OUTP` 映射；A1 只读证据已经完成。 | production descriptor 仅声明 `rf_source.idn` 与 `rf_source.snapshot`；没有 RF 写 capability。 |
-| 实机证据 | A1 已完成；A2–A5 尚未形成可提升 capability 的记录。 | DSG830 production descriptor 不能声明任何写 capability。 |
+| Core `0.8.25` 开发线 | 已实现 `rf_source` kind、append-only descriptor extension、`[rf_source]`、M0 只读路径、M1 OFF-only CW 事务，以及 M2 端口输出事务、CLI、run step 与 artifact。 | production capability 仍由各插件的实机证据逐项决定。 |
+| DSG830 包 `0.2.0` | 已迁移为 `kind="rf_source"`，提供 `rf_out` 静态 topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP` 映射；A1／A2 证据已经完成。 | production descriptor 声明 `rf_source.idn`、`rf_source.snapshot` 和受 safety 限制的 `rf_source.output`；CW 与后续写 capability 仍关闭。 |
+| 实机证据 | A1、A2 已完成；A3–A5 尚未形成可提升 capability 的记录。 | DSG830 production descriptor 只开放 snapshot 和端口级 output。 |
 
 普通 `source` 仍是面向函数／任意波形发生器的 Vpp、offset、数字 channel 与波形模型。它不是 RF 领域的兼容别名。
 
-除明确标为「生产只读」「离线已完成」或「离线进行中」的内容外，本文中的 M3–M4、production 写 capability 与 A2–A5 均为目标合同或证据门。M1／M2 的离线实现也不得写成当前可控制真实仪器的能力。
+除明确标为「生产只读」「A2 已提升」「离线已完成」或「离线进行中」的内容外，本文中的 M3–M4、CW 与其它 production 写 capability、A3–A5 均为目标合同或证据门。M1 的离线实现不得写成当前可控制真实仪器的能力；M2 仅在已取得 A2 证据的插件上开放端口级 output。
 
 ## 术语与证据级别
 
@@ -38,7 +38,7 @@ WaveBench 的独立 `rf_source` 仪器域面向以频率、功率等级、RF 输
 
 RIGOL DSG830 是第一个适配目标和手册验证样本，不是该领域的边界。核心合同不得出现 DSG830 专用 SCPI、固定频率范围、固定功率范围、固定端口名或厂商状态位。设备差异由插件 descriptor、driver 和证据记录承载。
 
-本文覆盖 M0 的当前只读实现、已完成 A1 的提升边界，以及 M1–M4 的离线开发和 fake transport 验证边界。A2–A5 实机验收、production 写 capability 声明和发行包推广另行处理；离线代码不能替代这些证据。
+本文覆盖 M0 的当前只读实现、已完成 A1／A2 的提升边界，以及 M1、M3–M4 的离线开发和 fake transport 验证边界。A3–A5 实机验收、其它 production 写 capability 声明和发行包推广另行处理；离线代码不能替代这些证据。
 
 ## 范围与非目标
 
@@ -46,7 +46,7 @@ RIGOL DSG830 是第一个适配目标和手册验证样本，不是该领域的�
 
 - M0 已提供 `rf_source` plugin kind、配置、capability、model、driver Protocol、只读 Service／CLI／doctor、run status 和 artifact namespace。
 - M1 已提供 OFF-only CW 的 typed request／result、单次写入、独立 snapshot 回读、CLI、run step 和 artifact；它只供离线 fake descriptor 使用。
-- M2 已提供端口级 RF ON/OFF 事务、ON safety preflight、一次性 OFF recovery、CLI、run step 和 artifact；它同样只供离线 fake descriptor 使用。
+- M2 已提供端口级 RF ON/OFF 事务、ON safety preflight、一次性 OFF recovery、CLI、run step 和 artifact；DSG830 的 A2 已将这一 capability 提升到 production。
 - 定义多 RF 输出端口的通用模型；首个 DSG830 适配器只声明一个端口。
 - 定义 CW 频率／dBm 功率配置、RF 输出控制、AM／FM／PM、Pulse、Step Sweep、arm／fire／stop 的标准 operation 合同。
 - 为每条写路径定义输入校验、RF OFF 配置前置条件、独立回读、状态异常失败关闭、fake transport 故障注入和包装测试要求。
@@ -57,7 +57,7 @@ RIGOL DSG830 是第一个适配目标和手册验证样本，不是该领域的�
 - 不发送 `*RST`、preset、memory、IQ、correction、任意波、list 上传或仪器文件系统命令。
 - 不将 `dBm` 换算为 Vpp，也不从连接器铭文、仪器显示或型号名推断实际端接。
 - 不将设备专用 ALC、衰减器、参考时钟、同步、外部触发或保护复位抽象为未定义的通用字段。
-- 不将未完成实机验收的 snapshot 或写 driver 方法暴露为 production descriptor capability。
+- 不将未完成实机验收的 snapshot 或写 driver 方法暴露为 production descriptor capability；A2 只授权已验收插件的 `rf_source.output`。
 
 ## 分层与职责
 
@@ -293,7 +293,7 @@ wavebench rf-source set-power --port PORT_ID DBM
 rf_source.set_frequency
 rf_source.set_power_dbm
 
-# 离线 M2：必须同时具备 read_write、output capability 和端口级 safety preflight
+# 生产 M2：仅在已完成 A2 的插件上，且必须同时具备 read_write、output capability 和端口级 safety preflight
 wavebench rf-source output --port PORT_ID on|off
 rf_source.output_enable
 rf_source.output_disable
@@ -301,15 +301,15 @@ rf_source.output_disable
 
 `rf-source status` 和 `rf_source.status` 均要求 descriptor 声明 `rf_source.snapshot`；缺少该 capability 时，Core 会在打开 transport 前拒绝请求。`doctor` 仅新增 `rf_source` 的 `*IDN?` target；它不读取运行状态、不改变访问模式，也不打开 RF 输出。
 
-M1 的每个 run step 都要求 `port_id` 与一个有限数值；M2 的每个 run step 都要求 `port_id`，并产生脱敏的 preflight／postcondition snapshot artifact。所有三类 step 使用独立的 `wavebench.rf_source.operation.v1` artifact namespace。DSG830 production descriptor 不声明 `rf_source.cw_configure` 或 `rf_source.output`，因此 M1／M2 CLI 和 run step 不能对已联网的 DSG830 发送写入。
+M1 的每个 run step 都要求 `port_id` 与一个有限数值；M2 的每个 run step 都要求 `port_id`，并产生脱敏的 preflight／postcondition snapshot artifact。所有三类 step 使用独立的 `wavebench.rf_source.operation.v1` artifact namespace。DSG830 production descriptor 仍不声明 `rf_source.cw_configure`，但已由 A2 声明 `rf_source.output`；因此 M1 CLI 和 run step 仍不能对已联网的 DSG830 写入，而 M2 仅在 `read_write`、完整端口 safety 配置和 fresh preflight 同时成立时可执行。
 
-### M1、M2 的离线写入合同
+### M1 的离线 CW 与 M2 的生产输出合同
 
 M1 是 OFF-only CW 配置：目标端口必须明确为 OFF，调制、Pulse、Sweep 与 protection 不得冲突；每次调用只写一个频率或 dBm 字段，并用独立 snapshot 回读确认。写后结果不明时不重试。
 
 M2 是端口级输出事务。RF ON 必须确认完整 safety 配置、实际端接与 dBm 参考阻抗一致、频率与 dBm 功率处于设备和实验室配置范围内、调制／Pulse／Sweep 都关闭，并且 protection 仅含已知的非阻断状态。RF OFF 只依赖目标输出状态，不要求频率、功率、端接或 protection 可读。ON 写入或其 readback 结果不明时，session 降为不确定状态，并且只在受 guard 的 recovery 预算内最多执行一次同端口 OFF 和 OFF 回读；OFF 写入结果不明时不重试，session 降为 poisoned。
 
-上述合同只由 fake descriptor 和 fake／guarded transport 验证。A2、A3 之前不得把它们纳入 DSG830 production descriptor，也不得把人工确认的实验室端接当作写入授权。
+M1 的 CW 合同仍只由 fake descriptor 和 fake／guarded transport 验证，A3 前不得把它纳入 DSG830 production descriptor。M2 已由 A2 在真实设备上完成受控 ON/OFF、独立 readback 与最终 OFF 验收，因而只将 `rf_source.output` 纳入 production descriptor；人工确认的实验室端接本身仍不构成任何额外写入授权。
 
 ### M3–M4 目标
 
@@ -337,13 +337,13 @@ wavebench rf-source sweep stop ...
 | --- | --- | --- | --- |
 | M0（生产只读） | `rf_source` kind、config、拓扑/profile、可观测 snapshot、Protocol、registry、doctor、只读 CLI 与 run status | 严格 snapshot parser；A1 后 production descriptor 声明只读 snapshot | descriptor 无 I/O；每个状态 query、解析和坏响应测试通过；A1 证据复核后仅提升 snapshot。 |
 | M1（离线完成） | CW request／result、OFF-only transaction、CLI、run step、artifact 与端口范围检查 | 频率／dBm 功率单次写入与独立回读 | output ON、活动调制／Pulse／Sweep 或越界请求时零写拒绝；结果不明无重试。 |
-| M2（离线完成） | per-port 输出事务、安全预检、受 guard 的一次性 RF OFF recovery、CLI、run step 与 artifact | RF ON/OFF 单次写入；Core 负责独立 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF。 |
+| M2（离线完成；DSG830 A2 已提升） | per-port 输出事务、安全预检、受 guard 的一次性 RF OFF recovery、CLI、run step 与 artifact | RF ON/OFF 单次写入；Core 负责独立 readback | 安全配置缺失、端接不匹配、保护异常或状态缺失时 ON 零写拒绝；ON readback 失败最多一次 OFF；DSG830 仅在 A2 复核后声明 output。 |
 | M3 | 声明式 AM／FM／PM profile、typed request/result、CLI 与 run step | 内部 Sine 调制序列 | 输出未 OFF、profile 不支持或 postcondition 不符时零写拒绝。 |
 | M4 | 声明式 Pulse／Sweep profile、typed request/result、arm/fire/stop、CLI、run step 与 operation spec | 已声明 Pulse 与 Step Sweep 子集 | 错误模式、未声明 option、外部 trigger 或 fire 前置不满足时零写拒绝；fire／trigger 仅由 fake descriptor 覆盖。 |
 
 M0–M4 只证明代码合同和 SCPI 映射。后续证据顺序固定为：A1 只读 snapshot，A2 RF OFF/ON，A3 CW 环回，A4 调制／Pulse／Sweep，A5 外部触发或同步接线。每项 evidence 绑定 capability、型号、固件、选件、端口、端接和最终 RF OFF 状态。
 
-DSG830 的 A1 已使 production descriptor 声明 `rf_source.snapshot`；A2、A3、A4、A5 分别是 RF output、CW 配置、调制／Pulse／Sweep、外部 trigger／同步 capability 的提升门槛。未取得对应 evidence 时不得声明或提升 production descriptor capability。
+DSG830 的 A1 已使 production descriptor 声明 `rf_source.snapshot`，A2 已使其声明 `rf_source.output`。A3、A4、A5 分别仍是 CW 配置、调制／Pulse／Sweep、外部 trigger／同步 capability 的提升门槛。未取得对应 evidence 时不得声明或提升其它 production descriptor capability。
 
 ## 首个适配器：RIGOL DSG830
 
@@ -362,7 +362,7 @@ DSG830 只为通用合同提供第一组设备映射，不改变核心类型或�
 
 手册未给出可安全采用的 error queue 查询命令。因此 DSG830 不声明 `rf_source.errors`，所有写后判断依赖独立状态回读和 condition register。
 
-DSG830 的 production `descriptor()` 在 A1 完成后声明 `rf_source.idn` 与 `rf_source.snapshot`。`get_rf_snapshot()` 可通过该只读入口观察状态；严格 parser 与 A1 证据仍不能借此向已联网设备开放频率、功率、输出、调制、Pulse、Sweep、fire 或 trigger 控制。历史 `0.1.0` 的 `source.idn` 种子已迁移为当前 `0.2.0` 的 RF 包。
+DSG830 的 production `descriptor()` 在 A1／A2 完成后声明 `rf_source.idn`、`rf_source.snapshot` 与 `rf_source.output`。`get_rf_snapshot()` 可通过只读入口观察状态，`set_rf_output()` 只可在完整 safety preflight 后切换 `rf_out`。严格 parser 与 A1／A2 证据不开放频率、功率、调制、Pulse、Sweep、fire 或 trigger 控制。历史 `0.1.0` 的 `source.idn` 种子已迁移为当前 `0.2.0` 的 RF 包。
 
 ## 测试与发布边界
 
@@ -379,5 +379,5 @@ DSG830 的 production `descriptor()` 在 A1 完成后声明 `rf_source.idn` 与 
 - 核心开发分支：`Scaxlibur/feat/rf-source-core`。
 - DSG830 插件开发分支：`Scaxlibur/feat/rf-source-dsg830`。
 - Core M0 提交：`8a746fb`、`6fa9c48`、`f3ae6d7`、`55474be`、`e8ff1be`、`cf53e14`；DSG830 M0 提交：`0c5c2bf`。
-- M0 离线验证已完成；DSG830 A1 snapshot 证据已通过并仅提升 production 的只读 snapshot。A2–A5 仍未开始，不能据此提升任何写 capability。
+- M0–M2 离线验证已完成；DSG830 A1 snapshot 与 A2 受控输出证据已通过，production 仅提升 snapshot 和 `rf_source.output`。A3–A5 仍未开始，不能据此提升 CW、调制、Pulse、Sweep 或 trigger capability。
 - `tool-of-rei/` 是本地恢复上下文，已忽略；面向项目的设计文档保存在 `docs/project/design/`。

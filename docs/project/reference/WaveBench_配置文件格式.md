@@ -170,13 +170,13 @@ ensure_fix_mode_on_set_frequency = true
 settle_ms_after_set_frequency = 500
 access = "read_write"
 
-# DSG830 production 当前只开放 M0 只读；read_only 是默认安全选择。
+# DSG830 已完成 A1／A2；read_only 仍是身份与状态查询的默认安全选择。
 [rf_source]
 driver = "rigol.dsg830"
 resource = "TCPIP::192.0.2.13::INSTR"
 access = "read_only"
 
-# M2 的离线 ON preflight 会消费该静态证据；它不授予 production 写入能力。
+# `rf-source output` 的 ON preflight 会消费该静态证据；它不授权 CW 或其它 RF 写入能力。
 [[rf_source.safety.ports]]
 port_id = "rf_out"
 minimum_frequency_hz = 9000
@@ -449,10 +449,10 @@ actual_termination_ohm = 50
 `[rf_source]` 是独立于普通 `[source]` 的 RF 信号源配置。它使用 plugin descriptor 的稳定
 `port_id`、Hz 和 dBm，不存在 `default_channel`、Vpp 或波形字段。M0 提供
 `wavebench rf-source idn` 与 `wavebench rf-source status`；后者要求 production descriptor 声明
-`rf_source.snapshot`。M1 的频率／功率 CLI 和 M2 的输出 CLI 已有离线路由，但还分别要求对应 capability、
-`read_write` 访问和 fresh safety preflight。DSG830 已完成 A1，并只声明 `rf_source.idn` 与
-`rf_source.snapshot`，所以可在已配置的只读 session 中执行 status；任何写 CLI 都会在打开 transport 前被
-拒绝，直到对应 A 级证据提升 capability。
+`rf_source.snapshot`。M1 的频率／功率 CLI 和 M2 的输出 CLI 都要求对应 capability、`read_write` 访问和
+fresh safety preflight。DSG830 已完成 A1／A2，声明 `rf_source.idn`、`rf_source.snapshot` 与
+`rf_source.output`：status 可在已配置的只读 session 中执行，端口 ON/OFF 还要求切换为 `read_write` 并提供
+完整安全配置。CW 与其它写 CLI 仍会在打开 transport 前被 capability 门禁拒绝，直到对应 A 级证据提升。
 
 字段说明：
 
@@ -465,8 +465,8 @@ actual_termination_ohm = 50
 `[[rf_source.safety.ports]]` 是按端口声明的本地静态安全证据。每项必须提供唯一 `port_id`、有限的
 `minimum_frequency_hz`、`maximum_frequency_hz`、`maximum_power_dbm` 和正数
 `actual_termination_ohm`；最大频率不得小于最小频率。它不改变仪器显示的负载设置，也不会把 dBm
-换算为 Vpp。M2 的离线 RF ON 事务会使用它进行准入判断；production descriptor 缺少 output capability 时，
-该事务仍会在打开 transport 前拒绝。
+换算为 Vpp。M2 的 RF ON 事务会使用它进行准入判断；若某个 descriptor 缺少 output capability，事务仍会在
+打开 transport 前拒绝。DSG830 已声明该 capability，但 `read_write`、完整安全配置和 fresh snapshot 缺一不可。
 
 RF 的 capability、A1–A5 证据门和 DSG830 的当前 production 边界见
 [RF 信号源领域设计](../design/WaveBench_RF信号源设计.md)和

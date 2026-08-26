@@ -63,7 +63,7 @@ wavebench run verify --config wavebench.toml --plan plans/dp800_scope_probe_volt
 
 ## 资源租约
 
-`run plan` 在打开任何仪器 session 前，会为计划涉及的 `scope`、`source`、`power` 和
+`run plan` 在打开任何仪器 session 前，会为计划涉及的 `scope`、`source`、`rf_source`、`power` 和
 `dmm` 资源按规范化资源键排序，并一次性取得本机独占租约。任一资源已被
 其他进程占用时，后续 transport 不会打开，已取得的前置租约会全部释放，并返回稳定错误码
 `resource_busy`。
@@ -228,13 +228,16 @@ source.set_func
 source.set_vpp
 source.output
 source.set_duty
+rf_source.status
+rf_source.output_enable
+rf_source.output_disable
 power.status
 power.set
 power.output
 sleep
 ```
 
-当前执行器已经实装并实机验证的动作是：
+当前执行器已实装的动作如下；对具体仪器执行仍取决于 descriptor capability、access 和各自的安全条件：
 
 ```text
 power.status
@@ -247,12 +250,15 @@ source.set_func
 source.set_vpp
 source.set_duty
 source.output
+rf_source.status
+rf_source.output_enable
+rf_source.output_disable
 sleep
 ```
 
 `source.set_duty` 对 DG4202 使用 `:SOUR<n>:FUNC:SQU:DCYC <percent>`，参数单位是百分比，范围限制为 `0 < duty_percent < 100`。
 
-RF 信号源不属于本节的 `source.*` step，也不能借用其中的 channel、Vpp、restore 或 safety gate 语义。当前 Core M0 已在 `run schema` 中提供只读 `rf_source.status`：它使用独立的类型化 snapshot artifact，并要求 descriptor 声明 `rf_source.snapshot`。DSG830 已完成 A1，并在 production descriptor 中声明该 capability，因此 status 可通过已配置的只读 session 读取快照。M1–M4 的频率、功率、输出和端口级 RF OFF safety gate 仍未进入 run schema。详见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
+RF 信号源不属于本节的 `source.*` step，也不能借用其中的 channel、Vpp、restore 或 safety gate 语义。当前 Core 已在 `run schema` 中提供 `rf_source.status`、`rf_source.output_enable` 和 `rf_source.output_disable`：它们使用独立的类型化 RF artifact，并分别要求 snapshot 或 output capability。DSG830 已完成 A1／A2，production descriptor 声明 `rf_source.snapshot` 和受 safety 限制的 `rf_source.output`，因此 status 可在 `read_only` session 中读取快照，输出 step 仅在 `read_write`、完整端口 safety 配置与 fresh preflight 同时成立时执行。频率、功率与 M3／M4 capability 仍未开放。详见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
 
 `scope.capture` 可以额外声明：
 
@@ -311,6 +317,9 @@ Supported `[[steps]]` kinds:
 | `source.set_freq` | `frequency_hz` | `channel` |
 | `source.set_duty` | `duty_percent` | `channel` |
 | `source.output` | `state` | `channel` |
+| `rf_source.status` | - | `on_failure` |
+| `rf_source.output_enable` | `port_id` | `on_failure` |
+| `rf_source.output_disable` | `port_id` | `on_failure` |
 | `scope.auto` | - | `on_failure`, `safety_gate` |
 | `scope.capture` | - | `channel`, `label`, `points`, `time_range_s`, `window_frequency_hz`, `target_cycles`, `expect_frequency_hz`, `frequency_tolerance`, `save_csv`, `save_npy`, `quality_gate`, `auto_recover`, `on_failure`, `safety_gate`, `[steps.expect]` |
 | `sleep` | `duration_s` | `on_failure`, `safety_gate` |

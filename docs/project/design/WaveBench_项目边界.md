@@ -19,8 +19,8 @@ WaveBench 优先解决以下问题：
 | 信号源 | DG4000 / DG4202 的状态、基本波形、频率、幅度、输出和任意波上传 | 不提供通用波形编辑器或跨厂商抽象 |
 | 电源 | DP800 的状态、保护、设定值和显式输出控制 | `power set` 与 `power output` 是独立动作 |
 | 万用表 | DM3000 / DM3058 的常用读数和部分连接方式 | 型号、接口和测量函数以当前 driver 为准 |
-| RF 信号源 | M0 只读插件领域：身份查询、类型化 snapshot 合同、配置、CLI 与 `rf_source.status` run step | 不复用普通 source；DSG830 已完成 A1，只声明 `rf_source.idn` 和 `rf_source.snapshot`，全部 RF 写入仍需实机证据 |
-| run plan | source、power、scope、dmm、sleep 和频响步骤；包含检查、预检、恢复和质量判断 | 不保证多仪器同步采样 |
+| RF 信号源 | M0–M2 插件领域：身份查询、类型化 snapshot、端口级输出合同、配置、CLI 与对应 run step | 不复用普通 source；DSG830 已完成 A1／A2，声明 `rf_source.idn`、`rf_source.snapshot` 和受 safety 限制的 `rf_source.output`；CW 与后续写入仍需实机证据 |
+| run plan | source、rf_source、power、scope、dmm、sleep 和频响步骤；包含检查、预检、恢复和质量判断 | 不保证多仪器同步采样；RF 输出仍受 capability、access 和端口 safety 限制 |
 | 报告与产物 | CSV、NPY、JSON metadata、命令记录、静态 HTML 报告和 report index | 报告读取已有产物，不代替实时采集 |
 | TUI | 电源、万用表和信号源的实验性终端面板 | 不负责 run plan 编辑、完整波形查看或插件管理 |
 | 插件 | V2 Python 插件、V1 metadata 和声明式 SCPI 检查 | Python 插件是可信代码，不是安全沙箱 |
@@ -29,7 +29,7 @@ WaveBench 优先解决以下问题：
 
 RF 信号源不是当前 `source` 的别名。`rf_source` 使用 `port_id`、dBm、RF 输出、端接和 protection 状态，不复用 Vpp、offset、数字 channel 或波形模型。
 
-当前 M0 提供 Core 侧只读合同。DSG830 已凭 A1 证据开放 production snapshot；写入设计仍须等待对应的 Core、插件和 A2–A5 证据，不能写成已支持能力。具体合同见[RF 信号源领域设计](WaveBench_RF信号源设计.md)，实现顺序见[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
+当前 Core 已提供 M0–M2 合同。DSG830 已凭 A1 证据开放 production snapshot，并凭 A2 证据开放具有完整端口 safety 配置的 `rf_source.output`。这不授权 CW、调制、Pulse、Sweep 或 trigger；这些能力仍须等待各自的 A3–A5 证据。具体合同见[RF 信号源领域设计](WaveBench_RF信号源设计.md)，实现顺序见[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
 
 ## 推荐工作顺序
 
