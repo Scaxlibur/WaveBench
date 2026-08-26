@@ -102,6 +102,27 @@ DSG830 只进入手册与离线测试均覆盖的 Pulse／frequency-only Step Sw
 
 每次证据记录必须独立于代码提交，且不能包含真实资源地址、序列号、原始响应或实验室专用配置。未恢复或无法确认最终 RF OFF 的验收不能用于提升 capability。
 
+### A1：只读 snapshot 验收流程
+
+A1 不是将 `rf_source.snapshot` 临时加入 production descriptor，也不能通过 `rf-source status` 绕过现有
+capability 门禁。验收使用一次性、非 production 的本地 evidence harness；production descriptor 在整个
+流程中保持仅 `rf_source.idn`。
+
+1. 使用独立的本地 TOML 副本，不修改现有 `wavebench.toml`。副本中的 `[rf_source]` 必须指定已核对的
+   canonical driver、资源和 `access = "read_only"`；不得使用 `read_write`、网络扫描或资源猜测。
+2. harness 通过受 guard 的 transport 和独占 resource lease 创建单个 session，只调用手册已审计的 snapshot
+   query，且不添加 query 重试：`*IDN?`、`:FREQ?`、`:LEV?`、`:OUTP?`、`:MOD:STAT?`、`:PULM:STAT?`、
+   `:SWE:STAT?`、`:STAT:QUES:POW:COND?`。
+3. 禁止 `*RST`、错误队列、RF OFF/ON、频率／功率／调制／Pulse／Sweep setter、trigger、capture 和任何
+   `write`／`write_bytes`。A1 失败时不在该只读流程中尝试 recovery OFF。
+4. 本地证据只保存 A1 标签、时间、Core／插件版本、canonical driver、脱敏的型号／固件／选件信息、`rf_out`
+   的类型化 snapshot、session 结果和 guard audit 摘要。不得保存资源、序列号、完整 IDN、原始响应或命令日志。
+5. 成功条件为：parser 完整成功、目标 RF 输出明确为 OFF、session 健康且关闭成功、audit 显示
+   `access=read_only`、query 数量与预期一致、所有写计数和 `instrument_mutation_writes` 均为零。输出为 ON、
+   状态未知、保护／解析异常、session 异常或关闭失败均为未通过，不能提升 capability。
+
+只有上述证据由人工复核后，才可以在单独补丁中把 `rf_source.snapshot` 加入 DSG830 production descriptor。
+
 ## 推荐实施顺序
 
 1. 已完成 Core M0 的 kind、descriptor、配置、只读 Service／CLI 与 run status 全链路。
