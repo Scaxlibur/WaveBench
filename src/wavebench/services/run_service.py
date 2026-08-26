@@ -454,6 +454,8 @@ class RunService:
                 add("source", "source.status")
             elif step.kind == "rf_source.status":
                 add("rf_source", "rf_source.snapshot")
+            elif step.kind == "rf_source.trigger_status":
+                add("rf_source", "rf_source.trigger_snapshot")
             elif step.kind in {"rf_source.set_frequency", "rf_source.set_power_dbm"}:
                 add("rf_source", "rf_source.snapshot", "rf_source.cw_configure")
             elif step.kind == "rf_source.modulation_configure":
@@ -1218,6 +1220,11 @@ class RunService:
         elif step.kind == "rf_source.status":
             snapshot = self._rf_source_service(services=services).snapshot()
             artifact = {"rf_source_operation": rf_source_snapshot_operation_artifact(snapshot)}
+        elif step.kind == "rf_source.trigger_status":
+            _, rf_source_operation = self._rf_source_service(
+                services=services
+            ).trigger_snapshot_with_artifact(step.fields["port_id"])
+            artifact = {"rf_source_operation": rf_source_operation}
         elif step.kind == "rf_source.set_frequency":
             _, rf_source_operation = self._rf_source_service(
                 services=services

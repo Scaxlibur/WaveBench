@@ -653,6 +653,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query a typed, read-only RF source snapshot",
     )
     add_runtime_options(rf_source_status)
+    rf_source_trigger = rf_source_sub.add_parser(
+        "trigger",
+        help="Read declared Pulse and Sweep trigger configuration without triggering",
+    )
+    rf_source_trigger_sub = rf_source_trigger.add_subparsers(
+        dest="trigger_command",
+        required=True,
+    )
+    rf_source_trigger_status = rf_source_trigger_sub.add_parser(
+        "status",
+        help="Read logical trigger configuration without changing RF or trigger state",
+    )
+    rf_source_trigger_status.add_argument("--port", required=True)
+    add_runtime_options(rf_source_trigger_status)
     rf_source_set_frequency = rf_source_sub.add_parser(
         "set-frequency",
         help="Configure one RF port frequency while its RF output is OFF",

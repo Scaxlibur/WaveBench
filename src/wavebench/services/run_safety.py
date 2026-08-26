@@ -22,6 +22,7 @@ EXECUTABLE_STEP_KINDS = {
     "sweep.frequency_response",
     "source.status",
     "rf_source.status",
+    "rf_source.trigger_status",
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
     "rf_source.modulation_configure",

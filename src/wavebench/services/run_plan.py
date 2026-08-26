@@ -22,6 +22,7 @@ ALLOWED_STEP_KINDS = {
     "sweep.frequency_response",
     "source.status",
     "rf_source.status",
+    "rf_source.trigger_status",
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
     "rf_source.modulation_configure",
@@ -72,6 +73,7 @@ _REQUIRED_FIELDS = {
     "source.set_vpp": ("value_vpp",),
     "source.set_duty": ("duty_percent",),
     "source.output": ("state",),
+    "rf_source.trigger_status": ("port_id",),
     "rf_source.set_frequency": ("port_id", "frequency_hz"),
     "rf_source.set_power_dbm": ("port_id", "power_dbm"),
     "rf_source.modulation_configure": (
@@ -196,6 +198,7 @@ _OPTIONAL_FIELDS = {
     },
     "source.status": {"channel", "on_failure"},
     "rf_source.status": {"on_failure"},
+    "rf_source.trigger_status": {"on_failure"},
     "rf_source.set_frequency": {"on_failure"},
     "rf_source.set_power_dbm": {"on_failure"},
     "rf_source.modulation_configure": {
@@ -267,6 +270,7 @@ _STEP_NOTES = {
     "sweep.frequency_response": "Sweep a source through discrete frequencies, capture reference and response channels in one acquisition per point, and write a Bode response CSV.",
     "source.status": "Read signal-generator channel state without changing output.",
     "rf_source.status": "Read a typed RF-source snapshot without changing output.",
+    "rf_source.trigger_status": "Read declared logical Pulse and Sweep trigger configuration without changing RF or trigger state.",
     "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
@@ -671,6 +675,8 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             fields["frequency_hz"],
             f"{prefix}.frequency_hz",
         )
+    elif kind == "rf_source.trigger_status":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
     elif kind == "rf_source.set_power_dbm":
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         fields["power_dbm"] = _finite_float(fields["power_dbm"], f"{prefix}.power_dbm")

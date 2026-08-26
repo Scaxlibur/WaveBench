@@ -1038,6 +1038,16 @@ _BUILTIN_SPECS = (
         risk_flags=("state_dependent_query",),
     ),
     _spec(
+        "rf_source.trigger_snapshot",
+        "rf_source",
+        required_capabilities=("rf_source.trigger_snapshot",),
+        effect="stateful_read",
+        lease_mode="exclusive",
+        restore_coverage="none-read-only",
+        error_check_minimum="disabled",
+        risk_flags=("state_dependent_query", "trigger_configuration"),
+    ),
+    _spec(
         "rf_source.set_frequency",
         "rf_source",
         required_capabilities=("rf_source.snapshot", "rf_source.cw_configure"),

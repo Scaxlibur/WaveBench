@@ -1549,6 +1549,13 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
                 return 0
+            if args.command == "trigger":
+                result = service.trigger_snapshot(args.port)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
             if args.command == "set-frequency":
                 result = service.configure_cw(
                     RfCwRequest(port_id=args.port, frequency_hz=args.frequency_hz)

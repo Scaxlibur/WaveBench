@@ -49,6 +49,12 @@ from wavebench.instruments.rf_source_extensions import (
     RfSweepSpacing,
     RfSweepState,
     RfSweepType,
+    RfExternalGatePolarity,
+    RfExternalTriggerEdge,
+    RfPulseTriggerMode,
+    RfSweepMode,
+    RfSweepTriggerMode,
+    RfTriggerSnapshot,
     rf_source_cw_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_pulse_operation_artifact,
@@ -57,6 +63,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfOutputResult,
     rf_source_output_operation_artifact,
     rf_source_snapshot_operation_artifact,
+    rf_source_trigger_snapshot_operation_artifact,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.execution_intent import build_execution_intent
@@ -99,6 +106,15 @@ def _cw_plan(directory: str, *, kind: str, field: str, value: float):
     path = Path(directory) / "plan.toml"
     path.write_text(
         f'[[steps]]\nkind = "{kind}"\nport_id = "rf_out"\n{field} = {value}\n',
+        encoding="utf-8",
+    )
+    return load_run_plan(path)
+
+
+def _trigger_plan(directory: str):
+    path = Path(directory) / "plan.toml"
+    path.write_text(
+        '[[steps]]\nkind = "rf_source.trigger_status"\nport_id = "rf_out"\n',
         encoding="utf-8",
     )
     return load_run_plan(path)
@@ -179,6 +195,18 @@ def _snapshot() -> RfSourceSnapshot:
     )
 
 
+def _trigger_snapshot() -> RfTriggerSnapshot:
+    return RfTriggerSnapshot(
+        port_id="rf_out",
+        pulse_trigger_mode=RfPulseTriggerMode.AUTOMATIC,
+        pulse_external_trigger_edge=RfExternalTriggerEdge.POSITIVE,
+        pulse_external_gate_polarity=RfExternalGatePolarity.NORMAL,
+        sweep_mode=RfSweepMode.CONTINUOUS,
+        sweep_period_trigger_mode=RfSweepTriggerMode.AUTOMATIC,
+        sweep_point_trigger_mode=RfSweepTriggerMode.AUTOMATIC,
+    )
+
+
 def _descriptor(*capabilities: str) -> SimpleNamespace:
     return SimpleNamespace(
         driver_id="example.rf1",
@@ -212,6 +240,86 @@ def test_rf_source_status_schema_and_intent_are_read_only() -> None:
             "policy": {"on_failure": "stop", "safety_gate": {}},
         },
     )
+
+
+def test_rf_trigger_status_schema_and_intent_are_read_only() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _trigger_plan(directory)
+        intent = build_execution_intent(plan, _config(directory))
+
+    assert STEP_SCHEMAS["rf_source.trigger_status"].required == ("port_id",)
+    assert intent.operations == (
+        {
+            "step_index": 0,
+            "step_kind": "rf_source.trigger_status",
+            "operation": "rf_source.trigger_snapshot",
+            "instrument_kind": "rf_source",
+            "effect": "stateful_read",
+            "lease_mode": "exclusive",
+            "changed_fields": [],
+            "restore_coverage": "none-read-only",
+            "session_purpose": "normal",
+            "required_verified_fields": [],
+            "verification_fields": [],
+            "timeout_source": "connection.timeout_ms",
+            "risk_flags": ["state_dependent_query", "trigger_configuration"],
+            "parameters": {"port_id": "rf_out"},
+            "policy": {"on_failure": "stop", "safety_gate": {}},
+        },
+    )
+
+
+def test_rf_trigger_status_requires_capability_before_session_opens() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory), logger=CommandLogger())
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor("rf_source.idn"),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="rf_source.trigger_snapshot"):
+                service.run(_trigger_plan(directory))
+
+    open_services.assert_not_called()
+
+
+def test_rf_trigger_status_run_uses_isolated_service_and_artifact_namespace() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _trigger_plan(directory)
+        snapshot = _trigger_snapshot()
+        artifact = rf_source_trigger_snapshot_operation_artifact(snapshot)
+        rf_service = SimpleNamespace(
+            trigger_snapshot_with_artifact=Mock(return_value=(snapshot, artifact)),
+            audit_snapshot=lambda: None,
+        )
+
+        class OfflineRfRunService(RunService):
+            @contextmanager
+            def _run_instrument_services(self, run_plan):
+                del run_plan
+                yield RunInstrumentServices(rf_source=rf_service)
+
+            def _run_safety_guards(self, run_plan, *, services=None):
+                del run_plan, services
+
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor("rf_source.idn", "rf_source.trigger_snapshot"),
+        ):
+            result = OfflineRfRunService(config=_config(directory), logger=CommandLogger()).run(plan)
+
+        rf_service.trigger_snapshot_with_artifact.assert_called_once_with("rf_out")
+        assert result.steps[0].artifact == {"rf_source_operation": artifact}
+        run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+        assert run_data["rf_source_operations"] == [artifact]
+        assert "source_operations" not in run_data
+
+
+def test_rf_sweep_configure_execution_intent_uses_its_declared_operation() -> None:
+    with TemporaryDirectory() as directory:
+        intent = build_execution_intent(_sweep_plan(directory), _config(directory, access="read_write"))
+
+    assert intent.operations[0]["operation"] == "rf_source.sweep_configure"
+    assert intent.operations[0]["effect"] == "write"
 
 
 def test_rf_source_status_requires_snapshot_capability_before_session_opens() -> None:

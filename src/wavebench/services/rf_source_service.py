@@ -59,12 +59,15 @@ from wavebench.instruments.rf_source_extensions import (
     RfSweepSpacing,
     RfSweepState,
     RfSweepType,
+    RfTriggerProfile,
+    RfTriggerSnapshot,
     rf_source_cw_operation_artifact,
     rf_source_modulation_disable_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_output_operation_artifact,
     rf_source_pulse_operation_artifact,
     rf_source_sweep_operation_artifact,
+    rf_source_trigger_snapshot_operation_artifact,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
@@ -241,6 +244,38 @@ class RfSourceService(SessionStateAliasMixin):
                 if session_state.health is not SessionHealth.HEALTHY:
                     raise ConfigError("rf_source.snapshot requires a healthy session")
                 return rf_source.get_rf_snapshot()
+
+    def trigger_snapshot(self, port_id: str) -> RfTriggerSnapshot:
+        """Read a declared logical trigger configuration without changing state."""
+
+        operation = "rf_source.trigger_snapshot"
+        self._require(operation, "rf_source.trigger_snapshot")
+        profile = self._validate_trigger_snapshot_descriptor(port_id, operation)
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                snapshot = rf_source.get_rf_trigger_snapshot(port_id)
+            else:
+                with session_state.transaction_lock:
+                    if session_state.health is not SessionHealth.HEALTHY:
+                        raise ConfigError(f"{operation} requires a healthy session")
+                    snapshot = rf_source.get_rf_trigger_snapshot(port_id)
+        self._validate_trigger_snapshot_readback(
+            port_id,
+            snapshot,
+            profile,
+            operation=operation,
+        )
+        return snapshot
+
+    def trigger_snapshot_with_artifact(
+        self,
+        port_id: str,
+    ) -> tuple[RfTriggerSnapshot, dict[str, object]]:
+        """Read a declared trigger configuration and retain redacted evidence."""
+
+        snapshot = self.trigger_snapshot(port_id)
+        return snapshot, rf_source_trigger_snapshot_operation_artifact(snapshot)
 
     def configure_cw(self, request: RfCwRequest) -> RfCwResult:
         return self._configure_cw_transaction(request).result
@@ -1035,6 +1070,62 @@ class RfSourceService(SessionStateAliasMixin):
             if not port_profile.power_min_dbm <= request.power_dbm <= port_profile.power_max_dbm:
                 raise ConfigError(f"{operation} request power_dbm is outside the descriptor range")
         return port_profile, profile
+
+    def _validate_trigger_snapshot_descriptor(
+        self,
+        port_id: str,
+        operation: str,
+    ) -> RfTriggerProfile:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.rf_source_extensions
+        if not isinstance(extensions, RfSourceDescriptorExtensions):
+            raise ConfigError(f"{operation} requires validated rf_source_extensions")
+        if not any(port.port_id == port_id for port in extensions.topology.ports):
+            raise ConfigError(f"{operation} references an undeclared RF port")
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.TRIGGER),
+            None,
+        )
+        if (
+            feature is None
+            or RfFeatureDirection.READ not in feature.directions
+            or port_id not in feature.port_ids
+            or not isinstance(feature.profile, RfTriggerProfile)
+            or not feature.profile.state_readable
+        ):
+            raise ConfigError(
+                f"{operation} requires a readable trigger profile for the target port"
+            )
+        return feature.profile
+
+    @staticmethod
+    def _validate_trigger_snapshot_readback(
+        port_id: str,
+        snapshot: object,
+        profile: RfTriggerProfile,
+        *,
+        operation: str,
+    ) -> None:
+        if not isinstance(snapshot, RfTriggerSnapshot):
+            raise ConfigError(f"{operation} driver returned an invalid trigger snapshot")
+        if snapshot.port_id != port_id:
+            raise ConfigError(f"{operation} trigger snapshot does not match the requested port")
+        if snapshot.pulse_trigger_mode not in profile.pulse_trigger_modes:
+            raise ConfigError(f"{operation} readback pulse trigger mode is outside the descriptor profile")
+        if snapshot.pulse_external_trigger_edge not in profile.pulse_external_trigger_edges:
+            raise ConfigError(f"{operation} readback external trigger edge is outside the descriptor profile")
+        if snapshot.pulse_external_gate_polarity not in profile.pulse_external_gate_polarities:
+            raise ConfigError(f"{operation} readback external gate polarity is outside the descriptor profile")
+        if snapshot.sweep_mode not in profile.sweep_modes:
+            raise ConfigError(f"{operation} readback Sweep mode is outside the descriptor profile")
+        if snapshot.sweep_period_trigger_mode not in profile.sweep_period_trigger_modes:
+            raise ConfigError(
+                f"{operation} readback Sweep-period trigger mode is outside the descriptor profile"
+            )
+        if snapshot.sweep_point_trigger_mode not in profile.sweep_point_trigger_modes:
+            raise ConfigError(
+                f"{operation} readback Sweep-point trigger mode is outside the descriptor profile"
+            )
 
     def _validate_pulse_descriptor(
         self,

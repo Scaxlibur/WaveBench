@@ -28,6 +28,9 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_sweep_and_output_commands(
         ["rf-source", "idn", "--config", "rf.toml", "--resource", "TCPIP::rf::INSTR"]
     )
     status = build_parser().parse_args(["rf-source", "status"])
+    trigger_status = build_parser().parse_args(
+        ["rf-source", "trigger", "status", "--port", "rf_out"]
+    )
     frequency = build_parser().parse_args(
         ["rf-source", "set-frequency", "--port", "rf_out", "4000000"]
     )
@@ -113,6 +116,12 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_sweep_and_output_commands(
     assert identity.config == "rf.toml"
     assert identity.resource == "TCPIP::rf::INSTR"
     assert (status.domain, status.command) == ("rf-source", "status")
+    assert (trigger_status.domain, trigger_status.command, trigger_status.trigger_command) == (
+        "rf-source",
+        "trigger",
+        "status",
+    )
+    assert trigger_status.port == "rf_out"
     assert (frequency.domain, frequency.command) == ("rf-source", "set-frequency")
     assert frequency.port == "rf_out"
     assert frequency.frequency_hz == 4_000_000.0
@@ -175,6 +184,28 @@ def test_rf_source_cli_dispatches_identity_and_typed_snapshot() -> None:
     assert payload["schema"] == "wavebench.cli.result.v1"
     assert payload["result"]["schema"] == "wavebench.rf_source.snapshot.v1"
     service.snapshot.assert_called_once_with()
+
+
+def test_rf_source_cli_dispatches_read_only_trigger_snapshot() -> None:
+    service = Mock()
+    service.trigger_snapshot.return_value = SimpleNamespace(
+        as_dict=lambda: {
+            "schema": "wavebench.rf_source.trigger_snapshot.v1",
+            "port_id": "rf_out",
+            "pulse_trigger_mode": "automatic",
+            "sweep_mode": "continuous",
+        }
+    )
+
+    stdout = io.StringIO()
+    with patch("wavebench.cli._load_rf_source_service", return_value=service), redirect_stdout(stdout):
+        assert main(["--json", "rf-source", "trigger", "status", "--port", "rf_out"]) == 0
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema"] == "wavebench.cli.result.v1"
+    assert payload["result"]["schema"] == "wavebench.rf_source.trigger_snapshot.v1"
+    assert payload["result"]["port_id"] == "rf_out"
+    service.trigger_snapshot.assert_called_once_with("rf_out")
 
 
 def test_rf_source_cli_dispatches_each_off_only_cw_request() -> None:
