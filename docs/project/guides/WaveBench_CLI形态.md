@@ -84,13 +84,18 @@ wavebench --json source snapshot-v2 --config wavebench.toml
 ```bash
 wavebench rf-source idn --config wavebench.toml
 wavebench rf-source status --config wavebench.toml
+wavebench rf-source set-frequency --port PORT_ID HZ --config wavebench.toml
+wavebench rf-source set-power --port PORT_ID DBM --config wavebench.toml
 wavebench capability explain rf_source.snapshot --driver rigol.dsg830 --kind rf_source --access read_only
 ```
 
 `rf-source idn` 要求 descriptor 声明 `rf_source.idn`。`rf-source status` 要求
 `rf_source.snapshot`，并在缺少 capability 时于 transport I/O 前拒绝。DSG830 已完成 A1，并在
 production descriptor 中声明这两个只读 capability；其他插件仍可能被该门禁拒绝。它不表示可以改用 raw
-SCPI。RF M0 不提供频率、功率、RF 输出、调制、Pulse 或 Sweep 写入命令。
+SCPI。M1 已注册 `set-frequency` 与 `set-power` 的 OFF-only CW CLI；它们还要求
+`rf_source.cw_configure`、`read_write` 访问、已声明的 CW profile 和完整的只读 preflight。当前 DSG830
+production descriptor 不声明该写 capability，因此命令会在打开 transport 前拒绝。RF 输出、调制、Pulse 和
+Sweep 写入命令仍不存在。
 
 已声明对应写 capability 的插件还可以配置跨通道关系：
 

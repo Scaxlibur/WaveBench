@@ -293,11 +293,16 @@ DSG830 已完成 A1，因此 production descriptor 可通过 Core 的 status 路
 
 ### M1–M4 目标
 
-后续写入命令和 run step 仍是设计合同，尚未进入当前 CLI 或 run schema：
+M1 已注册以下 OFF-only CW CLI；它们仍受 descriptor capability、`read_write` access、CW profile 和 fresh snapshot preflight 共同门控。DSG830 的 production descriptor 没有 `rf_source.cw_configure`，因此这些命令不能控制已联网的 DSG830。
 
 ```text
 wavebench rf-source set-frequency --port PORT_ID HZ
 wavebench rf-source set-power --port PORT_ID DBM
+```
+
+M1 的 run step、artifact，以及 M2–M4 的写入 CLI 和 run step 仍是设计合同，尚未进入当前 run schema：
+
+```text
 wavebench rf-source output --port PORT_ID on|off
 wavebench rf-source modulation configure-am ...
 wavebench rf-source modulation configure-fm ...
@@ -311,8 +316,6 @@ wavebench rf-source sweep stop ...
 ```
 
 ```text
-rf_source.set_frequency
-rf_source.set_power_dbm
 rf_source.output_disable
 rf_source.output_enable
 rf_source.modulation_configure

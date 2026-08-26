@@ -87,6 +87,7 @@ from .instruments.scope_extensions import (
     ScopeTraceData,
     ScopeTraceRef,
 )
+from .instruments.rf_source_extensions import RfCwRequest
 from .mcp_http import (
     resolve_mcp_token,
     serve_mcp_http,
@@ -1535,6 +1536,24 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "status":
                 result = service.snapshot()
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "set-frequency":
+                result = service.configure_cw(
+                    RfCwRequest(port_id=args.port, frequency_hz=args.frequency_hz)
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "set-power":
+                result = service.configure_cw(
+                    RfCwRequest(port_id=args.port, power_dbm=args.power_dbm)
+                )
                 if args.json:
                     _emit_json_result(_json_payload(result))
                 else:

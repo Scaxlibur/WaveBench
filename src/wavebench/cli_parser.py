@@ -653,6 +653,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query a typed, read-only RF source snapshot",
     )
     add_runtime_options(rf_source_status)
+    rf_source_set_frequency = rf_source_sub.add_parser(
+        "set-frequency",
+        help="Configure one RF port frequency while its RF output is OFF",
+    )
+    rf_source_set_frequency.add_argument("--port", required=True)
+    rf_source_set_frequency.add_argument("frequency_hz", type=float)
+    add_runtime_options(rf_source_set_frequency)
+    rf_source_set_power = rf_source_sub.add_parser(
+        "set-power",
+        help="Configure one RF port dBm level while its RF output is OFF",
+    )
+    rf_source_set_power.add_argument("--port", required=True)
+    rf_source_set_power.add_argument("power_dbm", type=float)
+    add_runtime_options(rf_source_set_power)
 
     source_sub = source_parser.add_subparsers(dest="command", required=True)
 
