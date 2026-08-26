@@ -20,6 +20,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfFeature,
     RfFeatureCapability,
     RfFeatureDirection,
+    RfModulationDisableRequest,
     RfModulationKind,
     RfModulationModeProfile,
     RfModulationProfile,
@@ -94,7 +95,14 @@ def _profile() -> RfModulationProfile:
     )
 
 
-def _descriptor(*capabilities: str, profile: RfModulationProfile | None = None) -> SimpleNamespace:
+def _descriptor(
+    *capabilities: str,
+    profile: RfModulationProfile | None = None,
+    directions: tuple[RfFeatureDirection, ...] = (
+        RfFeatureDirection.CONFIGURE,
+        RfFeatureDirection.READ,
+    ),
+) -> SimpleNamespace:
     return SimpleNamespace(
         driver_id="example.rf.modulation",
         capabilities=capabilities,
@@ -115,7 +123,7 @@ def _descriptor(*capabilities: str, profile: RfModulationProfile | None = None) 
             features=(
                 RfFeatureCapability(
                     feature=RfFeature.MODULATION,
-                    directions=(RfFeatureDirection.CONFIGURE, RfFeatureDirection.READ),
+                    directions=directions,
                     port_ids=("rf_out",),
                     profile=profile or _profile(),
                 ),
@@ -192,6 +200,7 @@ class _Driver:
         self.modulation_snapshots = list(modulation_snapshots)
         self.calls: list[str] = []
         self.requests: list[RfModulationRequest] = []
+        self.disable_requests: list[RfModulationDisableRequest] = []
 
     def close(self) -> None:
         self.calls.append("close")
@@ -232,6 +241,10 @@ class _Driver:
         self.calls.append("configure_modulation")
         self.requests.append(request)
 
+    def disable_rf_modulation(self, request: RfModulationDisableRequest) -> None:
+        self.calls.append("disable_modulation")
+        self.disable_requests.append(request)
+
 
 def _service(
     rf_snapshots: list[RfSourceSnapshot],
@@ -263,6 +276,10 @@ def _am_request(*, depth_percent: float = 50.0) -> RfModulationRequest:
         internal_frequency_hz=1_000.0,
         depth_percent=depth_percent,
     )
+
+
+def _am_disable_request() -> RfModulationDisableRequest:
+    return RfModulationDisableRequest(port_id="rf_out", kind=RfModulationKind.AM)
 
 
 def test_modulation_uses_one_driver_sequence_and_independent_readback() -> None:
@@ -481,6 +498,136 @@ def test_modulation_mismatch_is_not_retried_and_degrades_session() -> None:
         "configure_modulation",
         "snapshot",
         "modulation_snapshot",
+    ]
+    assert service.session_state is not None
+    assert service.session_state.health is SessionHealth.UNCERTAIN
+
+
+def _disable_descriptor() -> SimpleNamespace:
+    return _descriptor(
+        "rf_source.idn",
+        "rf_source.snapshot",
+        "rf_source.modulation_disable",
+        directions=(RfFeatureDirection.DISABLE, RfFeatureDirection.READ),
+    )
+
+
+def test_modulation_disable_uses_one_mode_global_sequence_and_independent_state_readback() -> None:
+    request = _am_disable_request()
+    service, driver = _service(
+        [
+            _rf_snapshot(modulation=RfModulationState.ENABLED),
+            _rf_snapshot(modulation=RfModulationState.DISABLED),
+        ],
+        [_modulation_snapshot(enabled=True), _modulation_snapshot(enabled=False)],
+        descriptor=_disable_descriptor(),
+    )
+
+    result, artifact = service.disable_modulation_with_artifact(request)
+
+    assert result.write_completed is True
+    assert driver.disable_requests == [request]
+    assert driver.calls == [
+        "snapshot",
+        "modulation_state",
+        "disable_modulation",
+        "snapshot",
+        "modulation_state",
+    ]
+    assert artifact["operation"] == "rf_source.modulation_disable"
+    assert artifact["postcondition_modulation_state"]["enabled_modes"] == []
+    assert service.session_state is not None
+    assert service.session_state.health is SessionHealth.HEALTHY
+
+
+def test_modulation_disable_is_a_no_write_success_for_an_already_disabled_consistent_state() -> None:
+    service, driver = _service(
+        [_rf_snapshot()],
+        [_modulation_snapshot(enabled=False)],
+        descriptor=_disable_descriptor(),
+    )
+
+    result = service.disable_modulation(_am_disable_request())
+
+    assert result.write_completed is False
+    assert driver.disable_requests == []
+    assert driver.calls == ["snapshot", "modulation_state"]
+
+
+@pytest.mark.parametrize(
+    ("rf_snapshot", "modulation_snapshot", "message"),
+    (
+        (
+            _rf_snapshot(output_enabled=True, modulation=RfModulationState.ENABLED),
+            _modulation_snapshot(enabled=True),
+            "target RF output OFF",
+        ),
+        (
+            _rf_snapshot(modulation=RfModulationState.ENABLED),
+            _modulation_snapshot(kind=RfModulationKind.FM, enabled=True),
+            "only the requested modulation mode",
+        ),
+    ),
+)
+def test_modulation_disable_rejects_unsafe_or_ambiguous_preflight_without_write(
+    rf_snapshot: RfSourceSnapshot,
+    modulation_snapshot: RfModulationSnapshot,
+    message: str,
+) -> None:
+    service, driver = _service(
+        [rf_snapshot],
+        [modulation_snapshot],
+        descriptor=_disable_descriptor(),
+    )
+
+    with pytest.raises(ConfigError, match=message):
+        service.disable_modulation(_am_disable_request())
+
+    assert driver.disable_requests == []
+    assert driver.calls == ["snapshot", "modulation_state"]
+
+
+def test_modulation_disable_checks_capability_and_access_before_driver_io() -> None:
+    missing, missing_driver = _service(
+        [],
+        [],
+        descriptor=_descriptor("rf_source.idn", "rf_source.snapshot"),
+    )
+    with pytest.raises(ConfigError, match="rf_source.modulation_disable"):
+        missing.disable_modulation(_am_disable_request())
+    assert missing_driver.calls == []
+
+    read_only, read_only_driver = _service(
+        [],
+        [],
+        access="read_only",
+        descriptor=_disable_descriptor(),
+    )
+    with pytest.raises(AccessDeniedError, match="rf_source.modulation_disable"):
+        read_only.disable_modulation(_am_disable_request())
+    assert read_only_driver.calls == []
+
+
+def test_modulation_disable_postcondition_mismatch_is_not_retried_and_degrades_session() -> None:
+    service, driver = _service(
+        [
+            _rf_snapshot(modulation=RfModulationState.ENABLED),
+            _rf_snapshot(modulation=RfModulationState.ENABLED),
+        ],
+        [_modulation_snapshot(enabled=True), _modulation_snapshot(enabled=True)],
+        descriptor=_disable_descriptor(),
+    )
+
+    with pytest.raises(ConfigError, match="postcondition requires modulation disabled"):
+        service.disable_modulation(_am_disable_request())
+
+    assert len(driver.disable_requests) == 1
+    assert driver.calls == [
+        "snapshot",
+        "modulation_state",
+        "disable_modulation",
+        "snapshot",
+        "modulation_state",
     ]
     assert service.session_state is not None
     assert service.session_state.health is SessionHealth.UNCERTAIN

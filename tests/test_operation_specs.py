@@ -95,6 +95,25 @@ def test_rf_source_m2_output_specs_require_snapshot_and_output_capability() -> N
     assert "safe_output_disable" in disable.risk_flags
 
 
+def test_rf_source_modulation_disable_spec_requires_state_evidence_and_keeps_rf_off() -> None:
+    disable = require_operation_spec("rf_source.modulation_disable")
+
+    assert disable.instrument_kind == "rf_source"
+    assert disable.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.modulation_disable",
+    )
+    assert disable.effect == "write"
+    assert disable.changed_fields == (
+        "rf_source.modulation.enabled_modes",
+        "rf_source.modulation.global_enabled",
+    )
+    assert disable.restore_coverage == "none"
+    assert "rf_output_must_be_off" in disable.risk_flags
+    assert "safe_modulation_disable" in disable.risk_flags
+    assert disable.safe_alternatives == ("rf_source.snapshot",)
+
+
 def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     pairs = (
         (

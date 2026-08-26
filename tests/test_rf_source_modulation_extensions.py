@@ -14,6 +14,8 @@ from wavebench.instruments.rf_source_extensions import (
     RfFeature,
     RfFeatureCapability,
     RfFeatureDirection,
+    RfModulationDisableRequest,
+    RfModulationDisableResult,
     RfModulationKind,
     RfModulationModeProfile,
     RfModulationProfile,
@@ -36,6 +38,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfModulationStateSnapshot,
     rf_modulation_snapshot_document,
     rf_modulation_state_snapshot_document,
+    rf_source_modulation_disable_operation_artifact,
     rf_source_modulation_operation_artifact,
 )
 
@@ -148,6 +151,33 @@ def _descriptor() -> SimpleNamespace:
     )
 
 
+def _disable_descriptor() -> SimpleNamespace:
+    return SimpleNamespace(
+        driver_id="example.rf.modulation",
+        kind="rf_source",
+        models=("RF-MOD",),
+        capabilities=(
+            "rf_source.idn",
+            "rf_source.snapshot",
+            "rf_source.modulation_disable",
+        ),
+        wavebench_min_version="0.8.25",
+        wavebench_max_version="0.9.0",
+        rf_source_extensions=RfSourceDescriptorExtensions(
+            contract_version=RF_SOURCE_CONTRACT_VERSION,
+            topology=_topology(),
+            features=(
+                RfFeatureCapability(
+                    feature=RfFeature.MODULATION,
+                    directions=(RfFeatureDirection.DISABLE, RfFeatureDirection.READ),
+                    port_ids=("rf_out",),
+                    profile=RfModulationProfile(state_readable=True),
+                ),
+            ),
+        ),
+    )
+
+
 class _Driver:
     def close(self) -> None:
         return None
@@ -175,6 +205,9 @@ class _Driver:
         return RfModulationStateSnapshot(port_id=port_id)
 
     def configure_rf_modulation(self, request: RfModulationRequest) -> None:
+        del request
+
+    def disable_rf_modulation(self, request: RfModulationDisableRequest) -> None:
         del request
 
 
@@ -326,6 +359,32 @@ def test_modulation_descriptor_requires_readable_bounded_feature_and_methods() -
         validate_rf_source_descriptor(invalid)
 
 
+def test_modulation_disable_descriptor_requires_state_read_and_disable_methods() -> None:
+    descriptor = _disable_descriptor()
+
+    assert CAPABILITY_METHODS["rf_source.modulation_disable"] == (
+        "get_rf_modulation_state",
+        "disable_rf_modulation",
+    )
+    validate_rf_source_descriptor(descriptor, _Driver())
+
+    invalid = _disable_descriptor()
+    invalid.rf_source_extensions = RfSourceDescriptorExtensions(
+        contract_version=RF_SOURCE_CONTRACT_VERSION,
+        topology=_topology(),
+        features=(
+            RfFeatureCapability(
+                feature=RfFeature.MODULATION,
+                directions=(RfFeatureDirection.READ,),
+                port_ids=("rf_out",),
+                profile=RfModulationProfile(state_readable=True),
+            ),
+        ),
+    )
+    with pytest.raises(Exception, match="disable and read"):
+        validate_rf_source_descriptor(invalid)
+
+
 def test_modulation_artifact_keeps_typed_pre_and_postcondition_evidence() -> None:
     request = RfModulationRequest(
         port_id="rf_out",
@@ -358,3 +417,32 @@ def test_modulation_artifact_keeps_typed_pre_and_postcondition_evidence() -> Non
     assert artifact["operation"] == "rf_source.modulation_configure"
     assert artifact["preflight_modulation_state"]["enabled_modes"] == []
     assert artifact["postcondition_modulation_snapshot"]["global_enabled"] is True
+
+
+def test_modulation_disable_artifact_keeps_state_only_pre_and_postcondition_evidence() -> None:
+    request = RfModulationDisableRequest(port_id="rf_out", kind=RfModulationKind.AM)
+    result = RfModulationDisableResult(
+        port_id="rf_out",
+        kind=RfModulationKind.AM,
+        write_completed=True,
+    )
+    preflight_state = RfModulationStateSnapshot(
+        port_id="rf_out",
+        enabled_modes=(RfModulationKind.AM,),
+        global_enabled=True,
+    )
+    postcondition_state = RfModulationStateSnapshot(port_id="rf_out")
+
+    artifact = rf_source_modulation_disable_operation_artifact(
+        request,
+        result,
+        preflight_snapshot=_rf_snapshot(),
+        preflight_modulation_state=preflight_state,
+        postcondition_snapshot=_rf_snapshot(),
+        postcondition_modulation_state=postcondition_state,
+    )
+
+    assert artifact["operation"] == "rf_source.modulation_disable"
+    assert artifact["result"]["write_completed"] is True
+    assert artifact["preflight_modulation_state"]["global_enabled"] is True
+    assert artifact["postcondition_modulation_state"]["enabled_modes"] == []

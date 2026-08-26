@@ -20,6 +20,8 @@ from wavebench.instruments.rf_source_extensions import (
     RfCwResult,
     RfFeature,
     RfFeatureDirection,
+    RfModulationDisableRequest,
+    RfModulationDisableResult,
     RfModulationKind,
     RfModulationModeProfile,
     RfModulationProfile,
@@ -42,6 +44,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfSourceSnapshot,
     RfSweepState,
     rf_source_cw_operation_artifact,
+    rf_source_modulation_disable_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_output_operation_artifact,
 )
@@ -73,6 +76,15 @@ class _RfModulationTransaction:
     preflight_modulation_state: RfModulationStateSnapshot
     postcondition_snapshot: RfSourceSnapshot
     postcondition_modulation_snapshot: RfModulationSnapshot
+
+
+@dataclass(frozen=True)
+class _RfModulationDisableTransaction:
+    result: RfModulationDisableResult
+    preflight_snapshot: RfSourceSnapshot
+    preflight_modulation_state: RfModulationStateSnapshot
+    postcondition_snapshot: RfSourceSnapshot
+    postcondition_modulation_state: RfModulationStateSnapshot
 
 
 @dataclass(frozen=True)
@@ -335,6 +347,110 @@ class RfSourceService(SessionStateAliasMixin):
                         session_state.degrade(
                             SessionHealth.UNCERTAIN,
                             reason="rf_modulation_postcondition_unverified",
+                        )
+                    raise
+
+    def disable_modulation(
+        self,
+        request: RfModulationDisableRequest,
+    ) -> RfModulationDisableResult:
+        return self._disable_modulation_transaction(request).result
+
+    def disable_modulation_with_artifact(
+        self,
+        request: RfModulationDisableRequest,
+    ) -> tuple[RfModulationDisableResult, dict[str, object]]:
+        """Disable one active M3 mode and retain typed pre/postcondition evidence."""
+
+        transaction = self._disable_modulation_transaction(request)
+        return (
+            transaction.result,
+            rf_source_modulation_disable_operation_artifact(
+                request,
+                transaction.result,
+                preflight_snapshot=transaction.preflight_snapshot,
+                preflight_modulation_state=transaction.preflight_modulation_state,
+                postcondition_snapshot=transaction.postcondition_snapshot,
+                postcondition_modulation_state=transaction.postcondition_modulation_state,
+            ),
+        )
+
+    def _disable_modulation_transaction(
+        self,
+        request: RfModulationDisableRequest,
+    ) -> _RfModulationDisableTransaction:
+        """Disable one known active M3 mode without retry or RF-output recovery.
+
+        The operation is intentionally narrow: a write is only permitted when
+        RF is OFF and typed state proves that exactly ``request.kind`` is active.
+        An already disabled, internally consistent state is a no-write success.
+        Any write failure or ambiguous postcondition leaves the session uncertain
+        for a fresh, independently preflighted recovery attempt.
+        """
+
+        if not isinstance(request, RfModulationDisableRequest):
+            raise ConfigError("rf_source modulation disable requires RfModulationDisableRequest")
+        operation = "rf_source.modulation_disable"
+        self._require(operation, "rf_source.snapshot", "rf_source.modulation_disable")
+        self._validate_modulation_disable_descriptor(request, operation)
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            with session_state.transaction_lock:
+                if session_state.health is not SessionHealth.HEALTHY:
+                    raise ConfigError(f"{operation} requires a healthy session")
+                preflight_snapshot = rf_source.get_rf_snapshot()
+                preflight_modulation_state = rf_source.get_rf_modulation_state(request.port_id)
+                write_required = self._validate_modulation_disable_preflight(
+                    request,
+                    preflight_snapshot,
+                    preflight_modulation_state,
+                    operation=operation,
+                )
+                if not write_required:
+                    return _RfModulationDisableTransaction(
+                        result=RfModulationDisableResult(
+                            port_id=request.port_id,
+                            kind=request.kind,
+                            write_completed=False,
+                        ),
+                        preflight_snapshot=preflight_snapshot,
+                        preflight_modulation_state=preflight_modulation_state,
+                        postcondition_snapshot=preflight_snapshot,
+                        postcondition_modulation_state=preflight_modulation_state,
+                    )
+
+                main_entered = False
+                try:
+                    main_entered = True
+                    rf_source.disable_rf_modulation(request)
+                    postcondition_snapshot = rf_source.get_rf_snapshot()
+                    postcondition_modulation_state = rf_source.get_rf_modulation_state(
+                        request.port_id
+                    )
+                    self._validate_modulation_disable_postcondition(
+                        request,
+                        postcondition_snapshot,
+                        postcondition_modulation_state,
+                        operation=operation,
+                    )
+                    return _RfModulationDisableTransaction(
+                        result=RfModulationDisableResult(
+                            port_id=request.port_id,
+                            kind=request.kind,
+                            write_completed=True,
+                        ),
+                        preflight_snapshot=preflight_snapshot,
+                        preflight_modulation_state=preflight_modulation_state,
+                        postcondition_snapshot=postcondition_snapshot,
+                        postcondition_modulation_state=postcondition_modulation_state,
+                    )
+                except BaseException:
+                    if main_entered and session_state.health is SessionHealth.HEALTHY:
+                        session_state.degrade(
+                            SessionHealth.UNCERTAIN,
+                            reason="rf_modulation_disable_postcondition_unverified",
                         )
                     raise
 
@@ -751,6 +867,33 @@ class RfSourceService(SessionStateAliasMixin):
             )
         return mode_profile
 
+    def _validate_modulation_disable_descriptor(
+        self,
+        request: RfModulationDisableRequest,
+        operation: str,
+    ) -> None:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.rf_source_extensions
+        if not isinstance(extensions, RfSourceDescriptorExtensions):
+            raise ConfigError(f"{operation} requires validated rf_source_extensions")
+        if not any(port.port_id == request.port_id for port in extensions.topology.ports):
+            raise ConfigError(f"{operation} references an undeclared RF port")
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.MODULATION),
+            None,
+        )
+        if (
+            feature is None
+            or RfFeatureDirection.DISABLE not in feature.directions
+            or RfFeatureDirection.READ not in feature.directions
+            or request.port_id not in feature.port_ids
+            or not isinstance(feature.profile, RfModulationProfile)
+            or not feature.profile.state_readable
+        ):
+            raise ConfigError(
+                f"{operation} requires a readable disable-capable modulation profile for the target port"
+            )
+
     def _validate_cw_preflight(
         self,
         request: RfCwRequest,
@@ -906,6 +1049,59 @@ class RfSourceService(SessionStateAliasMixin):
             phase_deviation_rad=request.value,
         )
 
+    def _validate_modulation_disable_preflight(
+        self,
+        request: RfModulationDisableRequest,
+        snapshot: RfSourceSnapshot,
+        modulation_state: RfModulationStateSnapshot,
+        *,
+        operation: str,
+    ) -> bool:
+        modulation = self._validate_modulation_safe_rf_snapshot(
+            request.port_id,
+            snapshot,
+            operation=operation,
+        )
+        if modulation_state.port_id != request.port_id:
+            raise ConfigError(f"{operation} modulation state does not match the requested port")
+        if modulation_state.fault_codes:
+            raise ConfigError(f"{operation} requires no active modulation fault condition")
+        if modulation is RfModulationState.DISABLED:
+            if modulation_state.global_enabled or modulation_state.enabled_modes:
+                raise ConfigError(
+                    f"{operation} rejects a disabled RF snapshot with active modulation state"
+                )
+            return False
+        if modulation_state.enabled_modes != (request.kind,):
+            raise ConfigError(f"{operation} requires only the requested modulation mode to be active")
+        if modulation_state.global_enabled is not True:
+            raise ConfigError(f"{operation} requires global modulation enabled")
+        return True
+
+    def _validate_modulation_disable_postcondition(
+        self,
+        request: RfModulationDisableRequest,
+        snapshot: RfSourceSnapshot,
+        modulation_state: RfModulationStateSnapshot,
+        *,
+        operation: str,
+    ) -> None:
+        modulation = self._validate_modulation_safe_rf_snapshot(
+            request.port_id,
+            snapshot,
+            operation=operation,
+        )
+        if modulation is not RfModulationState.DISABLED:
+            raise ConfigError(f"{operation} postcondition requires modulation disabled")
+        if modulation_state.port_id != request.port_id:
+            raise ConfigError(f"{operation} modulation state does not match the requested port")
+        if modulation_state.enabled_modes:
+            raise ConfigError(f"{operation} postcondition requires all modulation modes disabled")
+        if modulation_state.global_enabled:
+            raise ConfigError(f"{operation} postcondition requires global modulation disabled")
+        if modulation_state.fault_codes:
+            raise ConfigError(f"{operation} postcondition reports an active modulation fault condition")
+
     def _validate_modulation_rf_snapshot(
         self,
         request: RfModulationRequest,
@@ -914,7 +1110,23 @@ class RfSourceService(SessionStateAliasMixin):
         expected_modulation_state: RfModulationState,
         operation: str,
     ) -> None:
-        port = self._snapshot_port(snapshot, request.port_id, operation=operation)
+        modulation = self._validate_modulation_safe_rf_snapshot(
+            request.port_id,
+            snapshot,
+            operation=operation,
+        )
+        if modulation is not expected_modulation_state:
+            expected = expected_modulation_state.value
+            raise ConfigError(f"{operation} requires modulation state {expected}")
+
+    def _validate_modulation_safe_rf_snapshot(
+        self,
+        port_id: str,
+        snapshot: RfSourceSnapshot,
+        *,
+        operation: str,
+    ) -> RfModulationState:
+        port = self._snapshot_port(snapshot, port_id, operation=operation)
         output_enabled = self._observed_value(
             port.output_enabled,
             f"{operation} requires a readable RF output state",
@@ -925,9 +1137,8 @@ class RfSourceService(SessionStateAliasMixin):
             port.modulation,
             f"{operation} requires a readable modulation state",
         )
-        if modulation is not expected_modulation_state:
-            expected = expected_modulation_state.value
-            raise ConfigError(f"{operation} requires modulation state {expected}")
+        if not isinstance(modulation, RfModulationState):
+            raise ConfigError(f"{operation} requires a valid modulation state")
         pulse = self._observed_value(
             port.pulse,
             f"{operation} requires a readable Pulse state",
@@ -948,6 +1159,7 @@ class RfSourceService(SessionStateAliasMixin):
             raise ConfigError(f"{operation} requires a valid protection state")
         if protection.active_codes:
             raise ConfigError(f"{operation} requires no active protection condition")
+        return modulation
 
     @staticmethod
     def _validate_modulation_snapshot_identity(

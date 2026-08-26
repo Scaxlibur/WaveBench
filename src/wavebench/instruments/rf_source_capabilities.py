@@ -34,6 +34,10 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "get_rf_modulation_snapshot",
             "configure_rf_modulation",
         ),
+        "rf_source.modulation_disable": (
+            "get_rf_modulation_state",
+            "disable_rf_modulation",
+        ),
         "rf_source.output": ("set_rf_output",),
     }
 )
@@ -74,6 +78,8 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         _validate_cw_configure_feature(extensions)
     if "rf_source.modulation_configure" in rf_capabilities:
         _validate_modulation_configure_feature(extensions)
+    if "rf_source.modulation_disable" in rf_capabilities:
+        _validate_modulation_disable_feature(extensions)
     if "rf_source.output" in rf_capabilities:
         _validate_output_feature(extensions)
     _validate_rf_source_version_range(descriptor)
@@ -144,6 +150,26 @@ def _validate_modulation_configure_feature(extensions: RfSourceDescriptorExtensi
         raise ConfigError(
             "rf_source.modulation_configure requires readable bounded modulation mode profiles"
         )
+
+
+def _validate_modulation_disable_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.MODULATION),
+        None,
+    )
+    if (
+        feature is None
+        or RfFeatureDirection.DISABLE not in feature.directions
+        or RfFeatureDirection.READ not in feature.directions
+    ):
+        raise ConfigError(
+            "rf_source.modulation_disable requires an RF modulation feature with "
+            "disable and read directions"
+        )
+    if not isinstance(feature.profile, RfModulationProfile):  # defensive: extensions validates this.
+        raise ConfigError("rf_source.modulation_disable requires an RF modulation profile")
+    if not feature.profile.state_readable:
+        raise ConfigError("rf_source.modulation_disable requires readable RF modulation state")
 
 
 def validate_rf_source_plugin_dependencies(

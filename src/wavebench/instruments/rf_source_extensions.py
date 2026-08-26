@@ -667,6 +667,40 @@ class RfModulationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RfModulationDisableRequest:
+    """Disable exactly one active modulation mode on one RF output port.
+
+    This request deliberately identifies the mode that must be active before
+    the write.  It is not a broad reset: Service preflight rejects an unknown,
+    mixed-mode, or otherwise unsafe modulation state before the driver sends
+    its mode-specific disable sequence.
+    """
+
+    port_id: str
+    kind: RfModulationKind
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF modulation disable request port_id")
+        if not isinstance(self.kind, RfModulationKind):
+            raise ValueError("RF modulation disable request kind has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
+class RfModulationDisableResult:
+    """A mode-specific modulation-disable request confirmed by typed state readback."""
+
+    port_id: str
+    kind: RfModulationKind
+    write_completed: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF modulation disable result port_id")
+        if not isinstance(self.kind, RfModulationKind):
+            raise ValueError("RF modulation disable result kind has an invalid type")
+        _require_bool(self.write_completed, "RF modulation disable result write_completed")
+
+
+@dataclass(frozen=True, slots=True)
 class RfModulationStateSnapshot:
     """State-only readback used before an M3 configuration write.
 
@@ -816,6 +850,8 @@ class RfSourceDriver(InstrumentDriver, Protocol):
     ) -> RfModulationSnapshot: ...
 
     def configure_rf_modulation(self, request: RfModulationRequest) -> None: ...
+
+    def disable_rf_modulation(self, request: RfModulationDisableRequest) -> None: ...
 
     def set_rf_output(self, request: RfOutputRequest) -> None: ...
 
@@ -999,6 +1035,47 @@ def rf_source_modulation_operation_artifact(
     }
 
 
+def rf_source_modulation_disable_operation_artifact(
+    request: RfModulationDisableRequest,
+    result: RfModulationDisableResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    preflight_modulation_state: RfModulationStateSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+    postcondition_modulation_state: RfModulationStateSnapshot,
+) -> dict[str, object]:
+    """Build redacted typed evidence for one RF modulation-disable operation."""
+
+    if not isinstance(request, RfModulationDisableRequest):
+        raise TypeError("request must be RfModulationDisableRequest")
+    if not isinstance(result, RfModulationDisableResult):
+        raise TypeError("result must be RfModulationDisableResult")
+    if request.port_id != result.port_id or request.kind is not result.kind:
+        raise ValueError("RF modulation disable request and result must describe the same target")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(preflight_modulation_state, RfModulationStateSnapshot):
+        raise TypeError("preflight_modulation_state must be RfModulationStateSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_modulation_state, RfModulationStateSnapshot):
+        raise TypeError("postcondition_modulation_state must be RfModulationStateSnapshot")
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "rf_source.modulation_disable",
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "preflight_modulation_state": rf_modulation_state_snapshot_document(
+            preflight_modulation_state
+        ),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+        "postcondition_modulation_state": rf_modulation_state_snapshot_document(
+            postcondition_modulation_state
+        ),
+    }
+
+
 def rf_source_output_operation_artifact(
     request: RfOutputRequest,
     result: RfOutputResult,
@@ -1046,6 +1123,8 @@ __all__ = [
     "RfFeatureDirection",
     "RfFeatureProfile",
     "RfModulationKind",
+    "RfModulationDisableRequest",
+    "RfModulationDisableResult",
     "RfModulationModeProfile",
     "RfModulationProfile",
     "RfModulationRequest",
@@ -1078,6 +1157,7 @@ __all__ = [
     "rf_source_digest",
     "rf_modulation_snapshot_document",
     "rf_modulation_state_snapshot_document",
+    "rf_source_modulation_disable_operation_artifact",
     "rf_source_modulation_operation_artifact",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",
