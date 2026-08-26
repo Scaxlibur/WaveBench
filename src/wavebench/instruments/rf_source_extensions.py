@@ -25,6 +25,7 @@ RF_SOURCE_MODULATION_STATE_SCHEMA = "wavebench.rf_source.modulation_state.v1"
 RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA = "wavebench.rf_source.modulation_snapshot.v1"
 RF_SOURCE_PULSE_SNAPSHOT_SCHEMA = "wavebench.rf_source.pulse_snapshot.v1"
 RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA = "wavebench.rf_source.sweep_snapshot.v1"
+RF_SOURCE_TRIGGER_SNAPSHOT_SCHEMA = "wavebench.rf_source.trigger_snapshot.v1"
 RF_SOURCE_OPERATION_ARTIFACT_SCHEMA = "wavebench.rf_source.operation.v1"
 RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION = "0.8.25"
 
@@ -194,6 +195,26 @@ class RfPulsePolarity(StrEnum):
     INVERTED = "inverted"
 
 
+class RfPulseTriggerMode(StrEnum):
+    """Logical Pulse trigger modes reported by a device configuration query."""
+
+    AUTOMATIC = "automatic"
+    BUS = "bus"
+    EXTERNAL = "external"
+    EXTERNAL_GATE = "external_gate"
+    KEY = "key"
+
+
+class RfExternalTriggerEdge(StrEnum):
+    NEGATIVE = "negative"
+    POSITIVE = "positive"
+
+
+class RfExternalGatePolarity(StrEnum):
+    INVERTED = "inverted"
+    NORMAL = "normal"
+
+
 class RfSweepState(StrEnum):
     DISABLED = "disabled"
     ENABLED = "enabled"
@@ -215,12 +236,25 @@ class RfSweepSpacing(StrEnum):
     LINEAR = "linear"
 
 
+class RfSweepMode(StrEnum):
+    CONTINUOUS = "continuous"
+    SINGLE = "single"
+
+
+class RfSweepTriggerMode(StrEnum):
+    AUTOMATIC = "automatic"
+    BUS = "bus"
+    EXTERNAL = "external"
+    KEY = "key"
+
+
 class RfFeature(StrEnum):
     CW = "cw"
     MODULATION = "modulation"
     OUTPUT = "output"
     PULSE = "pulse"
     SWEEP = "sweep"
+    TRIGGER = "trigger"
 
 
 class RfFeatureDirection(StrEnum):
@@ -625,8 +659,63 @@ class RfSweepModeProfile:
             raise ValueError("RF sweep mode dwell_min_s must be positive")
 
 
+@dataclass(frozen=True, slots=True)
+class RfTriggerProfile:
+    """Complete read-only trigger-configuration profile for one RF output.
+
+    The profile describes logical Pulse and Sweep trigger configuration that a
+    driver can read.  It deliberately does not describe a physical trigger or
+    sync connector, its direction, or electrical characteristics; those need a
+    separate A5 physical-interface contract before any write or fire operation.
+    """
+
+    state_readable: bool
+    pulse_trigger_modes: tuple[RfPulseTriggerMode, ...] = ()
+    pulse_external_trigger_edges: tuple[RfExternalTriggerEdge, ...] = ()
+    pulse_external_gate_polarities: tuple[RfExternalGatePolarity, ...] = ()
+    sweep_modes: tuple[RfSweepMode, ...] = ()
+    sweep_period_trigger_modes: tuple[RfSweepTriggerMode, ...] = ()
+    sweep_point_trigger_modes: tuple[RfSweepTriggerMode, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_bool(self.state_readable, "RF trigger state_readable")
+        fields = (
+            (self.pulse_trigger_modes, RfPulseTriggerMode, "RF trigger pulse_trigger_modes"),
+            (
+                self.pulse_external_trigger_edges,
+                RfExternalTriggerEdge,
+                "RF trigger pulse_external_trigger_edges",
+            ),
+            (
+                self.pulse_external_gate_polarities,
+                RfExternalGatePolarity,
+                "RF trigger pulse_external_gate_polarities",
+            ),
+            (self.sweep_modes, RfSweepMode, "RF trigger sweep_modes"),
+            (
+                self.sweep_period_trigger_modes,
+                RfSweepTriggerMode,
+                "RF trigger sweep_period_trigger_modes",
+            ),
+            (
+                self.sweep_point_trigger_modes,
+                RfSweepTriggerMode,
+                "RF trigger sweep_point_trigger_modes",
+            ),
+        )
+        for values, enum_type, label in fields:
+            _require_enum_tuple(values, enum_type, label, allow_empty=not self.state_readable)
+        if not self.state_readable and any(values for values, _, _ in fields):
+            raise ValueError("RF unreadable trigger profile cannot declare trigger states")
+
+
 RfFeatureProfile: TypeAlias = (
-    RfCwProfile | RfOutputProfile | RfModulationProfile | RfPulseProfile | RfSweepProfile
+    RfCwProfile
+    | RfOutputProfile
+    | RfModulationProfile
+    | RfPulseProfile
+    | RfSweepProfile
+    | RfTriggerProfile
 )
 
 _FEATURE_PROFILE_TYPES: dict[RfFeature, type[RfFeatureProfile]] = {
@@ -635,6 +724,7 @@ _FEATURE_PROFILE_TYPES: dict[RfFeature, type[RfFeatureProfile]] = {
     RfFeature.OUTPUT: RfOutputProfile,
     RfFeature.PULSE: RfPulseProfile,
     RfFeature.SWEEP: RfSweepProfile,
+    RfFeature.TRIGGER: RfTriggerProfile,
 }
 
 
@@ -1172,6 +1262,45 @@ class RfSweepSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class RfTriggerSnapshot:
+    """Complete readback of logical Pulse and Sweep trigger configuration.
+
+    ``port_id`` identifies the RF output whose behavior the queried settings
+    govern.  It is not a physical trigger/sync connector identifier.
+    """
+
+    port_id: str
+    pulse_trigger_mode: RfPulseTriggerMode
+    pulse_external_trigger_edge: RfExternalTriggerEdge
+    pulse_external_gate_polarity: RfExternalGatePolarity
+    sweep_mode: RfSweepMode
+    sweep_period_trigger_mode: RfSweepTriggerMode
+    sweep_point_trigger_mode: RfSweepTriggerMode
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF trigger snapshot port_id")
+        if not isinstance(self.pulse_trigger_mode, RfPulseTriggerMode):
+            raise ValueError("RF trigger snapshot pulse_trigger_mode has an invalid type")
+        if not isinstance(self.pulse_external_trigger_edge, RfExternalTriggerEdge):
+            raise ValueError(
+                "RF trigger snapshot pulse_external_trigger_edge has an invalid type"
+            )
+        if not isinstance(self.pulse_external_gate_polarity, RfExternalGatePolarity):
+            raise ValueError(
+                "RF trigger snapshot pulse_external_gate_polarity has an invalid type"
+            )
+        if not isinstance(self.sweep_mode, RfSweepMode):
+            raise ValueError("RF trigger snapshot sweep_mode has an invalid type")
+        if not isinstance(self.sweep_period_trigger_mode, RfSweepTriggerMode):
+            raise ValueError("RF trigger snapshot sweep_period_trigger_mode has an invalid type")
+        if not isinstance(self.sweep_point_trigger_mode, RfSweepTriggerMode):
+            raise ValueError("RF trigger snapshot sweep_point_trigger_mode has an invalid type")
+
+    def as_dict(self) -> dict[str, object]:
+        return rf_trigger_snapshot_document(self)
+
+
+@dataclass(frozen=True, slots=True)
 class RfOutputRequest:
     """One explicit RF output state request for one descriptor-defined port."""
 
@@ -1200,6 +1329,8 @@ class RfOutputResult:
 @runtime_checkable
 class RfSourceDriver(InstrumentDriver, Protocol):
     def get_rf_snapshot(self) -> RfSourceSnapshot: ...
+
+    def get_rf_trigger_snapshot(self, port_id: str) -> RfTriggerSnapshot: ...
 
     def configure_cw(self, request: RfCwRequest) -> None: ...
 
@@ -1336,6 +1467,16 @@ def rf_sweep_snapshot_document(snapshot: RfSweepSnapshot) -> dict[str, object]:
     return {"schema": RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA, **data}
 
 
+def rf_trigger_snapshot_document(snapshot: RfTriggerSnapshot) -> dict[str, object]:
+    """Build a redacted document for one typed RF trigger configuration readback."""
+
+    if not isinstance(snapshot, RfTriggerSnapshot):
+        raise TypeError("snapshot must be RfTriggerSnapshot")
+    data = rf_source_to_data(snapshot)
+    assert isinstance(data, dict)
+    return {"schema": RF_SOURCE_TRIGGER_SNAPSHOT_SCHEMA, **data}
+
+
 def rf_source_snapshot_operation_artifact(snapshot: RfSourceSnapshot) -> dict[str, object]:
     """Build a read-only snapshot artifact without transport-private values."""
 
@@ -1343,6 +1484,18 @@ def rf_source_snapshot_operation_artifact(snapshot: RfSourceSnapshot) -> dict[st
         "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
         "operation": "rf_source.snapshot",
         "snapshot": rf_source_snapshot_document(snapshot),
+    }
+
+
+def rf_source_trigger_snapshot_operation_artifact(
+    snapshot: RfTriggerSnapshot,
+) -> dict[str, object]:
+    """Build a read-only trigger-configuration artifact without transport values."""
+
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "rf_source.trigger_snapshot",
+        "trigger_snapshot": rf_trigger_snapshot_document(snapshot),
     }
 
 
@@ -1583,10 +1736,13 @@ __all__ = [
     "RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA",
     "RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION",
     "RF_SOURCE_SNAPSHOT_SCHEMA",
+    "RF_SOURCE_TRIGGER_SNAPSHOT_SCHEMA",
     "RfAvailability",
     "RfCwProfile",
     "RfCwRequest",
     "RfCwResult",
+    "RfExternalGatePolarity",
+    "RfExternalTriggerEdge",
     "RfFeature",
     "RfFeatureCapability",
     "RfFeatureDirection",
@@ -1621,6 +1777,7 @@ __all__ = [
     "RfPulseSnapshot",
     "RfPulseSource",
     "RfPulseState",
+    "RfPulseTriggerMode",
     "RfReasonCode",
     "RfSourceDescriptorExtensions",
     "RfSourceDriver",
@@ -1635,7 +1792,11 @@ __all__ = [
     "RfSweepSnapshot",
     "RfSweepSpacing",
     "RfSweepState",
+    "RfSweepMode",
+    "RfSweepTriggerMode",
     "RfSweepType",
+    "RfTriggerProfile",
+    "RfTriggerSnapshot",
     "rf_source_canonical_json",
     "rf_source_cw_operation_artifact",
     "rf_source_digest",
@@ -1643,12 +1804,14 @@ __all__ = [
     "rf_modulation_state_snapshot_document",
     "rf_pulse_snapshot_document",
     "rf_sweep_snapshot_document",
+    "rf_trigger_snapshot_document",
     "rf_source_modulation_disable_operation_artifact",
     "rf_source_modulation_operation_artifact",
     "rf_source_pulse_operation_artifact",
     "rf_source_sweep_operation_artifact",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",
+    "rf_source_trigger_snapshot_operation_artifact",
     "rf_source_output_operation_artifact",
     "rf_source_to_data",
 ]

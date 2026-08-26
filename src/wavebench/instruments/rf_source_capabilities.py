@@ -23,6 +23,7 @@ from .rf_source_extensions import (
     RfPulseProfile,
     RfSourceDescriptorExtensions,
     RfSweepProfile,
+    RfTriggerProfile,
 )
 
 
@@ -30,6 +31,7 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "rf_source.idn": ("idn",),
         "rf_source.snapshot": ("get_rf_snapshot",),
+        "rf_source.trigger_snapshot": ("get_rf_trigger_snapshot",),
         "rf_source.cw_configure": ("configure_cw",),
         "rf_source.modulation_configure": (
             "get_rf_modulation_state",
@@ -86,6 +88,8 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         raise ConfigError("rf_source descriptors require the rf_source.idn capability")
     if "rf_source.cw_configure" in rf_capabilities:
         _validate_cw_configure_feature(extensions)
+    if "rf_source.trigger_snapshot" in rf_capabilities:
+        _validate_trigger_snapshot_feature(extensions)
     if "rf_source.modulation_configure" in rf_capabilities:
         _validate_modulation_configure_feature(extensions)
     if "rf_source.modulation_disable" in rf_capabilities:
@@ -122,7 +126,22 @@ def _validate_cw_configure_feature(extensions: RfSourceDescriptorExtensions) -> 
     if not (feature.profile.frequency_configurable or feature.profile.power_configurable):
         raise ConfigError(
             "rf_source.cw_configure requires a configurable RF CW frequency or power field"
+    )
+
+
+def _validate_trigger_snapshot_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.TRIGGER),
+        None,
+    )
+    if feature is None or RfFeatureDirection.READ not in feature.directions:
+        raise ConfigError(
+            "rf_source.trigger_snapshot requires an RF trigger feature with read direction"
         )
+    if not isinstance(feature.profile, RfTriggerProfile):  # defensive: extensions validates this.
+        raise ConfigError("rf_source.trigger_snapshot requires an RF trigger profile")
+    if not feature.profile.state_readable:
+        raise ConfigError("rf_source.trigger_snapshot requires readable RF trigger state")
 
 
 def _validate_output_feature(extensions: RfSourceDescriptorExtensions) -> None:

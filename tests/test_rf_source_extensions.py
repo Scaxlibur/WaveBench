@@ -16,10 +16,13 @@ from wavebench.instruments.rf_source_extensions import (
     RF_SOURCE_CONTRACT_VERSION,
     RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
     RF_SOURCE_SNAPSHOT_SCHEMA,
+    RF_SOURCE_TRIGGER_SNAPSHOT_SCHEMA,
     RfAvailability,
     RfCwProfile,
     RfCwRequest,
     RfCwResult,
+    RfExternalGatePolarity,
+    RfExternalTriggerEdge,
     RfFeature,
     RfFeatureCapability,
     RfFeatureDirection,
@@ -38,8 +41,15 @@ from wavebench.instruments.rf_source_extensions import (
     RfSourceSnapshot,
     RfSourceTopology,
     RfSweepState,
+    RfSweepMode,
+    RfSweepTriggerMode,
+    RfTriggerProfile,
+    RfTriggerSnapshot,
+    RfPulseTriggerMode,
     rf_source_snapshot_document,
     rf_source_snapshot_operation_artifact,
+    rf_source_trigger_snapshot_operation_artifact,
+    rf_trigger_snapshot_document,
     rf_source_cw_operation_artifact,
     rf_source_output_operation_artifact,
 )
@@ -54,6 +64,10 @@ class RfDriver:
 
     def get_rf_snapshot(self) -> RfSourceSnapshot:
         return snapshot()
+
+    def get_rf_trigger_snapshot(self, port_id: str) -> RfTriggerSnapshot:
+        assert port_id == "rf_out"
+        return trigger_snapshot()
 
     def configure_cw(self, request: RfCwRequest) -> None:
         del request
@@ -140,6 +154,55 @@ def output_extensions() -> RfSourceDescriptorExtensions:
     )
 
 
+def trigger_profile() -> RfTriggerProfile:
+    return RfTriggerProfile(
+        state_readable=True,
+        pulse_trigger_modes=(
+            RfPulseTriggerMode.AUTOMATIC,
+            RfPulseTriggerMode.BUS,
+            RfPulseTriggerMode.EXTERNAL,
+            RfPulseTriggerMode.EXTERNAL_GATE,
+            RfPulseTriggerMode.KEY,
+        ),
+        pulse_external_trigger_edges=(
+            RfExternalTriggerEdge.NEGATIVE,
+            RfExternalTriggerEdge.POSITIVE,
+        ),
+        pulse_external_gate_polarities=(
+            RfExternalGatePolarity.INVERTED,
+            RfExternalGatePolarity.NORMAL,
+        ),
+        sweep_modes=(RfSweepMode.CONTINUOUS, RfSweepMode.SINGLE),
+        sweep_period_trigger_modes=(
+            RfSweepTriggerMode.AUTOMATIC,
+            RfSweepTriggerMode.BUS,
+            RfSweepTriggerMode.EXTERNAL,
+            RfSweepTriggerMode.KEY,
+        ),
+        sweep_point_trigger_modes=(
+            RfSweepTriggerMode.AUTOMATIC,
+            RfSweepTriggerMode.BUS,
+            RfSweepTriggerMode.EXTERNAL,
+            RfSweepTriggerMode.KEY,
+        ),
+    )
+
+
+def trigger_extensions() -> RfSourceDescriptorExtensions:
+    return RfSourceDescriptorExtensions(
+        contract_version=RF_SOURCE_CONTRACT_VERSION,
+        topology=topology(),
+        features=(
+            RfFeatureCapability(
+                feature=RfFeature.TRIGGER,
+                directions=(RfFeatureDirection.READ,),
+                port_ids=("rf_out",),
+                profile=trigger_profile(),
+            ),
+        ),
+    )
+
+
 def descriptor(**changes: object) -> InstrumentDescriptor:
     value = InstrumentDescriptor(
         driver_id="example.rf1",
@@ -175,6 +238,18 @@ def snapshot() -> RfSourceSnapshot:
             ),
         ),
         protection=RfObserved.value_of(RfProtectionStatus(active_codes=())),
+    )
+
+
+def trigger_snapshot() -> RfTriggerSnapshot:
+    return RfTriggerSnapshot(
+        port_id="rf_out",
+        pulse_trigger_mode=RfPulseTriggerMode.AUTOMATIC,
+        pulse_external_trigger_edge=RfExternalTriggerEdge.POSITIVE,
+        pulse_external_gate_polarity=RfExternalGatePolarity.NORMAL,
+        sweep_mode=RfSweepMode.CONTINUOUS,
+        sweep_period_trigger_mode=RfSweepTriggerMode.AUTOMATIC,
+        sweep_point_trigger_mode=RfSweepTriggerMode.AUTOMATIC,
     )
 
 
@@ -256,6 +331,32 @@ def test_rf_output_request_and_result_require_explicit_boolean_state() -> None:
         RfOutputResult(port_id="rf_out", enabled=False, write_completed=0)  # type: ignore[arg-type]
 
 
+def test_rf_trigger_profile_and_snapshot_are_complete_and_typed() -> None:
+    profile = trigger_profile()
+    value = trigger_snapshot()
+
+    assert profile.state_readable is True
+    assert value.pulse_trigger_mode is RfPulseTriggerMode.AUTOMATIC
+    assert value.sweep_mode is RfSweepMode.CONTINUOUS
+    with pytest.raises(ValueError, match="must not be empty"):
+        RfTriggerProfile(state_readable=True)
+    with pytest.raises(ValueError, match="cannot declare trigger states"):
+        RfTriggerProfile(
+            state_readable=False,
+            pulse_trigger_modes=(RfPulseTriggerMode.AUTOMATIC,),
+        )
+    with pytest.raises(ValueError, match="invalid type"):
+        RfTriggerSnapshot(
+            port_id="rf_out",
+            pulse_trigger_mode=RfPulseTriggerMode.AUTOMATIC,
+            pulse_external_trigger_edge=RfExternalTriggerEdge.POSITIVE,
+            pulse_external_gate_polarity=RfExternalGatePolarity.NORMAL,
+            sweep_mode="continuous",  # type: ignore[arg-type]
+            sweep_period_trigger_mode=RfSweepTriggerMode.AUTOMATIC,
+            sweep_point_trigger_mode=RfSweepTriggerMode.AUTOMATIC,
+        )
+
+
 def test_rf_snapshot_document_and_artifact_are_structured_and_redacted() -> None:
     value = snapshot()
     document = rf_source_snapshot_document(value)
@@ -268,6 +369,30 @@ def test_rf_snapshot_document_and_artifact_are_structured_and_redacted() -> None
         "operation": "rf_source.snapshot",
         "snapshot": document,
     }
+
+
+def test_rf_trigger_snapshot_document_and_artifact_are_structured_and_redacted() -> None:
+    value = trigger_snapshot()
+    document = rf_trigger_snapshot_document(value)
+    artifact = rf_source_trigger_snapshot_operation_artifact(value)
+
+    assert document == {
+        "schema": RF_SOURCE_TRIGGER_SNAPSHOT_SCHEMA,
+        "type": "RfTriggerSnapshot",
+        "port_id": "rf_out",
+        "pulse_trigger_mode": "automatic",
+        "pulse_external_trigger_edge": "positive",
+        "pulse_external_gate_polarity": "normal",
+        "sweep_mode": "continuous",
+        "sweep_period_trigger_mode": "automatic",
+        "sweep_point_trigger_mode": "automatic",
+    }
+    assert artifact == {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "rf_source.trigger_snapshot",
+        "trigger_snapshot": document,
+    }
+    assert "resource" not in str(artifact)
 
 
 def test_rf_cw_operation_artifact_uses_typed_pre_and_postcondition_evidence() -> None:
@@ -337,6 +462,7 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
     assert dict(RF_SOURCE_CAPABILITY_METHODS) == {
         "rf_source.idn": ("idn",),
         "rf_source.snapshot": ("get_rf_snapshot",),
+        "rf_source.trigger_snapshot": ("get_rf_trigger_snapshot",),
         "rf_source.cw_configure": ("configure_cw",),
         "rf_source.modulation_configure": (
             "get_rf_modulation_state",
@@ -384,6 +510,20 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
     )
     validate_rf_source_descriptor(cw_descriptor)
     validate_declared_capabilities(cw_descriptor, RfDriver())
+    with pytest.raises(ConfigError, match="trigger feature with read direction"):
+        validate_rf_source_descriptor(
+            replace(
+                value,
+                capabilities=("rf_source.idn", "rf_source.snapshot", "rf_source.trigger_snapshot"),
+            )
+        )
+    trigger_descriptor = replace(
+        value,
+        capabilities=("rf_source.idn", "rf_source.snapshot", "rf_source.trigger_snapshot"),
+        rf_source_extensions=trigger_extensions(),
+    )
+    validate_rf_source_descriptor(trigger_descriptor)
+    validate_declared_capabilities(trigger_descriptor, RfDriver())
     with pytest.raises(ConfigError, match="output ENABLE and DISABLE"):
         validate_rf_source_descriptor(
             replace(
