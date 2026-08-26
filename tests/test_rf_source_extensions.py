@@ -18,6 +18,8 @@ from wavebench.instruments.rf_source_extensions import (
     RF_SOURCE_SNAPSHOT_SCHEMA,
     RfAvailability,
     RfCwProfile,
+    RfCwRequest,
+    RfCwResult,
     RfFeature,
     RfFeatureCapability,
     RfFeatureDirection,
@@ -48,6 +50,9 @@ class RfDriver:
 
     def get_rf_snapshot(self) -> RfSourceSnapshot:
         return snapshot()
+
+    def configure_cw(self, request: RfCwRequest) -> None:
+        del request
 
 
 def topology() -> RfSourceTopology:
@@ -85,6 +90,26 @@ def extensions() -> RfSourceDescriptorExtensions:
         ),
         protection_conditions=(
             RfProtectionConditionPolicy("overtemperature", blocks_output_enable=True),
+        ),
+    )
+
+
+def cw_extensions() -> RfSourceDescriptorExtensions:
+    return RfSourceDescriptorExtensions(
+        contract_version=RF_SOURCE_CONTRACT_VERSION,
+        topology=topology(),
+        features=(
+            RfFeatureCapability(
+                feature=RfFeature.CW,
+                directions=(RfFeatureDirection.CONFIGURE, RfFeatureDirection.READ),
+                port_ids=("rf_out",),
+                profile=RfCwProfile(
+                    frequency_readable=True,
+                    power_readable=True,
+                    frequency_configurable=True,
+                    power_configurable=True,
+                ),
+            ),
         ),
     )
 
@@ -146,6 +171,12 @@ def test_rf_source_topology_and_features_are_strict() -> None:
             port_ids=("rf_out",),
             profile=RfOutputProfile(output_readable=True),
         )
+    with pytest.raises(ValueError, match="requires readable frequency"):
+        RfCwProfile(
+            frequency_readable=False,
+            power_readable=True,
+            frequency_configurable=True,
+        )
     with pytest.raises(ValueError, match="unknown port"):
         replace(
             extensions(),
@@ -179,6 +210,17 @@ def test_rf_observation_and_snapshot_reject_unsafe_values() -> None:
         )
 
 
+def test_rf_cw_request_and_result_require_one_finite_field() -> None:
+    assert RfCwRequest(port_id="rf_out", frequency_hz=1_000_000.0).frequency_hz == 1_000_000.0
+    assert RfCwResult(port_id="rf_out", power_dbm=-20.0).power_dbm == -20.0
+    with pytest.raises(ValueError, match="exactly one"):
+        RfCwRequest(port_id="rf_out")
+    with pytest.raises(ValueError, match="exactly one"):
+        RfCwRequest(port_id="rf_out", frequency_hz=1.0, power_dbm=0.0)
+    with pytest.raises(ValueError, match="finite"):
+        RfCwResult(port_id="rf_out", frequency_hz=float("nan"))
+
+
 def test_rf_snapshot_document_and_artifact_are_structured_and_redacted() -> None:
     value = snapshot()
     document = rf_source_snapshot_document(value)
@@ -199,6 +241,7 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
     assert dict(RF_SOURCE_CAPABILITY_METHODS) == {
         "rf_source.idn": ("idn",),
         "rf_source.snapshot": ("get_rf_snapshot",),
+        "rf_source.cw_configure": ("configure_cw",),
     }
     assert {key: CAPABILITY_METHODS[key] for key in RF_SOURCE_CAPABILITY_METHODS} == dict(
         RF_SOURCE_CAPABILITY_METHODS
@@ -213,6 +256,20 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
         )
     with pytest.raises(ConfigError, match="unknown capabilities"):
         validate_rf_source_descriptor(replace(value, capabilities=("rf_source.idn", "rf_source.future")))
+    with pytest.raises(ConfigError, match="CW feature"):
+        validate_rf_source_descriptor(
+            replace(
+                value,
+                capabilities=("rf_source.idn", "rf_source.snapshot", "rf_source.cw_configure"),
+            )
+        )
+    cw_descriptor = replace(
+        value,
+        capabilities=("rf_source.idn", "rf_source.snapshot", "rf_source.cw_configure"),
+        rf_source_extensions=cw_extensions(),
+    )
+    validate_rf_source_descriptor(cw_descriptor)
+    validate_declared_capabilities(cw_descriptor, RfDriver())
 
 
 def test_rf_source_kind_requires_extensions_and_uses_append_only_field() -> None:

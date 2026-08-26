@@ -28,7 +28,7 @@
 | --- | --- | --- | --- | --- |
 | Seed | 历史完成 | 无 RF Core 改动 | `0.1.0` 的旧 `source.idn` 种子、无 I/O descriptor、包装与 fake 测试 | 已由 M0 迁移取代，不代表 RF 支持。 |
 | M0 | 离线完成；A1 已完成 | `rf_source` 只读领域 | `rf_out` topology 与严格 snapshot parser | A1 复核后，生产包声明 `rf_source.idn` 和 `rf_source.snapshot`。 |
-| M1 | 未开始 | OFF-only CW 配置 | `:FREQ`／`:LEV` 写后独立回读 | 输出 ON、活动 feature、越界或状态缺失时零写拒绝。 |
+| M1 | 离线进行中 | OFF-only CW 配置 | `:FREQ`／`:LEV` 映射与独立回读 | 已有 typed request／result、Service 和 fake 测试；CLI、run step 与正式离线验收仍待完成。 |
 | M2 | 未开始 | RF 输出安全事务 | `:OUTP` ON/OFF 及 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次 OFF recovery。 |
 | M3 | 未开始 | 声明式 AM／FM／PM | 已声明的内部 Sine 调制子集 | 只在 OFF 状态、profile 匹配且 postcondition 成立时写入。 |
 | M4 | 未开始 | Pulse／Step Sweep 合同 | 已声明子集、arm／fire／stop 映射 | trigger／fire 只能由专项安全规则与实机证据提升。 |
@@ -68,9 +68,9 @@ DSG830 `0.1.0` 种子包只包含 `*IDN?`、`close()`、无 I/O descriptor、包
 
 ## M1：OFF-only CW 配置
 
-Core 提供独立 `RfCwRequest`／result、`rf_source.set_frequency`／`rf_source.set_power_dbm`、端口范围检查和 `wavebench.rf_source.operation.v1` artifact。所有 CW 写入前必须确认目标 RF 输出为 OFF，且调制、Pulse、Sweep 与 protection 状态没有冲突。
+Core 已在离线开发中加入单字段 `RfCwRequest`／result、`rf_source.set_frequency`／`rf_source.set_power_dbm` OperationSpec、端口范围检查和 OFF-only Service 事务。所有 CW 写入前必须确认目标 RF 输出为 OFF，且调制、Pulse、Sweep 与 protection 状态没有冲突。CLI、run step、artifact 与完整离线验收仍待完成。
 
-DSG830 driver 只实现已冻结的 `:FREQ` 与 `:LEV` 映射及独立回读。输出 ON、越界、缺失安全关键状态或 readback 不确定时，必须零写拒绝或停止后续写入；production descriptor 仍不声明 CW write capability，直到 A3。
+DSG830 driver 已在离线测试中实现已冻结的 `:FREQ` 与 `:LEV` 单次写映射；Core 负责独立 snapshot 回读。输出 ON、越界、缺失安全关键状态或 readback 不确定时，必须零写拒绝或停止后续写入；production descriptor 仍不声明 CW write capability，直到 A3。
 
 ## M2：RF 输出安全事务
 
@@ -130,5 +130,5 @@ A1 已使用一次性、非 production 的本地 evidence harness 完成并经�
 1. 已完成 Core M0 的 kind、descriptor、配置、只读 Service／CLI 与 run status 全链路。
 2. 已在匹配的 Core `0.8.25` 开发线上迁移 DSG830 的 descriptor、依赖区间、topology 与 snapshot parser；正式 wheel 验收等待 Core 发布版本。
 3. 已取得并复核 A1 的只读 snapshot 证据；DSG830 parser 已仅作为 `rf_source.snapshot` 暴露为 production capability。
-4. 下一步用 fake descriptor 完成 M1／M2 的零写拒绝、postcondition 与 recovery 测试，并实现 DSG830 的对应离线 SCPI 映射。
+4. 正在用 fake descriptor 完成 M1 的零写拒绝与 postcondition 测试，并实现 DSG830 的对应离线 SCPI 映射；随后单独推进 M2 的 safety preflight 与 recovery。
 5. 取得 A2、A3 证据后，按 capability 而非按「整台仪器已支持」逐项提升 production descriptor；M3／M4 保持独立工作。

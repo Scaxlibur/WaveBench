@@ -1,4 +1,4 @@
-"""Read-only M0 service for RF signal sources."""
+"""M0 read-only and M1 OFF-only CW service for RF signal sources."""
 
 from __future__ import annotations
 
@@ -13,7 +13,23 @@ from wavebench.instruments.api import InstrumentDescriptor
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.registry import resolve_instrument_descriptor
-from wavebench.instruments.rf_source_extensions import RfSourceDriver, RfSourceSnapshot
+from wavebench.instruments.rf_source_extensions import (
+    RfAvailability,
+    RfCwProfile,
+    RfCwRequest,
+    RfCwResult,
+    RfFeature,
+    RfFeatureDirection,
+    RfModulationState,
+    RfOutputPortProfile,
+    RfPortSnapshot,
+    RfProtectionStatus,
+    RfPulseState,
+    RfSourceDescriptorExtensions,
+    RfSourceDriver,
+    RfSourceSnapshot,
+    RfSweepState,
+)
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
 from wavebench.services.operation_specs import require_operation_spec
@@ -25,7 +41,7 @@ from wavebench.transport.session import InstrumentSessionState, SessionHealth
 
 @dataclass
 class RfSourceService(SessionStateAliasMixin):
-    """Open one configured RF source session for an explicitly read-only operation."""
+    """Open one configured RF source session for a bounded RF operation."""
 
     config: WaveBenchConfig
     logger: CommandLogger
@@ -115,3 +131,191 @@ class RfSourceService(SessionStateAliasMixin):
                 if session_state.health is not SessionHealth.HEALTHY:
                     raise ConfigError("rf_source.snapshot requires a healthy session")
                 return rf_source.get_rf_snapshot()
+
+    def configure_cw(self, request: RfCwRequest) -> RfCwResult:
+        """Apply one OFF-only CW field and independently confirm the result.
+
+        M1 deliberately permits exactly one write per call.  It does not retry a
+        failed or mismatched write and leaves RF OFF recovery to the later M2
+        output transaction.
+        """
+
+        if not isinstance(request, RfCwRequest):
+            raise ConfigError("rf_source CW configuration requires RfCwRequest")
+        operation = (
+            "rf_source.set_frequency"
+            if request.frequency_hz is not None
+            else "rf_source.set_power_dbm"
+        )
+        self._require(operation, "rf_source.snapshot", "rf_source.cw_configure")
+        port_profile, cw_profile = self._validate_cw_descriptor(request, operation)
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            with session_state.transaction_lock:
+                if session_state.health is not SessionHealth.HEALTHY:
+                    raise ConfigError(f"{operation} requires a healthy session")
+                preflight_snapshot = rf_source.get_rf_snapshot()
+                self._validate_cw_preflight(
+                    request,
+                    preflight_snapshot,
+                    port_profile,
+                    cw_profile,
+                    operation=operation,
+                )
+                main_entered = False
+                try:
+                    main_entered = True
+                    rf_source.configure_cw(request)
+                    postcondition_snapshot = rf_source.get_rf_snapshot()
+                    return self._validate_cw_postcondition(
+                        request,
+                        postcondition_snapshot,
+                        port_profile,
+                        cw_profile,
+                        operation=operation,
+                    )
+                except BaseException:
+                    if main_entered and session_state.health is SessionHealth.HEALTHY:
+                        session_state.degrade(
+                            SessionHealth.UNCERTAIN,
+                            reason="rf_cw_postcondition_unverified",
+                        )
+                    raise
+
+    def _validate_cw_descriptor(
+        self,
+        request: RfCwRequest,
+        operation: str,
+    ) -> tuple[RfOutputPortProfile, RfCwProfile]:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.rf_source_extensions
+        if not isinstance(extensions, RfSourceDescriptorExtensions):
+            raise ConfigError(f"{operation} requires validated rf_source_extensions")
+        port_profile = next(
+            (port for port in extensions.topology.ports if port.port_id == request.port_id),
+            None,
+        )
+        if port_profile is None:
+            raise ConfigError(f"{operation} references an undeclared RF port")
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.CW),
+            None,
+        )
+        if (
+            feature is None
+            or RfFeatureDirection.CONFIGURE not in feature.directions
+            or request.port_id not in feature.port_ids
+            or not isinstance(feature.profile, RfCwProfile)
+        ):
+            raise ConfigError(f"{operation} requires a configurable CW profile for the target port")
+        profile = feature.profile
+        if request.frequency_hz is not None:
+            if not profile.frequency_configurable:
+                raise ConfigError(f"{operation} requires a configurable CW frequency profile")
+            if not port_profile.frequency_min_hz <= request.frequency_hz <= port_profile.frequency_max_hz:
+                raise ConfigError(f"{operation} request frequency_hz is outside the descriptor range")
+        else:
+            assert request.power_dbm is not None
+            if not profile.power_configurable:
+                raise ConfigError(f"{operation} requires a configurable CW power profile")
+            if not port_profile.power_min_dbm <= request.power_dbm <= port_profile.power_max_dbm:
+                raise ConfigError(f"{operation} request power_dbm is outside the descriptor range")
+        return port_profile, profile
+
+    def _validate_cw_preflight(
+        self,
+        request: RfCwRequest,
+        snapshot: RfSourceSnapshot,
+        port_profile: RfOutputPortProfile,
+        profile: RfCwProfile,
+        *,
+        operation: str,
+    ) -> RfPortSnapshot:
+        del port_profile, profile
+        port = self._snapshot_port(snapshot, request.port_id, operation=operation)
+        output_enabled = self._observed_value(
+            port.output_enabled,
+            f"{operation} requires a readable RF output state",
+        )
+        if output_enabled is not False:
+            raise ConfigError(f"{operation} requires target RF output OFF")
+        modulation = self._observed_value(
+            port.modulation,
+            f"{operation} requires a readable modulation state",
+        )
+        if modulation is not RfModulationState.DISABLED:
+            raise ConfigError(f"{operation} requires modulation disabled")
+        pulse = self._observed_value(
+            port.pulse,
+            f"{operation} requires a readable Pulse state",
+        )
+        if pulse is not RfPulseState.DISABLED:
+            raise ConfigError(f"{operation} requires Pulse disabled")
+        sweep = self._observed_value(
+            port.sweep,
+            f"{operation} requires a readable Sweep state",
+        )
+        if sweep is not RfSweepState.DISABLED:
+            raise ConfigError(f"{operation} requires Sweep disabled")
+        protection = self._observed_value(
+            snapshot.protection,
+            f"{operation} requires a readable protection state",
+        )
+        if not isinstance(protection, RfProtectionStatus):  # defensive: snapshot validates this.
+            raise ConfigError(f"{operation} requires a valid protection state")
+        if protection.active_codes:
+            raise ConfigError(f"{operation} requires no active protection condition")
+        return port
+
+    def _validate_cw_postcondition(
+        self,
+        request: RfCwRequest,
+        snapshot: RfSourceSnapshot,
+        port_profile: RfOutputPortProfile,
+        profile: RfCwProfile,
+        *,
+        operation: str,
+    ) -> RfCwResult:
+        port = self._validate_cw_preflight(
+            request,
+            snapshot,
+            port_profile,
+            profile,
+            operation=operation,
+        )
+        if request.frequency_hz is not None:
+            frequency_hz = self._observed_value(
+                port.frequency_hz,
+                f"{operation} requires a readable frequency_hz readback",
+            )
+            if frequency_hz != request.frequency_hz:
+                raise ConfigError(f"{operation} frequency_hz readback does not match request")
+            return RfCwResult(port_id=request.port_id, frequency_hz=float(frequency_hz))
+        power_dbm = self._observed_value(
+            port.power_dbm,
+            f"{operation} requires a readable power_dbm readback",
+        )
+        assert request.power_dbm is not None
+        if power_dbm != request.power_dbm:
+            raise ConfigError(f"{operation} power_dbm readback does not match request")
+        return RfCwResult(port_id=request.port_id, power_dbm=float(power_dbm))
+
+    @staticmethod
+    def _snapshot_port(
+        snapshot: RfSourceSnapshot,
+        port_id: str,
+        *,
+        operation: str,
+    ) -> RfPortSnapshot:
+        port = next((item for item in snapshot.ports if item.port_id == port_id), None)
+        if port is None:
+            raise ConfigError(f"{operation} snapshot omitted the target RF port")
+        return port
+
+    @staticmethod
+    def _observed_value(observed: object, message: str) -> object:
+        if getattr(observed, "availability", None) is not RfAvailability.VALUE:
+            raise ConfigError(message)
+        return getattr(observed, "value", None)

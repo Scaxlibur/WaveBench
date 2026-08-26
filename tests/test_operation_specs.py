@@ -60,6 +60,25 @@ def test_rf_source_m0_specs_are_read_only_and_exclusive() -> None:
     assert snapshot.error_check_minimum == "disabled"
 
 
+def test_rf_source_m1_cw_specs_require_snapshot_and_cw_capability() -> None:
+    frequency = require_operation_spec("rf_source.set_frequency")
+    power = require_operation_spec("rf_source.set_power_dbm")
+
+    assert frequency.instrument_kind == "rf_source"
+    assert frequency.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.cw_configure",
+    )
+    assert frequency.effect == "write"
+    assert frequency.changed_fields == ("rf_source.port.frequency_hz",)
+    assert frequency.restore_coverage == "none"
+    assert "rf_output_must_be_off" in frequency.risk_flags
+    assert frequency.safe_alternatives == ("rf_source.snapshot",)
+    assert power.required_capabilities == frequency.required_capabilities
+    assert power.effect == "write"
+    assert power.changed_fields == ("rf_source.port.power_dbm",)
+
+
 def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     pairs = (
         (

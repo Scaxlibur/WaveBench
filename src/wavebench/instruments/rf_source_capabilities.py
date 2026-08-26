@@ -15,6 +15,9 @@ from wavebench.errors import ConfigError
 from .rf_source_extensions import (
     RF_SOURCE_CONTRACT_VERSION,
     RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION,
+    RfCwProfile,
+    RfFeature,
+    RfFeatureDirection,
     RfSourceDescriptorExtensions,
 )
 
@@ -23,12 +26,13 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "rf_source.idn": ("idn",),
         "rf_source.snapshot": ("get_rf_snapshot",),
+        "rf_source.cw_configure": ("configure_cw",),
     }
 )
 
 
 def validate_rf_source_descriptor(descriptor: object, driver: object | None = None) -> None:
-    """Validate the static, read-only RF-source M0 descriptor contract."""
+    """Validate the static RF-source descriptor contract."""
 
     capabilities = tuple(getattr(descriptor, "capabilities", ()))
     rf_capabilities = tuple(
@@ -58,6 +62,8 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         raise ConfigError("rf_source descriptors can only declare rf_source capabilities")
     if "rf_source.idn" not in rf_capabilities:
         raise ConfigError("rf_source descriptors require the rf_source.idn capability")
+    if "rf_source.cw_configure" in rf_capabilities:
+        _validate_cw_configure_feature(extensions)
     _validate_rf_source_version_range(descriptor)
     if driver is not None:
         for capability in rf_capabilities:
@@ -68,6 +74,23 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
                         f"descriptor declares capability {capability!r}, but driver lacks "
                         f"callable method {method_name}"
                     )
+
+
+def _validate_cw_configure_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.CW),
+        None,
+    )
+    if feature is None or RfFeatureDirection.CONFIGURE not in feature.directions:
+        raise ConfigError(
+            "rf_source.cw_configure requires an RF CW feature with configure direction"
+        )
+    if not isinstance(feature.profile, RfCwProfile):  # defensive: extensions validates this.
+        raise ConfigError("rf_source.cw_configure requires an RF CW profile")
+    if not (feature.profile.frequency_configurable or feature.profile.power_configurable):
+        raise ConfigError(
+            "rf_source.cw_configure requires a configurable RF CW frequency or power field"
+        )
 
 
 def validate_rf_source_plugin_dependencies(

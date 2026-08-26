@@ -2,8 +2,8 @@
 
 This module deliberately models radio-frequency sources independently from
 the ``source`` domain used by function and arbitrary waveform generators.
-It contains only static descriptors and read-only snapshots; it never opens a
-transport or sends SCPI commands.
+It contains static descriptors, typed requests/results, and snapshots; it
+never opens a transport or sends SCPI commands.
 """
 
 from __future__ import annotations
@@ -306,10 +306,18 @@ class RfSourceSnapshot:
 class RfCwProfile:
     frequency_readable: bool
     power_readable: bool
+    frequency_configurable: bool = False
+    power_configurable: bool = False
 
     def __post_init__(self) -> None:
         _require_bool(self.frequency_readable, "RF CW frequency_readable")
         _require_bool(self.power_readable, "RF CW power_readable")
+        _require_bool(self.frequency_configurable, "RF CW frequency_configurable")
+        _require_bool(self.power_configurable, "RF CW power_configurable")
+        if self.frequency_configurable and not self.frequency_readable:
+            raise ValueError("RF configurable frequency requires readable frequency")
+        if self.power_configurable and not self.power_readable:
+            raise ValueError("RF configurable power requires readable power")
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,9 +413,59 @@ class RfSourceDescriptorExtensions:
             raise ValueError("RF source descriptor protection_conditions must be sorted and unique")
 
 
+@dataclass(frozen=True, slots=True)
+class RfCwRequest:
+    """One OFF-only CW update for one explicitly addressed RF output port."""
+
+    port_id: str
+    frequency_hz: float | None = None
+    power_dbm: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF CW request port_id")
+        frequency_requested = self.frequency_hz is not None
+        power_requested = self.power_dbm is not None
+        if frequency_requested == power_requested:
+            raise ValueError("RF CW request must set exactly one of frequency_hz or power_dbm")
+        if frequency_requested:
+            _require_finite(
+                self.frequency_hz,
+                "RF CW request frequency_hz",
+                minimum=0.0,
+            )
+        if power_requested:
+            _require_finite(self.power_dbm, "RF CW request power_dbm")
+
+
+@dataclass(frozen=True, slots=True)
+class RfCwResult:
+    """A single CW field confirmed by an independent postcondition snapshot."""
+
+    port_id: str
+    frequency_hz: float | None = None
+    power_dbm: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF CW result port_id")
+        frequency_confirmed = self.frequency_hz is not None
+        power_confirmed = self.power_dbm is not None
+        if frequency_confirmed == power_confirmed:
+            raise ValueError("RF CW result must confirm exactly one of frequency_hz or power_dbm")
+        if frequency_confirmed:
+            _require_finite(
+                self.frequency_hz,
+                "RF CW result frequency_hz",
+                minimum=0.0,
+            )
+        if power_confirmed:
+            _require_finite(self.power_dbm, "RF CW result power_dbm")
+
+
 @runtime_checkable
 class RfSourceDriver(InstrumentDriver, Protocol):
     def get_rf_snapshot(self) -> RfSourceSnapshot: ...
+
+    def configure_cw(self, request: RfCwRequest) -> None: ...
 
 
 def _require_observed_number(
@@ -495,6 +553,8 @@ __all__ = [
     "RF_SOURCE_SNAPSHOT_SCHEMA",
     "RfAvailability",
     "RfCwProfile",
+    "RfCwRequest",
+    "RfCwResult",
     "RfFeature",
     "RfFeatureCapability",
     "RfFeatureDirection",
