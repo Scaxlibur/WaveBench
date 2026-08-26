@@ -26,6 +26,7 @@ EXECUTABLE_STEP_KINDS = {
     "rf_source.set_power_dbm",
     "rf_source.modulation_configure",
     "rf_source.pulse_configure",
+    "rf_source.sweep_configure",
     "rf_source.output_enable",
     "rf_source.output_disable",
     "source.set_freq",

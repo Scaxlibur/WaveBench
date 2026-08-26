@@ -41,10 +41,18 @@ from wavebench.instruments.rf_source_extensions import (
     RfPulseSource,
     RfPulseState,
     RfSourceSnapshot,
+    RfSweepConfigureRequest,
+    RfSweepConfigureResult,
+    RfSweepDirection,
+    RfSweepShape,
+    RfSweepSnapshot,
+    RfSweepSpacing,
     RfSweepState,
+    RfSweepType,
     rf_source_cw_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_pulse_operation_artifact,
+    rf_source_sweep_operation_artifact,
     RfOutputRequest,
     RfOutputResult,
     rf_source_output_operation_artifact,
@@ -134,6 +142,21 @@ def _pulse_plan(directory: str):
         "period_s = 0.001\n"
         "width_s = 0.0001\n"
         'polarity = "inverted"\n',
+        encoding="utf-8",
+    )
+    return load_run_plan(path)
+
+
+def _sweep_plan(directory: str):
+    path = Path(directory) / "plan.toml"
+    path.write_text(
+        "[[steps]]\n"
+        'kind = "rf_source.sweep_configure"\n'
+        'port_id = "rf_out"\n'
+        "start_frequency_hz = 1000000\n"
+        "stop_frequency_hz = 2000000\n"
+        "points = 11\n"
+        "dwell_s = 0.02\n",
         encoding="utf-8",
     )
     return load_run_plan(path)
@@ -679,6 +702,157 @@ def test_rf_source_pulse_step_has_write_intent_and_separate_artifact_namespace()
             run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
 
         rf_service.configure_pulse_with_artifact.assert_called_once_with(request)
+        assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
+        run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
+        assert run_data["rf_source_operations"] == [artifact]
+
+
+def test_rf_source_sweep_plan_normalizes_the_disabled_frequency_only_subset() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _sweep_plan(directory)
+        assert plan.steps[0].fields == {
+            "port_id": "rf_out",
+            "start_frequency_hz": 1_000_000.0,
+            "stop_frequency_hz": 2_000_000.0,
+            "points": 11,
+            "dwell_s": 0.02,
+        }
+
+        invalid_order_path = Path(directory) / "invalid-order.toml"
+        invalid_order_path.write_text(
+            "[[steps]]\n"
+            'kind = "rf_source.sweep_configure"\n'
+            'port_id = "rf_out"\n'
+            "start_frequency_hz = 2000000\n"
+            "stop_frequency_hz = 1000000\n"
+            "points = 11\n"
+            "dwell_s = 0.02\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="less than stop_frequency_hz"):
+            load_run_plan(invalid_order_path)
+
+        invalid_points_path = Path(directory) / "invalid-points.toml"
+        invalid_points_path.write_text(
+            "[[steps]]\n"
+            'kind = "rf_source.sweep_configure"\n'
+            'port_id = "rf_out"\n'
+            "start_frequency_hz = 1000000\n"
+            "stop_frequency_hz = 2000000\n"
+            "points = 1\n"
+            "dwell_s = 0.02\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="points must be an integer >= 2"):
+            load_run_plan(invalid_points_path)
+
+
+def test_rf_source_sweep_step_requires_capability_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory, access="read_write"), logger=CommandLogger())
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor("rf_source.idn", "rf_source.snapshot"),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="rf_source.sweep_configure"):
+                service.run(_sweep_plan(directory))
+
+    open_services.assert_not_called()
+
+
+def test_rf_source_sweep_step_rejects_read_only_access_before_opening_a_session() -> None:
+    with TemporaryDirectory() as directory:
+        service = RunService(config=_config(directory), logger=CommandLogger())
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor(
+                "rf_source.idn",
+                "rf_source.snapshot",
+                "rf_source.sweep_configure",
+            ),
+        ), patch.object(service, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="access policy 'read_only'"):
+                service.run(_sweep_plan(directory))
+
+    open_services.assert_not_called()
+
+
+def test_rf_source_sweep_step_has_write_intent_and_separate_artifact_namespace() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _sweep_plan(directory)
+        config = _config(directory, access="read_write")
+        intent = build_execution_intent(plan, config)
+        assert intent.operations[0]["operation"] == "rf_source.sweep_configure"
+        assert intent.operations[0]["effect"] == "write"
+        assert intent.operations[0]["parameters"] == {
+            "port_id": "rf_out",
+            "start_frequency_hz": 1_000_000.0,
+            "stop_frequency_hz": 2_000_000.0,
+            "points": 11,
+            "dwell_s": 0.02,
+        }
+
+        request = RfSweepConfigureRequest(
+            port_id="rf_out",
+            start_frequency_hz=1_000_000.0,
+            stop_frequency_hz=2_000_000.0,
+            points=11,
+            dwell_s=0.02,
+        )
+        result_value = RfSweepConfigureResult(
+            port_id="rf_out",
+            start_frequency_hz=1_000_000.0,
+            stop_frequency_hz=2_000_000.0,
+            points=11,
+            dwell_s=0.02,
+        )
+        preflight_snapshot = _snapshot()
+        postcondition_snapshot = _snapshot()
+        postcondition_sweep_snapshot = RfSweepSnapshot(
+            port_id="rf_out",
+            sweep_type=RfSweepType.STEP,
+            direction=RfSweepDirection.FORWARD,
+            shape=RfSweepShape.RAMP,
+            spacing=RfSweepSpacing.LINEAR,
+            start_frequency_hz=1_000_000.0,
+            stop_frequency_hz=2_000_000.0,
+            points=11,
+            dwell_s=0.02,
+            state=RfSweepState.DISABLED,
+        )
+        artifact = rf_source_sweep_operation_artifact(
+            request=request,
+            result=result_value,
+            preflight_snapshot=preflight_snapshot,
+            postcondition_snapshot=postcondition_snapshot,
+            postcondition_sweep_snapshot=postcondition_sweep_snapshot,
+        )
+        rf_service = SimpleNamespace(
+            configure_sweep_with_artifact=Mock(return_value=(result_value, artifact)),
+            audit_snapshot=lambda: None,
+        )
+
+        class OfflineRfRunService(RunService):
+            @contextmanager
+            def _run_instrument_services(self, run_plan):
+                del run_plan
+                yield RunInstrumentServices(rf_source=rf_service)
+
+            def _run_safety_guards(self, run_plan, *, services=None):
+                del run_plan, services
+
+        descriptor = _descriptor(
+            "rf_source.idn",
+            "rf_source.snapshot",
+            "rf_source.sweep_configure",
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=descriptor,
+        ):
+            run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
+
+        rf_service.configure_sweep_with_artifact.assert_called_once_with(request)
         assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
         run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
         assert run_data["rf_source_operations"] == [artifact]

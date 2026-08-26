@@ -29,6 +29,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfOutputRequest,
     RfPulseConfigureRequest,
     RfPulsePolarity,
+    RfSweepConfigureRequest,
     rf_source_snapshot_operation_artifact,
 )
 from wavebench.instruments.source_extensions import (
@@ -307,6 +308,7 @@ class RunService:
             "rf_source.set_power_dbm": "rf_source.set_power_dbm",
             "rf_source.modulation_configure": "rf_source.modulation_configure",
             "rf_source.pulse_configure": "rf_source.pulse_configure",
+            "rf_source.sweep_configure": "rf_source.sweep_configure",
             "rf_source.output_enable": "rf_source.output_enable",
             "rf_source.output_disable": "rf_source.output_disable",
         }
@@ -458,6 +460,8 @@ class RunService:
                 add("rf_source", "rf_source.snapshot", "rf_source.modulation_configure")
             elif step.kind == "rf_source.pulse_configure":
                 add("rf_source", "rf_source.snapshot", "rf_source.pulse_configure")
+            elif step.kind == "rf_source.sweep_configure":
+                add("rf_source", "rf_source.snapshot", "rf_source.sweep_configure")
             elif step.kind in {"rf_source.output_enable", "rf_source.output_disable"}:
                 add("rf_source", "rf_source.snapshot", "rf_source.output")
             elif step.kind == "source.set_freq":
@@ -1272,6 +1276,20 @@ class RunService:
                     period_s=fields["period_s"],
                     width_s=fields["width_s"],
                     polarity=RfPulsePolarity(fields["polarity"]),
+                )
+            )
+            artifact = {"rf_source_operation": rf_source_operation}
+        elif step.kind == "rf_source.sweep_configure":
+            fields = step.fields
+            _, rf_source_operation = self._rf_source_service(
+                services=services
+            ).configure_sweep_with_artifact(
+                RfSweepConfigureRequest(
+                    port_id=fields["port_id"],
+                    start_frequency_hz=fields["start_frequency_hz"],
+                    stop_frequency_hz=fields["stop_frequency_hz"],
+                    points=fields["points"],
+                    dwell_s=fields["dwell_s"],
                 )
             )
             artifact = {"rf_source_operation": rf_source_operation}

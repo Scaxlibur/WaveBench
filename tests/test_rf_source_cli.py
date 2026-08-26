@@ -18,10 +18,12 @@ from wavebench.instruments.rf_source_extensions import (
     RfPulseConfigureRequest,
     RfPulseConfigureResult,
     RfPulsePolarity,
+    RfSweepConfigureRequest,
+    RfSweepConfigureResult,
 )
 
 
-def test_rf_source_parser_accepts_cw_modulation_pulse_and_output_commands() -> None:
+def test_rf_source_parser_accepts_cw_modulation_pulse_sweep_and_output_commands() -> None:
     identity = build_parser().parse_args(
         ["rf-source", "idn", "--config", "rf.toml", "--resource", "TCPIP::rf::INSTR"]
     )
@@ -89,6 +91,23 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_and_output_commands() -> N
             "inverted",
         ]
     )
+    sweep = build_parser().parse_args(
+        [
+            "rf-source",
+            "sweep",
+            "configure",
+            "--port",
+            "rf_out",
+            "--start-frequency-hz",
+            "1000000",
+            "--stop-frequency-hz",
+            "2000000",
+            "--points",
+            "11",
+            "--dwell-s",
+            "0.02",
+        ]
+    )
 
     assert (identity.domain, identity.command) == ("rf-source", "idn")
     assert identity.config == "rf.toml"
@@ -117,6 +136,15 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_and_output_commands() -> N
     assert pulse.period_s == 0.001
     assert pulse.width_s == 0.0001
     assert pulse.polarity == "inverted"
+    assert (sweep.domain, sweep.command, sweep.sweep_command) == (
+        "rf-source",
+        "sweep",
+        "configure",
+    )
+    assert sweep.start_frequency_hz == 1_000_000.0
+    assert sweep.stop_frequency_hz == 2_000_000.0
+    assert sweep.points == 11
+    assert sweep.dwell_s == 0.02
 
 
 def test_rf_source_cli_dispatches_identity_and_typed_snapshot() -> None:
@@ -349,6 +377,56 @@ def test_rf_source_cli_dispatches_disabled_internal_single_pulse_request() -> No
             period_s=0.001,
             width_s=0.0001,
             polarity=RfPulsePolarity.INVERTED,
+        )
+    )
+
+
+def test_rf_source_cli_dispatches_disabled_frequency_only_step_sweep_request() -> None:
+    service = Mock()
+    service.configure_sweep.return_value = RfSweepConfigureResult(
+        port_id="rf_out",
+        start_frequency_hz=1_000_000.0,
+        stop_frequency_hz=2_000_000.0,
+        points=11,
+        dwell_s=0.02,
+    )
+
+    stdout = io.StringIO()
+    with patch("wavebench.cli._load_rf_source_service", return_value=service), redirect_stdout(stdout):
+        assert main(
+            [
+                "--json",
+                "rf-source",
+                "sweep",
+                "configure",
+                "--port",
+                "rf_out",
+                "--start-frequency-hz",
+                "1000000",
+                "--stop-frequency-hz",
+                "2000000",
+                "--points",
+                "11",
+                "--dwell-s",
+                "0.02",
+            ]
+        ) == 0
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"] == {
+        "port_id": "rf_out",
+        "start_frequency_hz": 1_000_000.0,
+        "stop_frequency_hz": 2_000_000.0,
+        "points": 11,
+        "dwell_s": 0.02,
+    }
+    service.configure_sweep.assert_called_once_with(
+        RfSweepConfigureRequest(
+            port_id="rf_out",
+            start_frequency_hz=1_000_000.0,
+            stop_frequency_hz=2_000_000.0,
+            points=11,
+            dwell_s=0.02,
         )
     )
 

@@ -26,6 +26,7 @@ ALLOWED_STEP_KINDS = {
     "rf_source.set_power_dbm",
     "rf_source.modulation_configure",
     "rf_source.pulse_configure",
+    "rf_source.sweep_configure",
     "rf_source.output_enable",
     "rf_source.output_disable",
     "source.set_freq",
@@ -79,6 +80,13 @@ _REQUIRED_FIELDS = {
         "internal_frequency_hz",
     ),
     "rf_source.pulse_configure": ("port_id", "period_s", "width_s", "polarity"),
+    "rf_source.sweep_configure": (
+        "port_id",
+        "start_frequency_hz",
+        "stop_frequency_hz",
+        "points",
+        "dwell_s",
+    ),
     "rf_source.output_enable": ("port_id",),
     "rf_source.output_disable": ("port_id",),
     "source.basic_configure_v2": ("channel",),
@@ -197,6 +205,7 @@ _OPTIONAL_FIELDS = {
         "on_failure",
     },
     "rf_source.pulse_configure": set(),
+    "rf_source.sweep_configure": set(),
     "rf_source.output_enable": {"on_failure"},
     "rf_source.output_disable": {"on_failure"},
     "source.set_freq": {"channel", "on_failure"},
@@ -262,6 +271,7 @@ _STEP_NOTES = {
     "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
     "rf_source.pulse_configure": "Configure one OFF RF port with a disabled internal single-pulse profile; it does not enable RF output or trigger a pulse.",
+    "rf_source.sweep_configure": "Configure one OFF RF port with a disabled frequency-only Step Sweep profile; it does not arm, fire, trigger, or enable RF output.",
     "rf_source.output_enable": "Enable one RF port only after a fresh safety snapshot confirms the configured load, frequency, power, and inactive modulation, Pulse, Sweep, and blocking protection conditions.",
     "rf_source.output_disable": "Disable one RF port and confirm OFF without requiring frequency, power, or protection readback.",
     "source.arb_load": "Upload a DG4202 arbitrary waveform from CSV/NPY using DATA:DAC VOLATILE; output remains unchanged unless output_on = true.",
@@ -707,6 +717,27 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         fields["period_s"] = period_s
         fields["width_s"] = width_s
         fields["polarity"] = polarity
+    elif kind == "rf_source.sweep_configure":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        start_frequency_hz = _positive_float(
+            fields["start_frequency_hz"],
+            f"{prefix}.start_frequency_hz",
+        )
+        stop_frequency_hz = _positive_float(
+            fields["stop_frequency_hz"],
+            f"{prefix}.stop_frequency_hz",
+        )
+        if start_frequency_hz >= stop_frequency_hz:
+            raise ConfigError(
+                f"{prefix}.start_frequency_hz must be less than stop_frequency_hz"
+            )
+        points = fields["points"]
+        if isinstance(points, bool) or not isinstance(points, int) or points < 2:
+            raise ConfigError(f"{prefix}.points must be an integer >= 2")
+        fields["start_frequency_hz"] = start_frequency_hz
+        fields["stop_frequency_hz"] = stop_frequency_hz
+        fields["points"] = points
+        fields["dwell_s"] = _positive_float(fields["dwell_s"], f"{prefix}.dwell_s")
     elif kind in {"rf_source.output_enable", "rf_source.output_disable"}:
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
     elif kind == "source.arb_load":

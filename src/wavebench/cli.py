@@ -94,6 +94,7 @@ from .instruments.rf_source_extensions import (
     RfOutputRequest,
     RfPulseConfigureRequest,
     RfPulsePolarity,
+    RfSweepConfigureRequest,
 )
 from .mcp_http import (
     resolve_mcp_token,
@@ -1596,6 +1597,21 @@ def _main(argv: list[str] | None = None) -> int:
                         period_s=args.period_s,
                         width_s=args.width_s,
                         polarity=RfPulsePolarity(args.polarity),
+                    )
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "sweep":
+                result = service.configure_sweep(
+                    RfSweepConfigureRequest(
+                        port_id=args.port,
+                        start_frequency_hz=args.start_frequency_hz,
+                        stop_frequency_hz=args.stop_frequency_hz,
+                        points=args.points,
+                        dwell_s=args.dwell_s,
                     )
                 )
                 if args.json:

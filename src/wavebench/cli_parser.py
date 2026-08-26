@@ -735,6 +735,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(rf_source_pulse_configure)
 
+    rf_source_sweep = rf_source_sub.add_parser(
+        "sweep",
+        help="Configure a bounded frequency-only Step Sweep while RF output is OFF",
+    )
+    rf_source_sweep_sub = rf_source_sweep.add_subparsers(
+        dest="sweep_command",
+        required=True,
+    )
+    rf_source_sweep_configure = rf_source_sweep_sub.add_parser(
+        "configure",
+        help="Configure a disabled Step Sweep without arming, firing, or triggering",
+    )
+    rf_source_sweep_configure.add_argument("--port", required=True)
+    rf_source_sweep_configure.add_argument("--start-frequency-hz", type=float, required=True)
+    rf_source_sweep_configure.add_argument("--stop-frequency-hz", type=float, required=True)
+    rf_source_sweep_configure.add_argument("--points", type=int, required=True)
+    rf_source_sweep_configure.add_argument("--dwell-s", type=float, required=True)
+    add_runtime_options(rf_source_sweep_configure)
+
     source_sub = source_parser.add_subparsers(dest="command", required=True)
 
     source_idn = source_sub.add_parser("idn", help="Query source *IDN?")
