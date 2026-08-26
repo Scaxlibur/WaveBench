@@ -79,6 +79,22 @@ def test_rf_source_m1_cw_specs_require_snapshot_and_cw_capability() -> None:
     assert power.changed_fields == ("rf_source.port.power_dbm",)
 
 
+def test_rf_source_m2_output_specs_require_snapshot_and_output_capability() -> None:
+    enable = require_operation_spec("rf_source.output_enable")
+    disable = require_operation_spec("rf_source.output_disable")
+
+    assert enable.instrument_kind == "rf_source"
+    assert enable.required_capabilities == ("rf_source.snapshot", "rf_source.output")
+    assert enable.effect == "write"
+    assert enable.changed_fields == ("rf_source.port.output_enabled",)
+    assert enable.restore_coverage == "none"
+    assert "dangerous_output" in enable.risk_flags
+    assert enable.safe_alternatives == ("rf_source.snapshot",)
+    assert disable.required_capabilities == enable.required_capabilities
+    assert disable.effect == "write"
+    assert "safe_output_disable" in disable.risk_flags
+
+
 def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     pairs = (
         (

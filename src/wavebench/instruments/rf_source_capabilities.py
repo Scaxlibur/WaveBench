@@ -18,6 +18,7 @@ from .rf_source_extensions import (
     RfCwProfile,
     RfFeature,
     RfFeatureDirection,
+    RfOutputProfile,
     RfSourceDescriptorExtensions,
 )
 
@@ -27,6 +28,7 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "rf_source.idn": ("idn",),
         "rf_source.snapshot": ("get_rf_snapshot",),
         "rf_source.cw_configure": ("configure_cw",),
+        "rf_source.output": ("set_rf_output",),
     }
 )
 
@@ -64,6 +66,8 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         raise ConfigError("rf_source descriptors require the rf_source.idn capability")
     if "rf_source.cw_configure" in rf_capabilities:
         _validate_cw_configure_feature(extensions)
+    if "rf_source.output" in rf_capabilities:
+        _validate_output_feature(extensions)
     _validate_rf_source_version_range(descriptor)
     if driver is not None:
         for capability in rf_capabilities:
@@ -91,6 +95,25 @@ def _validate_cw_configure_feature(extensions: RfSourceDescriptorExtensions) -> 
         raise ConfigError(
             "rf_source.cw_configure requires a configurable RF CW frequency or power field"
         )
+
+
+def _validate_output_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.OUTPUT),
+        None,
+    )
+    if (
+        feature is None
+        or RfFeatureDirection.ENABLE not in feature.directions
+        or RfFeatureDirection.DISABLE not in feature.directions
+    ):
+        raise ConfigError(
+            "rf_source.output requires matching RF output ENABLE and DISABLE directions"
+        )
+    if not isinstance(feature.profile, RfOutputProfile):  # defensive: extensions validates this.
+        raise ConfigError("rf_source.output requires an RF output profile")
+    if not feature.profile.output_readable:
+        raise ConfigError("rf_source.output requires readable RF output state")
 
 
 def validate_rf_source_plugin_dependencies(

@@ -27,6 +27,8 @@ from wavebench.instruments.rf_source_extensions import (
     RfObserved,
     RfOutputPortProfile,
     RfOutputProfile,
+    RfOutputRequest,
+    RfOutputResult,
     RfPortSnapshot,
     RfProtectionConditionPolicy,
     RfProtectionStatus,
@@ -39,6 +41,7 @@ from wavebench.instruments.rf_source_extensions import (
     rf_source_snapshot_document,
     rf_source_snapshot_operation_artifact,
     rf_source_cw_operation_artifact,
+    rf_source_output_operation_artifact,
 )
 
 
@@ -53,6 +56,9 @@ class RfDriver:
         return snapshot()
 
     def configure_cw(self, request: RfCwRequest) -> None:
+        del request
+
+    def set_rf_output(self, request: RfOutputRequest) -> None:
         del request
 
 
@@ -110,6 +116,25 @@ def cw_extensions() -> RfSourceDescriptorExtensions:
                     frequency_configurable=True,
                     power_configurable=True,
                 ),
+            ),
+        ),
+    )
+
+
+def output_extensions() -> RfSourceDescriptorExtensions:
+    return RfSourceDescriptorExtensions(
+        contract_version=RF_SOURCE_CONTRACT_VERSION,
+        topology=topology(),
+        features=(
+            RfFeatureCapability(
+                feature=RfFeature.OUTPUT,
+                directions=(
+                    RfFeatureDirection.DISABLE,
+                    RfFeatureDirection.ENABLE,
+                    RfFeatureDirection.READ,
+                ),
+                port_ids=("rf_out",),
+                profile=RfOutputProfile(output_readable=True),
             ),
         ),
     )
@@ -222,6 +247,15 @@ def test_rf_cw_request_and_result_require_one_finite_field() -> None:
         RfCwResult(port_id="rf_out", frequency_hz=float("nan"))
 
 
+def test_rf_output_request_and_result_require_explicit_boolean_state() -> None:
+    assert RfOutputRequest(port_id="rf_out", enabled=True).enabled is True
+    assert RfOutputResult(port_id="rf_out", enabled=False, write_completed=False).write_completed is False
+    with pytest.raises(ValueError, match="boolean"):
+        RfOutputRequest(port_id="rf_out", enabled=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="boolean"):
+        RfOutputResult(port_id="rf_out", enabled=False, write_completed=0)  # type: ignore[arg-type]
+
+
 def test_rf_snapshot_document_and_artifact_are_structured_and_redacted() -> None:
     value = snapshot()
     document = rf_source_snapshot_document(value)
@@ -269,6 +303,34 @@ def test_rf_cw_operation_artifact_uses_typed_pre_and_postcondition_evidence() ->
     assert "resource" not in str(artifact)
 
 
+def test_rf_output_operation_artifact_uses_typed_pre_and_postcondition_evidence() -> None:
+    request = RfOutputRequest(port_id="rf_out", enabled=True)
+    result = RfOutputResult(port_id="rf_out", enabled=True, write_completed=True)
+    preflight = snapshot()
+    postcondition = replace(
+        preflight,
+        ports=(replace(preflight.ports[0], output_enabled=RfObserved.value_of(True)),),
+    )
+
+    artifact = rf_source_output_operation_artifact(
+        request,
+        result,
+        preflight_snapshot=preflight,
+        postcondition_snapshot=postcondition,
+    )
+
+    assert artifact["operation"] == "rf_source.output_enable"
+    assert artifact["result"]["write_completed"] is True
+    assert artifact["postcondition_snapshot"]["ports"][0]["output_enabled"]["value"] is True
+    with pytest.raises(ValueError, match="same target"):
+        rf_source_output_operation_artifact(
+            request,
+            RfOutputResult(port_id="rf_out", enabled=False, write_completed=True),
+            preflight_snapshot=preflight,
+            postcondition_snapshot=postcondition,
+        )
+
+
 def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
     value = descriptor()
 
@@ -276,6 +338,7 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
         "rf_source.idn": ("idn",),
         "rf_source.snapshot": ("get_rf_snapshot",),
         "rf_source.cw_configure": ("configure_cw",),
+        "rf_source.output": ("set_rf_output",),
     }
     assert {key: CAPABILITY_METHODS[key] for key in RF_SOURCE_CAPABILITY_METHODS} == dict(
         RF_SOURCE_CAPABILITY_METHODS
@@ -304,6 +367,20 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
     )
     validate_rf_source_descriptor(cw_descriptor)
     validate_declared_capabilities(cw_descriptor, RfDriver())
+    with pytest.raises(ConfigError, match="output ENABLE and DISABLE"):
+        validate_rf_source_descriptor(
+            replace(
+                value,
+                capabilities=("rf_source.idn", "rf_source.snapshot", "rf_source.output"),
+            )
+        )
+    output_descriptor = replace(
+        value,
+        capabilities=("rf_source.idn", "rf_source.snapshot", "rf_source.output"),
+        rf_source_extensions=output_extensions(),
+    )
+    validate_rf_source_descriptor(output_descriptor)
+    validate_declared_capabilities(output_descriptor, RfDriver())
 
 
 def test_rf_source_kind_requires_extensions_and_uses_append_only_field() -> None:

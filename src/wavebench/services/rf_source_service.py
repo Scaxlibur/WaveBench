@@ -1,4 +1,4 @@
-"""M0 read-only and M1 OFF-only CW service for RF signal sources."""
+"""Read-only, OFF-only CW, and guarded RF-output service for RF sources."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, cast
 
-from wavebench.config import RfSourceConfig, WaveBenchConfig
+from wavebench.config import RfPortSafetyConfig, RfSourceConfig, WaveBenchConfig
 from wavebench.errors import ConfigError
 from wavebench.instruments.api import InstrumentDescriptor
 from wavebench.instruments.capabilities import require_capabilities
@@ -22,6 +22,9 @@ from wavebench.instruments.rf_source_extensions import (
     RfFeatureDirection,
     RfModulationState,
     RfOutputPortProfile,
+    RfOutputProfile,
+    RfOutputRequest,
+    RfOutputResult,
     RfPortSnapshot,
     RfProtectionStatus,
     RfPulseState,
@@ -30,6 +33,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfSourceSnapshot,
     RfSweepState,
     rf_source_cw_operation_artifact,
+    rf_source_output_operation_artifact,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.access_policy import access_policy
@@ -37,12 +41,24 @@ from wavebench.services.operation_specs import require_operation_spec
 from wavebench.services.resource_lease import ResourceLease
 from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.transport.base import InstrumentTransport
-from wavebench.transport.session import InstrumentSessionState, SessionHealth
+from wavebench.transport.session import (
+    InstrumentSessionState,
+    SessionHealth,
+    SessionPurpose,
+    SessionTransactionCoordinator,
+)
 
 
 @dataclass(frozen=True)
 class _RfCwTransaction:
     result: RfCwResult
+    preflight_snapshot: RfSourceSnapshot
+    postcondition_snapshot: RfSourceSnapshot
+
+
+@dataclass(frozen=True)
+class _RfOutputTransaction:
+    result: RfOutputResult
     preflight_snapshot: RfSourceSnapshot
     postcondition_snapshot: RfSourceSnapshot
 
@@ -216,6 +232,329 @@ class RfSourceService(SessionStateAliasMixin):
                             reason="rf_cw_postcondition_unverified",
                         )
                     raise
+
+    def set_output(self, request: RfOutputRequest) -> RfOutputResult:
+        return self._set_output_transaction(request).result
+
+    def set_output_with_artifact(
+        self,
+        request: RfOutputRequest,
+    ) -> tuple[RfOutputResult, dict[str, object]]:
+        """Apply M2 RF output once and retain typed pre/postcondition evidence."""
+
+        transaction = self._set_output_transaction(request)
+        return (
+            transaction.result,
+            rf_source_output_operation_artifact(
+                request,
+                transaction.result,
+                preflight_snapshot=transaction.preflight_snapshot,
+                postcondition_snapshot=transaction.postcondition_snapshot,
+            ),
+        )
+
+    def _set_output_transaction(self, request: RfOutputRequest) -> _RfOutputTransaction:
+        """Execute one per-port M2 output transaction with bounded OFF recovery."""
+
+        if not isinstance(request, RfOutputRequest):
+            raise ConfigError("rf_source output control requires RfOutputRequest")
+        operation = "rf_source.output_enable" if request.enabled else "rf_source.output_disable"
+        self._require(operation, "rf_source.snapshot", "rf_source.output")
+        port_profile, output_profile, extensions = self._validate_output_descriptor(
+            request,
+            operation,
+        )
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            with session_state.transaction_lock:
+                if session_state.health is not SessionHealth.HEALTHY:
+                    raise ConfigError(f"{operation} requires a healthy session")
+                preflight_snapshot = rf_source.get_rf_snapshot()
+                if request.enabled:
+                    current_enabled = self._validate_output_enable_snapshot(
+                        request,
+                        preflight_snapshot,
+                        port_profile,
+                        output_profile,
+                        extensions,
+                        operation=operation,
+                    )
+                else:
+                    current_enabled = self._output_state_if_observed(
+                        self._snapshot_port(
+                            preflight_snapshot,
+                            request.port_id,
+                            operation=operation,
+                        )
+                    )
+                if current_enabled is request.enabled:
+                    return _RfOutputTransaction(
+                        result=RfOutputResult(
+                            port_id=request.port_id,
+                            enabled=request.enabled,
+                            write_completed=False,
+                        ),
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=preflight_snapshot,
+                    )
+
+                main_entered = False
+                try:
+                    main_entered = True
+                    rf_source.set_rf_output(request)
+                    postcondition_snapshot = rf_source.get_rf_snapshot()
+                    if request.enabled:
+                        postcondition_enabled = self._validate_output_enable_snapshot(
+                            request,
+                            postcondition_snapshot,
+                            port_profile,
+                            output_profile,
+                            extensions,
+                            operation=operation,
+                        )
+                        if postcondition_enabled is not True:
+                            raise ConfigError(
+                                f"{operation} postcondition reports RF output OFF or unknown"
+                            )
+                    else:
+                        self._validate_output_disable_snapshot(
+                            request,
+                            postcondition_snapshot,
+                            operation=operation,
+                        )
+                    return _RfOutputTransaction(
+                        result=RfOutputResult(
+                            port_id=request.port_id,
+                            enabled=request.enabled,
+                            write_completed=True,
+                        ),
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                    )
+                except BaseException as exc:
+                    if main_entered:
+                        if request.enabled:
+                            self._degrade_output_session_uncertain(session_state)
+                            recovery = self._recover_rf_output_off(
+                                rf_source,
+                                request.port_id,
+                                operation=operation,
+                            )
+                            try:
+                                setattr(exc, "rf_source_recovery", recovery)
+                            except Exception:
+                                pass
+                        else:
+                            self._degrade_output_session_poisoned(session_state)
+                    raise
+
+    def _validate_output_descriptor(
+        self,
+        request: RfOutputRequest,
+        operation: str,
+    ) -> tuple[RfOutputPortProfile, RfOutputProfile, RfSourceDescriptorExtensions]:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.rf_source_extensions
+        if not isinstance(extensions, RfSourceDescriptorExtensions):
+            raise ConfigError(f"{operation} requires validated rf_source_extensions")
+        port_profile = next(
+            (port for port in extensions.topology.ports if port.port_id == request.port_id),
+            None,
+        )
+        if port_profile is None:
+            raise ConfigError(f"{operation} references an undeclared RF port")
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.OUTPUT),
+            None,
+        )
+        if (
+            feature is None
+            or request.port_id not in feature.port_ids
+            or RfFeatureDirection.ENABLE not in feature.directions
+            or RfFeatureDirection.DISABLE not in feature.directions
+            or not isinstance(feature.profile, RfOutputProfile)
+            or not feature.profile.output_readable
+        ):
+            raise ConfigError(f"{operation} requires a readable output profile for the target port")
+        return port_profile, feature.profile, extensions
+
+    def _validate_output_enable_snapshot(
+        self,
+        request: RfOutputRequest,
+        snapshot: RfSourceSnapshot,
+        port_profile: RfOutputPortProfile,
+        output_profile: RfOutputProfile,
+        extensions: RfSourceDescriptorExtensions,
+        *,
+        operation: str,
+    ) -> bool:
+        del output_profile
+        port = self._snapshot_port(snapshot, request.port_id, operation=operation)
+        safety_port = self._output_safety_port(request.port_id, operation=operation)
+        frequency_hz = self._observed_value(
+            port.frequency_hz,
+            f"{operation} requires a readable RF frequency",
+        )
+        power_dbm = self._observed_value(
+            port.power_dbm,
+            f"{operation} requires a readable RF power",
+        )
+        output_enabled = self._observed_value(
+            port.output_enabled,
+            f"{operation} requires a readable RF output state",
+        )
+        modulation = self._observed_value(
+            port.modulation,
+            f"{operation} requires a readable modulation state",
+        )
+        pulse = self._observed_value(
+            port.pulse,
+            f"{operation} requires a readable Pulse state",
+        )
+        sweep = self._observed_value(
+            port.sweep,
+            f"{operation} requires a readable Sweep state",
+        )
+        protection = self._observed_value(
+            snapshot.protection,
+            f"{operation} requires a readable protection state",
+        )
+        if not isinstance(frequency_hz, (int, float)) or isinstance(frequency_hz, bool):
+            raise ConfigError(f"{operation} requires a valid RF frequency")
+        if not isinstance(power_dbm, (int, float)) or isinstance(power_dbm, bool):
+            raise ConfigError(f"{operation} requires a valid RF power")
+        if not isinstance(output_enabled, bool):
+            raise ConfigError(f"{operation} requires a valid RF output state")
+        if modulation is not RfModulationState.DISABLED:
+            raise ConfigError(f"{operation} requires modulation disabled")
+        if pulse is not RfPulseState.DISABLED:
+            raise ConfigError(f"{operation} requires Pulse disabled")
+        if sweep is not RfSweepState.DISABLED:
+            raise ConfigError(f"{operation} requires Sweep disabled")
+        if not isinstance(protection, RfProtectionStatus):
+            raise ConfigError(f"{operation} requires a valid protection state")
+        if not (
+            port_profile.frequency_min_hz <= frequency_hz <= port_profile.frequency_max_hz
+            and safety_port.minimum_frequency_hz
+            <= frequency_hz
+            <= safety_port.maximum_frequency_hz
+        ):
+            raise ConfigError(f"{operation} requires RF frequency within descriptor and safety ranges")
+        if not (
+            port_profile.power_min_dbm <= power_dbm <= port_profile.power_max_dbm
+            and power_dbm <= safety_port.maximum_power_dbm
+        ):
+            raise ConfigError(f"{operation} requires RF power within descriptor and safety ranges")
+        if safety_port.actual_termination_ohm != port_profile.power_reference_impedance_ohm:
+            raise ConfigError(f"{operation} requires actual termination to match RF power reference")
+        policies = {item.code: item for item in extensions.protection_conditions}
+        unknown = sorted(set(protection.active_codes) - set(policies))
+        if unknown:
+            raise ConfigError(f"{operation} rejects an unknown active protection condition")
+        if any(policies[code].blocks_output_enable for code in protection.active_codes):
+            raise ConfigError(f"{operation} rejects an active blocking protection condition")
+        return output_enabled
+
+    def _validate_output_disable_snapshot(
+        self,
+        request: RfOutputRequest,
+        snapshot: RfSourceSnapshot,
+        *,
+        operation: str,
+    ) -> None:
+        port = self._snapshot_port(snapshot, request.port_id, operation=operation)
+        output_enabled = self._observed_value(
+            port.output_enabled,
+            f"{operation} requires a readable RF output state",
+        )
+        if output_enabled is not False:
+            raise ConfigError(f"{operation} postcondition reports RF output ON or unknown")
+
+    def _output_safety_port(self, port_id: str, *, operation: str) -> RfPortSafetyConfig:
+        safety_port = next(
+            (item for item in self._rf_source_config().safety_ports if item.port_id == port_id),
+            None,
+        )
+        if safety_port is None:
+            raise ConfigError(f"{operation} requires complete safety configuration for the target RF port")
+        return safety_port
+
+    @staticmethod
+    def _output_state_if_observed(port: RfPortSnapshot) -> bool | None:
+        if port.output_enabled.availability is not RfAvailability.VALUE:
+            return None
+        value = port.output_enabled.value
+        return value if isinstance(value, bool) else None
+
+    def _recover_rf_output_off(
+        self,
+        rf_source: RfSourceDriver,
+        port_id: str,
+        *,
+        operation: str,
+    ) -> dict[str, str]:
+        """Attempt exactly one bounded, same-port OFF recovery after a failed ON."""
+
+        session_state = self.session_state
+        if session_state is None or session_state.health in {
+            SessionHealth.POISONED,
+            SessionHealth.CLOSED,
+        }:
+            return {"status": "not_attempted", "reason": "session_unavailable"}
+        coordinator = SessionTransactionCoordinator(session_state)
+        fields = ("rf_source.port.output_enabled",)
+        timeout_ms = self.config.connection.timeout_ms
+        request = RfOutputRequest(port_id=port_id, enabled=False)
+        try:
+            with coordinator.authorize(
+                operation_id="rf_source.output_recovery",
+                purpose=SessionPurpose.RECOVERY,
+                allowed_io={"write"},
+                fields=fields,
+                timeout_ms=timeout_ms,
+                max_steps=1,
+            ):
+                rf_source.set_rf_output(request)
+        except BaseException:
+            return {"status": "off_failed", "session_health": session_state.health.value}
+        if session_state.health in {SessionHealth.POISONED, SessionHealth.CLOSED}:
+            return {"status": "off_sent_unverified", "reason": "session_unavailable"}
+        try:
+            with coordinator.authorize(
+                operation_id="rf_source.output_recovery_verify",
+                purpose=SessionPurpose.RECOVERY,
+                allowed_io={"query"},
+                fields=fields,
+                timeout_ms=timeout_ms,
+                max_steps=16,
+            ):
+                snapshot = rf_source.get_rf_snapshot()
+                self._validate_output_disable_snapshot(
+                    request,
+                    snapshot,
+                    operation=operation,
+                )
+        except BaseException:
+            return {"status": "off_sent_unverified", "session_health": session_state.health.value}
+        return {"status": "off_verified", "session_health": session_state.health.value}
+
+    @staticmethod
+    def _degrade_output_session_uncertain(session_state: InstrumentSessionState) -> None:
+        if session_state.health is SessionHealth.HEALTHY:
+            session_state.degrade(
+                SessionHealth.UNCERTAIN,
+                reason="rf_output_enable_unverified",
+            )
+
+    @staticmethod
+    def _degrade_output_session_poisoned(session_state: InstrumentSessionState) -> None:
+        if session_state.health not in {SessionHealth.POISONED, SessionHealth.CLOSED}:
+            session_state.degrade(
+                SessionHealth.POISONED,
+                reason="rf_output_disable_unverified",
+            )
 
     def _validate_cw_descriptor(
         self,

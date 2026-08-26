@@ -461,11 +461,39 @@ class RfCwResult:
             _require_finite(self.power_dbm, "RF CW result power_dbm")
 
 
+@dataclass(frozen=True, slots=True)
+class RfOutputRequest:
+    """One explicit RF output state request for one descriptor-defined port."""
+
+    port_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF output request port_id")
+        _require_bool(self.enabled, "RF output request enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class RfOutputResult:
+    """An RF output target confirmed by a fresh postcondition snapshot."""
+
+    port_id: str
+    enabled: bool
+    write_completed: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF output result port_id")
+        _require_bool(self.enabled, "RF output result enabled")
+        _require_bool(self.write_completed, "RF output result write_completed")
+
+
 @runtime_checkable
 class RfSourceDriver(InstrumentDriver, Protocol):
     def get_rf_snapshot(self) -> RfSourceSnapshot: ...
 
     def configure_cw(self, request: RfCwRequest) -> None: ...
+
+    def set_rf_output(self, request: RfOutputRequest) -> None: ...
 
 
 def _require_observed_number(
@@ -578,6 +606,37 @@ def rf_source_cw_operation_artifact(
     }
 
 
+def rf_source_output_operation_artifact(
+    request: RfOutputRequest,
+    result: RfOutputResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+) -> dict[str, object]:
+    """Build one redacted M2 RF-output artifact from typed evidence."""
+
+    if not isinstance(request, RfOutputRequest):
+        raise TypeError("request must be RfOutputRequest")
+    if not isinstance(result, RfOutputResult):
+        raise TypeError("result must be RfOutputResult")
+    if request.port_id != result.port_id or request.enabled is not result.enabled:
+        raise ValueError("RF output request and result must describe the same target")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": (
+            "rf_source.output_enable" if request.enabled else "rf_source.output_disable"
+        ),
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+    }
+
+
 __all__ = [
     "RF_SOURCE_CONTRACT_VERSION",
     "RF_SOURCE_OPERATION_ARTIFACT_SCHEMA",
@@ -596,6 +655,8 @@ __all__ = [
     "RfObserved",
     "RfOutputPortProfile",
     "RfOutputProfile",
+    "RfOutputRequest",
+    "RfOutputResult",
     "RfPortSnapshot",
     "RfProtectionConditionPolicy",
     "RfProtectionStatus",
@@ -613,5 +674,6 @@ __all__ = [
     "rf_source_digest",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",
+    "rf_source_output_operation_artifact",
     "rf_source_to_data",
 ]
