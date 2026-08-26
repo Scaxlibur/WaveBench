@@ -25,6 +25,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfModulationProfile,
     RfModulationRequest,
     RfModulationResult,
+    RfModulationStateSnapshot,
     RfModulationSnapshot,
     RfModulationSource,
     RfModulationState,
@@ -69,7 +70,7 @@ class _RfCwTransaction:
 class _RfModulationTransaction:
     result: RfModulationResult
     preflight_snapshot: RfSourceSnapshot
-    preflight_modulation_snapshot: RfModulationSnapshot
+    preflight_modulation_state: RfModulationStateSnapshot
     postcondition_snapshot: RfSourceSnapshot
     postcondition_modulation_snapshot: RfModulationSnapshot
 
@@ -267,7 +268,7 @@ class RfSourceService(SessionStateAliasMixin):
                 request,
                 transaction.result,
                 preflight_snapshot=transaction.preflight_snapshot,
-                preflight_modulation_snapshot=transaction.preflight_modulation_snapshot,
+                preflight_modulation_state=transaction.preflight_modulation_state,
                 postcondition_snapshot=transaction.postcondition_snapshot,
                 postcondition_modulation_snapshot=transaction.postcondition_modulation_snapshot,
             ),
@@ -299,15 +300,11 @@ class RfSourceService(SessionStateAliasMixin):
                 if session_state.health is not SessionHealth.HEALTHY:
                     raise ConfigError(f"{operation} requires a healthy session")
                 preflight_snapshot = rf_source.get_rf_snapshot()
-                preflight_modulation_snapshot = rf_source.get_rf_modulation_snapshot(
-                    request.port_id,
-                    request.kind,
-                )
+                preflight_modulation_state = rf_source.get_rf_modulation_state(request.port_id)
                 self._validate_modulation_preflight(
                     request,
                     preflight_snapshot,
-                    preflight_modulation_snapshot,
-                    mode_profile,
+                    preflight_modulation_state,
                     operation=operation,
                 )
                 main_entered = False
@@ -329,7 +326,7 @@ class RfSourceService(SessionStateAliasMixin):
                     return _RfModulationTransaction(
                         result=result,
                         preflight_snapshot=preflight_snapshot,
-                        preflight_modulation_snapshot=preflight_modulation_snapshot,
+                        preflight_modulation_state=preflight_modulation_state,
                         postcondition_snapshot=postcondition_snapshot,
                         postcondition_modulation_snapshot=postcondition_modulation_snapshot,
                     )
@@ -836,8 +833,7 @@ class RfSourceService(SessionStateAliasMixin):
         self,
         request: RfModulationRequest,
         snapshot: RfSourceSnapshot,
-        modulation_snapshot: RfModulationSnapshot,
-        mode_profile: RfModulationModeProfile,
+        modulation_state: RfModulationStateSnapshot,
         *,
         operation: str,
     ) -> None:
@@ -847,16 +843,11 @@ class RfSourceService(SessionStateAliasMixin):
             expected_modulation_state=RfModulationState.DISABLED,
             operation=operation,
         )
-        self._validate_modulation_snapshot_identity(
-            request,
-            modulation_snapshot,
-            mode_profile,
-            require_selected_fm_pm_kind=False,
-            operation=operation,
-        )
-        if modulation_snapshot.global_enabled or modulation_snapshot.enabled_modes:
+        if modulation_state.port_id != request.port_id:
+            raise ConfigError(f"{operation} modulation state does not match the requested port")
+        if modulation_state.global_enabled or modulation_state.enabled_modes:
             raise ConfigError(f"{operation} requires all modulation modes disabled")
-        if modulation_snapshot.fault_codes:
+        if modulation_state.fault_codes:
             raise ConfigError(f"{operation} requires no active modulation fault condition")
 
     def _validate_modulation_postcondition(
@@ -878,6 +869,7 @@ class RfSourceService(SessionStateAliasMixin):
             request,
             modulation_snapshot,
             mode_profile,
+            require_target_profile=True,
             require_selected_fm_pm_kind=True,
             operation=operation,
         )
@@ -963,13 +955,18 @@ class RfSourceService(SessionStateAliasMixin):
         snapshot: RfModulationSnapshot,
         mode_profile: RfModulationModeProfile,
         *,
+        require_target_profile: bool,
         require_selected_fm_pm_kind: bool,
         operation: str,
     ) -> None:
         if snapshot.port_id != request.port_id or snapshot.kind is not request.kind:
             raise ConfigError(f"{operation} modulation snapshot does not match the requested port and kind")
-        if snapshot.source is not mode_profile.source or snapshot.waveform is not mode_profile.waveform:
-            raise ConfigError(f"{operation} requires readable internal-sine modulation source and waveform")
+        if require_target_profile and (
+            snapshot.source is not mode_profile.source or snapshot.waveform is not mode_profile.waveform
+        ):
+            raise ConfigError(
+                f"{operation} postcondition requires the requested internal-sine source and waveform"
+            )
         if request.kind is RfModulationKind.AM:
             if snapshot.selected_fm_pm_kind is not None:
                 raise ConfigError(f"{operation} AM snapshot has an unexpected FM/PM selection")

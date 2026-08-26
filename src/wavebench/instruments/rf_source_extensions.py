@@ -21,6 +21,7 @@ from .contracts import InstrumentDriver
 
 RF_SOURCE_CONTRACT_VERSION = "wavebench.rf_source.v1"
 RF_SOURCE_SNAPSHOT_SCHEMA = "wavebench.rf_source.snapshot.v1"
+RF_SOURCE_MODULATION_STATE_SCHEMA = "wavebench.rf_source.modulation_state.v1"
 RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA = "wavebench.rf_source.modulation_snapshot.v1"
 RF_SOURCE_OPERATION_ARTIFACT_SCHEMA = "wavebench.rf_source.operation.v1"
 RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION = "0.8.25"
@@ -128,15 +129,26 @@ class RfModulationKind(StrEnum):
 
 
 class RfModulationSource(StrEnum):
-    """The M3 contract intentionally exposes only the instrument-internal source."""
+    """Known current modulation-source values.
+
+    M3 configuration profiles remain internal-only.  ``EXTERNAL`` exists only
+    so a driver can report an inactive device state that M3 will explicitly
+    replace with the requested internal source.
+    """
 
     INTERNAL = "internal"
+    EXTERNAL = "external"
 
 
 class RfModulationWaveform(StrEnum):
-    """The M3 contract intentionally exposes only an internal sine waveform."""
+    """Known current internal modulation-waveform values.
+
+    M3 configuration profiles remain sine-only.  ``SQUARE`` exists only for
+    typed readback of a current inactive device state before M3 replaces it.
+    """
 
     SINE = "sine"
+    SQUARE = "square"
 
 
 class RfModulationValueUnit(StrEnum):
@@ -349,6 +361,10 @@ class RfModulationModeProfile:
             raise ValueError("RF modulation mode source has an invalid type")
         if not isinstance(self.waveform, RfModulationWaveform):
             raise ValueError("RF modulation mode waveform has an invalid type")
+        if self.source is not RfModulationSource.INTERNAL:
+            raise ValueError("RF modulation mode profiles must use the internal source")
+        if self.waveform is not RfModulationWaveform.SINE:
+            raise ValueError("RF modulation mode profiles must use the sine waveform")
         _require_finite(self.value_min, "RF modulation mode value_min")
         _require_finite(
             self.value_max,
@@ -651,6 +667,37 @@ class RfModulationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RfModulationStateSnapshot:
+    """State-only readback used before an M3 configuration write.
+
+    An inactive device can legitimately retain an external source, a non-sine
+    waveform, or source-dependent values that are not queryable.  M3 only
+    needs its mode/global/fault state before it replaces that configuration,
+    so this snapshot deliberately excludes profile fields.
+    """
+
+    port_id: str
+    enabled_modes: tuple[RfModulationKind, ...] = ()
+    global_enabled: bool = False
+    fault_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF modulation state snapshot port_id")
+        _require_enum_tuple(
+            self.enabled_modes,
+            RfModulationKind,
+            "RF modulation state snapshot enabled_modes",
+            allow_empty=True,
+        )
+        _require_bool(self.global_enabled, "RF modulation state snapshot global_enabled")
+        _require_token_tuple(
+            self.fault_codes,
+            "RF modulation state snapshot fault_codes",
+            allow_empty=True,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RfModulationSnapshot:
     """Complete typed readback for one internal-sine modulation mode.
 
@@ -760,6 +807,8 @@ class RfSourceDriver(InstrumentDriver, Protocol):
 
     def configure_cw(self, request: RfCwRequest) -> None: ...
 
+    def get_rf_modulation_state(self, port_id: str) -> RfModulationStateSnapshot: ...
+
     def get_rf_modulation_snapshot(
         self,
         port_id: str,
@@ -849,6 +898,18 @@ def rf_modulation_snapshot_document(snapshot: RfModulationSnapshot) -> dict[str,
     return {"schema": RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA, **data}
 
 
+def rf_modulation_state_snapshot_document(
+    snapshot: RfModulationStateSnapshot,
+) -> dict[str, object]:
+    """Build a redacted document for one typed RF modulation-state readback."""
+
+    if not isinstance(snapshot, RfModulationStateSnapshot):
+        raise TypeError("snapshot must be RfModulationStateSnapshot")
+    data = rf_source_to_data(snapshot)
+    assert isinstance(data, dict)
+    return {"schema": RF_SOURCE_MODULATION_STATE_SCHEMA, **data}
+
+
 def rf_source_snapshot_operation_artifact(snapshot: RfSourceSnapshot) -> dict[str, object]:
     """Build a read-only snapshot artifact without transport-private values."""
 
@@ -896,7 +957,7 @@ def rf_source_modulation_operation_artifact(
     result: RfModulationResult,
     *,
     preflight_snapshot: RfSourceSnapshot,
-    preflight_modulation_snapshot: RfModulationSnapshot,
+    preflight_modulation_state: RfModulationStateSnapshot,
     postcondition_snapshot: RfSourceSnapshot,
     postcondition_modulation_snapshot: RfModulationSnapshot,
 ) -> dict[str, object]:
@@ -916,8 +977,8 @@ def rf_source_modulation_operation_artifact(
         raise ValueError("RF modulation request and result must describe the same target")
     if not isinstance(preflight_snapshot, RfSourceSnapshot):
         raise TypeError("preflight_snapshot must be RfSourceSnapshot")
-    if not isinstance(preflight_modulation_snapshot, RfModulationSnapshot):
-        raise TypeError("preflight_modulation_snapshot must be RfModulationSnapshot")
+    if not isinstance(preflight_modulation_state, RfModulationStateSnapshot):
+        raise TypeError("preflight_modulation_state must be RfModulationStateSnapshot")
     if not isinstance(postcondition_snapshot, RfSourceSnapshot):
         raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
     if not isinstance(postcondition_modulation_snapshot, RfModulationSnapshot):
@@ -928,8 +989,8 @@ def rf_source_modulation_operation_artifact(
         "request": rf_source_to_data(request),
         "result": rf_source_to_data(result),
         "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
-        "preflight_modulation_snapshot": rf_modulation_snapshot_document(
-            preflight_modulation_snapshot
+        "preflight_modulation_state": rf_modulation_state_snapshot_document(
+            preflight_modulation_state
         ),
         "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
         "postcondition_modulation_snapshot": rf_modulation_snapshot_document(
@@ -971,6 +1032,7 @@ def rf_source_output_operation_artifact(
 
 __all__ = [
     "RF_SOURCE_CONTRACT_VERSION",
+    "RF_SOURCE_MODULATION_STATE_SCHEMA",
     "RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA",
     "RF_SOURCE_OPERATION_ARTIFACT_SCHEMA",
     "RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION",
@@ -988,6 +1050,7 @@ __all__ = [
     "RfModulationProfile",
     "RfModulationRequest",
     "RfModulationResult",
+    "RfModulationStateSnapshot",
     "RfModulationSnapshot",
     "RfModulationSource",
     "RfModulationState",
@@ -1014,6 +1077,7 @@ __all__ = [
     "rf_source_cw_operation_artifact",
     "rf_source_digest",
     "rf_modulation_snapshot_document",
+    "rf_modulation_state_snapshot_document",
     "rf_source_modulation_operation_artifact",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",

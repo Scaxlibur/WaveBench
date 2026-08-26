@@ -28,6 +28,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfModulationSnapshot,
     RfModulationSource,
     RfModulationState,
+    RfModulationStateSnapshot,
     RfModulationWaveform,
     RfObserved,
     RfPortSnapshot,
@@ -456,14 +457,7 @@ def test_rf_source_modulation_step_has_write_intent_and_separate_artifact_namesp
             internal_frequency_hz=1_000.0,
         )
         preflight_snapshot = _snapshot()
-        preflight_modulation_snapshot = RfModulationSnapshot(
-            port_id="rf_out",
-            kind=RfModulationKind.AM,
-            source=RfModulationSource.INTERNAL,
-            waveform=RfModulationWaveform.SINE,
-            depth_percent=0.0,
-            internal_frequency_hz=1_000.0,
-        )
+        preflight_modulation_state = RfModulationStateSnapshot(port_id="rf_out")
         postcondition_snapshot = RfSourceSnapshot(
             ports=(
                 RfPortSnapshot(
@@ -492,7 +486,7 @@ def test_rf_source_modulation_step_has_write_intent_and_separate_artifact_namesp
             request=request,
             result=result_value,
             preflight_snapshot=preflight_snapshot,
-            preflight_modulation_snapshot=preflight_modulation_snapshot,
+            preflight_modulation_state=preflight_modulation_state,
             postcondition_snapshot=postcondition_snapshot,
             postcondition_modulation_snapshot=postcondition_modulation_snapshot,
         )

@@ -27,6 +27,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfModulationSnapshot,
     RfModulationSource,
     RfModulationState,
+    RfModulationStateSnapshot,
     RfModulationValueUnit,
     RfModulationWaveform,
     RfObserved,
@@ -214,6 +215,19 @@ class _Driver:
         assert snapshot.kind is kind
         return snapshot
 
+    def get_rf_modulation_state(self, port_id: str) -> RfModulationStateSnapshot:
+        self.calls.append("modulation_state")
+        assert port_id == "rf_out"
+        if not self.modulation_snapshots:
+            raise AssertionError("unexpected modulation state")
+        snapshot = self.modulation_snapshots.pop(0)
+        return RfModulationStateSnapshot(
+            port_id=snapshot.port_id,
+            enabled_modes=snapshot.enabled_modes,
+            global_enabled=snapshot.global_enabled,
+            fault_codes=snapshot.fault_codes,
+        )
+
     def configure_rf_modulation(self, request: RfModulationRequest) -> None:
         self.calls.append("configure_modulation")
         self.requests.append(request)
@@ -265,7 +279,7 @@ def test_modulation_uses_one_driver_sequence_and_independent_readback() -> None:
     assert driver.requests == [request]
     assert driver.calls == [
         "snapshot",
-        "modulation_snapshot",
+        "modulation_state",
         "configure_modulation",
         "snapshot",
         "modulation_snapshot",
@@ -274,6 +288,48 @@ def test_modulation_uses_one_driver_sequence_and_independent_readback() -> None:
     assert artifact["postcondition_modulation_snapshot"]["global_enabled"] is True
     assert service.session_state is not None
     assert service.session_state.health is SessionHealth.HEALTHY
+
+
+def test_modulation_replaces_an_inactive_external_square_profile_with_internal_sine() -> None:
+    request = _am_request()
+    service, driver = _service(
+        [_rf_snapshot(), _rf_snapshot(modulation=RfModulationState.ENABLED)],
+        [
+            _modulation_snapshot(
+                source=RfModulationSource.EXTERNAL,
+                waveform=RfModulationWaveform.SQUARE,
+            ),
+            _modulation_snapshot(enabled=True),
+        ],
+    )
+
+    result = service.configure_modulation(request)
+
+    assert result.depth_percent == request.depth_percent
+    assert driver.requests == [request]
+    assert service.session_state is not None
+    assert service.session_state.health is SessionHealth.HEALTHY
+
+
+def test_modulation_rejects_a_non_internal_sine_postcondition() -> None:
+    service, driver = _service(
+        [_rf_snapshot(), _rf_snapshot(modulation=RfModulationState.ENABLED)],
+        [
+            _modulation_snapshot(),
+            _modulation_snapshot(
+                enabled=True,
+                source=RfModulationSource.EXTERNAL,
+                waveform=RfModulationWaveform.SQUARE,
+            ),
+        ],
+    )
+
+    with pytest.raises(ConfigError, match="postcondition requires the requested internal-sine"):
+        service.configure_modulation(_am_request())
+
+    assert len(driver.requests) == 1
+    assert service.session_state is not None
+    assert service.session_state.health is SessionHealth.UNCERTAIN
 
 
 def test_modulation_allows_off_only_fm_pm_selection_change_before_fixed_write() -> None:
@@ -306,7 +362,7 @@ def test_modulation_allows_off_only_fm_pm_selection_change_before_fixed_write() 
     assert driver.requests == [request]
     assert driver.calls == [
         "snapshot",
-        "modulation_snapshot",
+        "modulation_state",
         "configure_modulation",
         "snapshot",
         "modulation_snapshot",
@@ -383,7 +439,7 @@ def test_modulation_rejects_unsafe_preflight_without_write(
         service.configure_modulation(_am_request())
 
     assert driver.requests == []
-    assert driver.calls == ["snapshot", "modulation_snapshot"]
+    assert driver.calls == ["snapshot", "modulation_state"]
     assert service.session_state is not None
     assert service.session_state.health is SessionHealth.HEALTHY
 
@@ -421,7 +477,7 @@ def test_modulation_mismatch_is_not_retried_and_degrades_session() -> None:
     assert len(driver.requests) == 1
     assert driver.calls == [
         "snapshot",
-        "modulation_snapshot",
+        "modulation_state",
         "configure_modulation",
         "snapshot",
         "modulation_snapshot",

@@ -339,6 +339,7 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
         "rf_source.snapshot": ("get_rf_snapshot",),
         "rf_source.cw_configure": ("configure_cw",),
         "rf_source.modulation_configure": (
+            "get_rf_modulation_state",
             "get_rf_modulation_snapshot",
             "configure_rf_modulation",
         ),
