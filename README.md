@@ -122,7 +122,9 @@ wavebench tui --fake
 
 ## RF 信号源
 
-`rf_source` 是独立于普通 `source` 的仪器领域。当前 DSG830 已开放只读状态、RF OFF 时的单字段 CW 配置、RF-OFF 内部正弦 AM／FM／PM 配置及按模式关闭、具有完整 safety 配置的 `rf_out` ON/OFF、RF-OFF internal／single Pulse 配置，以及 RF-OFF 的 frequency-only Step Sweep 配置。PM 的 production profile 限于 `1.25 rad`。A4-MO 已将受限 `rf_source.modulated_output_enable` 提升到 production：仅接受已激活且精确匹配的 AM `50 %`／`1 kHz` profile，最大功率 `-50 dBm`；普通 `rf_source.output` 仍要求调制关闭。Step Sweep 固定为 `STEP`／`FWD`／`RAMP`／`LIN`，配置后保持 Sweep disabled。A5-0 已具备逻辑 Pulse／Sweep trigger configuration 的只读代码合同，但 DSG830 production descriptor 未声明该 capability；它不代表后面板 trigger／sync 接口已定义或可操作。当前 production 范围仍不提供 execute、arm、fire、trigger、Level Sweep 或 list。
+`rf_source` 是独立于普通 `source` 的仪器领域。DSG830 当前已开放只读状态、RF OFF 时的单字段 CW 配置、RF-OFF 内部正弦 AM／FM／PM 配置及按模式关闭、具有完整 safety 配置的 `rf_out` ON/OFF、RF-OFF internal／single Pulse 配置，以及 RF-OFF 的 frequency-only Step Sweep 配置。PM 的 production profile 限于 `1.25 rad`。A4-MO 已将受限 `rf_source.modulated_output_enable` 提升到 production：仅接受已激活且精确匹配的 AM `50 %`／`1 kHz` profile，最大功率 `-50 dBm`；普通 `rf_source.output` 仍要求调制关闭。Step Sweep 固定为 `STEP`／`FWD`／`RAMP`／`LIN`，配置后保持 Sweep disabled。
+
+已完成的 A5 只覆盖一条后面板物理路径：DSG830 的「PULSE IN/OUT」按 output 方向、固定 internal／single／normal／`1 ms`／`100 μs` profile，提供 `rf_source.pulse_output` 与 `wavebench rf-source pulse-output`。它不启用 RF 输出，也不定义 Pulse input、`TRIGGER IN`、Sweep fire、sync／reference、Level Sweep 或 list。A5-0 仍仅是逻辑 Pulse／Sweep trigger configuration 的零写读取合同，DSG830 production descriptor 不声明 `rf_source.trigger_snapshot`。
 
 - 日常配置与操作：[RF 信号源使用指南](docs/project/guides/WaveBench_RF信号源使用指南.md)
 - 模型、安全语义和 capability 边界：[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)

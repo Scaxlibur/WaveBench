@@ -27,6 +27,7 @@
 | 受限调制输出 | A4-MO 后已开放 | A4-MO 后已开放 | 仅 AM `50 %`／内部 `1 kHz`、最大 `-50 dBm`。它要求 profile 已激活且精确匹配，不配置或关闭调制；普通 `rf_source.output on` 仍要求调制关闭。 |
 | Pulse | M4 离线合同与受控 evidence 已完成 | A4 Pulse 后已开放 | 当前只限 internal／single 配置并强制保持 Pulse OFF；需要 `read_write` 与 fresh OFF-only preflight。 |
 | frequency-only Step Sweep | M4 合同、CLI、run step、artifact 与 A4 证据已完成 | A4 Step Sweep 后已开放 | 仅固定 `STEP`／`FWD`／`RAMP`／`LIN`，配置后 Sweep 仍保持关闭；需要 `read_write`、匹配 profile 与 fresh OFF-only preflight。 |
+| 后面板 Pulse Output | A5 合同、CLI、run step、artifact 与受控 evidence 已完成 | A5 Pulse Output 后已开放 | 仅 `rf_out` 的 `pulse_in_out` output 方向；固定 `0 V`／`3.3 V`、约 `600 Ω`、internal／single／normal／`1 ms`／`100 μs`。它不启用 RF 输出，也不配置接收设备。 |
 | 逻辑 trigger configuration 读取 | A5-0 离线合同完成 | 未开放 | `rf-source trigger status`／`rf_source.trigger_status` 需要独立 capability 和 `TRIGGER / READ` profile；当前 DSG830 production descriptor 会拒绝该请求。它不读取或配置物理 trigger／sync 接口。 |
 | trigger、arm／fire、Level Sweep | 未完成 | 未开放 | 不应尝试调用或绕过。 |
 
@@ -85,7 +86,7 @@ wavebench rf-source idn --config wavebench.toml
 wavebench rf-source status --config wavebench.toml
 ```
 
-在 production descriptor 已声明对应 capability、配置为 `read_write` 且所有 preflight 条件满足时，DSG830 可以执行受限的 CW、内部正弦调制、RF 输出、Pulse 和 Step Sweep 配置操作：
+在 production descriptor 已声明对应 capability、配置为 `read_write` 且所有 preflight 条件满足时，DSG830 可以执行受限的 CW、内部正弦调制、RF 输出、Pulse、Pulse Output 和 Step Sweep 操作：
 
 ```bash
 wavebench rf-source set-frequency --config wavebench.toml --port rf_out 1000000
@@ -97,6 +98,8 @@ wavebench rf-source modulation disable --config wavebench.toml --port rf_out --m
 wavebench rf-source output --config wavebench.toml --port rf_out on
 wavebench rf-source output --config wavebench.toml --port rf_out off
 wavebench rf-source pulse configure --config wavebench.toml --port rf_out --period-s 0.001 --width-s 0.0001 --polarity normal
+wavebench rf-source pulse-output --config wavebench.toml --port rf_out --interface pulse_in_out on
+wavebench rf-source pulse-output --config wavebench.toml --port rf_out --interface pulse_in_out off
 wavebench rf-source sweep configure --config wavebench.toml --port rf_out --start-frequency-hz 1000000 --stop-frequency-hz 2000000 --points 11 --dwell-s 0.02
 ```
 
@@ -112,6 +115,14 @@ wavebench rf-source modulation disable --config wavebench.toml --port rf_out --m
 ```
 
 DSG830 目前只声明上述精确 AM `50 %`／`1 kHz`、最大 `-50 dBm` 的 `enable-output-am`。`enable-output-fm`、`enable-output-pm` 会因 profile 不匹配而在仪器 I/O 前拒绝。成功的特殊 ON 不会自动 RF OFF 或关闭调制；结束时必须显式执行普通 `output off` 和按模式 `disable`。不得用原始 SCPI、临时替换 production descriptor 或普通 `output on` 绕过该限制。
+
+## A5：后面板 Pulse Output（受限生产操作）
+
+`rf_source.pulse_output` 只覆盖 DSG830 的 `pulse_in_out` output 方向。它不是 `rf_source.pulse_configure` 的别名，也不表示接口的 input 方向、`TRIGGER IN`、Pulse trigger、Sweep fire、sync／reference 或 RTM 控制能力。
+
+固定 profile 为 `0 V`／`3.3 V`、约 `600 Ω`、internal／single／normal、period `1 ms`、width `100 μs`。`on` 只在 RF 输出、调制、Pulse、Sweep 都关闭、protection 为空且 readback 与该 profile 精确匹配时执行一次状态写入；成功不会启用 RF 输出或改变示波器。`off` 仍只操作该接口，但故意允许已知 profile 漂移，以保留关闭已启用输出的路径。写入或读回结果不明时，不重试，session 会变为不确定状态。
+
+已验证的接线仅为 DSG830「PULSE IN/OUT」output → RTM2032「EXT TRIGGER INPUT」。日常 CLI 或 run plan 不会检测接收设备、配置 scope trigger、发起 scope single 或恢复接收设备状态；使用前必须人工核对实际接线与接收端电气额定值。该操作不适用于从相似连接器名称推导出的其它路径。
 
 ## A5-0：逻辑 trigger configuration 读取
 
@@ -155,6 +166,16 @@ port_id = "rf_out"
 period_s = 0.001
 width_s = 0.0001
 polarity = "normal"
+
+[[steps]]
+kind = "rf_source.pulse_output_enable"
+port_id = "rf_out"
+interface_id = "pulse_in_out"
+
+[[steps]]
+kind = "rf_source.pulse_output_disable"
+port_id = "rf_out"
+interface_id = "pulse_in_out"
 ```
 
 `rf_source.sweep_configure` 已进入 schema，并在 DSG830 的 A4 Step Sweep 证据复核后成为受限生产操作：
@@ -271,6 +292,6 @@ DSG830 源码 checkout 的 `tools/a4_step_sweep_evidence.py` 与无资源 setup 
 2. 从 `read_only` 开始；只有本次确实需要、且 production descriptor 已声明的操作才使用 `read_write`。
 3. 核对 `rf_out` 的实际端接、频率范围和功率上限。示波器的 CH2 50 Ω 输入不能替代整条路径核对。
 4. 在任何写入前读取 RF snapshot，确认 RF 输出 OFF；完成后独立确认最终 RF OFF。
-5. 日常 M3／M4 操作不使用 raw SCPI，不执行 reset、preset、错误队列、外部调制、后面板 Pulse I/O、Step Sweep execute、trigger 或 scope 自动量程。Pulse 与 Step Sweep 只使用 descriptor 已声明的受限配置入口；M3-MO 只能使用 DSG830 已声明的固定 AM profile，并在结束时显式 RF OFF 与按模式关闭调制。
+5. 日常 M3／M4／A5 操作不使用 raw SCPI，不执行 reset、preset、错误队列、外部调制、未声明的后面板接口、Step Sweep execute、trigger 或 scope 自动量程。Pulse 与 Step Sweep 只使用 descriptor 已声明的受限配置入口；A5 只使用已声明的 `pulse_in_out` output 路径；M3-MO 只能使用 DSG830 已声明的固定 AM profile，并在结束时显式 RF OFF 与按模式关闭调制。
 
 需要实现新型号或提升 capability 时，继续阅读 [RF 信号源领域设计](../design/WaveBench_RF信号源设计.md)、[RF 信号源开发里程碑](../design/WaveBench_RF信号源开发里程碑.md) 和对应插件的型号级里程碑。

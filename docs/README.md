@@ -28,7 +28,7 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 
 ### 使用 RF 信号源
 
-`rf_source` 不复用普通 `source` 的 Vpp、offset 或数字 channel 模型。先从 [RF 信号源使用指南](project/guides/WaveBench_RF信号源使用指南.md) 确认当前 production capability 和端接声明；DSG830 的 RF-OFF 调制配置已开放，但调制开启时的 RF 输出仍未开放。需要实现新型号或查看证据门时，再阅读 [领域设计](project/design/WaveBench_RF信号源设计.md) 与 [开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)。
+`rf_source` 不复用普通 `source` 的 Vpp、offset 或数字 channel 模型。先从 [RF 信号源使用指南](project/guides/WaveBench_RF信号源使用指南.md) 确认当前 production capability 和端接声明；DSG830 已开放固定 profile 的调制输出，以及唯一受验证的后面板 `pulse_in_out` output 路径。后者不代表 Pulse input、`TRIGGER IN` 或同步能力。需要实现新型号或查看证据门时，再阅读 [领域设计](project/design/WaveBench_RF信号源设计.md) 与 [开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)。
 
 ### 执行实验
 
