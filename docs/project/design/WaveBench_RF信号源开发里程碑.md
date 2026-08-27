@@ -8,9 +8,9 @@
 
 | 范围 | 当前状态 | 说明 |
 | --- | --- | --- |
-| Core `0.8.25` 开发线 | M0–M4 与 A5-0 离线只读合同完成；已提升的范围由插件 descriptor 决定 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出、内部正弦 AM／FM／PM、internal／single Pulse、frequency-only Step Sweep，以及逻辑 trigger configuration 的只读类型、Service、CLI、run 和 artifact；按模式调制关闭仅用于本地证据与私有恢复。 |
-| DSG830 包 `0.2.0` | M0–M3、M4 Pulse 与 Step Sweep 的 A4 均已通过并提升；A5-0 映射已完成，物理 A5 未开始 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP`、内部正弦 AM／FM／PM、internal／single Pulse、frequency-only Step Sweep 与六条固定 trigger configuration query 映射；production descriptor 声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 和 `rf_source.sweep_configure`，不声明 `rf_source.trigger_snapshot`。 |
-| 真实仪器证据 | A1、A2、A3、A4 调制／Pulse／Step Sweep 已完成；物理 A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW，A4 分别提升 RF-OFF 调制、OFF-only Pulse 与保持 Sweep disabled 的 Step Sweep 配置。A5-0 不产生 production capability，也不提升调制开启时的 RF 输出。 |
+| Core `0.8.25` 开发线 | M0–M4、M3-MO 与 A5-0 的离线合同完成；已提升的范围由插件 descriptor 决定 | 已有 `rf_source` kind、配置、只读路径、OFF-only CW、端口输出、内部正弦 AM／FM／PM、profile-bound 调制输出、internal／single Pulse、frequency-only Step Sweep，以及逻辑 trigger configuration 的只读类型、Service、CLI、run 和 artifact；按模式调制关闭仅用于本地证据与私有恢复。 |
+| DSG830 包 `0.2.0` | M0–M3、M4 Pulse 与 Step Sweep 的 A4 均已通过并提升；M3-MO 的私有 harness 与 fake 回归完成，实机验收待进行；A5-0 映射已完成，物理 A5 未开始 | 已迁移为 `kind="rf_source"`，含 `rf_out` topology、严格 snapshot parser、`:FREQ`／`:LEV`／`:OUTP`、内部正弦 AM／FM／PM、internal／single Pulse、frequency-only Step Sweep 与六条固定 trigger configuration query 映射；production descriptor 声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 和 `rf_source.sweep_configure`，不声明 `rf_source.modulated_output_enable` 或 `rf_source.trigger_snapshot`。 |
+| 真实仪器证据 | A1、A2、A3、A4 调制／Pulse／Step Sweep 已完成；A4-MO 与物理 A5 未开始 | 真实设备能力不能由 fake transport 替代；A1 提升 snapshot，A2 提升端口级 output，A3 提升 OFF-only CW，A4 分别提升 RF-OFF 调制、OFF-only Pulse 与保持 Sweep disabled 的 Step Sweep 配置。A4-MO 是单独的调制输出证据。A5-0 不产生 production capability。 |
 
 ## 双仓库交付规则
 
@@ -31,6 +31,7 @@
 | M1 | 离线完成；A3 已完成 | OFF-only CW 配置 | `:FREQ`／`:LEV` 映射与独立回读 | typed request／result、Service、CLI、run step、artifact、fake 测试与受控 A3 证据已完成；DSG830 production 已开放 `rf_source.cw_configure`。 |
 | M2 | 离线完成；A2 已完成 | RF 输出安全事务 | `:OUTP` ON/OFF 的单次映射；Core 独立 readback | 安全配置／端接／protection 不满足时 ON 零写拒绝；失败最多一次受 guard 的 OFF recovery；DSG830 production 已开放 `rf_source.output`。 |
 | M3 | A4 已通过并提升 | 声明式内部正弦 AM／FM／PM profile、配置事务、CLI、run 与 artifact；按模式关闭仅用于本地证据与私有恢复 | 手册范围内的内部 Sine AM／FM／PM 映射、严格 readback、单模式 RF-OFF evidence harness 与私有恢复路径 | 只在 RF OFF、所有调制模式 disabled、profile 匹配且 postcondition 成立时写入；DSG830 production 已开放 `rf_source.modulation_configure`。PM 的 production profile 固定为 `1.25 rad`。 |
+| M3-MO | 离线完成；A4-MO 实机待验收 | `RfModulatedOutputProfile`、严格 pre/post RF 与调制 snapshot、一次 RF ON、受 guard OFF recovery、CLI、run 与 artifact | 复用既有 `:OUTP`／调制 snapshot 映射；私有固定 AM descriptor、CH2-only evidence harness 与 fake 回归 | 只接受已激活且精确匹配的内部 Sine profile；不配置调制，不重试 ON。普通 `rf_source.output` 仍要求调制关闭。DSG830 production 不声明 `rf_source.modulated_output_enable`。 |
 | M4（Pulse） | 离线完成；A4 Pulse 已通过 | internal／single Pulse profile、OFF-only 配置事务、CLI、run 与 artifact | `:PULM:SOUR INT`、`:PULM:MODE SING`、period／width／polarity，固定以 `:PULM:STAT OFF` 收尾 | 初始或写后 RF 输出、调制、Pulse、Sweep、protection 不满足时拒绝；不触发、不使用后面板 Pulse I/O；DSG830 production 已开放 `rf_source.pulse_configure`。 |
 | M4（Step Sweep） | A4 已完成并提升 | frequency-only Step Sweep 合同、CLI、run、artifact 与本地 evidence harness | `:SWE:TYPE STEP`、`:SWE:DIR FWD`、`RAMP`／`LIN`、起止频率、点数、驻留时间，固定以 `:SWE:STAT OFF` 收尾 | 初始或写后 RF 输出、调制、Pulse、Sweep、protection 不满足时拒绝；不写 `:SWE:EXEC`、trigger、Level Sweep 或 RF 输出；DSG830 production 已开放 `rf_source.sweep_configure`。 |
 | A5-0 | 离线完成；不属于物理 A5 证据 | `RfTriggerProfile`、`RfTriggerSnapshot`、`rf_source.trigger_snapshot`、只读 Service／CLI／run／artifact | `:PULM:TRIG:MODE?`、external edge／gate query、Sweep mode／period／point trigger query 与严格 enum parser | 只使用 `TRIGGER / READ` profile 和非 production descriptor；固定 query 顺序、零 write、未知值失败关闭。它不定义物理 connector，不发送 trigger，也不提升 production capability。 |
@@ -93,12 +94,20 @@ FM／PM 的共享 mode type 会与被查询 profile 分开记录。当前类型�
 均 disabled、Pulse／Sweep disabled 且无活动 protection condition；postcondition 要求 RF 仍 OFF、仅目标模式 enabled、全局调制
 开启且所有目标字段精确匹配。写入或 postcondition 结果不明时不重试，session 降为不确定状态。
 
-`rf_source.modulation_disable` 单独关闭一个已明确识别的 AM／FM／PM 模式和全局调制开关。它要求 RF OFF、Pulse／Sweep disabled、无活动 protection，且调制状态只包含请求模式；写后必须重新确认所有模式和全局调制均关闭。已一致关闭的状态不写入；混合、未知或矛盾状态在写入前拒绝。该 operation 当前只供 A4 本地证据与恢复流程使用，不进入 DSG830 production descriptor。
+`rf_source.modulation_disable` 单独关闭一个已明确识别的 AM／FM／PM 模式和全局调制开关。它要求 RF OFF、Pulse／Sweep disabled、无活动 protection，且调制状态只包含请求模式；写后必须重新确认所有模式和全局调制均关闭。已一致关闭的状态不写入；混合、未知或矛盾状态在写入前拒绝。该 operation 当前只供 A4 本地证据、A4-MO 清理和私有恢复流程使用，不进入 DSG830 production descriptor。
 
 DSG830 的 A4 调制证据已将 `rf_source.modulation_configure` 加入 production descriptor。production profile 为 AM `0–100 %`、FM `0.1 Hz–1 MHz`，以及 PM 精确 `1.25 rad`；三种模式的内部频率均为 `10 Hz–100 kHz`。driver 的离线 PM 映射范围不自动扩大 production profile。
-当前 M2 的 RF ON 合同仍要求调制 disabled，因此 M3 capability 不授权在调制开启时输出 RF；该能力仍需要专门的输出安全合同与实机证据。
+当前 M2 的 RF ON 合同仍要求调制 disabled，因此 M3 capability 不授权在调制开启时输出 RF；M3-MO 为此提供了专门的输出安全合同，但仍需要独立的 A4-MO 实机证据。
 
 DSG830 源码 checkout 提供 A4 的独立本地 harness 和资源无关 setup 模板。一次运行只配置一个内部 Sine AM／FM／PM profile；成功路径在配置读回后执行同一模式的受限关闭事务，最终 snapshot 必须同时确认 RF OFF 和调制关闭。三种模式的 RF-OFF 配置、严格读回与关闭恢复均已通过。为使生产 profile 与 PM 的严格读回证据完全一致，PM 仅开放 `1.25 rad`，不将离线映射的其它值外推到 production。`--recover` 只用于把已知的单一活动模式恢复为关闭状态，输出为私有恢复记录，不是新的 capability 提升证据。两条路径都不读取 scope、不调用 RF output，也不做 output recovery。该证据不能外推为调制输出、CH2 信号、Pulse、Sweep 或 trigger 证据。
+
+### M3-MO：受限调制输出（离线完成，A4-MO 待验收）
+
+Core 将调制开启时的 RF 输出建模为独立的 `rf_source.modulated_output_enable`，而不是放宽通用 `rf_source.output`。request 包含一个内部 Sine AM／FM／PM profile；preflight 要求 RF OFF、全局调制开启、唯一目标模式开启且完整 profile 与 request 精确相同，Pulse／Sweep disabled、protection 清晰、频率／功率／实际端接满足端口 safety 配置，并且 request 被 `RfModulatedOutputProfile` 的窄范围接受。它读取 RF snapshot 和完整调制 snapshot，单次 ON 后再次读取二者；不会配置调制，也不会在成功后自动 RF OFF 或关闭调制。
+
+任何 ON 结果不明、RF readback 或调制 readback 不符时，都不重试 ON。只有 session health 允许时，Core 才复用 M2 的一次受 guard RF OFF recovery；恢复后不推断调制状态。普通 `rf_source.output` 的 ON preflight 不变，仍要求调制关闭。
+
+DSG830 源码 checkout 提供 `tools/a4_modulated_output_evidence.py` 与无资源 setup 模板。它使用仅在内存中创建的 descriptor，固定为 AM `50 %`／内部 `1 kHz`、RF `1 MHz`／`-50 dBm`，并只读取 CH2 的当前 `DEF` 缓冲区。CH2 必须由 setup 显式确认 50 Ω；scope 只判定是否有可见信号，不计算 dBm、频率或调制深度。工具不读取或控制 CH1，不把 LF OUTPUT 解释为调制测量，不使用 trigger／sync／后面板 Pulse I/O。成功路径仍显式 RF OFF，再关闭 AM 和全局调制，最后独立确认安全基线。该 harness 目前只完成代码与 fake 回归；未取得私有实机通过记录并完成审查前，不得将 capability 加入 production descriptor。
 
 ## M4：Pulse 与 Step Sweep
 
@@ -121,7 +130,8 @@ Pulse trigger、Sweep arm／fire／stop、外部 trigger、后面板辅助输出
 | A1 | 只读 snapshot | `rf_source.snapshot` |
 | A2 | RF OFF/ON、readback 与最终 OFF | `rf_source.output` |
 | A3 | CW 环回、频率与 dBm 功率 | `rf_source.cw_configure` |
-| A4 | 调制、Pulse、Step Sweep | 对应 M3／M4 capability |
+| A4 | RF-OFF 调制、Pulse、Step Sweep | 对应 M3／M4 capability |
+| A4-MO | 固定调制 profile 的 RF ON、CH2 存在性观察与最终清理 | `rf_source.modulated_output_enable` |
 | A5 | 外部 trigger 或同步接线 | trigger／fire／同步相关 capability |
 
 每次证据记录必须独立于代码提交，且不能包含真实资源地址、序列号、原始响应或实验室专用配置。未恢复或无法确认最终 RF OFF 的验收不能用于提升 capability。
@@ -201,3 +211,4 @@ CH2 的 50 Ω 端接是在 setup 中明确声明的电气安全前提。scope �
 5. A3 已完成并将 `rf_source.cw_configure` 加入 production descriptor。M3 的 Core 合同、DSG830 映射、CLI、run、artifact 与 A4 证据均已完成，`rf_source.modulation_configure` 已提升；M4 继续保持独立工作。
 6. A4 的 AM／FM／PM RF-OFF 单模式配置、严格读回与关闭恢复证据均已通过。PM production profile 固定为 `1.25 rad`，以避免将更宽的离线映射当作实机覆盖范围。源码 checkout 的 `--diagnose` 模式保留 `read_only` 配置，只读取初始／最终 RF snapshot 与指定模式 profile，并以零写审计保存私有诊断记录。该记录不构成新的 capability 提升证据；任何允许调制开启时 RF 输出的安全合同仍须单独设计和验证，CH2 可见信号也不能替代该证据。
 7. 已完成 M4 frequency-only Step Sweep 的 Core／DSG830 合同、固定 SCPI 映射、CLI、run、artifact、fake 回归和独立 A4 证据。零写诊断与一次受控配置均已通过，production descriptor 已提升 `rf_source.sweep_configure`；后续只讨论未开放的 execute／fire、trigger、Level Sweep、list 或调制输出等独立范围。
+8. 已完成 M3-MO 的 Core special capability、严格 transaction、CLI／run／artifact、DSG830 固定 profile 私有 descriptor、CH2-only harness 与 fake 回归。下一步是先用网络发现与只读诊断确认隔离设备状态，再以固定 AM `50 %`／`1 kHz`、RF `1 MHz`／`-50 dBm` 执行一次受控 A4-MO；只在 final RF OFF、调制关闭、健康关闭和脱敏证据均通过后，才评估 production descriptor 提升。CH1 的低频输出不属于该证据路径。
