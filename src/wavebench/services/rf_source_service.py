@@ -20,6 +20,9 @@ from wavebench.instruments.rf_source_extensions import (
     RfCwResult,
     RfFeature,
     RfFeatureDirection,
+    RfModulatedOutputProfile,
+    RfModulatedOutputRequest,
+    RfModulatedOutputResult,
     RfModulationDisableRequest,
     RfModulationDisableResult,
     RfModulationKind,
@@ -63,6 +66,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfTriggerSnapshot,
     rf_source_cw_operation_artifact,
     rf_source_modulation_disable_operation_artifact,
+    rf_source_modulated_output_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_output_operation_artifact,
     rf_source_pulse_operation_artifact,
@@ -106,6 +110,15 @@ class _RfModulationDisableTransaction:
     preflight_modulation_state: RfModulationStateSnapshot
     postcondition_snapshot: RfSourceSnapshot
     postcondition_modulation_state: RfModulationStateSnapshot
+
+
+@dataclass(frozen=True)
+class _RfModulatedOutputTransaction:
+    result: RfModulatedOutputResult
+    preflight_snapshot: RfSourceSnapshot
+    preflight_modulation_snapshot: RfModulationSnapshot
+    postcondition_snapshot: RfSourceSnapshot
+    postcondition_modulation_snapshot: RfModulationSnapshot
 
 
 @dataclass(frozen=True)
@@ -728,6 +741,128 @@ class RfSourceService(SessionStateAliasMixin):
             ),
         )
 
+    def enable_modulated_output(
+        self,
+        request: RfModulatedOutputRequest,
+    ) -> RfModulatedOutputResult:
+        return self._enable_modulated_output_transaction(request).result
+
+    def enable_modulated_output_with_artifact(
+        self,
+        request: RfModulatedOutputRequest,
+    ) -> tuple[RfModulatedOutputResult, dict[str, object]]:
+        """Enable RF once for one exactly verified active modulation profile.
+
+        This does not configure modulation, turn RF back off after success, or
+        disable modulation. Those actions remain explicit, separate operations.
+        On an uncertain RF-ON result it uses the existing one-shot guarded OFF
+        recovery, never retries RF ON, and keeps the session uncertain.
+        """
+
+        transaction = self._enable_modulated_output_transaction(request)
+        return (
+            transaction.result,
+            rf_source_modulated_output_operation_artifact(
+                request,
+                transaction.result,
+                preflight_snapshot=transaction.preflight_snapshot,
+                preflight_modulation_snapshot=transaction.preflight_modulation_snapshot,
+                postcondition_snapshot=transaction.postcondition_snapshot,
+                postcondition_modulation_snapshot=transaction.postcondition_modulation_snapshot,
+            ),
+        )
+
+    def _enable_modulated_output_transaction(
+        self,
+        request: RfModulatedOutputRequest,
+    ) -> _RfModulatedOutputTransaction:
+        """Run one explicit, profile-bound RF-ON transaction under active modulation."""
+
+        if not isinstance(request, RfModulatedOutputRequest):
+            raise ConfigError(
+                "rf_source modulated-output enable requires RfModulatedOutputRequest"
+            )
+        operation = "rf_source.modulated_output_enable"
+        self._require(
+            operation,
+            "rf_source.snapshot",
+            "rf_source.output",
+            "rf_source.modulation_configure",
+            "rf_source.modulated_output_enable",
+        )
+        (
+            port_profile,
+            output_profile,
+            modulated_output_profile,
+            extensions,
+        ) = self._validate_modulated_output_descriptor(request, operation)
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            with session_state.transaction_lock:
+                if session_state.health is not SessionHealth.HEALTHY:
+                    raise ConfigError(f"{operation} requires a healthy session")
+                preflight_snapshot = rf_source.get_rf_snapshot()
+                preflight_modulation_snapshot = rf_source.get_rf_modulation_snapshot(
+                    request.port_id,
+                    request.kind,
+                )
+                self._validate_modulated_output_enable_snapshot(
+                    request,
+                    preflight_snapshot,
+                    preflight_modulation_snapshot,
+                    port_profile,
+                    output_profile,
+                    modulated_output_profile,
+                    extensions,
+                    expected_output_enabled=False,
+                    operation=operation,
+                )
+                main_entered = False
+                try:
+                    main_entered = True
+                    rf_source.set_rf_output(RfOutputRequest(port_id=request.port_id, enabled=True))
+                    postcondition_snapshot = rf_source.get_rf_snapshot()
+                    postcondition_modulation_snapshot = rf_source.get_rf_modulation_snapshot(
+                        request.port_id,
+                        request.kind,
+                    )
+                    modulation_result = self._validate_modulated_output_enable_snapshot(
+                        request,
+                        postcondition_snapshot,
+                        postcondition_modulation_snapshot,
+                        port_profile,
+                        output_profile,
+                        modulated_output_profile,
+                        extensions,
+                        expected_output_enabled=True,
+                        operation=operation,
+                    )
+                    return _RfModulatedOutputTransaction(
+                        result=RfModulatedOutputResult(
+                            modulation=modulation_result,
+                            write_completed=True,
+                        ),
+                        preflight_snapshot=preflight_snapshot,
+                        preflight_modulation_snapshot=preflight_modulation_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        postcondition_modulation_snapshot=postcondition_modulation_snapshot,
+                    )
+                except BaseException as exc:
+                    if main_entered:
+                        self._degrade_output_session_uncertain(session_state)
+                        recovery = self._recover_rf_output_off(
+                            rf_source,
+                            request.port_id,
+                            operation=operation,
+                        )
+                        try:
+                            setattr(exc, "rf_source_recovery", recovery)
+                        except Exception:
+                            pass
+                    raise
+
     def _set_output_transaction(self, request: RfOutputRequest) -> _RfOutputTransaction:
         """Execute one per-port M2 output transaction with bounded OFF recovery."""
 
@@ -854,6 +989,174 @@ class RfSourceService(SessionStateAliasMixin):
         ):
             raise ConfigError(f"{operation} requires a readable output profile for the target port")
         return port_profile, feature.profile, extensions
+
+    def _validate_modulated_output_descriptor(
+        self,
+        request: RfModulatedOutputRequest,
+        operation: str,
+    ) -> tuple[
+        RfOutputPortProfile,
+        RfOutputProfile,
+        RfModulatedOutputProfile,
+        RfSourceDescriptorExtensions,
+    ]:
+        port_profile, output_profile, extensions = self._validate_output_descriptor(
+            RfOutputRequest(port_id=request.port_id, enabled=True),
+            operation,
+        )
+        self._validate_modulation_descriptor(request.modulation, operation)
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.MODULATED_OUTPUT),
+            None,
+        )
+        if (
+            feature is None
+            or RfFeatureDirection.ENABLE not in feature.directions
+            or request.port_id not in feature.port_ids
+            or not isinstance(feature.profile, RfModulatedOutputProfile)
+        ):
+            raise ConfigError(
+                f"{operation} requires a modulated-output enable profile for the target port"
+            )
+        mode_profile = next(
+            (item for item in feature.profile.mode_profiles if item.kind is request.kind),
+            None,
+        )
+        if mode_profile is None:
+            raise ConfigError(f"{operation} does not support the requested modulation kind")
+        if (
+            mode_profile.source is not RfModulationSource.INTERNAL
+            or mode_profile.waveform is not RfModulationWaveform.SINE
+            or mode_profile.value_unit is not request.modulation.value_unit
+        ):
+            raise ConfigError(f"{operation} requires an internal-sine profile for the requested kind")
+        if not mode_profile.value_min <= request.modulation.value <= mode_profile.value_max:
+            raise ConfigError(f"{operation} request value is outside the descriptor range")
+        if not (
+            mode_profile.internal_frequency_min_hz
+            <= request.modulation.internal_frequency_hz
+            <= mode_profile.internal_frequency_max_hz
+        ):
+            raise ConfigError(
+                f"{operation} request internal_frequency_hz is outside the descriptor range"
+            )
+        return port_profile, output_profile, feature.profile, extensions
+
+    def _validate_modulated_output_enable_snapshot(
+        self,
+        request: RfModulatedOutputRequest,
+        snapshot: RfSourceSnapshot,
+        modulation_snapshot: RfModulationSnapshot,
+        port_profile: RfOutputPortProfile,
+        output_profile: RfOutputProfile,
+        modulated_output_profile: RfModulatedOutputProfile,
+        extensions: RfSourceDescriptorExtensions,
+        *,
+        expected_output_enabled: bool,
+        operation: str,
+    ) -> RfModulationResult:
+        del output_profile
+        port = self._snapshot_port(snapshot, request.port_id, operation=operation)
+        safety_port = self._output_safety_port(request.port_id, operation=operation)
+        frequency_hz = self._observed_value(
+            port.frequency_hz,
+            f"{operation} requires a readable RF frequency",
+        )
+        power_dbm = self._observed_value(
+            port.power_dbm,
+            f"{operation} requires a readable RF power",
+        )
+        output_enabled = self._observed_value(
+            port.output_enabled,
+            f"{operation} requires a readable RF output state",
+        )
+        modulation = self._observed_value(
+            port.modulation,
+            f"{operation} requires a readable modulation state",
+        )
+        pulse = self._observed_value(
+            port.pulse,
+            f"{operation} requires a readable Pulse state",
+        )
+        sweep = self._observed_value(
+            port.sweep,
+            f"{operation} requires a readable Sweep state",
+        )
+        protection = self._observed_value(
+            snapshot.protection,
+            f"{operation} requires a readable protection state",
+        )
+        if not isinstance(frequency_hz, (int, float)) or isinstance(frequency_hz, bool):
+            raise ConfigError(f"{operation} requires a valid RF frequency")
+        if not isinstance(power_dbm, (int, float)) or isinstance(power_dbm, bool):
+            raise ConfigError(f"{operation} requires a valid RF power")
+        if not isinstance(output_enabled, bool):
+            raise ConfigError(f"{operation} requires a valid RF output state")
+        if output_enabled is not expected_output_enabled:
+            expected = "ON" if expected_output_enabled else "OFF"
+            raise ConfigError(f"{operation} requires target RF output {expected}")
+        if modulation is not RfModulationState.ENABLED:
+            raise ConfigError(f"{operation} requires modulation enabled")
+        if pulse is not RfPulseState.DISABLED:
+            raise ConfigError(f"{operation} requires Pulse disabled")
+        if sweep is not RfSweepState.DISABLED:
+            raise ConfigError(f"{operation} requires Sweep disabled")
+        if not isinstance(protection, RfProtectionStatus):
+            raise ConfigError(f"{operation} requires a valid protection state")
+        if not (
+            port_profile.frequency_min_hz <= frequency_hz <= port_profile.frequency_max_hz
+            and safety_port.minimum_frequency_hz
+            <= frequency_hz
+            <= safety_port.maximum_frequency_hz
+        ):
+            raise ConfigError(f"{operation} requires RF frequency within descriptor and safety ranges")
+        if not (
+            port_profile.power_min_dbm <= power_dbm <= port_profile.power_max_dbm
+            and power_dbm <= safety_port.maximum_power_dbm
+            and power_dbm <= modulated_output_profile.maximum_power_dbm
+        ):
+            raise ConfigError(
+                f"{operation} requires RF power within descriptor, modulated-output, and safety ranges"
+            )
+        if safety_port.actual_termination_ohm != port_profile.power_reference_impedance_ohm:
+            raise ConfigError(f"{operation} requires actual termination to match RF power reference")
+        policies = {item.code: item for item in extensions.protection_conditions}
+        unknown = sorted(set(protection.active_codes) - set(policies))
+        if unknown:
+            raise ConfigError(f"{operation} rejects an unknown active protection condition")
+        if any(policies[code].blocks_output_enable for code in protection.active_codes):
+            raise ConfigError(f"{operation} rejects an active blocking protection condition")
+        mode_profile = next(
+            (
+                item
+                for item in modulated_output_profile.mode_profiles
+                if item.kind is request.kind
+            ),
+            None,
+        )
+        if mode_profile is None:  # defensive: descriptor validation already requires it.
+            raise ConfigError(f"{operation} does not support the requested modulation kind")
+        self._validate_modulation_snapshot_identity(
+            request.modulation,
+            modulation_snapshot,
+            mode_profile,
+            require_target_profile=True,
+            require_selected_fm_pm_kind=True,
+            operation=operation,
+        )
+        if modulation_snapshot.enabled_modes != (request.kind,):
+            raise ConfigError(f"{operation} requires only the requested modulation mode")
+        if modulation_snapshot.global_enabled is not True:
+            raise ConfigError(f"{operation} requires global modulation enabled")
+        if modulation_snapshot.fault_codes:
+            raise ConfigError(f"{operation} rejects an active modulation fault condition")
+        if (
+            modulation_snapshot.internal_frequency_hz != request.modulation.internal_frequency_hz
+            or modulation_snapshot.value != request.modulation.value
+            or modulation_snapshot.value_unit is not request.modulation.value_unit
+        ):
+            raise ConfigError(f"{operation} modulation readback does not match request")
+        return self._modulation_result(request.modulation)
 
     def _validate_output_enable_snapshot(
         self,
@@ -1596,6 +1899,10 @@ class RfSourceService(SessionStateAliasMixin):
             or modulation_snapshot.value_unit is not request.value_unit
         ):
             raise ConfigError(f"{operation} modulation readback does not match request")
+        return self._modulation_result(request)
+
+    @staticmethod
+    def _modulation_result(request: RfModulationRequest) -> RfModulationResult:
         if request.kind is RfModulationKind.AM:
             return RfModulationResult(
                 port_id=request.port_id,

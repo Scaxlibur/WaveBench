@@ -1103,6 +1103,26 @@ _BUILTIN_SPECS = (
         safe_alternatives=("rf_source.snapshot",),
     ),
     _spec(
+        "rf_source.modulated_output_enable",
+        "rf_source",
+        required_capabilities=(
+            "rf_source.snapshot",
+            "rf_source.output",
+            "rf_source.modulation_configure",
+            "rf_source.modulated_output_enable",
+        ),
+        effect="write",
+        changed_fields=("rf_source.port.output_enabled",),
+        restore_coverage="none",
+        risk_flags=(
+            "dangerous_output",
+            "rf_output_enable",
+            "active_modulation",
+            "state_drift",
+        ),
+        safe_alternatives=("rf_source.snapshot",),
+    ),
+    _spec(
         "rf_source.pulse_configure",
         "rf_source",
         required_capabilities=("rf_source.snapshot", "rf_source.pulse_configure"),
