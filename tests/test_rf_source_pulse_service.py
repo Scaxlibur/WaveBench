@@ -344,4 +344,3 @@ def test_pulse_configuration_write_failure_is_not_retried_and_degrades_session()
     assert driver.calls == ["snapshot", "configure_pulse"]
     assert service.session_state is not None
     assert service.session_state.health is SessionHealth.UNCERTAIN
-
