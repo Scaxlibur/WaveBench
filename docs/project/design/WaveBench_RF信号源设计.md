@@ -385,7 +385,7 @@ M3-MO 复用同一 `modulation_kind` 和数值字段，但语义相反：它要�
 
 外部 trigger／同步不能只在 `RfFeatureDirection.TRIGGER`、`FIRE` 或 `ARM` 已存在的前提下补充 driver 方法。新的 operation 必须先定义目标物理接口、方向、电气 profile、允许的模式、可读回状态、RF 能量前置条件和失败恢复语义；这些字段不能用自由 mapping 或普通 `source` 的 channel／Vpp 模型表示。
 
-在没有已确认后面板接线和电气边界的情况下，Core 只允许离线 typed contract、descriptor validator、fake transport、零写拒绝和 artifact 测试。A5-0 已在该范围内增加 `RfTriggerProfile`、`RfTriggerSnapshot`、`rf_source.trigger_snapshot`、`rf-source trigger status` 与 `rf_source.trigger_status`；它固定读取逻辑 Pulse／Sweep trigger configuration，不把 `port_id` 解释为物理 trigger／sync connector。DSG830 源码 checkout 的私有 A5-0 harness 保持原始 `read_only` 配置，并已完成一次隔离零写诊断：22 次 query、零 write、最终 RF OFF 和健康关闭均已复核。该诊断不构成物理 A5 实机证据。该范围不声明 production capability、不创建外部接口默认值、不隐式触发设备，也不把 `rf_out` 的端接或 CH2 的输入设置用于推断 trigger／sync 端口。任何会使设备开始 Pulse 或 Sweep 的 fire／trigger operation 仍需独立的、一次性 safety 决定和 A5 实机证据。
+在没有已确认后面板接线和电气边界的情况下，Core 只允许离线 typed contract、descriptor validator、fake transport、零写拒绝和 artifact 测试。A5-0 已在该范围内增加 `RfTriggerProfile`、`RfTriggerSnapshot`、`rf_source.trigger_snapshot`、`rf-source trigger status` 与 `rf_source.trigger_status`；它固定读取逻辑 Pulse／Sweep trigger configuration，不把 `port_id` 解释为物理 trigger／sync connector。DSG830 源码 checkout 的私有 A5-0 harness 保持原始 `read_only` 配置，并已完成一次隔离零写诊断：22 次 query、零 write、最终 RF OFF 和健康关闭均已复核。静态预检精确绑定当前 production descriptor 的 capability 列表；后续 capability 变更必须通过代码审查、fake 回归和新的零写诊断更新该基线，否则工具在建立 session 前拒绝。该诊断不构成物理 A5 实机证据。该范围不声明 production capability、不创建外部接口默认值、不隐式触发设备，也不把 `rf_out` 的端接或 CH2 的输入设置用于推断 trigger／sync 端口。任何会使设备开始 Pulse 或 Sweep 的 fire／trigger operation 仍需独立的、一次性 safety 决定和 A5 实机证据。
 
 ## M0–M4 与 M3-MO 里程碑
 
