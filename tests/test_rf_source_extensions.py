@@ -473,6 +473,10 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
             "get_rf_modulation_state",
             "disable_rf_modulation",
         ),
+        "rf_source.modulated_output_enable": (
+            "get_rf_modulation_snapshot",
+            "set_rf_output",
+        ),
         "rf_source.pulse_configure": (
             "get_rf_pulse_snapshot",
             "configure_rf_pulse",
