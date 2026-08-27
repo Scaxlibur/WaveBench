@@ -10,6 +10,8 @@ from wavebench.cli import _load_rf_source_service, build_parser, main
 from wavebench.instruments.rf_source_extensions import (
     RfCwRequest,
     RfCwResult,
+    RfModulatedOutputRequest,
+    RfModulatedOutputResult,
     RfModulationKind,
     RfModulationRequest,
     RfModulationResult,
@@ -79,6 +81,19 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_sweep_and_output_commands(
             "1000",
         ]
     )
+    modulation_output_am = build_parser().parse_args(
+        [
+            "rf-source",
+            "modulation",
+            "enable-output-am",
+            "--port",
+            "rf_out",
+            "--depth-percent",
+            "50",
+            "--internal-frequency-hz",
+            "1000",
+        ]
+    )
     pulse = build_parser().parse_args(
         [
             "rf-source",
@@ -137,6 +152,8 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_sweep_and_output_commands(
     assert modulation_fm.frequency_deviation_hz == 10_000.0
     assert modulation_pm.modulation_command == "configure-pm"
     assert modulation_pm.phase_deviation_rad == 1.5
+    assert modulation_output_am.modulation_command == "enable-output-am"
+    assert modulation_output_am.depth_percent == 50.0
     assert (pulse.domain, pulse.command, pulse.pulse_command) == (
         "rf-source",
         "pulse",
@@ -365,6 +382,52 @@ def test_rf_source_cli_dispatches_each_internal_sine_modulation_request() -> Non
             {},
         ),
     ]
+
+
+def test_rf_source_cli_dispatches_profile_bound_modulated_output_enable() -> None:
+    service = Mock()
+    service.enable_modulated_output.return_value = RfModulatedOutputResult(
+        modulation=RfModulationResult(
+            port_id="rf_out",
+            kind=RfModulationKind.AM,
+            depth_percent=50.0,
+            internal_frequency_hz=1_000.0,
+        ),
+        write_completed=True,
+    )
+
+    stdout = io.StringIO()
+    with patch("wavebench.cli._load_rf_source_service", return_value=service), redirect_stdout(stdout):
+        assert (
+            main(
+                [
+                    "--json",
+                    "rf-source",
+                    "modulation",
+                    "enable-output-am",
+                    "--port",
+                    "rf_out",
+                    "--depth-percent",
+                    "50",
+                    "--internal-frequency-hz",
+                    "1000",
+                ]
+            )
+            == 0
+        )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["write_completed"] is True
+    service.enable_modulated_output.assert_called_once_with(
+        RfModulatedOutputRequest(
+            modulation=RfModulationRequest(
+                port_id="rf_out",
+                kind=RfModulationKind.AM,
+                depth_percent=50.0,
+                internal_frequency_hz=1_000.0,
+            )
+        )
+    )
 
 
 def test_rf_source_cli_dispatches_disabled_internal_single_pulse_request() -> None:

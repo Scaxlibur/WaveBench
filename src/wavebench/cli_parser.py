@@ -691,7 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     rf_source_modulation = rf_source_sub.add_parser(
         "modulation",
-        help="Configure one OFF RF port with bounded internal-sine AM, FM, or PM",
+        help="Configure internal-sine modulation or enable RF for one exactly verified profile",
     )
     rf_source_modulation_sub = rf_source_modulation.add_subparsers(
         dest="modulation_command",
@@ -703,6 +703,21 @@ def build_parser() -> argparse.ArgumentParser:
             "configure-fm",
             "frequency-deviation-hz",
             "Configure internal-sine FM while RF output is OFF",
+        ),
+        (
+            "enable-output-am",
+            "depth-percent",
+            "Enable RF only when the active internal-sine AM profile exactly matches",
+        ),
+        (
+            "enable-output-fm",
+            "frequency-deviation-hz",
+            "Enable RF only when the active internal-sine FM profile exactly matches",
+        ),
+        (
+            "enable-output-pm",
+            "phase-deviation-rad",
+            "Enable RF only when the active internal-sine PM profile exactly matches",
         ),
         (
             "configure-pm",

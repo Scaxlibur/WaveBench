@@ -89,6 +89,7 @@ from .instruments.scope_extensions import (
 )
 from .instruments.rf_source_extensions import (
     RfCwRequest,
+    RfModulatedOutputRequest,
     RfModulationKind,
     RfModulationRequest,
     RfOutputRequest,
@@ -1579,6 +1580,9 @@ def _main(argv: list[str] | None = None) -> int:
                     "configure-am": RfModulationKind.AM,
                     "configure-fm": RfModulationKind.FM,
                     "configure-pm": RfModulationKind.PM,
+                    "enable-output-am": RfModulationKind.AM,
+                    "enable-output-fm": RfModulationKind.FM,
+                    "enable-output-pm": RfModulationKind.PM,
                 }[args.modulation_command]
                 request_fields = {
                     "port_id": args.port,
@@ -1591,7 +1595,13 @@ def _main(argv: list[str] | None = None) -> int:
                     request_fields["frequency_deviation_hz"] = args.frequency_deviation_hz
                 else:
                     request_fields["phase_deviation_rad"] = args.phase_deviation_rad
-                result = service.configure_modulation(RfModulationRequest(**request_fields))
+                request = RfModulationRequest(**request_fields)
+                if args.modulation_command.startswith("enable-output-"):
+                    result = service.enable_modulated_output(
+                        RfModulatedOutputRequest(modulation=request)
+                    )
+                else:
+                    result = service.configure_modulation(request)
                 if args.json:
                     _emit_json_result(_json_payload(result))
                 else:

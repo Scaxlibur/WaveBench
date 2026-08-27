@@ -24,6 +24,7 @@ from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.instruments.rf_source_extensions import (
     RfCwRequest,
+    RfModulatedOutputRequest,
     RfModulationKind,
     RfModulationRequest,
     RfOutputRequest,
@@ -307,6 +308,7 @@ class RunService:
             "rf_source.set_frequency": "rf_source.set_frequency",
             "rf_source.set_power_dbm": "rf_source.set_power_dbm",
             "rf_source.modulation_configure": "rf_source.modulation_configure",
+            "rf_source.modulated_output_enable": "rf_source.modulated_output_enable",
             "rf_source.pulse_configure": "rf_source.pulse_configure",
             "rf_source.sweep_configure": "rf_source.sweep_configure",
             "rf_source.output_enable": "rf_source.output_enable",
@@ -460,6 +462,14 @@ class RunService:
                 add("rf_source", "rf_source.snapshot", "rf_source.cw_configure")
             elif step.kind == "rf_source.modulation_configure":
                 add("rf_source", "rf_source.snapshot", "rf_source.modulation_configure")
+            elif step.kind == "rf_source.modulated_output_enable":
+                add(
+                    "rf_source",
+                    "rf_source.snapshot",
+                    "rf_source.output",
+                    "rf_source.modulation_configure",
+                    "rf_source.modulated_output_enable",
+                )
             elif step.kind == "rf_source.pulse_configure":
                 add("rf_source", "rf_source.snapshot", "rf_source.pulse_configure")
             elif step.kind == "rf_source.sweep_configure":
@@ -1245,7 +1255,10 @@ class RunService:
                 )
             )
             artifact = {"rf_source_operation": rf_source_operation}
-        elif step.kind == "rf_source.modulation_configure":
+        elif step.kind in {
+            "rf_source.modulation_configure",
+            "rf_source.modulated_output_enable",
+        }:
             fields = step.fields
             modulation_kind = RfModulationKind(fields["modulation_kind"])
             if modulation_kind is RfModulationKind.AM:
@@ -1269,9 +1282,15 @@ class RunService:
                     phase_deviation_rad=fields["phase_deviation_rad"],
                     internal_frequency_hz=fields["internal_frequency_hz"],
                 )
-            _, rf_source_operation = self._rf_source_service(
-                services=services
-            ).configure_modulation_with_artifact(request)
+            rf_source_service = self._rf_source_service(services=services)
+            if step.kind == "rf_source.modulated_output_enable":
+                _, rf_source_operation = rf_source_service.enable_modulated_output_with_artifact(
+                    RfModulatedOutputRequest(modulation=request)
+                )
+            else:
+                _, rf_source_operation = rf_source_service.configure_modulation_with_artifact(
+                    request
+                )
             artifact = {"rf_source_operation": rf_source_operation}
         elif step.kind == "rf_source.pulse_configure":
             fields = step.fields

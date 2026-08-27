@@ -26,6 +26,7 @@ ALLOWED_STEP_KINDS = {
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
     "rf_source.modulation_configure",
+    "rf_source.modulated_output_enable",
     "rf_source.pulse_configure",
     "rf_source.sweep_configure",
     "rf_source.output_enable",
@@ -77,6 +78,11 @@ _REQUIRED_FIELDS = {
     "rf_source.set_frequency": ("port_id", "frequency_hz"),
     "rf_source.set_power_dbm": ("port_id", "power_dbm"),
     "rf_source.modulation_configure": (
+        "port_id",
+        "modulation_kind",
+        "internal_frequency_hz",
+    ),
+    "rf_source.modulated_output_enable": (
         "port_id",
         "modulation_kind",
         "internal_frequency_hz",
@@ -207,6 +213,12 @@ _OPTIONAL_FIELDS = {
         "phase_deviation_rad",
         "on_failure",
     },
+    "rf_source.modulated_output_enable": {
+        "depth_percent",
+        "frequency_deviation_hz",
+        "phase_deviation_rad",
+        "on_failure",
+    },
     "rf_source.pulse_configure": set(),
     "rf_source.sweep_configure": set(),
     "rf_source.output_enable": {"on_failure"},
@@ -274,6 +286,7 @@ _STEP_NOTES = {
     "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
+    "rf_source.modulated_output_enable": "Enable one RF port only when its active internal-sine AM, FM, or PM profile exactly matches the requested bounded profile; it does not configure modulation or restore RF OFF.",
     "rf_source.pulse_configure": "Configure one OFF RF port with a disabled internal single-pulse profile; it does not enable RF output or trigger a pulse.",
     "rf_source.sweep_configure": "Configure one OFF RF port with a disabled frequency-only Step Sweep profile; it does not arm, fire, trigger, or enable RF output.",
     "rf_source.output_enable": "Enable one RF port only after a fresh safety snapshot confirms the configured load, frequency, power, and inactive modulation, Pulse, Sweep, and blocking protection conditions.",
@@ -680,7 +693,7 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
     elif kind == "rf_source.set_power_dbm":
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         fields["power_dbm"] = _finite_float(fields["power_dbm"], f"{prefix}.power_dbm")
-    elif kind == "rf_source.modulation_configure":
+    elif kind in {"rf_source.modulation_configure", "rf_source.modulated_output_enable"}:
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         modulation_kind = _non_empty_str(
             fields["modulation_kind"],
@@ -697,7 +710,7 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         present_value_fields = [field for field in value_fields.values() if field in fields]
         if present_value_fields != [expected_value_field]:
             raise ConfigError(
-                f"{prefix} rf_source.modulation_configure requires only "
+                f"{prefix} {kind} requires only "
                 f"{expected_value_field} for modulation_kind {modulation_kind}"
             )
         fields[expected_value_field] = _finite_float(
