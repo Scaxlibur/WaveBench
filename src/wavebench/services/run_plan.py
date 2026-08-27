@@ -29,6 +29,8 @@ ALLOWED_STEP_KINDS = {
     "rf_source.modulation_disable",
     "rf_source.modulated_output_enable",
     "rf_source.pulse_configure",
+    "rf_source.pulse_output_enable",
+    "rf_source.pulse_output_disable",
     "rf_source.sweep_configure",
     "rf_source.output_enable",
     "rf_source.output_disable",
@@ -90,6 +92,8 @@ _REQUIRED_FIELDS = {
         "internal_frequency_hz",
     ),
     "rf_source.pulse_configure": ("port_id", "period_s", "width_s", "polarity"),
+    "rf_source.pulse_output_enable": ("port_id", "interface_id"),
+    "rf_source.pulse_output_disable": ("port_id", "interface_id"),
     "rf_source.sweep_configure": (
         "port_id",
         "start_frequency_hz",
@@ -749,6 +753,12 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         fields["period_s"] = period_s
         fields["width_s"] = width_s
         fields["polarity"] = polarity
+    elif kind in {"rf_source.pulse_output_enable", "rf_source.pulse_output_disable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        fields["interface_id"] = _rf_interface_id(
+            fields["interface_id"],
+            f"{prefix}.interface_id",
+        )
     elif kind == "rf_source.sweep_configure":
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         start_frequency_hz = _positive_float(
@@ -1286,6 +1296,13 @@ def _rf_port_id(value: Any, name: str) -> str:
     token = _non_empty_str(value, name)
     if _SOURCE_STORAGE_TOKEN.fullmatch(token) is None:
         raise ConfigError(f"{name} must be a short safe RF port ID")
+    return token
+
+
+def _rf_interface_id(value: Any, name: str) -> str:
+    token = _non_empty_str(value, name)
+    if _SOURCE_STORAGE_TOKEN.fullmatch(token) is None:
+        raise ConfigError(f"{name} must be a short safe RF physical interface ID")
     return token
 
 

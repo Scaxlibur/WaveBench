@@ -24,6 +24,7 @@ RF_SOURCE_SNAPSHOT_SCHEMA = "wavebench.rf_source.snapshot.v1"
 RF_SOURCE_MODULATION_STATE_SCHEMA = "wavebench.rf_source.modulation_state.v1"
 RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA = "wavebench.rf_source.modulation_snapshot.v1"
 RF_SOURCE_PULSE_SNAPSHOT_SCHEMA = "wavebench.rf_source.pulse_snapshot.v1"
+RF_SOURCE_PULSE_OUTPUT_SNAPSHOT_SCHEMA = "wavebench.rf_source.pulse_output_snapshot.v1"
 RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA = "wavebench.rf_source.sweep_snapshot.v1"
 RF_SOURCE_TRIGGER_SNAPSHOT_SCHEMA = "wavebench.rf_source.trigger_snapshot.v1"
 RF_SOURCE_OPERATION_ARTIFACT_SCHEMA = "wavebench.rf_source.operation.v1"
@@ -195,6 +196,12 @@ class RfPulsePolarity(StrEnum):
     INVERTED = "inverted"
 
 
+class RfPulseOutputDirection(StrEnum):
+    """Physical direction declared by the bounded rear-panel Pulse contract."""
+
+    OUTPUT = "output"
+
+
 class RfPulseTriggerMode(StrEnum):
     """Logical Pulse trigger modes reported by a device configuration query."""
 
@@ -254,6 +261,7 @@ class RfFeature(StrEnum):
     MODULATED_OUTPUT = "modulated_output"
     OUTPUT = "output"
     PULSE = "pulse"
+    PULSE_OUTPUT = "pulse_output"
     SWEEP = "sweep"
     TRIGGER = "trigger"
 
@@ -603,6 +611,68 @@ class RfPulseModeProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class RfPulseOutputProfile:
+    """One bounded physical Pulse-output interface tied to an RF port.
+
+    This contract intentionally models only a proven output direction.  A
+    connector with an ``IN/OUT`` label does not imply that input behavior is
+    declared.  The profile fixes both the documented electrical characteristics
+    and the exact internal Pulse profile that must be read back before the
+    physical output can be enabled.
+    """
+
+    interface_id: str
+    direction: RfPulseOutputDirection
+    output_readable: bool
+    low_level_v: float
+    high_level_v: float
+    output_impedance_ohm: float
+    source: RfPulseSource
+    mode: RfPulseMode
+    period_s: float
+    width_s: float
+    polarity: RfPulsePolarity
+    pulse_state: RfPulseState = RfPulseState.DISABLED
+
+    def __post_init__(self) -> None:
+        _require_token(self.interface_id, "RF pulse-output interface_id")
+        if not isinstance(self.direction, RfPulseOutputDirection):
+            raise ValueError("RF pulse-output direction has an invalid type")
+        if self.direction is not RfPulseOutputDirection.OUTPUT:
+            raise ValueError("RF pulse-output profiles must declare output direction")
+        _require_bool(self.output_readable, "RF pulse-output output_readable")
+        _require_finite(self.low_level_v, "RF pulse-output low_level_v", minimum=0.0)
+        _require_finite(
+            self.high_level_v,
+            "RF pulse-output high_level_v",
+            minimum=self.low_level_v,
+        )
+        if self.high_level_v <= self.low_level_v:
+            raise ValueError("RF pulse-output high_level_v must exceed low_level_v")
+        _require_finite(
+            self.output_impedance_ohm,
+            "RF pulse-output output_impedance_ohm",
+            minimum=0.0,
+        )
+        if self.output_impedance_ohm <= 0.0:
+            raise ValueError("RF pulse-output output_impedance_ohm must be positive")
+        if self.source is not RfPulseSource.INTERNAL:
+            raise ValueError("RF pulse-output profiles must use the internal source")
+        if self.mode is not RfPulseMode.SINGLE:
+            raise ValueError("RF pulse-output profiles must use the single mode")
+        _require_finite(self.period_s, "RF pulse-output period_s", minimum=0.0)
+        _require_finite(self.width_s, "RF pulse-output width_s", minimum=0.0)
+        if self.period_s <= 0.0 or self.width_s <= 0.0:
+            raise ValueError("RF pulse-output period_s and width_s must be positive")
+        if self.width_s >= self.period_s:
+            raise ValueError("RF pulse-output width_s must be less than period_s")
+        if not isinstance(self.polarity, RfPulsePolarity):
+            raise ValueError("RF pulse-output polarity has an invalid type")
+        if self.pulse_state is not RfPulseState.DISABLED:
+            raise ValueError("RF pulse-output profiles must keep Pulse modulation disabled")
+
+
+@dataclass(frozen=True, slots=True)
 class RfSweepProfile:
     state_readable: bool
     configuration_readable: bool = False
@@ -740,6 +810,7 @@ RfFeatureProfile: TypeAlias = (
     | RfModulationProfile
     | RfModulatedOutputProfile
     | RfPulseProfile
+    | RfPulseOutputProfile
     | RfSweepProfile
     | RfTriggerProfile
 )
@@ -750,6 +821,7 @@ _FEATURE_PROFILE_TYPES: dict[RfFeature, type[RfFeatureProfile]] = {
     RfFeature.MODULATED_OUTPUT: RfModulatedOutputProfile,
     RfFeature.OUTPUT: RfOutputProfile,
     RfFeature.PULSE: RfPulseProfile,
+    RfFeature.PULSE_OUTPUT: RfPulseOutputProfile,
     RfFeature.SWEEP: RfSweepProfile,
     RfFeature.TRIGGER: RfTriggerProfile,
 }
@@ -1205,6 +1277,41 @@ class RfPulseConfigureResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RfPulseOutputRequest:
+    """Set one declared physical Pulse-output interface on or off.
+
+    Timing, polarity, electrical levels, and physical direction are all fixed
+    by the descriptor.  This request cannot select an input direction, a
+    trigger source, a receiving instrument, or arbitrary output levels.
+    """
+
+    port_id: str
+    interface_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF pulse-output request port_id")
+        _require_token(self.interface_id, "RF pulse-output request interface_id")
+        _require_bool(self.enabled, "RF pulse-output request enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class RfPulseOutputResult:
+    """A physical Pulse-output target confirmed by independent readback."""
+
+    port_id: str
+    interface_id: str
+    enabled: bool
+    write_completed: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF pulse-output result port_id")
+        _require_token(self.interface_id, "RF pulse-output result interface_id")
+        _require_bool(self.enabled, "RF pulse-output result enabled")
+        _require_bool(self.write_completed, "RF pulse-output result write_completed")
+
+
+@dataclass(frozen=True, slots=True)
 class RfPulseSnapshot:
     """Complete typed readback for one pulse profile on one RF port."""
 
@@ -1234,6 +1341,64 @@ class RfPulseSnapshot:
             raise ValueError("RF pulse snapshot polarity has an invalid type")
         if not isinstance(self.state, RfPulseState):
             raise ValueError("RF pulse snapshot state has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
+class RfPulseOutputSnapshot:
+    """Typed readback of one declared physical Pulse-output interface."""
+
+    port_id: str
+    interface_id: str
+    direction: RfPulseOutputDirection
+    enabled: bool
+    low_level_v: float
+    high_level_v: float
+    output_impedance_ohm: float
+    source: RfPulseSource
+    mode: RfPulseMode
+    period_s: float
+    width_s: float
+    polarity: RfPulsePolarity
+    pulse_state: RfPulseState
+
+    def __post_init__(self) -> None:
+        _require_token(self.port_id, "RF pulse-output snapshot port_id")
+        _require_token(self.interface_id, "RF pulse-output snapshot interface_id")
+        if self.direction is not RfPulseOutputDirection.OUTPUT:
+            raise ValueError("RF pulse-output snapshots must report output direction")
+        _require_bool(self.enabled, "RF pulse-output snapshot enabled")
+        _require_finite(self.low_level_v, "RF pulse-output snapshot low_level_v", minimum=0.0)
+        _require_finite(
+            self.high_level_v,
+            "RF pulse-output snapshot high_level_v",
+            minimum=self.low_level_v,
+        )
+        if self.high_level_v <= self.low_level_v:
+            raise ValueError("RF pulse-output snapshot high_level_v must exceed low_level_v")
+        _require_finite(
+            self.output_impedance_ohm,
+            "RF pulse-output snapshot output_impedance_ohm",
+            minimum=0.0,
+        )
+        if self.output_impedance_ohm <= 0.0:
+            raise ValueError("RF pulse-output snapshot output_impedance_ohm must be positive")
+        if not isinstance(self.source, RfPulseSource):
+            raise ValueError("RF pulse-output snapshot source has an invalid type")
+        if not isinstance(self.mode, RfPulseMode):
+            raise ValueError("RF pulse-output snapshot mode has an invalid type")
+        _require_finite(self.period_s, "RF pulse-output snapshot period_s", minimum=0.0)
+        _require_finite(self.width_s, "RF pulse-output snapshot width_s", minimum=0.0)
+        if self.period_s <= 0.0 or self.width_s <= 0.0:
+            raise ValueError("RF pulse-output snapshot period_s and width_s must be positive")
+        if self.width_s >= self.period_s:
+            raise ValueError("RF pulse-output snapshot width_s must be less than period_s")
+        if not isinstance(self.polarity, RfPulsePolarity):
+            raise ValueError("RF pulse-output snapshot polarity has an invalid type")
+        if not isinstance(self.pulse_state, RfPulseState):
+            raise ValueError("RF pulse-output snapshot pulse_state has an invalid type")
+
+    def as_dict(self) -> dict[str, object]:
+        return rf_pulse_output_snapshot_document(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1424,6 +1589,14 @@ class RfSourceDriver(InstrumentDriver, Protocol):
 
     def configure_rf_pulse(self, request: RfPulseConfigureRequest) -> None: ...
 
+    def get_rf_pulse_output_snapshot(
+        self,
+        port_id: str,
+        interface_id: str,
+    ) -> RfPulseOutputSnapshot: ...
+
+    def set_rf_pulse_output(self, request: RfPulseOutputRequest) -> None: ...
+
     def get_rf_sweep_snapshot(self, port_id: str) -> RfSweepSnapshot: ...
 
     def configure_rf_sweep(self, request: RfSweepConfigureRequest) -> None: ...
@@ -1529,6 +1702,16 @@ def rf_pulse_snapshot_document(snapshot: RfPulseSnapshot) -> dict[str, object]:
     data = rf_source_to_data(snapshot)
     assert isinstance(data, dict)
     return {"schema": RF_SOURCE_PULSE_SNAPSHOT_SCHEMA, **data}
+
+
+def rf_pulse_output_snapshot_document(snapshot: RfPulseOutputSnapshot) -> dict[str, object]:
+    """Build a redacted document for one physical RF Pulse-output readback."""
+
+    if not isinstance(snapshot, RfPulseOutputSnapshot):
+        raise TypeError("snapshot must be RfPulseOutputSnapshot")
+    data = rf_source_to_data(snapshot)
+    assert isinstance(data, dict)
+    return {"schema": RF_SOURCE_PULSE_OUTPUT_SNAPSHOT_SCHEMA, **data}
 
 
 def rf_sweep_snapshot_document(snapshot: RfSweepSnapshot) -> dict[str, object]:
@@ -1785,6 +1968,55 @@ def rf_source_pulse_operation_artifact(
     }
 
 
+def rf_source_pulse_output_operation_artifact(
+    request: RfPulseOutputRequest,
+    result: RfPulseOutputResult,
+    *,
+    preflight_snapshot: RfSourceSnapshot,
+    preflight_pulse_output_snapshot: RfPulseOutputSnapshot,
+    postcondition_snapshot: RfSourceSnapshot,
+    postcondition_pulse_output_snapshot: RfPulseOutputSnapshot,
+) -> dict[str, object]:
+    """Build redacted typed evidence for one physical Pulse-output state change."""
+
+    if not isinstance(request, RfPulseOutputRequest):
+        raise TypeError("request must be RfPulseOutputRequest")
+    if not isinstance(result, RfPulseOutputResult):
+        raise TypeError("result must be RfPulseOutputResult")
+    if (
+        request.port_id != result.port_id
+        or request.interface_id != result.interface_id
+        or request.enabled is not result.enabled
+    ):
+        raise ValueError("RF pulse-output request and result must describe the same target")
+    if not isinstance(preflight_snapshot, RfSourceSnapshot):
+        raise TypeError("preflight_snapshot must be RfSourceSnapshot")
+    if not isinstance(preflight_pulse_output_snapshot, RfPulseOutputSnapshot):
+        raise TypeError("preflight_pulse_output_snapshot must be RfPulseOutputSnapshot")
+    if not isinstance(postcondition_snapshot, RfSourceSnapshot):
+        raise TypeError("postcondition_snapshot must be RfSourceSnapshot")
+    if not isinstance(postcondition_pulse_output_snapshot, RfPulseOutputSnapshot):
+        raise TypeError("postcondition_pulse_output_snapshot must be RfPulseOutputSnapshot")
+    return {
+        "schema": RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": (
+            "rf_source.pulse_output_enable"
+            if request.enabled
+            else "rf_source.pulse_output_disable"
+        ),
+        "request": rf_source_to_data(request),
+        "result": rf_source_to_data(result),
+        "preflight_snapshot": rf_source_snapshot_document(preflight_snapshot),
+        "preflight_pulse_output_snapshot": rf_pulse_output_snapshot_document(
+            preflight_pulse_output_snapshot
+        ),
+        "postcondition_snapshot": rf_source_snapshot_document(postcondition_snapshot),
+        "postcondition_pulse_output_snapshot": rf_pulse_output_snapshot_document(
+            postcondition_pulse_output_snapshot
+        ),
+    }
+
+
 def rf_source_sweep_operation_artifact(
     request: RfSweepConfigureRequest,
     result: RfSweepConfigureResult,
@@ -1861,6 +2093,7 @@ __all__ = [
     "RF_SOURCE_MODULATION_SNAPSHOT_SCHEMA",
     "RF_SOURCE_OPERATION_ARTIFACT_SCHEMA",
     "RF_SOURCE_PULSE_SNAPSHOT_SCHEMA",
+    "RF_SOURCE_PULSE_OUTPUT_SNAPSHOT_SCHEMA",
     "RF_SOURCE_SWEEP_SNAPSHOT_SCHEMA",
     "RF_SOURCE_SNAPSHOT_MIN_CORE_VERSION",
     "RF_SOURCE_SNAPSHOT_SCHEMA",
@@ -1904,6 +2137,11 @@ __all__ = [
     "RfPulseConfigureResult",
     "RfPulseMode",
     "RfPulseModeProfile",
+    "RfPulseOutputDirection",
+    "RfPulseOutputProfile",
+    "RfPulseOutputRequest",
+    "RfPulseOutputResult",
+    "RfPulseOutputSnapshot",
     "RfPulsePolarity",
     "RfPulseSnapshot",
     "RfPulseSource",
@@ -1934,12 +2172,14 @@ __all__ = [
     "rf_modulation_snapshot_document",
     "rf_modulation_state_snapshot_document",
     "rf_pulse_snapshot_document",
+    "rf_pulse_output_snapshot_document",
     "rf_sweep_snapshot_document",
     "rf_trigger_snapshot_document",
     "rf_source_modulation_disable_operation_artifact",
     "rf_source_modulated_output_operation_artifact",
     "rf_source_modulation_operation_artifact",
     "rf_source_pulse_operation_artifact",
+    "rf_source_pulse_output_operation_artifact",
     "rf_source_sweep_operation_artifact",
     "rf_source_snapshot_document",
     "rf_source_snapshot_operation_artifact",

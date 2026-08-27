@@ -22,6 +22,7 @@ from .rf_source_extensions import (
     RfModulationProfile,
     RfOutputProfile,
     RfPulseProfile,
+    RfPulseOutputProfile,
     RfSourceDescriptorExtensions,
     RfSweepProfile,
     RfTriggerProfile,
@@ -50,6 +51,10 @@ RF_SOURCE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "rf_source.pulse_configure": (
             "get_rf_pulse_snapshot",
             "configure_rf_pulse",
+        ),
+        "rf_source.pulse_output": (
+            "get_rf_pulse_output_snapshot",
+            "set_rf_pulse_output",
         ),
         "rf_source.sweep_configure": (
             "get_rf_sweep_snapshot",
@@ -111,6 +116,14 @@ def validate_rf_source_descriptor(descriptor: object, driver: object | None = No
         _validate_modulated_output_enable_feature(extensions)
     if "rf_source.pulse_configure" in rf_capabilities:
         _validate_pulse_configure_feature(extensions)
+    if "rf_source.pulse_output" in rf_capabilities:
+        if "rf_source.snapshot" not in rf_capabilities:
+            raise ConfigError("rf_source.pulse_output requires the rf_source.snapshot capability")
+        if "rf_source.pulse_configure" not in rf_capabilities:
+            raise ConfigError(
+                "rf_source.pulse_output requires the rf_source.pulse_configure capability"
+            )
+        _validate_pulse_output_feature(extensions)
     if "rf_source.sweep_configure" in rf_capabilities:
         _validate_sweep_configure_feature(extensions)
     if "rf_source.output" in rf_capabilities:
@@ -318,6 +331,72 @@ def _validate_pulse_configure_feature(extensions: RfSourceDescriptorExtensions) 
     if not feature.profile.configuration_readable or not feature.profile.mode_profiles:
         raise ConfigError(
             "rf_source.pulse_configure requires readable bounded RF pulse mode profiles"
+        )
+
+
+def _validate_pulse_output_feature(extensions: RfSourceDescriptorExtensions) -> None:
+    pulse_feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.PULSE),
+        None,
+    )
+    feature = next(
+        (item for item in extensions.features if item.feature is RfFeature.PULSE_OUTPUT),
+        None,
+    )
+    if (
+        pulse_feature is None
+        or RfFeatureDirection.CONFIGURE not in pulse_feature.directions
+        or RfFeatureDirection.READ not in pulse_feature.directions
+        or not isinstance(pulse_feature.profile, RfPulseProfile)
+        or not pulse_feature.profile.configuration_readable
+    ):
+        raise ConfigError(
+            "rf_source.pulse_output requires a readable configurable base pulse profile"
+        )
+    if (
+        feature is None
+        or RfFeatureDirection.READ not in feature.directions
+        or RfFeatureDirection.ENABLE not in feature.directions
+        or RfFeatureDirection.DISABLE not in feature.directions
+        or not isinstance(feature.profile, RfPulseOutputProfile)
+        or not feature.profile.output_readable
+    ):
+        raise ConfigError(
+            "rf_source.pulse_output requires a readable Pulse-output feature with "
+            "enable and disable directions"
+        )
+    if not set(feature.port_ids) <= set(pulse_feature.port_ids):
+        raise ConfigError(
+            "rf_source.pulse_output ports must also declare the base pulse feature"
+        )
+    profile = feature.profile
+    mode_profile = next(
+        (
+            item
+            for item in pulse_feature.profile.mode_profiles
+            if item.source is profile.source and item.mode is profile.mode
+        ),
+        None,
+    )
+    if mode_profile is None:
+        raise ConfigError(
+            "rf_source.pulse_output profile must reference a declared base pulse mode"
+        )
+    if profile.polarity not in mode_profile.polarities:
+        raise ConfigError(
+            "rf_source.pulse_output profile polarity must be declared by the base pulse mode"
+        )
+    if not mode_profile.period_min_s <= profile.period_s <= mode_profile.period_max_s:
+        raise ConfigError(
+            "rf_source.pulse_output profile period_s must be within the base pulse range"
+        )
+    if not mode_profile.width_min_s <= profile.width_s <= mode_profile.width_max_s:
+        raise ConfigError(
+            "rf_source.pulse_output profile width_s must be within the base pulse range"
+        )
+    if profile.width_s > profile.period_s - mode_profile.minimum_off_time_s:
+        raise ConfigError(
+            "rf_source.pulse_output profile violates the base pulse minimum off time"
         )
 
 

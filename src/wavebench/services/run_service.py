@@ -30,6 +30,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfModulationRequest,
     RfOutputRequest,
     RfPulseConfigureRequest,
+    RfPulseOutputRequest,
     RfPulsePolarity,
     RfSweepConfigureRequest,
     rf_source_snapshot_operation_artifact,
@@ -312,6 +313,8 @@ class RunService:
             "rf_source.modulation_disable": "rf_source.modulation_disable",
             "rf_source.modulated_output_enable": "rf_source.modulated_output_enable",
             "rf_source.pulse_configure": "rf_source.pulse_configure",
+            "rf_source.pulse_output_enable": "rf_source.pulse_output_enable",
+            "rf_source.pulse_output_disable": "rf_source.pulse_output_disable",
             "rf_source.sweep_configure": "rf_source.sweep_configure",
             "rf_source.output_enable": "rf_source.output_enable",
             "rf_source.output_disable": "rf_source.output_disable",
@@ -476,6 +479,13 @@ class RunService:
                 )
             elif step.kind == "rf_source.pulse_configure":
                 add("rf_source", "rf_source.snapshot", "rf_source.pulse_configure")
+            elif step.kind in {"rf_source.pulse_output_enable", "rf_source.pulse_output_disable"}:
+                add(
+                    "rf_source",
+                    "rf_source.snapshot",
+                    "rf_source.pulse_configure",
+                    "rf_source.pulse_output",
+                )
             elif step.kind == "rf_source.sweep_configure":
                 add("rf_source", "rf_source.snapshot", "rf_source.sweep_configure")
             elif step.kind in {"rf_source.output_enable", "rf_source.output_disable"}:
@@ -1317,6 +1327,18 @@ class RunService:
                     period_s=fields["period_s"],
                     width_s=fields["width_s"],
                     polarity=RfPulsePolarity(fields["polarity"]),
+                )
+            )
+            artifact = {"rf_source_operation": rf_source_operation}
+        elif step.kind in {"rf_source.pulse_output_enable", "rf_source.pulse_output_disable"}:
+            fields = step.fields
+            _, rf_source_operation = self._rf_source_service(
+                services=services
+            ).set_pulse_output_with_artifact(
+                RfPulseOutputRequest(
+                    port_id=fields["port_id"],
+                    interface_id=fields["interface_id"],
+                    enabled=step.kind == "rf_source.pulse_output_enable",
                 )
             )
             artifact = {"rf_source_operation": rf_source_operation}

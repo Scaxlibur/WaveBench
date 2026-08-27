@@ -95,6 +95,7 @@ from .instruments.rf_source_extensions import (
     RfModulationRequest,
     RfOutputRequest,
     RfPulseConfigureRequest,
+    RfPulseOutputRequest,
     RfPulsePolarity,
     RfSweepConfigureRequest,
 )
@@ -1627,6 +1628,19 @@ def _main(argv: list[str] | None = None) -> int:
                         period_s=args.period_s,
                         width_s=args.width_s,
                         polarity=RfPulsePolarity(args.polarity),
+                    )
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pulse-output":
+                result = service.set_pulse_output(
+                    RfPulseOutputRequest(
+                        port_id=args.port,
+                        interface_id=args.interface_id,
+                        enabled=args.state == "on",
                     )
                 )
                 if args.json:

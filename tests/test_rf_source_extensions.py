@@ -481,6 +481,10 @@ def test_rf_descriptor_capabilities_and_driver_methods_are_validated() -> None:
             "get_rf_pulse_snapshot",
             "configure_rf_pulse",
         ),
+        "rf_source.pulse_output": (
+            "get_rf_pulse_output_snapshot",
+            "set_rf_pulse_output",
+        ),
         "rf_source.sweep_configure": (
             "get_rf_sweep_snapshot",
             "configure_rf_sweep",

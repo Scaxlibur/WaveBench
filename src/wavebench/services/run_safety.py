@@ -29,6 +29,8 @@ EXECUTABLE_STEP_KINDS = {
     "rf_source.modulation_disable",
     "rf_source.modulated_output_enable",
     "rf_source.pulse_configure",
+    "rf_source.pulse_output_enable",
+    "rf_source.pulse_output_disable",
     "rf_source.sweep_configure",
     "rf_source.output_enable",
     "rf_source.output_disable",

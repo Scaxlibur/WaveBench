@@ -776,6 +776,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(rf_source_pulse_configure)
 
+    rf_source_pulse_output = rf_source_sub.add_parser(
+        "pulse-output",
+        help="Set one declared physical Pulse-output interface without enabling RF output",
+    )
+    rf_source_pulse_output.add_argument("--port", required=True)
+    rf_source_pulse_output.add_argument("--interface", dest="interface_id", required=True)
+    rf_source_pulse_output.add_argument("state", choices=["on", "off"])
+    add_runtime_options(rf_source_pulse_output)
+
     rf_source_sweep = rf_source_sub.add_parser(
         "sweep",
         help="Configure a bounded frequency-only Step Sweep while RF output is OFF",

@@ -45,6 +45,10 @@ from wavebench.instruments.rf_source_extensions import (
     RfPulseConfigureResult,
     RfPulseMode,
     RfPulseModeProfile,
+    RfPulseOutputProfile,
+    RfPulseOutputRequest,
+    RfPulseOutputResult,
+    RfPulseOutputSnapshot,
     RfPulseProfile,
     RfPulseSnapshot,
     RfPulseSource,
@@ -70,6 +74,7 @@ from wavebench.instruments.rf_source_extensions import (
     rf_source_modulation_operation_artifact,
     rf_source_output_operation_artifact,
     rf_source_pulse_operation_artifact,
+    rf_source_pulse_output_operation_artifact,
     rf_source_sweep_operation_artifact,
     rf_source_trigger_snapshot_operation_artifact,
 )
@@ -127,6 +132,15 @@ class _RfPulseTransaction:
     preflight_snapshot: RfSourceSnapshot
     postcondition_snapshot: RfSourceSnapshot
     postcondition_pulse_snapshot: RfPulseSnapshot
+
+
+@dataclass(frozen=True)
+class _RfPulseOutputTransaction:
+    result: RfPulseOutputResult
+    preflight_snapshot: RfSourceSnapshot
+    preflight_pulse_output_snapshot: RfPulseOutputSnapshot
+    postcondition_snapshot: RfSourceSnapshot
+    postcondition_pulse_output_snapshot: RfPulseOutputSnapshot
 
 
 @dataclass(frozen=True)
@@ -640,6 +654,152 @@ class RfSourceService(SessionStateAliasMixin):
                         session_state.degrade(
                             SessionHealth.UNCERTAIN,
                             reason="rf_pulse_postcondition_unverified",
+                        )
+                    raise
+
+    def set_pulse_output(self, request: RfPulseOutputRequest) -> RfPulseOutputResult:
+        """Set one declared physical Pulse-output interface without changing RF output."""
+
+        return self._set_pulse_output_transaction(request).result
+
+    def set_pulse_output_with_artifact(
+        self,
+        request: RfPulseOutputRequest,
+    ) -> tuple[RfPulseOutputResult, dict[str, object]]:
+        """Set one declared physical Pulse-output interface with typed evidence.
+
+        This operation is intentionally independent from ``configure_pulse``.
+        It never changes RF output, trigger configuration, Sweep, or a
+        receiving instrument.  A failed write or readback is never retried and
+        leaves the session uncertain for an independently preflighted recovery.
+        """
+
+        transaction = self._set_pulse_output_transaction(request)
+        return (
+            transaction.result,
+            rf_source_pulse_output_operation_artifact(
+                request,
+                transaction.result,
+                preflight_snapshot=transaction.preflight_snapshot,
+                preflight_pulse_output_snapshot=transaction.preflight_pulse_output_snapshot,
+                postcondition_snapshot=transaction.postcondition_snapshot,
+                postcondition_pulse_output_snapshot=transaction.postcondition_pulse_output_snapshot,
+            ),
+        )
+
+    def _set_pulse_output_transaction(
+        self,
+        request: RfPulseOutputRequest,
+    ) -> _RfPulseOutputTransaction:
+        """Run one bounded physical Pulse-output state transaction.
+
+        Enabling requires the exact descriptor-declared internal Pulse profile
+        and the same RF-OFF baseline as the M4 Pulse configurator.  Disabling
+        is deliberately narrower: it requires a readable declared interface
+        state but does not reject a caller's attempt to remove an auxiliary
+        output merely because the RF configuration has drifted.
+        """
+
+        if not isinstance(request, RfPulseOutputRequest):
+            raise ConfigError("rf_source pulse-output control requires RfPulseOutputRequest")
+        operation = (
+            "rf_source.pulse_output_enable"
+            if request.enabled
+            else "rf_source.pulse_output_disable"
+        )
+        self._require(
+            operation,
+            "rf_source.snapshot",
+            "rf_source.pulse_configure",
+            "rf_source.pulse_output",
+        )
+        profile = self._validate_pulse_output_descriptor(request, operation)
+        with self._rf_source_session() as rf_source:
+            session_state = self.session_state
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            with session_state.transaction_lock:
+                if session_state.health is not SessionHealth.HEALTHY:
+                    raise ConfigError(f"{operation} requires a healthy session")
+                preflight_snapshot = rf_source.get_rf_snapshot()
+                preflight_pulse_output_snapshot = rf_source.get_rf_pulse_output_snapshot(
+                    request.port_id,
+                    request.interface_id,
+                )
+                if request.enabled:
+                    current_enabled = self._validate_pulse_output_enable_snapshot(
+                        request,
+                        preflight_snapshot,
+                        preflight_pulse_output_snapshot,
+                        profile,
+                        operation=operation,
+                    )
+                else:
+                    current_enabled = self._validate_pulse_output_disable_snapshot(
+                        request,
+                        preflight_pulse_output_snapshot,
+                        profile,
+                        operation=operation,
+                    )
+                if current_enabled is request.enabled:
+                    return _RfPulseOutputTransaction(
+                        result=RfPulseOutputResult(
+                            port_id=request.port_id,
+                            interface_id=request.interface_id,
+                            enabled=request.enabled,
+                            write_completed=False,
+                        ),
+                        preflight_snapshot=preflight_snapshot,
+                        preflight_pulse_output_snapshot=preflight_pulse_output_snapshot,
+                        postcondition_snapshot=preflight_snapshot,
+                        postcondition_pulse_output_snapshot=preflight_pulse_output_snapshot,
+                    )
+
+                main_entered = False
+                try:
+                    main_entered = True
+                    rf_source.set_rf_pulse_output(request)
+                    postcondition_snapshot = rf_source.get_rf_snapshot()
+                    postcondition_pulse_output_snapshot = rf_source.get_rf_pulse_output_snapshot(
+                        request.port_id,
+                        request.interface_id,
+                    )
+                    if request.enabled:
+                        postcondition_enabled = self._validate_pulse_output_enable_snapshot(
+                            request,
+                            postcondition_snapshot,
+                            postcondition_pulse_output_snapshot,
+                            profile,
+                            operation=operation,
+                        )
+                    else:
+                        postcondition_enabled = self._validate_pulse_output_disable_snapshot(
+                            request,
+                            postcondition_pulse_output_snapshot,
+                            profile,
+                            operation=operation,
+                        )
+                    if postcondition_enabled is not request.enabled:
+                        raise ConfigError(
+                            f"{operation} postcondition does not match requested Pulse-output state"
+                        )
+                    return _RfPulseOutputTransaction(
+                        result=RfPulseOutputResult(
+                            port_id=request.port_id,
+                            interface_id=request.interface_id,
+                            enabled=request.enabled,
+                            write_completed=True,
+                        ),
+                        preflight_snapshot=preflight_snapshot,
+                        preflight_pulse_output_snapshot=preflight_pulse_output_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        postcondition_pulse_output_snapshot=postcondition_pulse_output_snapshot,
+                    )
+                except BaseException:
+                    if main_entered and session_state.health is SessionHealth.HEALTHY:
+                        session_state.degrade(
+                            SessionHealth.UNCERTAIN,
+                            reason="rf_pulse_output_postcondition_unverified",
                         )
                     raise
 
@@ -1546,6 +1706,147 @@ class RfSourceService(SessionStateAliasMixin):
             width_s=request.width_s,
             polarity=request.polarity,
         )
+
+    def _validate_pulse_output_descriptor(
+        self,
+        request: RfPulseOutputRequest,
+        operation: str,
+    ) -> RfPulseOutputProfile:
+        descriptor = self.descriptor
+        extensions = None if descriptor is None else descriptor.rf_source_extensions
+        if not isinstance(extensions, RfSourceDescriptorExtensions):
+            raise ConfigError(f"{operation} requires validated rf_source_extensions")
+        if not any(port.port_id == request.port_id for port in extensions.topology.ports):
+            raise ConfigError(f"{operation} references an undeclared RF port")
+        pulse_feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.PULSE),
+            None,
+        )
+        feature = next(
+            (item for item in extensions.features if item.feature is RfFeature.PULSE_OUTPUT),
+            None,
+        )
+        if (
+            pulse_feature is None
+            or RfFeatureDirection.CONFIGURE not in pulse_feature.directions
+            or RfFeatureDirection.READ not in pulse_feature.directions
+            or request.port_id not in pulse_feature.port_ids
+            or not isinstance(pulse_feature.profile, RfPulseProfile)
+            or not pulse_feature.profile.configuration_readable
+        ):
+            raise ConfigError(
+                f"{operation} requires a readable configurable base pulse profile for the target port"
+            )
+        if (
+            feature is None
+            or RfFeatureDirection.READ not in feature.directions
+            or RfFeatureDirection.ENABLE not in feature.directions
+            or RfFeatureDirection.DISABLE not in feature.directions
+            or request.port_id not in feature.port_ids
+            or not isinstance(feature.profile, RfPulseOutputProfile)
+            or not feature.profile.output_readable
+        ):
+            raise ConfigError(
+                f"{operation} requires a readable Pulse-output profile for the target port"
+            )
+        profile = feature.profile
+        if profile.interface_id != request.interface_id:
+            raise ConfigError(f"{operation} references an undeclared physical Pulse-output interface")
+        self._validate_pulse_descriptor(
+            RfPulseConfigureRequest(
+                port_id=request.port_id,
+                period_s=profile.period_s,
+                width_s=profile.width_s,
+                polarity=profile.polarity,
+            ),
+            operation,
+        )
+        return profile
+
+    def _validate_pulse_output_snapshot_target(
+        self,
+        request: RfPulseOutputRequest,
+        snapshot: RfPulseOutputSnapshot,
+        profile: RfPulseOutputProfile,
+        *,
+        operation: str,
+    ) -> None:
+        if not isinstance(snapshot, RfPulseOutputSnapshot):
+            raise ConfigError(f"{operation} driver returned an invalid Pulse-output snapshot")
+        if snapshot.port_id != request.port_id or snapshot.interface_id != request.interface_id:
+            raise ConfigError(f"{operation} Pulse-output snapshot does not match the requested interface")
+        if snapshot.direction is not profile.direction:
+            raise ConfigError(f"{operation} Pulse-output direction is outside the descriptor profile")
+
+    def _validate_pulse_output_profile_readback(
+        self,
+        snapshot: RfPulseOutputSnapshot,
+        profile: RfPulseOutputProfile,
+        *,
+        operation: str,
+    ) -> None:
+        if (
+            snapshot.low_level_v != profile.low_level_v
+            or snapshot.high_level_v != profile.high_level_v
+            or snapshot.output_impedance_ohm != profile.output_impedance_ohm
+            or snapshot.source is not profile.source
+            or snapshot.mode is not profile.mode
+            or snapshot.period_s != profile.period_s
+            or snapshot.width_s != profile.width_s
+            or snapshot.polarity is not profile.polarity
+            or snapshot.pulse_state is not profile.pulse_state
+        ):
+            raise ConfigError(
+                f"{operation} Pulse-output readback does not match the descriptor profile"
+            )
+
+    def _validate_pulse_output_enable_snapshot(
+        self,
+        request: RfPulseOutputRequest,
+        rf_snapshot: RfSourceSnapshot,
+        pulse_output_snapshot: RfPulseOutputSnapshot,
+        profile: RfPulseOutputProfile,
+        *,
+        operation: str,
+    ) -> bool:
+        self._validate_pulse_preflight(
+            RfPulseConfigureRequest(
+                port_id=request.port_id,
+                period_s=profile.period_s,
+                width_s=profile.width_s,
+                polarity=profile.polarity,
+            ),
+            rf_snapshot,
+            operation=operation,
+        )
+        self._validate_pulse_output_snapshot_target(
+            request,
+            pulse_output_snapshot,
+            profile,
+            operation=operation,
+        )
+        self._validate_pulse_output_profile_readback(
+            pulse_output_snapshot,
+            profile,
+            operation=operation,
+        )
+        return pulse_output_snapshot.enabled
+
+    def _validate_pulse_output_disable_snapshot(
+        self,
+        request: RfPulseOutputRequest,
+        pulse_output_snapshot: RfPulseOutputSnapshot,
+        profile: RfPulseOutputProfile,
+        *,
+        operation: str,
+    ) -> bool:
+        self._validate_pulse_output_snapshot_target(
+            request,
+            pulse_output_snapshot,
+            profile,
+            operation=operation,
+        )
+        return pulse_output_snapshot.enabled
 
     def _validate_sweep_descriptor(
         self,
