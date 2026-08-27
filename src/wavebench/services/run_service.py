@@ -25,6 +25,7 @@ from wavebench.instruments.registry import resolve_instrument_descriptor
 from wavebench.instruments.rf_source_extensions import (
     RfCwRequest,
     RfModulatedOutputRequest,
+    RfModulationDisableRequest,
     RfModulationKind,
     RfModulationRequest,
     RfOutputRequest,
@@ -308,6 +309,7 @@ class RunService:
             "rf_source.set_frequency": "rf_source.set_frequency",
             "rf_source.set_power_dbm": "rf_source.set_power_dbm",
             "rf_source.modulation_configure": "rf_source.modulation_configure",
+            "rf_source.modulation_disable": "rf_source.modulation_disable",
             "rf_source.modulated_output_enable": "rf_source.modulated_output_enable",
             "rf_source.pulse_configure": "rf_source.pulse_configure",
             "rf_source.sweep_configure": "rf_source.sweep_configure",
@@ -462,6 +464,8 @@ class RunService:
                 add("rf_source", "rf_source.snapshot", "rf_source.cw_configure")
             elif step.kind == "rf_source.modulation_configure":
                 add("rf_source", "rf_source.snapshot", "rf_source.modulation_configure")
+            elif step.kind == "rf_source.modulation_disable":
+                add("rf_source", "rf_source.snapshot", "rf_source.modulation_disable")
             elif step.kind == "rf_source.modulated_output_enable":
                 add(
                     "rf_source",
@@ -1252,6 +1256,17 @@ class RunService:
                 RfCwRequest(
                     port_id=step.fields["port_id"],
                     power_dbm=step.fields["power_dbm"],
+                )
+            )
+            artifact = {"rf_source_operation": rf_source_operation}
+        elif step.kind == "rf_source.modulation_disable":
+            fields = step.fields
+            _, rf_source_operation = self._rf_source_service(
+                services=services
+            ).disable_modulation_with_artifact(
+                RfModulationDisableRequest(
+                    port_id=fields["port_id"],
+                    kind=RfModulationKind(fields["modulation_kind"]),
                 )
             )
             artifact = {"rf_source_operation": rf_source_operation}

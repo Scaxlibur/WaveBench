@@ -90,6 +90,7 @@ from .instruments.scope_extensions import (
 from .instruments.rf_source_extensions import (
     RfCwRequest,
     RfModulatedOutputRequest,
+    RfModulationDisableRequest,
     RfModulationKind,
     RfModulationRequest,
     RfOutputRequest,
@@ -1576,6 +1577,18 @@ def _main(argv: list[str] | None = None) -> int:
                     print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
                 return 0
             if args.command == "modulation":
+                if args.modulation_command == "disable":
+                    result = service.disable_modulation(
+                        RfModulationDisableRequest(
+                            port_id=args.port,
+                            kind=RfModulationKind(args.modulation_kind),
+                        )
+                    )
+                    if args.json:
+                        _emit_json_result(_json_payload(result))
+                    else:
+                        print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                    return 0
                 modulation_kind = {
                     "configure-am": RfModulationKind.AM,
                     "configure-fm": RfModulationKind.FM,

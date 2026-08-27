@@ -12,6 +12,8 @@ from wavebench.instruments.rf_source_extensions import (
     RfCwResult,
     RfModulatedOutputRequest,
     RfModulatedOutputResult,
+    RfModulationDisableRequest,
+    RfModulationDisableResult,
     RfModulationKind,
     RfModulationRequest,
     RfModulationResult,
@@ -94,6 +96,17 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_sweep_and_output_commands(
             "1000",
         ]
     )
+    modulation_disable = build_parser().parse_args(
+        [
+            "rf-source",
+            "modulation",
+            "disable",
+            "--port",
+            "rf_out",
+            "--modulation-kind",
+            "am",
+        ]
+    )
     pulse = build_parser().parse_args(
         [
             "rf-source",
@@ -154,6 +167,8 @@ def test_rf_source_parser_accepts_cw_modulation_pulse_sweep_and_output_commands(
     assert modulation_pm.phase_deviation_rad == 1.5
     assert modulation_output_am.modulation_command == "enable-output-am"
     assert modulation_output_am.depth_percent == 50.0
+    assert modulation_disable.modulation_command == "disable"
+    assert modulation_disable.modulation_kind == "am"
     assert (pulse.domain, pulse.command, pulse.pulse_command) == (
         "rf-source",
         "pulse",
@@ -427,6 +442,39 @@ def test_rf_source_cli_dispatches_profile_bound_modulated_output_enable() -> Non
                 internal_frequency_hz=1_000.0,
             )
         )
+    )
+
+
+def test_rf_source_cli_dispatches_mode_specific_modulation_disable() -> None:
+    service = Mock()
+    service.disable_modulation.return_value = RfModulationDisableResult(
+        port_id="rf_out",
+        kind=RfModulationKind.AM,
+        write_completed=True,
+    )
+
+    stdout = io.StringIO()
+    with patch("wavebench.cli._load_rf_source_service", return_value=service), redirect_stdout(stdout):
+        assert (
+            main(
+                [
+                    "--json",
+                    "rf-source",
+                    "modulation",
+                    "disable",
+                    "--port",
+                    "rf_out",
+                    "--modulation-kind",
+                    "am",
+                ]
+            )
+            == 0
+        )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["write_completed"] is True
+    service.disable_modulation.assert_called_once_with(
+        RfModulationDisableRequest(port_id="rf_out", kind=RfModulationKind.AM)
     )
 
 

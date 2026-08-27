@@ -742,6 +742,18 @@ def build_parser() -> argparse.ArgumentParser:
         )
         add_runtime_options(rf_source_modulation_configure)
 
+    rf_source_modulation_disable = rf_source_modulation_sub.add_parser(
+        "disable",
+        help="Disable one known active internal-sine modulation mode while RF output is OFF",
+    )
+    rf_source_modulation_disable.add_argument("--port", required=True)
+    rf_source_modulation_disable.add_argument(
+        "--modulation-kind",
+        choices=("am", "fm", "pm"),
+        required=True,
+    )
+    add_runtime_options(rf_source_modulation_disable)
+
     rf_source_pulse = rf_source_sub.add_parser(
         "pulse",
         help="Configure a bounded internal single-pulse profile while RF output is OFF",

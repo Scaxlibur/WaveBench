@@ -22,6 +22,8 @@ from wavebench.errors import ConfigError
 from wavebench.instruments.rf_source_extensions import (
     RfCwRequest,
     RfCwResult,
+    RfModulationDisableRequest,
+    RfModulationDisableResult,
     RfModulationKind,
     RfModulationRequest,
     RfModulationResult,
@@ -56,6 +58,7 @@ from wavebench.instruments.rf_source_extensions import (
     RfSweepTriggerMode,
     RfTriggerSnapshot,
     rf_source_cw_operation_artifact,
+    rf_source_modulation_disable_operation_artifact,
     rf_source_modulation_operation_artifact,
     rf_source_pulse_operation_artifact,
     rf_source_sweep_operation_artifact,
@@ -144,6 +147,18 @@ def _modulation_plan(
         f'modulation_kind = "{modulation_kind}"\n'
         f"{value_field} = {value}\n"
         "internal_frequency_hz = 1000\n",
+        encoding="utf-8",
+    )
+    return load_run_plan(path)
+
+
+def _modulation_disable_plan(directory: str, *, modulation_kind: str = "am"):
+    path = Path(directory) / "plan.toml"
+    path.write_text(
+        "[[steps]]\n"
+        'kind = "rf_source.modulation_disable"\n'
+        'port_id = "rf_out"\n'
+        f'modulation_kind = "{modulation_kind}"\n',
         encoding="utf-8",
     )
     return load_run_plan(path)
@@ -668,6 +683,131 @@ def test_rf_source_modulation_step_has_write_intent_and_separate_artifact_namesp
             run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
 
         rf_service.configure_modulation_with_artifact.assert_called_once_with(request)
+        assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
+        run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
+        assert run_data["rf_source_operations"] == [artifact]
+
+
+def test_rf_source_modulation_disable_plan_has_explicit_mode_only_schema_and_intent() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _modulation_disable_plan(directory)
+        assert plan.steps[0].fields == {
+            "port_id": "rf_out",
+            "modulation_kind": "am",
+        }
+        assert "rf_source.modulation_disable" in STEP_SCHEMAS
+        intent = build_execution_intent(plan, _config(directory, access="read_write"))
+        assert intent.operations[0]["operation"] == "rf_source.modulation_disable"
+        assert intent.operations[0]["parameters"] == {
+            "port_id": "rf_out",
+            "modulation_kind": "am",
+        }
+
+        invalid_path = Path(directory) / "invalid-modulation-disable.toml"
+        invalid_path.write_text(
+            "[[steps]]\n"
+            'kind = "rf_source.modulation_disable"\n'
+            'port_id = "rf_out"\n'
+            'modulation_kind = "unknown"\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="must be one of am, fm, pm"):
+            load_run_plan(invalid_path)
+
+
+def test_rf_source_modulation_disable_step_requires_capability_and_read_write_access() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _modulation_disable_plan(directory)
+        missing_capability = RunService(
+            config=_config(directory, access="read_write"),
+            logger=CommandLogger(),
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor("rf_source.idn", "rf_source.snapshot"),
+        ), patch.object(missing_capability, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="rf_source.modulation_disable"):
+                missing_capability.run(plan)
+        open_services.assert_not_called()
+
+        read_only = RunService(config=_config(directory), logger=CommandLogger())
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=_descriptor(
+                "rf_source.idn",
+                "rf_source.snapshot",
+                "rf_source.modulation_disable",
+            ),
+        ), patch.object(read_only, "_run_instrument_services") as open_services:
+            with pytest.raises(ConfigError, match="access policy 'read_only'"):
+                read_only.run(plan)
+        open_services.assert_not_called()
+
+
+def test_rf_source_modulation_disable_step_dispatches_typed_artifact() -> None:
+    with TemporaryDirectory() as directory:
+        plan = _modulation_disable_plan(directory)
+        config = _config(directory, access="read_write")
+        request = RfModulationDisableRequest(port_id="rf_out", kind=RfModulationKind.AM)
+        result = RfModulationDisableResult(
+            port_id="rf_out",
+            kind=RfModulationKind.AM,
+            write_completed=True,
+        )
+        preflight_snapshot = RfSourceSnapshot(
+            ports=(
+                RfPortSnapshot(
+                    port_id="rf_out",
+                    frequency_hz=RfObserved.value_of(1_000_000.0),
+                    power_dbm=RfObserved.value_of(-30.0),
+                    output_enabled=RfObserved.value_of(False),
+                    modulation=RfObserved.value_of(RfModulationState.ENABLED),
+                    pulse=RfObserved.value_of(RfPulseState.DISABLED),
+                    sweep=RfObserved.value_of(RfSweepState.DISABLED),
+                ),
+            ),
+            protection=RfObserved.value_of(RfProtectionStatus(active_codes=())),
+        )
+        preflight_modulation_state = RfModulationStateSnapshot(
+            port_id="rf_out",
+            enabled_modes=(RfModulationKind.AM,),
+            global_enabled=True,
+        )
+        postcondition_modulation_state = RfModulationStateSnapshot(port_id="rf_out")
+        artifact = rf_source_modulation_disable_operation_artifact(
+            request=request,
+            result=result,
+            preflight_snapshot=preflight_snapshot,
+            preflight_modulation_state=preflight_modulation_state,
+            postcondition_snapshot=_snapshot(),
+            postcondition_modulation_state=postcondition_modulation_state,
+        )
+        rf_service = SimpleNamespace(
+            disable_modulation_with_artifact=Mock(return_value=(result, artifact)),
+            audit_snapshot=lambda: None,
+        )
+
+        class OfflineRfRunService(RunService):
+            @contextmanager
+            def _run_instrument_services(self, run_plan):
+                del run_plan
+                yield RunInstrumentServices(rf_source=rf_service)
+
+            def _run_safety_guards(self, run_plan, *, services=None):
+                del run_plan, services
+
+        descriptor = _descriptor(
+            "rf_source.idn",
+            "rf_source.snapshot",
+            "rf_source.modulation_disable",
+        )
+        with patch(
+            "wavebench.services.run_service.resolve_instrument_descriptor",
+            return_value=descriptor,
+        ):
+            run_result = OfflineRfRunService(config=config, logger=CommandLogger()).run(plan)
+
+        rf_service.disable_modulation_with_artifact.assert_called_once_with(request)
         assert run_result.steps[0].artifact == {"rf_source_operation": artifact}
         run_data = json.loads(run_result.run_json_path.read_text(encoding="utf-8"))
         assert run_data["rf_source_operations"] == [artifact]

@@ -26,6 +26,7 @@ ALLOWED_STEP_KINDS = {
     "rf_source.set_frequency",
     "rf_source.set_power_dbm",
     "rf_source.modulation_configure",
+    "rf_source.modulation_disable",
     "rf_source.modulated_output_enable",
     "rf_source.pulse_configure",
     "rf_source.sweep_configure",
@@ -82,6 +83,7 @@ _REQUIRED_FIELDS = {
         "modulation_kind",
         "internal_frequency_hz",
     ),
+    "rf_source.modulation_disable": ("port_id", "modulation_kind"),
     "rf_source.modulated_output_enable": (
         "port_id",
         "modulation_kind",
@@ -213,6 +215,7 @@ _OPTIONAL_FIELDS = {
         "phase_deviation_rad",
         "on_failure",
     },
+    "rf_source.modulation_disable": {"on_failure"},
     "rf_source.modulated_output_enable": {
         "depth_percent",
         "frequency_deviation_hz",
@@ -286,6 +289,7 @@ _STEP_NOTES = {
     "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
     "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
+    "rf_source.modulation_disable": "Disable one known active internal-sine AM, FM, or PM mode while RF output is OFF; an already consistent disabled state makes no write.",
     "rf_source.modulated_output_enable": "Enable one RF port only when its active internal-sine AM, FM, or PM profile exactly matches the requested bounded profile; it does not configure modulation or restore RF OFF.",
     "rf_source.pulse_configure": "Configure one OFF RF port with a disabled internal single-pulse profile; it does not enable RF output or trigger a pulse.",
     "rf_source.sweep_configure": "Configure one OFF RF port with a disabled frequency-only Step Sweep profile; it does not arm, fire, trigger, or enable RF output.",
@@ -693,6 +697,15 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
     elif kind == "rf_source.set_power_dbm":
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         fields["power_dbm"] = _finite_float(fields["power_dbm"], f"{prefix}.power_dbm")
+    elif kind == "rf_source.modulation_disable":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        modulation_kind = _non_empty_str(
+            fields["modulation_kind"],
+            f"{prefix}.modulation_kind",
+        ).lower()
+        if modulation_kind not in {"am", "fm", "pm"}:
+            raise ConfigError(f"{prefix}.modulation_kind must be one of am, fm, pm")
+        fields["modulation_kind"] = modulation_kind
     elif kind in {"rf_source.modulation_configure", "rf_source.modulated_output_enable"}:
         fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
         modulation_kind = _non_empty_str(
