@@ -2443,7 +2443,7 @@ mode = "complex_transfer"
 
     def test_runs_source_v2_arbitrary_steps_without_putting_payload_in_artifacts(self):
         with TemporaryDirectory() as tmp:
-            payload = b"abc"
+            payload = b"wavebench-payload-artifact-sentinel-9d7cc41e"
             payload_path = Path(tmp) / "payload.bin"
             payload_path.write_bytes(payload)
             digest = "sha256:" + sha256(payload).hexdigest()
@@ -2512,7 +2512,7 @@ playback_frequency_hz = 1000
             self.assertEqual(select_request.playback_mode.value, "dds")
             self.assertEqual(select_request.playback_frequency_hz, 1_000.0)
             self.assertEqual(run_data["source_operations"], artifacts)
-            self.assertNotIn("abc", json.dumps(run_data, ensure_ascii=False))
+            self.assertNotIn(payload.decode("ascii"), json.dumps(run_data, ensure_ascii=False))
 
 
 if __name__ == "__main__":
