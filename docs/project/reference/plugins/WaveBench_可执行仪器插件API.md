@@ -120,7 +120,7 @@ def descriptor() -> InstrumentDescriptor:
 | 字段 | 核心强制 | 接口约定和用途 |
 | --- | --- | --- |
 | `driver_id` | 非空、无首尾空白；外置插件必须与 entry point 名一致 | 使用小写 ASCII canonical ID，推荐 `vendor.model` 形式；发布后不得复用给其他设备族 |
-| `kind` | 配置解析时必须与目标槽位一致 | 只能是 `scope`、`source`、`power`、`dmm` 或 `sweep_analyzer` |
+| `kind` | 配置解析时必须与目标槽位一致 | 只能是 `scope`、`source`、`rf_source`、`power`、`dmm` 或 `sweep_analyzer` |
 | `display_name` | 仅要求构造参数存在 | 面向用户的简短名称，不承担型号匹配 |
 | `manufacturer` | 仅要求构造参数存在 | 使用厂商正式名称 |
 | `models` | 至少包含一项 | 每项应为非空型号名称；不要把营销系列名当作已验证型号 |
@@ -141,6 +141,7 @@ def descriptor() -> InstrumentDescriptor:
 | `config_fields` | 当前只展示；为空时由 `option_specs` 推导 `options.<name>` | 只列出用户实际可配置的字段，不代表核心会按此字段授权 |
 | `scope_extensions` | 仅允许 scope descriptor 使用，类型必须为 `ScopeDescriptorExtensions` | 为 R1.3 capability 提供静态截图、采集控制、trace、标准 waveform bounded profile 和 average capture V2 profile；旧插件保持 `None` |
 | `source_extensions` | 仅允许 source descriptor 使用，类型必须为 `SourceDescriptorExtensions` | 为 `source.snapshot_v2` 及各已声明的 Source V2 写 capability 提供 topology、feature profile 和查询合同；旧插件保持 `None` |
+| `rf_source_extensions` | `rf_source` descriptor 必须提供，且其它 kind 不得提供；类型必须为 `RfSourceDescriptorExtensions` | M0 的独立 RF topology、feature 和 protection policy；该字段 append-only，旧插件保持 `None` |
 
 ### `scope_coupling_policy`
 
@@ -582,6 +583,42 @@ run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`sourc
 声明任一 ARB V2 capability 时，V1 `upload_arbitrary_waveform` 也在本地文件读取和仪器 I/O 前拒绝。其余尚无对应 V2
 capability 的高级配置保持 V1。插件不得把 capability 注册视为
 自行发起写操作的许可，也不得通过已有 V1 方法绕过核心路由。
+
+### RF 信号源 M0–M4（DSG830 production 已含 A2 output、A3 CW、A4 调制／Pulse／Step Sweep）
+
+`rf_source` 是独立于 `source` 的 kind，不能使用 `source_extensions`、Vpp、数字 channel 或普通 source
+能力。descriptor 必须同时满足以下静态条件：
+
+- 只声明 `rf_source.*` capability，且至少包含 `rf_source.idn`；当前 Core 识别
+  `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.modulation_configure`、`rf_source.modulation_disable`、`rf_source.pulse_configure`、`rf_source.sweep_configure` 和 `rf_source.output`。
+- 提供 `rf_source_extensions`，其 contract version、拓扑、端口 ID、feature 和 protection policy 必须通过
+  Core 校验。
+- 声明 `rf_source.cw_configure` 时，CW feature 必须有 `CONFIGURE` direction 和至少一个可配置字段；声明
+  `rf_source.output` 时，output feature 必须同时有 `ENABLE`／`DISABLE` direction 与可读 output state。
+- 声明 `rf_source.modulation_configure` 时，Modulation feature 必须同时有 `CONFIGURE`／`READ` direction、
+  `configuration_readable = true`，并至少声明一个内部 Sine `RfModulationModeProfile`。profile 的模式、值单位、值范围和内部频率范围必须与 driver 的严格 readback 一致。
+- 声明 `rf_source.pulse_configure` 或 `rf_source.sweep_configure` 时，对应 feature 必须同时有 `CONFIGURE`／`READ` direction、可读 configuration state 和有界的 mode profile；Pulse 与 Sweep 的配置方法必须在独立 readback 后保持 disabled。
+- `wavebench_min_version` 不低于 `0.8.25`，并且小于 `wavebench_max_version`。
+- 打包检查时，wheel 必须有且仅有一条生效的 `wavebench` 依赖，并显式使用与 descriptor 相同的
+  `>=wavebench_min_version,<wavebench_max_version` 区间。
+
+| capability | 必须可调用的方法 | 当前 Core 入口 |
+| --- | --- | --- |
+| `rf_source.idn` | `idn` | `wavebench rf-source idn`、doctor IDN target |
+| `rf_source.snapshot` | `get_rf_snapshot` | `wavebench rf-source status`、`rf_source.status` run step |
+| `rf_source.cw_configure` | `configure_cw` | `rf-source set-frequency`／`set-power`、对应 run step；OFF-only 合同，DSG830 经 A3 复核后已提升 |
+| `rf_source.modulation_configure` | `get_rf_modulation_snapshot`、`configure_rf_modulation` | `rf-source modulation configure-am`／`configure-fm`／`configure-pm`、`rf_source.modulation_configure` run step；内部 Sine、RF OFF、无重试合同，DSG830 经 A4 复核后已提升。AM `0–100 %`、FM `0.1 Hz–1 MHz`、PM 精确 `1.25 rad`，均为 `10 Hz–100 kHz` 内部频率。 |
+| `rf_source.modulation_disable` | `get_rf_modulation_state`、`disable_rf_modulation` | 仅用于受控本地证据与恢复；DSG830 不声明 production capability |
+| `rf_source.pulse_configure` | `get_rf_pulse_snapshot`、`configure_rf_pulse` | `rf-source pulse configure`、`rf_source.pulse_configure` run step；internal／single、RF OFF，配置后保持 Pulse disabled，DSG830 经 A4 Pulse 复核后已提升 |
+| `rf_source.sweep_configure` | `get_rf_sweep_snapshot`、`configure_rf_sweep` | `rf-source sweep configure`、`rf_source.sweep_configure` run step；固定 `STEP`／`FWD`／`RAMP`／`LIN`、RF OFF，配置后保持 Sweep disabled，DSG830 经 A4 Step Sweep 复核后已提升 |
+| `rf_source.output` | `set_rf_output` | `rf-source output`、`rf_source.output_enable`／`output_disable` run step；端口级 ON/OFF，受 capability、access、profile 和 fresh safety preflight 共同门禁 |
+
+`RfSourceDriver`、`RfSourceSnapshot`、`RfSourceDescriptorExtensions` 和相关类型均从
+`wavebench.instruments` 导入。`rf_source.snapshot` 缺失时，status 入口会在 transport I/O 前拒绝；实现
+`get_rf_snapshot()` 本身不会形成隐式 capability。M1／M2／M3／M4 的 CLI 与 run step 也是 capability、access、
+profile 和 fresh preflight 的共同门禁；实现 `configure_cw()`、`configure_rf_modulation()`、`configure_rf_pulse()`、`configure_rf_sweep()` 或 `set_rf_output()` 本身不会形成隐式
+capability。M3 request 只能选择内部 Sine AM／FM／PM 中的一种，并分别使用 percent、Hz 或 rad 值字段；对共享 FM／PM 选择位的设备，snapshot 必须将当前选择与被查询 profile 分开表示，preflight 只能在所有模式关闭时接受不同选择，postcondition 必须确认目标选择。driver 不得扩展外部 source、其它波形、IQ、Pulse trigger、Sweep execute／fire、Level Sweep、list 或 raw SCPI passthrough。production capability 必须按 [RF 信号源开发里程碑](../../design/WaveBench_RF信号源开发里程碑.md)
+的 A 级实机证据逐项提升，不能由 descriptor 静态校验或 fake transport 测试替代。
 
 ### Power、DMM 和 sweep analyzer
 

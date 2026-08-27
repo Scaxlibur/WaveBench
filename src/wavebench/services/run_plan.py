@@ -21,6 +21,19 @@ ALLOWED_STEP_KINDS = {
     "scope.capture",
     "sweep.frequency_response",
     "source.status",
+    "rf_source.status",
+    "rf_source.trigger_status",
+    "rf_source.set_frequency",
+    "rf_source.set_power_dbm",
+    "rf_source.modulation_configure",
+    "rf_source.modulation_disable",
+    "rf_source.modulated_output_enable",
+    "rf_source.pulse_configure",
+    "rf_source.pulse_output_enable",
+    "rf_source.pulse_output_disable",
+    "rf_source.sweep_configure",
+    "rf_source.output_enable",
+    "rf_source.output_disable",
     "source.set_freq",
     "source.arb_load",
     "source.set_func",
@@ -64,6 +77,32 @@ _REQUIRED_FIELDS = {
     "source.set_vpp": ("value_vpp",),
     "source.set_duty": ("duty_percent",),
     "source.output": ("state",),
+    "rf_source.trigger_status": ("port_id",),
+    "rf_source.set_frequency": ("port_id", "frequency_hz"),
+    "rf_source.set_power_dbm": ("port_id", "power_dbm"),
+    "rf_source.modulation_configure": (
+        "port_id",
+        "modulation_kind",
+        "internal_frequency_hz",
+    ),
+    "rf_source.modulation_disable": ("port_id", "modulation_kind"),
+    "rf_source.modulated_output_enable": (
+        "port_id",
+        "modulation_kind",
+        "internal_frequency_hz",
+    ),
+    "rf_source.pulse_configure": ("port_id", "period_s", "width_s", "polarity"),
+    "rf_source.pulse_output_enable": ("port_id", "interface_id"),
+    "rf_source.pulse_output_disable": ("port_id", "interface_id"),
+    "rf_source.sweep_configure": (
+        "port_id",
+        "start_frequency_hz",
+        "stop_frequency_hz",
+        "points",
+        "dwell_s",
+    ),
+    "rf_source.output_enable": ("port_id",),
+    "rf_source.output_disable": ("port_id",),
     "source.basic_configure_v2": ("channel",),
     "source.output_enable_v2": ("channel",),
     "source.output_disable_v2": ("channel",),
@@ -170,6 +209,27 @@ _OPTIONAL_FIELDS = {
         "on_failure",
     },
     "source.status": {"channel", "on_failure"},
+    "rf_source.status": {"on_failure"},
+    "rf_source.trigger_status": {"on_failure"},
+    "rf_source.set_frequency": {"on_failure"},
+    "rf_source.set_power_dbm": {"on_failure"},
+    "rf_source.modulation_configure": {
+        "depth_percent",
+        "frequency_deviation_hz",
+        "phase_deviation_rad",
+        "on_failure",
+    },
+    "rf_source.modulation_disable": {"on_failure"},
+    "rf_source.modulated_output_enable": {
+        "depth_percent",
+        "frequency_deviation_hz",
+        "phase_deviation_rad",
+        "on_failure",
+    },
+    "rf_source.pulse_configure": set(),
+    "rf_source.sweep_configure": set(),
+    "rf_source.output_enable": {"on_failure"},
+    "rf_source.output_disable": {"on_failure"},
     "source.set_freq": {"channel", "on_failure"},
     "source.arb_load": {"channel", "offset_v", "sample_rate_hz", "max_points", "byte_order", "output_on", "on_failure"},
     "source.set_func": {"channel", "on_failure"},
@@ -228,6 +288,17 @@ _STEP_NOTES = {
     "scope.capture": "Trigger one acquisition, write a capture package, and optionally evaluate quality/expect checks. Use target_vpp or vertical_scale_v_per_div to fit the waveform vertically before capture.",
     "sweep.frequency_response": "Sweep a source through discrete frequencies, capture reference and response channels in one acquisition per point, and write a Bode response CSV.",
     "source.status": "Read signal-generator channel state without changing output.",
+    "rf_source.status": "Read a typed RF-source snapshot without changing output.",
+    "rf_source.trigger_status": "Read declared logical Pulse and Sweep trigger configuration without changing RF or trigger state.",
+    "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
+    "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
+    "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
+    "rf_source.modulation_disable": "Disable one known active internal-sine AM, FM, or PM mode while RF output is OFF; an already consistent disabled state makes no write.",
+    "rf_source.modulated_output_enable": "Enable one RF port only when its active internal-sine AM, FM, or PM profile exactly matches the requested bounded profile; it does not configure modulation or restore RF OFF.",
+    "rf_source.pulse_configure": "Configure one OFF RF port with a disabled internal single-pulse profile; it does not enable RF output or trigger a pulse.",
+    "rf_source.sweep_configure": "Configure one OFF RF port with a disabled frequency-only Step Sweep profile; it does not arm, fire, trigger, or enable RF output.",
+    "rf_source.output_enable": "Enable one RF port only after a fresh safety snapshot confirms the configured load, frequency, power, and inactive modulation, Pulse, Sweep, and blocking protection conditions.",
+    "rf_source.output_disable": "Disable one RF port and confirm OFF without requiring frequency, power, or protection readback.",
     "source.arb_load": "Upload a DG4202 arbitrary waveform from CSV/NPY using DATA:DAC VOLATILE; output remains unchanged unless output_on = true.",
     "source.set_freq": "Set fixed source frequency in Hz; config may force FIX mode first.",
     "source.set_func": "Set source waveform function, for example SIN or SQU.",
@@ -619,6 +690,98 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         fields["state"] = state
     elif kind == "source.set_freq":
         fields["frequency_hz"] = _positive_float(fields["frequency_hz"], f"{prefix}.frequency_hz")
+    elif kind == "rf_source.set_frequency":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        fields["frequency_hz"] = _positive_float(
+            fields["frequency_hz"],
+            f"{prefix}.frequency_hz",
+        )
+    elif kind == "rf_source.trigger_status":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+    elif kind == "rf_source.set_power_dbm":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        fields["power_dbm"] = _finite_float(fields["power_dbm"], f"{prefix}.power_dbm")
+    elif kind == "rf_source.modulation_disable":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        modulation_kind = _non_empty_str(
+            fields["modulation_kind"],
+            f"{prefix}.modulation_kind",
+        ).lower()
+        if modulation_kind not in {"am", "fm", "pm"}:
+            raise ConfigError(f"{prefix}.modulation_kind must be one of am, fm, pm")
+        fields["modulation_kind"] = modulation_kind
+    elif kind in {"rf_source.modulation_configure", "rf_source.modulated_output_enable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        modulation_kind = _non_empty_str(
+            fields["modulation_kind"],
+            f"{prefix}.modulation_kind",
+        ).lower()
+        value_fields = {
+            "am": "depth_percent",
+            "fm": "frequency_deviation_hz",
+            "pm": "phase_deviation_rad",
+        }
+        expected_value_field = value_fields.get(modulation_kind)
+        if expected_value_field is None:
+            raise ConfigError(f"{prefix}.modulation_kind must be one of am, fm, pm")
+        present_value_fields = [field for field in value_fields.values() if field in fields]
+        if present_value_fields != [expected_value_field]:
+            raise ConfigError(
+                f"{prefix} {kind} requires only "
+                f"{expected_value_field} for modulation_kind {modulation_kind}"
+            )
+        fields[expected_value_field] = _finite_float(
+            fields[expected_value_field],
+            f"{prefix}.{expected_value_field}",
+        )
+        if fields[expected_value_field] < 0:
+            raise ConfigError(f"{prefix}.{expected_value_field} must be >= 0")
+        fields["modulation_kind"] = modulation_kind
+        fields["internal_frequency_hz"] = _positive_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+    elif kind == "rf_source.pulse_configure":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        period_s = _positive_float(fields["period_s"], f"{prefix}.period_s")
+        width_s = _positive_float(fields["width_s"], f"{prefix}.width_s")
+        if width_s >= period_s:
+            raise ConfigError(f"{prefix}.width_s must be less than period_s")
+        polarity = _non_empty_str(fields["polarity"], f"{prefix}.polarity").lower()
+        if polarity not in {"normal", "inverted"}:
+            raise ConfigError(f"{prefix}.polarity must be one of normal, inverted")
+        fields["period_s"] = period_s
+        fields["width_s"] = width_s
+        fields["polarity"] = polarity
+    elif kind in {"rf_source.pulse_output_enable", "rf_source.pulse_output_disable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        fields["interface_id"] = _rf_interface_id(
+            fields["interface_id"],
+            f"{prefix}.interface_id",
+        )
+    elif kind == "rf_source.sweep_configure":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        start_frequency_hz = _positive_float(
+            fields["start_frequency_hz"],
+            f"{prefix}.start_frequency_hz",
+        )
+        stop_frequency_hz = _positive_float(
+            fields["stop_frequency_hz"],
+            f"{prefix}.stop_frequency_hz",
+        )
+        if start_frequency_hz >= stop_frequency_hz:
+            raise ConfigError(
+                f"{prefix}.start_frequency_hz must be less than stop_frequency_hz"
+            )
+        points = fields["points"]
+        if isinstance(points, bool) or not isinstance(points, int) or points < 2:
+            raise ConfigError(f"{prefix}.points must be an integer >= 2")
+        fields["start_frequency_hz"] = start_frequency_hz
+        fields["stop_frequency_hz"] = stop_frequency_hz
+        fields["points"] = points
+        fields["dwell_s"] = _positive_float(fields["dwell_s"], f"{prefix}.dwell_s")
+    elif kind in {"rf_source.output_enable", "rf_source.output_disable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
     elif kind == "source.arb_load":
         fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
         fields["frequency_hz"] = _positive_float(fields["frequency_hz"], f"{prefix}.frequency_hz")
@@ -1127,6 +1290,20 @@ def _finite_float(value: Any, name: str) -> float:
     if result != result or result in (float("inf"), float("-inf")):
         raise ConfigError(f"{name} must be finite")
     return result
+
+
+def _rf_port_id(value: Any, name: str) -> str:
+    token = _non_empty_str(value, name)
+    if _SOURCE_STORAGE_TOKEN.fullmatch(token) is None:
+        raise ConfigError(f"{name} must be a short safe RF port ID")
+    return token
+
+
+def _rf_interface_id(value: Any, name: str) -> str:
+    token = _non_empty_str(value, name)
+    if _SOURCE_STORAGE_TOKEN.fullmatch(token) is None:
+        raise ConfigError(f"{name} must be a short safe RF physical interface ID")
+    return token
 
 
 def _table(raw: Any, name: str) -> dict[str, Any]:

@@ -13,6 +13,10 @@ from .source_extension_capabilities import (
     SOURCE_EXTENSION_CAPABILITY_METHODS,
     validate_source_descriptor,
 )
+from .rf_source_capabilities import (
+    RF_SOURCE_CAPABILITY_METHODS,
+    validate_rf_source_descriptor,
+)
 
 
 _PROFILE_AWARE_WAVEFORM_CAPABILITIES = frozenset(
@@ -104,6 +108,7 @@ CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
 }
 CAPABILITY_METHODS.update(SCOPE_CAPABILITY_METHODS)
 CAPABILITY_METHODS.update(SOURCE_EXTENSION_CAPABILITY_METHODS)
+CAPABILITY_METHODS.update(RF_SOURCE_CAPABILITY_METHODS)
 
 
 def require_capabilities(
@@ -149,3 +154,4 @@ def validate_declared_capabilities(
             )
     validate_scope_descriptor(descriptor, driver=driver)
     validate_source_descriptor(descriptor, driver=driver)
+    validate_rf_source_descriptor(descriptor, driver=driver)

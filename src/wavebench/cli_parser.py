@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     scope_parser = subparsers.add_parser("scope", help="Oscilloscope commands")
     source_parser = subparsers.add_parser("source", help="Signal generator commands")
+    rf_source_parser = subparsers.add_parser("rf-source", help="RF signal source commands")
     power_parser = subparsers.add_parser("power", help="Power supply commands")
     dmm_parser = subparsers.add_parser("dmm", help="Digital multimeter commands")
     sweep_parser = subparsers.add_parser("sweep", help="Source/scope sweep commands")
@@ -96,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capability_explain.add_argument(
         "--kind",
-        choices=("scope", "source", "power", "dmm"),
+        choices=("scope", "source", "rf_source", "power", "dmm"),
         default=None,
         help="Instrument kind when selecting a configured driver / 仪器类型",
     )
@@ -153,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plugin_list.add_argument(
         "--kind",
-        choices=("scope", "source", "power", "dmm"),
+        choices=("scope", "source", "rf_source", "power", "dmm"),
         default=None,
         help="Filter plugins by instrument kind / 按仪器类型过滤",
     )
@@ -643,6 +644,165 @@ def build_parser() -> argparse.ArgumentParser:
     protection_set.add_argument("--ocp-threshold", type=float, default=None)
     protection_set.add_argument("--ocp", choices=["on", "off"], default=None)
     add_runtime_options(protection_set)
+
+    rf_source_sub = rf_source_parser.add_subparsers(dest="command", required=True)
+    rf_source_idn = rf_source_sub.add_parser("idn", help="Query RF source *IDN?")
+    add_runtime_options(rf_source_idn)
+    rf_source_status = rf_source_sub.add_parser(
+        "status",
+        help="Query a typed, read-only RF source snapshot",
+    )
+    add_runtime_options(rf_source_status)
+    rf_source_trigger = rf_source_sub.add_parser(
+        "trigger",
+        help="Read declared Pulse and Sweep trigger configuration without triggering",
+    )
+    rf_source_trigger_sub = rf_source_trigger.add_subparsers(
+        dest="trigger_command",
+        required=True,
+    )
+    rf_source_trigger_status = rf_source_trigger_sub.add_parser(
+        "status",
+        help="Read logical trigger configuration without changing RF or trigger state",
+    )
+    rf_source_trigger_status.add_argument("--port", required=True)
+    add_runtime_options(rf_source_trigger_status)
+    rf_source_set_frequency = rf_source_sub.add_parser(
+        "set-frequency",
+        help="Configure one RF port frequency while its RF output is OFF",
+    )
+    rf_source_set_frequency.add_argument("--port", required=True)
+    rf_source_set_frequency.add_argument("frequency_hz", type=float)
+    add_runtime_options(rf_source_set_frequency)
+    rf_source_set_power = rf_source_sub.add_parser(
+        "set-power",
+        help="Configure one RF port dBm level while its RF output is OFF",
+    )
+    rf_source_set_power.add_argument("--port", required=True)
+    rf_source_set_power.add_argument("power_dbm", type=float)
+    add_runtime_options(rf_source_set_power)
+    rf_source_output = rf_source_sub.add_parser(
+        "output",
+        help="Set one RF port output on or off after a safety-checked snapshot",
+    )
+    rf_source_output.add_argument("--port", required=True)
+    rf_source_output.add_argument("state", choices=["on", "off"])
+    add_runtime_options(rf_source_output)
+
+    rf_source_modulation = rf_source_sub.add_parser(
+        "modulation",
+        help="Configure internal-sine modulation or enable RF for one exactly verified profile",
+    )
+    rf_source_modulation_sub = rf_source_modulation.add_subparsers(
+        dest="modulation_command",
+        required=True,
+    )
+    for command, value_option, help_text in (
+        ("configure-am", "depth-percent", "Configure internal-sine AM while RF output is OFF"),
+        (
+            "configure-fm",
+            "frequency-deviation-hz",
+            "Configure internal-sine FM while RF output is OFF",
+        ),
+        (
+            "enable-output-am",
+            "depth-percent",
+            "Enable RF only when the active internal-sine AM profile exactly matches",
+        ),
+        (
+            "enable-output-fm",
+            "frequency-deviation-hz",
+            "Enable RF only when the active internal-sine FM profile exactly matches",
+        ),
+        (
+            "enable-output-pm",
+            "phase-deviation-rad",
+            "Enable RF only when the active internal-sine PM profile exactly matches",
+        ),
+        (
+            "configure-pm",
+            "phase-deviation-rad",
+            "Configure internal-sine PM while RF output is OFF",
+        ),
+    ):
+        rf_source_modulation_configure = rf_source_modulation_sub.add_parser(
+            command,
+            help=help_text,
+        )
+        rf_source_modulation_configure.add_argument("--port", required=True)
+        rf_source_modulation_configure.add_argument(
+            f"--{value_option}",
+            type=float,
+            required=True,
+        )
+        rf_source_modulation_configure.add_argument(
+            "--internal-frequency-hz",
+            type=float,
+            required=True,
+        )
+        add_runtime_options(rf_source_modulation_configure)
+
+    rf_source_modulation_disable = rf_source_modulation_sub.add_parser(
+        "disable",
+        help="Disable one known active internal-sine modulation mode while RF output is OFF",
+    )
+    rf_source_modulation_disable.add_argument("--port", required=True)
+    rf_source_modulation_disable.add_argument(
+        "--modulation-kind",
+        choices=("am", "fm", "pm"),
+        required=True,
+    )
+    add_runtime_options(rf_source_modulation_disable)
+
+    rf_source_pulse = rf_source_sub.add_parser(
+        "pulse",
+        help="Configure a bounded internal single-pulse profile while RF output is OFF",
+    )
+    rf_source_pulse_sub = rf_source_pulse.add_subparsers(
+        dest="pulse_command",
+        required=True,
+    )
+    rf_source_pulse_configure = rf_source_pulse_sub.add_parser(
+        "configure",
+        help="Configure a disabled internal single-pulse profile without triggering",
+    )
+    rf_source_pulse_configure.add_argument("--port", required=True)
+    rf_source_pulse_configure.add_argument("--period-s", type=float, required=True)
+    rf_source_pulse_configure.add_argument("--width-s", type=float, required=True)
+    rf_source_pulse_configure.add_argument(
+        "--polarity",
+        choices=["normal", "inverted"],
+        required=True,
+    )
+    add_runtime_options(rf_source_pulse_configure)
+
+    rf_source_pulse_output = rf_source_sub.add_parser(
+        "pulse-output",
+        help="Set one declared physical Pulse-output interface without enabling RF output",
+    )
+    rf_source_pulse_output.add_argument("--port", required=True)
+    rf_source_pulse_output.add_argument("--interface", dest="interface_id", required=True)
+    rf_source_pulse_output.add_argument("state", choices=["on", "off"])
+    add_runtime_options(rf_source_pulse_output)
+
+    rf_source_sweep = rf_source_sub.add_parser(
+        "sweep",
+        help="Configure a bounded frequency-only Step Sweep while RF output is OFF",
+    )
+    rf_source_sweep_sub = rf_source_sweep.add_subparsers(
+        dest="sweep_command",
+        required=True,
+    )
+    rf_source_sweep_configure = rf_source_sweep_sub.add_parser(
+        "configure",
+        help="Configure a disabled Step Sweep without arming, firing, or triggering",
+    )
+    rf_source_sweep_configure.add_argument("--port", required=True)
+    rf_source_sweep_configure.add_argument("--start-frequency-hz", type=float, required=True)
+    rf_source_sweep_configure.add_argument("--stop-frequency-hz", type=float, required=True)
+    rf_source_sweep_configure.add_argument("--points", type=int, required=True)
+    rf_source_sweep_configure.add_argument("--dwell-s", type=float, required=True)
+    add_runtime_options(rf_source_sweep_configure)
 
     source_sub = source_parser.add_subparsers(dest="command", required=True)
 

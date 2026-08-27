@@ -2,7 +2,7 @@
 
 [中文文档](README.md) · English
 
-WaveBench is a Python measurement bench for laboratory debugging. It combines explicit instrument commands, run plans, capture packages, and offline reports. It requires Python 3.11 or newer. The current development line is `0.8.24`; the latest stable tag is `v0.8.0`.
+WaveBench is a Python measurement bench for laboratory debugging. It combines explicit instrument commands, run plans, capture packages, and offline reports. It requires Python 3.11 or newer. The current development line is `0.8.25`; the latest stable tag is `v0.8.0`.
 
 > [!WARNING]
 > Some commands connect to and change real instruments. Check wiring, input impedance, output state, and voltage/current limits before running a hardware action.
@@ -59,6 +59,7 @@ For the terminal UI, install `.[tui]` and run `wavebench tui --fake`. The fake m
 - Install or develop plugins: [plugin user guide](project/guides/WaveBench_可安装仪器插件.md) and [plugin development guide](project/contributing/WaveBench_插件开发指南.md)
 - TUI and read-only HTTP MCP: [TUI](project/guides/WaveBench_TUI终端控制面板.md) and [HTTP MCP](project/guides/WaveBench_HTTP_MCP_只读接口.md)
 - Example plans and their hardware boundaries: [plans README](../plans/README.md)
+- RF-source domain and milestones: [guide](project/guides/WaveBench_RF信号源使用指南.md), [design](project/design/WaveBench_RF信号源设计.md), and [milestones](project/design/WaveBench_RF信号源开发里程碑.md). Core provides M0–M4 and one bounded A5 Pulse Output contract; DSG830 A1/A2/A3/A4/A4-MO/A5 evidence permits production identity, snapshot, OFF-only `rf_source.cw_configure`, RF-OFF internal-sine `rf_source.modulation_configure`, `rf_source.modulation_disable`, safety-gated `rf_source.output` ON/OFF, fixed-profile modulated output, internal/single Pulse configuration, `rf_source.pulse_output`, and frequency-only Step Sweep configuration that remains disabled. A5 covers only the declared `pulse_in_out` output route, not Pulse input, `TRIGGER IN`, trigger, sync, or Sweep execution. PM is limited to the verified `1.25 rad` production profile.
 
 Most detailed pages are currently maintained in Chinese. Commands, identifiers, and schemas should match across languages.
 

@@ -11,6 +11,7 @@ from wavebench.transport.base import InstrumentTransport
 
 from .scope_extensions import ScopeDescriptorExtensions
 from .source_extensions import SourceDescriptorExtensions
+from .rf_source_extensions import RfSourceDescriptorExtensions
 
 EXECUTABLE_PLUGIN_API_VERSION = "wavebench.instrument.v2"
 ScopeCouplingPolicy = Literal["fixed-high-impedance", "switchable-termination", "unknown"]
@@ -92,6 +93,7 @@ class InstrumentDescriptor:
     # Append-only to preserve the positional layout accepted by instrument API v2.
     scope_extensions: ScopeDescriptorExtensions | None = None
     source_extensions: SourceDescriptorExtensions | None = None
+    rf_source_extensions: RfSourceDescriptorExtensions | None = None
 
     def __post_init__(self) -> None:
         if not self.driver_id or self.driver_id.strip() != self.driver_id:
@@ -129,6 +131,16 @@ class InstrumentDescriptor:
                 raise ValueError("source_extensions can only be declared by source descriptors")
             if not isinstance(self.source_extensions, SourceDescriptorExtensions):
                 raise TypeError("source_extensions has an invalid type")
+        if self.rf_source_extensions is None:
+            if self.kind == "rf_source":
+                raise ValueError("rf_source descriptors require rf_source_extensions")
+        else:
+            if self.kind != "rf_source":
+                raise ValueError(
+                    "rf_source_extensions can only be declared by rf_source descriptors"
+                )
+            if not isinstance(self.rf_source_extensions, RfSourceDescriptorExtensions):
+                raise TypeError("rf_source_extensions has an invalid type")
 
     def with_distribution(
         self,

@@ -27,7 +27,7 @@ class Instrument:
 
 ### Metadata 与可执行插件分层
 
-`wavebench.drivers` V1 继续提供只读 metadata；`wavebench.instruments` V2 提供可信的可执行 driver factory。Service 只依赖 `ScopeDriver` / `SourceDriver` / `PowerDriver` / `DmmDriver` contracts，并通过统一 registry/factory 创建内置或外部 driver。
+`wavebench.drivers` V1 继续提供只读 metadata；`wavebench.instruments` V2 提供可信的可执行 driver factory。当前 Service 依赖 `ScopeDriver` / `SourceDriver` / `RfSourceDriver` / `PowerDriver` / `DmmDriver` contracts，并通过统一 registry/factory 创建内置或外部 driver。
 
 插件只负责设备差异。核心继续掌握 resource、transport factory、安全限制、Service、run plan 和 artifact。未选中的第三方插件默认不导入；`plugin ... --load` 才会显式加载并诊断全部可执行 descriptor。
 
@@ -247,6 +247,14 @@ Service 层可以按以下顺序组合这些动作：
 ```text
 设置信号 → 等待稳定 → 采集波形 → 保存数据 → 计算指标
 ```
+
+## RF 信号源：当前 M0–M4 与后续阶段
+
+上述 `SignalGenerator` 示例只描述普通函数／任意波形发生器。RF 信号源以频率、dBm 功率、RF 输出和稳定 `port_id` 为主，不能把它映射为普通 `SourceDriver` 的 Vpp、offset、数字 channel 或波形接口。
+
+当前 Core 已实现独立 model、`RfSourceDriver` Protocol、只读 Service、OFF-only CW transaction、端口级输出 transaction、内部正弦 AM／FM／PM transaction、internal／single Pulse transaction、保持 Sweep disabled 的 Step Sweep transaction、`rf-source idn`／`rf-source status`／`rf-source set-frequency`／`rf-source set-power`／`rf-source output`／`rf-source modulation configure-*`／`rf-source pulse configure`／`rf-source sweep configure` 和对应的 run step。所有入口仍受 capability、access、资源租约与 session health 约束；descriptor 未声明所需 capability 时，会在 transport I/O 前被拒绝。
+
+DSG830 已由 A1／A2／A3／A4 调制／Pulse／Step Sweep 将 snapshot、OFF-only `rf_source.cw_configure`、受 safety 限制的 `rf_source.output`、RF-OFF `rf_source.modulation_configure`、`rf_source.pulse_configure` 和 `rf_source.sweep_configure` 提升到 production。PM production profile 固定为 `1.25 rad`；Pulse 与 Step Sweep 只允许已声明的配置 profile，且配置后保持 disabled。调制开启时的 RF 输出、trigger、Sweep execute／fire 与 Level Sweep 仍待独立证据。设计与里程碑分别见[RF 信号源领域设计](WaveBench_RF信号源设计.md)和[RF 信号源开发里程碑](WaveBench_RF信号源开发里程碑.md)。
 
 ## 早期目录示意
 

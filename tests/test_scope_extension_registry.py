@@ -170,11 +170,12 @@ def test_public_scope_capability_requires_new_core_floor() -> None:
 def test_scope_descriptor_extension_is_append_only_for_positional_compatibility() -> None:
     names = [field.name for field in fields(InstrumentDescriptor)]
 
-    assert names[-4:] == [
+    assert names[-5:] == [
         "config_fields",
         "resource_schemes",
         "scope_extensions",
         "source_extensions",
+        "rf_source_extensions",
     ]
     assert [field.name for field in fields(ScopeDescriptorExtensions)] == [
         "screenshot_profile",

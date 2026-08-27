@@ -13,7 +13,7 @@ wavebench
 当前一级命令按设备或功能划分：
 
 ```text
-scope    source    power    dmm    sweep    run
+scope    source    rf-source    power    dmm    sweep    run
 capture  mcp       tui      net    doctor   plugin
 capability  lock
 ```
@@ -31,8 +31,8 @@ wavebench run --help
 | 类别 | 示例 | 行为 |
 |---|---|---|
 | 离线 | `run schema`、`run template`、`run check`、`run intent`、`run report`、`run compare`、`run resume`、`capability explain`、`lock status`、`capture inspect`、`tui --fake` | 不连接仪器；报告、比较、检查、能力解释、锁查询和意图生成只读取本地文件 |
-| 连接读取 | `doctor`、`net`、`scope idn`、`scope status`、`source snapshot-v2`、`run verify` | 查询资源、身份或状态，不应修改实验设置 |
-| 显式写入或触发 | `scope auto`、`scope fetch/capture`、source / power setter、`run plan` | 可能改变设置、触发采集或切换输出 |
+| 连接读取 | `doctor`、`net`、`scope idn`、`scope status`、`source snapshot-v2`、`rf-source idn`／`status`、`run verify` | 查询资源、身份或状态，不应修改实验设置 |
+| 显式写入或触发 | `scope auto`、`scope fetch/capture`、source / power setter、已获 capability 的 `rf-source` setter、`run plan` | 可能改变设置、触发采集或切换输出 |
 
 执行硬件写入前，应先确认接线、输入阻抗、输出状态和安全限制。CLI 不会自动发送 `*RST`，也不会因为设置电压或幅度而自动打开输出。
 
@@ -78,6 +78,32 @@ wavebench --json source snapshot-v2 --config wavebench.toml
 该命令要求插件声明 `source.snapshot_v2`，按 descriptor topology 查询全部通道、输入和跨通道
 关系，不接受单通道或 raw query 参数。普通模式输出缩进 JSON；`--json` 使用
 `wavebench.cli.result.v1` envelope。命令不授权任何 Source V2 写入。
+
+安装匹配的 RF 插件后，RF 信号源使用独立命令域：
+
+```bash
+wavebench rf-source idn --config wavebench.toml
+wavebench rf-source status --config wavebench.toml
+wavebench rf-source set-frequency --port PORT_ID HZ --config wavebench.toml
+wavebench rf-source set-power --port PORT_ID DBM --config wavebench.toml
+wavebench rf-source output --port PORT_ID on|off --config wavebench.toml
+wavebench rf-source modulation configure-am --port PORT_ID --depth-percent PERCENT --internal-frequency-hz HZ --config wavebench.toml
+wavebench rf-source modulation configure-fm --port PORT_ID --frequency-deviation-hz HZ --internal-frequency-hz HZ --config wavebench.toml
+wavebench rf-source modulation configure-pm --port PORT_ID --phase-deviation-rad RAD --internal-frequency-hz HZ --config wavebench.toml
+wavebench rf-source pulse configure --port PORT_ID --period-s SECONDS --width-s SECONDS --polarity normal|inverted --config wavebench.toml
+wavebench rf-source sweep configure --port PORT_ID --start-frequency-hz START --stop-frequency-hz STOP --points COUNT --dwell-s SECONDS --config wavebench.toml
+wavebench capability explain rf_source.snapshot --driver rigol.dsg830 --kind rf_source --access read_only
+wavebench capability explain rf_source.output_enable --driver rigol.dsg830 --kind rf_source --access read_write
+wavebench capability explain rf_source.modulation_configure --driver rigol.dsg830 --kind rf_source --access read_write
+```
+
+`rf-source idn` 要求 descriptor 声明 `rf_source.idn`。`rf-source status` 要求
+`rf_source.snapshot`，并在缺少 capability 时于 transport I/O 前拒绝。DSG830 已完成 A1／A2／A3 与 A4 调制／Pulse／Step Sweep，并在
+production descriptor 中声明只读 capability、`rf_source.cw_configure`、`rf_source.output`、`rf_source.modulation_configure`、`rf_source.pulse_configure` 与 `rf_source.sweep_configure`；其他插件仍可能被该门禁拒绝。它不表示可以改用 raw
+SCPI。M1 的 `set-frequency` 与 `set-power` 还要求 `rf_source.cw_configure`、`read_write` 访问、已声明的
+CW profile 和完整的 OFF-only preflight。M2 的 `output` 要求 `rf_source.output`、
+`read_write` 访问、可读 output profile 和端口级 safety preflight；ON 还要求确认端接、频率、功率、调制、Pulse、Sweep 和 protection。
+DSG830 对 OFF-only CW、RF-OFF 内部正弦调制、端口级 ON/OFF、internal／single Pulse 与固定 profile 的 Step Sweep 配置开放 production 写入；缺少 `read_write`、对应 profile 或 fresh preflight 时仍在写入前拒绝。调制 profile 的 PM 固定为 `1.25 rad`，且当前 RF ON 合同要求调制 disabled。Pulse 与 Step Sweep 配置完成后分别保持 Pulse／Sweep disabled；它们不提供 `modulation_disable`、trigger、execute、arm、fire、Level Sweep 或 list。
 
 已声明对应写 capability 的插件还可以配置跨通道关系：
 

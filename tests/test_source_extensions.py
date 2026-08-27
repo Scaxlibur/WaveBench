@@ -496,11 +496,12 @@ def test_source_descriptor_append_only_and_replace_compatible() -> None:
     descriptor = source_descriptor(driver=SourceV2FakeDriver(combined=True))
     names = [item.name for item in fields(InstrumentDescriptor)]
 
-    assert names[-4:] == [
+    assert names[-5:] == [
         "config_fields",
         "resource_schemes",
         "scope_extensions",
         "source_extensions",
+        "rf_source_extensions",
     ]
     assert replace(descriptor, summary="changed").source_extensions is descriptor.source_extensions
 

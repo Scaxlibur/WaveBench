@@ -7,7 +7,7 @@
 
 WaveBench 是一个用 Python 编写的实验室自动测量台，面向电子设计竞赛调试和日常实验。它把仪器控制、实验步骤和采集证据放在同一条命令链中，支持先离线检查 plan，再决定是否连接硬件。
 
-当前仓库开发线为 `0.8.24`，最新稳定 tag 为 `v0.8.0`。不同版本的命令和能力可能不同，以对应 tag 中的文档为准。
+当前仓库开发线为 `0.8.25`，最新稳定 tag 为 `v0.8.0`。不同版本的命令和能力可能不同，以对应 tag 中的文档为准。
 
 ## 🌟 特别鸣谢
 
@@ -114,11 +114,21 @@ wavebench tui --fake
 | 信号源 | RIGOL DG4000/DG4202 | 基本波形、频率控制、扫频和任意波上传 | 主包能力 |
 | 电源 | RIGOL DP800 | 状态、保护、设定值和输出控制 | 主包能力 |
 | 万用表 | RIGOL DM3000/DM3058 | 常用读数、功能和部分量程/触发状态 | 主包能力 |
-| run plan | source、power、scope、dmm、sleep、频响步骤 | 多仪器编排、质量检查和恢复 | 主入口 |
+| run plan | source、rf_source、power、scope、dmm、sleep、频响步骤 | 多仪器编排、质量检查和恢复 | 主入口 |
 | TUI | 电源、万用表、信号源面板 | 人工查看和少量控制 | 实验性 |
 | 插件 | `wavebench.instruments` 外部 driver | 添加或替换特定仪器实现 | 可选 |
 
 详细的能力边界和参数见 [文档总览](docs/README.md)、[项目文档分类](docs/project/README.md) 及 `docs/project/reference/` 下的参考页。
+
+## RF 信号源
+
+`rf_source` 是独立于普通 `source` 的仪器领域。DSG830 当前已开放只读状态、RF OFF 时的单字段 CW 配置、RF-OFF 内部正弦 AM／FM／PM 配置及按模式关闭、具有完整 safety 配置的 `rf_out` ON/OFF、RF-OFF internal／single Pulse 配置，以及 RF-OFF 的 frequency-only Step Sweep 配置。PM 的 production profile 限于 `1.25 rad`。A4-MO 已将受限 `rf_source.modulated_output_enable` 提升到 production：仅接受已激活且精确匹配的 AM `50 %`／`1 kHz`、FM `20 kHz`／`1 kHz`、PM `1.25 rad`／`1 kHz` profile，最大功率均为 `-50 dBm`；普通 `rf_source.output` 仍要求调制关闭。FM／PM 的 WaveBench CH2 分析只记录波形质量，不计量频偏或相偏。Step Sweep 固定为 `STEP`／`FWD`／`RAMP`／`LIN`，配置后保持 Sweep disabled。
+
+已完成的 A5 只覆盖一条后面板物理路径：DSG830 的「PULSE IN/OUT」按 output 方向、固定 internal／single／normal／`1 ms`／`100 μs` profile，提供 `rf_source.pulse_output` 与 `wavebench rf-source pulse-output`。它不启用 RF 输出，也不定义 Pulse input、`TRIGGER IN`、Sweep fire、sync／reference、Level Sweep 或 list。A5-0 仍仅是逻辑 Pulse／Sweep trigger configuration 的零写读取合同，DSG830 production descriptor 不声明 `rf_source.trigger_snapshot`。
+
+- 日常配置与操作：[RF 信号源使用指南](docs/project/guides/WaveBench_RF信号源使用指南.md)
+- 模型、安全语义和 capability 边界：[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)
+- Core／插件的同步计划和证据状态：[RF 信号源开发里程碑](docs/project/design/WaveBench_RF信号源开发里程碑.md)
 
 ## 三条常用路径
 

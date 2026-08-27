@@ -64,6 +64,62 @@ step 的 `OperationSpec`。`run plan --intent` 会在取得资源租约、打开
 - `run plan` 是整次实验持有 session，减少同一 plan 内反复连接/断开的开销，也让 safety、采集和 restore 使用同一批仪器连接。
 - 当前第一版不做长 session 断线自动重建；如果 run 中途断线，应该让 run 失败并留下 `run.json` 证据，而不是偷偷重连后继续。
 
+## RF 信号源步骤
+
+RF 使用独立的 `rf_source.*` step，不使用普通 `source` 的 channel、Vpp、restore 或 safety 语义。当前 DSG830 production descriptor 已开放只读状态、OFF-only CW、RF-OFF 内部正弦调制、受 safety 限制的 RF 输出、internal／single Pulse 和保持 Sweep disabled 的 frequency-only Step Sweep 配置：
+
+```toml
+[[steps]]
+kind = "rf_source.set_frequency"
+port_id = "rf_out"
+frequency_hz = 1000000
+
+[[steps]]
+kind = "rf_source.set_power_dbm"
+port_id = "rf_out"
+power_dbm = -40
+
+[[steps]]
+kind = "rf_source.output_enable"
+port_id = "rf_out"
+
+[[steps]]
+kind = "rf_source.output_disable"
+port_id = "rf_out"
+
+[[steps]]
+kind = "rf_source.pulse_configure"
+port_id = "rf_out"
+period_s = 0.001
+width_s = 0.0001
+polarity = "normal"
+
+[[steps]]
+kind = "rf_source.sweep_configure"
+port_id = "rf_out"
+start_frequency_hz = 1000000
+stop_frequency_hz = 2000000
+points = 11
+dwell_s = 0.02
+```
+
+CW、Pulse 和 Step Sweep 配置均要求 RF 输出明确 OFF，且调制、Pulse、Sweep 与 protection 没有冲突。Pulse 只支持 internal／single，配置后保持 disabled；Step Sweep 固定为 `STEP`／`FWD`／`RAMP`／`LIN`，不 arm、fire、trigger、execute、配置 Level Sweep 或切换 RF 输出，配置后保持 disabled。`rf_source.output_enable` 还会检查每端口安全配置、实际端接、频率、功率和 fresh snapshot；不满足时会在 ON 前拒绝。RF operation 的类型化 artifact 写入 `run.json.rf_source_operations`。
+
+Core 已在 schema 中提供 M3 的 `rf_source.modulation_configure`：
+
+```toml
+[[steps]]
+kind = "rf_source.modulation_configure"
+port_id = "rf_out"
+modulation_kind = "fm"
+frequency_deviation_hz = 10000
+internal_frequency_hz = 1000
+```
+
+`modulation_kind` 为 `am`、`fm` 或 `pm`，分别只能使用 `depth_percent`、`frequency_deviation_hz` 或 `phase_deviation_rad`。它只覆盖内部 Sine，要求 RF OFF、所有调制模式 disabled、Pulse／Sweep disabled 和无活动 protection condition。DSG830 production descriptor 已声明调制 capability，profile 为 AM `0–100 %`、FM `0.1 Hz–1 MHz`、PM 精确 `1.25 rad`，且内部频率均为 `10 Hz–100 kHz`。不要把它与 `rf_source.output_enable` 拼成「调制输出」流程：当前 ON 合同要求调制 disabled。
+
+RF 的配置、端接判断、CLI 与 A4 边界见 [RF 信号源使用指南](WaveBench_RF信号源使用指南.md)。
+
 ## 不想手写时先用模板
 
 `run template` 只负责生成标准 TOML plan，不连接仪器、不改配置、不覆盖已有文件（除非传 `--force`）。生成后仍然走普通流程：`run check`、`run verify`、`run plan`、`run report`。

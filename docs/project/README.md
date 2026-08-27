@@ -2,6 +2,18 @@
 
 `docs/project/` 按文档用途分组。当前重点是让入口、参考资料和设计说明各自承担单一职责；文件名暂时保留原样，ASCII 文件名迁移另行处理。
 
+## RF 信号源
+
+`rf_source` 是与普通 `source` 平行的仪器领域：它使用 `port_id`、dBm、RF 输出、端接与 protection 状态，不能套用普通信号源的 Vpp、offset 或 channel 语义。
+
+| 阅读目的 | 入口 |
+| --- | --- |
+| 配置仪器、声明端接和执行已开放操作 | [使用指南](guides/WaveBench_RF信号源使用指南.md) |
+| 理解模型、事务与安全边界 | [领域设计](design/WaveBench_RF信号源设计.md) |
+| 开发 Core／DSG830 或复核 capability 提升依据 | [开发里程碑](design/WaveBench_RF信号源开发里程碑.md) |
+
+DSG830 当前 production 范围包括只读状态、RF-OFF CW、RF-OFF 内部正弦调制、受 safety 限制的 RF ON/OFF、保持 disabled 的 internal／single Pulse 和 fixed Step Sweep 配置。调制配置不授权调制开启时的 RF 输出；`rf_source.modulation_disable`、trigger、Sweep execute／fire、Level Sweep 与 list 仍不在 production 范围内。PM 的 production profile 仅为已验证的 `1.25 rad`。
+
 ## guides：使用指南
 
 - [CLI 形态](guides/WaveBench_CLI形态.md)

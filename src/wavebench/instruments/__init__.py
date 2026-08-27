@@ -150,12 +150,16 @@ from .models import (
 )
 from . import scope_extensions as _scope_extensions
 from . import source_extensions as _source_extensions
+from . import rf_source_extensions as _rf_source_extensions
 
 for _scope_extension_name in _scope_extensions.__all__:
     globals()[_scope_extension_name] = getattr(_scope_extensions, _scope_extension_name)
 
 for _source_extension_name in _source_extensions.__all__:
     globals()[_source_extension_name] = getattr(_source_extensions, _source_extension_name)
+
+for _rf_source_extension_name in _rf_source_extensions.__all__:
+    globals()[_rf_source_extension_name] = getattr(_rf_source_extensions, _rf_source_extension_name)
 
 __all__ = [
     "ArbitraryQueryProbeResult",
@@ -310,7 +314,9 @@ __all__ = [
     "open_instrument_driver",
     *_scope_extensions.__all__,
     *_source_extensions.__all__,
+    *_rf_source_extensions.__all__,
 ]
 
 del _scope_extension_name
 del _source_extension_name
+del _rf_source_extension_name

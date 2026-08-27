@@ -87,6 +87,18 @@ from .instruments.scope_extensions import (
     ScopeTraceData,
     ScopeTraceRef,
 )
+from .instruments.rf_source_extensions import (
+    RfCwRequest,
+    RfModulatedOutputRequest,
+    RfModulationDisableRequest,
+    RfModulationKind,
+    RfModulationRequest,
+    RfOutputRequest,
+    RfPulseConfigureRequest,
+    RfPulseOutputRequest,
+    RfPulsePolarity,
+    RfSweepConfigureRequest,
+)
 from .mcp_http import (
     resolve_mcp_token,
     serve_mcp_http,
@@ -99,6 +111,7 @@ from .plugins.registry import build_plugin_registry, has_doctor_errors, plugin_d
 from .plugins.scpi import has_scpi_doctor_errors, load_scpi_plugin, probe_scpi_plugin, scpi_plugin_doctor_records
 from .services.scope_service import ScopeService
 from .services.source_service import SourceService
+from .services.rf_source_service import RfSourceService
 from .services.power_service import PowerService
 from .services.dmm_service import DmmService
 from .services.run_plan import format_run_plan_schema, load_run_plan
@@ -195,6 +208,13 @@ def _load_source_service(args: argparse.Namespace) -> SourceService:
     if probe_timeout_ms is not None:
         config = config.with_connection_timeout_ms(probe_timeout_ms)
     return SourceService(config=config, logger=CommandLogger())
+
+
+def _load_rf_source_service(args: argparse.Namespace) -> RfSourceService:
+    config = load_config(args.config)
+    if args.resource:
+        config = config.with_rf_source_resource(args.resource)
+    return RfSourceService(config=config, logger=CommandLogger())
 
 
 def _load_power_service(args: argparse.Namespace) -> PowerService:
@@ -1519,6 +1539,138 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "set-duty":
                 _print_source_status(service.set_square_duty_cycle(channel=args.channel, duty_percent=args.duty_percent))
+                return 0
+        if args.domain == "rf-source":
+            service = _load_rf_source_service(args)
+            if args.command == "idn":
+                print(service.idn())
+                return 0
+            if args.command == "status":
+                result = service.snapshot()
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "trigger":
+                result = service.trigger_snapshot(args.port)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "set-frequency":
+                result = service.configure_cw(
+                    RfCwRequest(port_id=args.port, frequency_hz=args.frequency_hz)
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "set-power":
+                result = service.configure_cw(
+                    RfCwRequest(port_id=args.port, power_dbm=args.power_dbm)
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "modulation":
+                if args.modulation_command == "disable":
+                    result = service.disable_modulation(
+                        RfModulationDisableRequest(
+                            port_id=args.port,
+                            kind=RfModulationKind(args.modulation_kind),
+                        )
+                    )
+                    if args.json:
+                        _emit_json_result(_json_payload(result))
+                    else:
+                        print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                    return 0
+                modulation_kind = {
+                    "configure-am": RfModulationKind.AM,
+                    "configure-fm": RfModulationKind.FM,
+                    "configure-pm": RfModulationKind.PM,
+                    "enable-output-am": RfModulationKind.AM,
+                    "enable-output-fm": RfModulationKind.FM,
+                    "enable-output-pm": RfModulationKind.PM,
+                }[args.modulation_command]
+                request_fields = {
+                    "port_id": args.port,
+                    "kind": modulation_kind,
+                    "internal_frequency_hz": args.internal_frequency_hz,
+                }
+                if modulation_kind is RfModulationKind.AM:
+                    request_fields["depth_percent"] = args.depth_percent
+                elif modulation_kind is RfModulationKind.FM:
+                    request_fields["frequency_deviation_hz"] = args.frequency_deviation_hz
+                else:
+                    request_fields["phase_deviation_rad"] = args.phase_deviation_rad
+                request = RfModulationRequest(**request_fields)
+                if args.modulation_command.startswith("enable-output-"):
+                    result = service.enable_modulated_output(
+                        RfModulatedOutputRequest(modulation=request)
+                    )
+                else:
+                    result = service.configure_modulation(request)
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pulse":
+                result = service.configure_pulse(
+                    RfPulseConfigureRequest(
+                        port_id=args.port,
+                        period_s=args.period_s,
+                        width_s=args.width_s,
+                        polarity=RfPulsePolarity(args.polarity),
+                    )
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "pulse-output":
+                result = service.set_pulse_output(
+                    RfPulseOutputRequest(
+                        port_id=args.port,
+                        interface_id=args.interface_id,
+                        enabled=args.state == "on",
+                    )
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "sweep":
+                result = service.configure_sweep(
+                    RfSweepConfigureRequest(
+                        port_id=args.port,
+                        start_frequency_hz=args.start_frequency_hz,
+                        stop_frequency_hz=args.stop_frequency_hz,
+                        points=args.points,
+                        dwell_s=args.dwell_s,
+                    )
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "output":
+                result = service.set_output(
+                    RfOutputRequest(port_id=args.port, enabled=args.state == "on")
+                )
+                if args.json:
+                    _emit_json_result(_json_payload(result))
+                else:
+                    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
                 return 0
         if args.domain == "sweep":
             service = _load_sweep_service(args)

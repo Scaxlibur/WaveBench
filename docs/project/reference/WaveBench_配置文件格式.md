@@ -88,7 +88,7 @@ wavebench scope capture --channel 2
 
 ## 仪器访问策略
 
-`[scope]`、`[source]`、`[power]` 和 `[dmm]` 都支持 `access` 字段。该字段只控制
+`[scope]`、`[source]`、`[rf_source]`、`[power]` 和 `[dmm]` 都支持 `access` 字段。该字段只控制
 WaveBench 发起的仪器操作，不会修改配置文件，也不会替代操作系统或仪器自身的权限控制。
 
 ```toml
@@ -169,6 +169,20 @@ check_errors = true
 ensure_fix_mode_on_set_frequency = true
 settle_ms_after_set_frequency = 500
 access = "read_write"
+
+# DSG830 已完成 A1／A2；read_only 仍是身份与状态查询的默认安全选择。
+[rf_source]
+driver = "rigol.dsg830"
+resource = "TCPIP::192.0.2.13::INSTR"
+access = "read_only"
+
+# `rf-source output` 的 ON preflight 会消费该静态证据；它不授权 CW 或其它 RF 写入能力。
+[[rf_source.safety.ports]]
+port_id = "rf_out"
+minimum_frequency_hz = 9000
+maximum_frequency_hz = 3000000000
+maximum_power_dbm = -20
+actual_termination_ohm = 50
 
 [power]
 driver = "dp800"
@@ -415,6 +429,46 @@ maximum_ohm = 50.5
 
 实际端接与仪器显示的 `HiZ`、`50 Ω` 或其它 load setting 是不同事实。配置项只声明实验台已确认的
 外部端接；未配置不会被核心根据显示负载自动推断。
+
+## `[rf_source]`
+
+```toml
+[rf_source]
+driver = "rigol.dsg830"
+resource = "TCPIP::192.0.2.13::INSTR"
+access = "read_only"
+
+[[rf_source.safety.ports]]
+port_id = "rf_out"
+minimum_frequency_hz = 9000
+maximum_frequency_hz = 3000000000
+maximum_power_dbm = -20
+actual_termination_ohm = 50
+```
+
+`[rf_source]` 是独立于普通 `[source]` 的 RF 信号源配置。它使用 plugin descriptor 的稳定
+`port_id`、Hz 和 dBm，不存在 `default_channel`、Vpp 或波形字段。M0 提供
+`wavebench rf-source idn` 与 `wavebench rf-source status`；后者要求 production descriptor 声明
+`rf_source.snapshot`。M1 的频率／功率 CLI、M4 的 Pulse／Step Sweep 配置和 M2 的输出 CLI 都要求对应 capability、`read_write` 访问和
+fresh preflight；M2 的端口 ON/OFF 还要求完整安全配置。DSG830 已完成 A1／A2／A3／A4 Pulse／A4 Step Sweep，声明 `rf_source.idn`、`rf_source.snapshot`、`rf_source.cw_configure`、`rf_source.output`、`rf_source.pulse_configure` 与 `rf_source.sweep_configure`：status 可在已配置的只读 session 中执行，端口 ON/OFF 还要求切换为 `read_write` 并提供完整安全配置。Pulse 与 Step Sweep 配置分别保持 Pulse／Sweep disabled；调制、trigger、Sweep execute／fire 与 Level Sweep 仍由 capability 门禁拒绝。
+
+字段说明：
+
+- `driver`：已安装 RF 插件的 canonical driver ID；默认值是 `rigol.dsg830`，但只有已安装插件才可解析。
+- `resource`：RF 信号源的 VISA 资源串；可由 `rf-source` 命令的 `--resource` 临时覆盖。
+- `access`：沿用通用访问策略。`read_only` 是 production 状态查询的默认选择；`read_write` 本身不授予写入，
+  还必须同时具备对应 descriptor capability、profile、fresh safety preflight 和实机证据。
+- `options`：可选的插件私有配置表；公开配置不要放入真实资源之外的凭据或实验室专有数据。
+
+`[[rf_source.safety.ports]]` 是按端口声明的本地静态安全证据。每项必须提供唯一 `port_id`、有限的
+`minimum_frequency_hz`、`maximum_frequency_hz`、`maximum_power_dbm` 和正数
+`actual_termination_ohm`；最大频率不得小于最小频率。它不改变仪器显示的负载设置，也不会把 dBm
+换算为 Vpp。M2 的 RF ON 事务会使用它进行准入判断；若某个 descriptor 缺少 output capability，事务仍会在
+打开 transport 前拒绝。DSG830 已声明该 capability，但 `read_write`、完整安全配置和 fresh snapshot 缺一不可。
+
+RF 的 capability、A1–A5 证据门和 DSG830 的当前 production 边界见
+[RF 信号源领域设计](../design/WaveBench_RF信号源设计.md)和
+[RF 信号源开发里程碑](../design/WaveBench_RF信号源开发里程碑.md)。
 
 ## `[power]`
 

@@ -43,6 +43,127 @@ def test_source_output_spec_describes_mutation_and_restore_boundary() -> None:
     assert spec.as_dict()["required_capabilities"] == ["source.output"]
 
 
+def test_rf_source_m0_specs_are_read_only_and_exclusive() -> None:
+    identity = require_operation_spec("rf_source.idn")
+    snapshot = require_operation_spec("rf_source.snapshot")
+
+    assert identity.instrument_kind == "rf_source"
+    assert identity.required_capabilities == ("rf_source.idn",)
+    assert identity.effect == "observe"
+    assert identity.mutates is False
+    assert snapshot.instrument_kind == "rf_source"
+    assert snapshot.required_capabilities == ("rf_source.snapshot",)
+    assert snapshot.effect == "stateful_read"
+    assert snapshot.mutates is False
+    assert snapshot.lease_mode == "exclusive"
+    assert snapshot.restore_coverage == "none-read-only"
+    assert snapshot.error_check_minimum == "disabled"
+
+
+def test_rf_source_m1_cw_specs_require_snapshot_and_cw_capability() -> None:
+    frequency = require_operation_spec("rf_source.set_frequency")
+    power = require_operation_spec("rf_source.set_power_dbm")
+
+    assert frequency.instrument_kind == "rf_source"
+    assert frequency.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.cw_configure",
+    )
+    assert frequency.effect == "write"
+    assert frequency.changed_fields == ("rf_source.port.frequency_hz",)
+    assert frequency.restore_coverage == "none"
+    assert "rf_output_must_be_off" in frequency.risk_flags
+    assert frequency.safe_alternatives == ("rf_source.snapshot",)
+    assert power.required_capabilities == frequency.required_capabilities
+    assert power.effect == "write"
+    assert power.changed_fields == ("rf_source.port.power_dbm",)
+
+
+def test_rf_source_m2_output_specs_require_snapshot_and_output_capability() -> None:
+    enable = require_operation_spec("rf_source.output_enable")
+    disable = require_operation_spec("rf_source.output_disable")
+
+    assert enable.instrument_kind == "rf_source"
+    assert enable.required_capabilities == ("rf_source.snapshot", "rf_source.output")
+    assert enable.effect == "write"
+    assert enable.changed_fields == ("rf_source.port.output_enabled",)
+    assert enable.restore_coverage == "none"
+    assert "dangerous_output" in enable.risk_flags
+    assert enable.safe_alternatives == ("rf_source.snapshot",)
+    assert disable.required_capabilities == enable.required_capabilities
+    assert disable.effect == "write"
+    assert "safe_output_disable" in disable.risk_flags
+
+
+def test_rf_source_modulation_disable_spec_requires_state_evidence_and_keeps_rf_off() -> None:
+    disable = require_operation_spec("rf_source.modulation_disable")
+
+    assert disable.instrument_kind == "rf_source"
+    assert disable.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.modulation_disable",
+    )
+    assert disable.effect == "write"
+    assert disable.changed_fields == (
+        "rf_source.modulation.enabled_modes",
+        "rf_source.modulation.global_enabled",
+    )
+    assert disable.restore_coverage == "none"
+    assert "rf_output_must_be_off" in disable.risk_flags
+    assert "safe_modulation_disable" in disable.risk_flags
+    assert disable.safe_alternatives == ("rf_source.snapshot",)
+
+
+def test_rf_source_pulse_configure_spec_keeps_rf_and_pulse_off() -> None:
+    configure = require_operation_spec("rf_source.pulse_configure")
+
+    assert configure.instrument_kind == "rf_source"
+    assert configure.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.pulse_configure",
+    )
+    assert configure.effect == "write"
+    assert configure.changed_fields == (
+        "rf_source.pulse.source",
+        "rf_source.pulse.mode",
+        "rf_source.pulse.period_s",
+        "rf_source.pulse.width_s",
+        "rf_source.pulse.polarity",
+        "rf_source.pulse.state",
+    )
+    assert configure.restore_coverage == "none"
+    assert "rf_output_must_be_off" in configure.risk_flags
+    assert "pulse_state" in configure.risk_flags
+    assert configure.safe_alternatives == ("rf_source.snapshot",)
+
+
+def test_rf_source_sweep_configure_spec_keeps_rf_and_sweep_off() -> None:
+    configure = require_operation_spec("rf_source.sweep_configure")
+
+    assert configure.instrument_kind == "rf_source"
+    assert configure.required_capabilities == (
+        "rf_source.snapshot",
+        "rf_source.sweep_configure",
+    )
+    assert configure.effect == "write"
+    assert configure.changed_fields == (
+        "rf_source.sweep.type",
+        "rf_source.sweep.direction",
+        "rf_source.sweep.shape",
+        "rf_source.sweep.spacing",
+        "rf_source.sweep.start_frequency_hz",
+        "rf_source.sweep.stop_frequency_hz",
+        "rf_source.sweep.points",
+        "rf_source.sweep.dwell_s",
+        "rf_source.sweep.state",
+    )
+    assert configure.restore_coverage == "none"
+    assert "rf_output_must_be_off" in configure.risk_flags
+    assert "sweep_disabled" in configure.risk_flags
+    assert "trigger" not in configure.risk_flags
+    assert configure.safe_alternatives == ("rf_source.snapshot",)
+
+
 def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     pairs = (
         (
