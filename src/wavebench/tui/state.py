@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from wavebench.config import WaveBenchConfig
 from wavebench.instruments.models import DmmReading, PowerProtectionStatus, PowerStatus, SourceStatus
+from wavebench.logging import CommandLogger
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,10 @@ SOURCE_TABLE_COLUMNS = (
     "幅度 / Vpp",
     "偏置 / Offset V",
 )
+
+
+def _logger_lines(logger: CommandLogger) -> list[str]:
+    return [f"{entry.timestamp} {entry.direction} {entry.text}" for entry in logger.entries[-80:]]
 
 
 def format_optional_number(value: float | None, unit: str = "", digits: int = 6) -> str:

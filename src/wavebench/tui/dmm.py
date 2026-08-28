@@ -11,7 +11,7 @@ from wavebench.instruments.dmm import normalize_dmm_function
 from wavebench.instruments.models import DmmReading
 from wavebench.logging import CommandLogger
 from wavebench.services.dmm_service import DmmService
-from wavebench.tui.state import DmmPanelState, dmm_state_from_reading
+from wavebench.tui.state import DmmPanelState, _logger_lines, dmm_state_from_reading
 
 
 class DmmPanelAdapter(Protocol):
@@ -193,7 +193,3 @@ def build_dmm_panel_state(
         reading=reading,
         log_lines=log_lines,
     )
-
-
-def _logger_lines(logger: CommandLogger) -> list[str]:
-    return [f"{entry.timestamp} {entry.direction} {entry.text}" for entry in logger.entries[-80:]]

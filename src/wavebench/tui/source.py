@@ -8,7 +8,7 @@ from wavebench.config import WaveBenchConfig, load_config
 from wavebench.instruments.models import SourceStatus
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
-from wavebench.tui.state import SourcePanelState, source_state_from_status
+from wavebench.tui.state import SourcePanelState, _logger_lines, source_state_from_status
 
 
 class SourcePanelAdapter(Protocol):
@@ -169,7 +169,3 @@ def build_source_panel_state(
         status=status,
         log_lines=log_lines,
     )
-
-
-def _logger_lines(logger: CommandLogger) -> list[str]:
-    return [f"{entry.timestamp} {entry.direction} {entry.text}" for entry in logger.entries[-80:]]
