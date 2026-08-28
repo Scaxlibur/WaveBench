@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, replace as _replace
 from math import isfinite
 from pathlib import Path
 import re
@@ -384,13 +384,13 @@ class WaveBenchConfig:
     def with_connection_timeout_ms(self, timeout_ms: int) -> "WaveBenchConfig":
         if timeout_ms <= 0:
             raise ConfigError("connection timeout must be > 0")
-        return replace(
+        return _replace(
             self,
-            connection=replace(self.connection, timeout_ms=timeout_ms),
+            connection=_replace(self.connection, timeout_ms=timeout_ms),
         )
 
     def with_resource(self, resource: str) -> "WaveBenchConfig":
-        return replace(self, connection=replace(self.connection, resource=resource))
+        return _replace(self, connection=_replace(self.connection, resource=resource))
 
     def with_output_overrides(
         self,
@@ -400,9 +400,9 @@ class WaveBenchConfig:
         save_json: bool | None = None,
         save_screenshot: bool | None = None,
     ) -> "WaveBenchConfig":
-        return replace(
+        return _replace(
             self,
-            output=replace(
+            output=_replace(
                 self.output,
                 save_csv=self.output.save_csv if save_csv is None else save_csv,
                 save_npy=self.output.save_npy if save_npy is None else save_npy,
@@ -424,9 +424,9 @@ class WaveBenchConfig:
         target_vpp: float | None = None,
         min_signal_vpp: float | None = None,
     ) -> "WaveBenchConfig":
-        return replace(
+        return _replace(
             self,
-            waveform=replace(
+            waveform=_replace(
                 self.waveform,
                 points=self.waveform.points if points is None else normalize_waveform_points(points),
                 time_range_s=self.waveform.time_range_s if time_range_s is None else time_range_s,
@@ -459,7 +459,7 @@ class WaveBenchConfig:
             ensure_fix_mode_on_set_frequency=True,
             settle_ms_after_set_frequency=0,
         )
-        return replace(self, source=replace(source, resource=resource))
+        return _replace(self, source=_replace(source, resource=resource))
 
     def with_power_resource(self, resource: str) -> "WaveBenchConfig":
         power = self.power or PowerConfig(
@@ -470,7 +470,7 @@ class WaveBenchConfig:
             settle_ms_after_set=2000,
             settle_ms_after_output=1000,
         )
-        return replace(self, power=replace(power, resource=resource))
+        return _replace(self, power=_replace(power, resource=resource))
 
     def with_dmm_resource(self, resource: str) -> "WaveBenchConfig":
         dmm = self.dmm or DmmConfig(
@@ -486,9 +486,9 @@ class WaveBenchConfig:
             settle_ms_after_function_change=500,
         )
         is_tcpip = resource.upper().startswith("TCPIP")
-        return replace(
+        return _replace(
             self,
-            dmm=replace(
+            dmm=_replace(
                 dmm,
                 driver="dm3058" if is_tcpip else dmm.driver,
                 resource=resource,
@@ -501,7 +501,7 @@ class WaveBenchConfig:
             driver="rigol.dsg830",
             resource=None,
         )
-        return replace(self, rf_source=replace(rf_source, resource=resource))
+        return _replace(self, rf_source=_replace(rf_source, resource=resource))
 
 def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
     config_path = Path(path)
