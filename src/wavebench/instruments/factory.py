@@ -342,13 +342,3 @@ def _validate_bounded_binary_transport(
             f"instrument driver {descriptor.driver_id!r} bounded binary operation requires "
             "a bounded PyVISA or RsInstrument INSTR resource"
         )
-
-
-def _validate_waveform_binary_transport(
-    *,
-    descriptor: InstrumentDescriptor,
-    transport: GuardedAuditedTransport,
-) -> None:
-    """Compatibility wrapper for the former waveform-specific internal validator."""
-
-    _validate_bounded_binary_transport(descriptor=descriptor, transport=transport)
