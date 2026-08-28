@@ -12,6 +12,7 @@ import numpy as np
 from wavebench.data.packages import FrequencyResponsePackage, RunPackage
 from wavebench.errors import ConfigError
 from wavebench.report.plot3d import (
+    _finite_float,
     build_surface_payload,
     plotly_head_tag,
     plotly_initializer,
@@ -1646,14 +1647,6 @@ def _format_linear_axis_tick(value: float, step: float) -> str:
 def _short_svg_legend_label(label: str, *, limit: int = 30) -> str:
     normalized = " ".join(label.split())
     return normalized if len(normalized) <= limit else normalized[: limit - 1] + "…"
-
-
-def _finite_float(value: Any) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if np.isfinite(numeric) else None
 
 
 def _metric_label(metric: str) -> str:
