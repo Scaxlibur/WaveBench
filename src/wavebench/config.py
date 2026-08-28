@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import isfinite
 from pathlib import Path
 import re
@@ -384,52 +384,13 @@ class WaveBenchConfig:
     def with_connection_timeout_ms(self, timeout_ms: int) -> "WaveBenchConfig":
         if timeout_ms <= 0:
             raise ConfigError("connection timeout must be > 0")
-        return WaveBenchConfig(
-            connection=ConnectionConfig(
-                backend=self.connection.backend,
-                resource=self.connection.resource,
-                timeout_ms=timeout_ms,
-                opc_timeout_ms=self.connection.opc_timeout_ms,
-                read_retry_attempts=self.connection.read_retry_attempts,
-                read_retry_delay_ms=self.connection.read_retry_delay_ms,
-            ),
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=self.waveform,
-            output=self.output,
-            source_path=self.source_path,
-            source=self.source,
-            power=self.power,
-            dmm=self.dmm,
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=self.rf_source,
+        return replace(
+            self,
+            connection=replace(self.connection, timeout_ms=timeout_ms),
         )
 
     def with_resource(self, resource: str) -> "WaveBenchConfig":
-        return WaveBenchConfig(
-            connection=ConnectionConfig(
-                backend=self.connection.backend,
-                resource=resource,
-                timeout_ms=self.connection.timeout_ms,
-                opc_timeout_ms=self.connection.opc_timeout_ms,
-                read_retry_attempts=self.connection.read_retry_attempts,
-                read_retry_delay_ms=self.connection.read_retry_delay_ms,
-            ),
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=self.waveform,
-            output=self.output,
-            source_path=self.source_path,
-            source=self.source,
-            power=self.power,
-            dmm=self.dmm,
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=self.rf_source,
-        )
+        return replace(self, connection=replace(self.connection, resource=resource))
 
     def with_output_overrides(
         self,
@@ -439,28 +400,15 @@ class WaveBenchConfig:
         save_json: bool | None = None,
         save_screenshot: bool | None = None,
     ) -> "WaveBenchConfig":
-        return WaveBenchConfig(
-            connection=self.connection,
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=self.waveform,
-            output=OutputConfig(
-                directory=self.output.directory,
-                package_naming=self.output.package_naming,
+        return replace(
+            self,
+            output=replace(
+                self.output,
                 save_csv=self.output.save_csv if save_csv is None else save_csv,
                 save_npy=self.output.save_npy if save_npy is None else save_npy,
                 save_json=self.output.save_json if save_json is None else save_json,
-                save_commands_log=self.output.save_commands_log,
                 save_screenshot=self.output.save_screenshot if save_screenshot is None else save_screenshot,
             ),
-            source_path=self.source_path,
-            source=self.source,
-            power=self.power,
-            dmm=self.dmm,
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=self.rf_source,
         )
 
     def with_waveform_overrides(
@@ -476,13 +424,10 @@ class WaveBenchConfig:
         target_vpp: float | None = None,
         min_signal_vpp: float | None = None,
     ) -> "WaveBenchConfig":
-        return WaveBenchConfig(
-            connection=self.connection,
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=WaveformConfig(
-                format=self.waveform.format,
-                byte_order=self.waveform.byte_order,
+        return replace(
+            self,
+            waveform=replace(
+                self.waveform,
                 points=self.waveform.points if points is None else normalize_waveform_points(points),
                 time_range_s=self.waveform.time_range_s if time_range_s is None else time_range_s,
                 expected_frequency_hz=(
@@ -503,15 +448,6 @@ class WaveBenchConfig:
                 target_vpp=self.waveform.target_vpp if target_vpp is None else target_vpp,
                 min_signal_vpp=self.waveform.min_signal_vpp if min_signal_vpp is None else min_signal_vpp,
             ),
-            output=self.output,
-            source_path=self.source_path,
-            source=self.source,
-            power=self.power,
-            dmm=self.dmm,
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=self.rf_source,
         )
 
     def with_source_resource(self, resource: str) -> "WaveBenchConfig":
@@ -523,31 +459,7 @@ class WaveBenchConfig:
             ensure_fix_mode_on_set_frequency=True,
             settle_ms_after_set_frequency=0,
         )
-        return WaveBenchConfig(
-            connection=self.connection,
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=self.waveform,
-            output=self.output,
-            source_path=self.source_path,
-            source=SourceConfig(
-                driver=source.driver,
-                resource=resource,
-                default_channel=source.default_channel,
-                check_errors=source.check_errors,
-                ensure_fix_mode_on_set_frequency=source.ensure_fix_mode_on_set_frequency,
-                settle_ms_after_set_frequency=source.settle_ms_after_set_frequency,
-                options=source.options,
-                access=source.access,
-                terminations=source.terminations,
-            ),
-            power=self.power,
-            dmm=self.dmm,
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=self.rf_source,
-        )
+        return replace(self, source=replace(source, resource=resource))
 
     def with_power_resource(self, resource: str) -> "WaveBenchConfig":
         power = self.power or PowerConfig(
@@ -558,30 +470,7 @@ class WaveBenchConfig:
             settle_ms_after_set=2000,
             settle_ms_after_output=1000,
         )
-        return WaveBenchConfig(
-            connection=self.connection,
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=self.waveform,
-            output=self.output,
-            source_path=self.source_path,
-            source=self.source,
-            power=PowerConfig(
-                driver=power.driver,
-                resource=resource,
-                default_channel=power.default_channel,
-                check_errors=power.check_errors,
-                settle_ms_after_set=power.settle_ms_after_set,
-                settle_ms_after_output=power.settle_ms_after_output,
-                options=power.options,
-                access=power.access,
-            ),
-            dmm=self.dmm,
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=self.rf_source,
-        )
+        return replace(self, power=replace(power, resource=resource))
 
     def with_dmm_resource(self, resource: str) -> "WaveBenchConfig":
         dmm = self.dmm or DmmConfig(
@@ -597,38 +486,14 @@ class WaveBenchConfig:
             settle_ms_after_function_change=500,
         )
         is_tcpip = resource.upper().startswith("TCPIP")
-        return WaveBenchConfig(
-            connection=self.connection,
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=self.waveform,
-            output=self.output,
-            source_path=self.source_path,
-            source=self.source,
-            power=self.power,
-            dmm=DmmConfig(
+        return replace(
+            self,
+            dmm=replace(
+                dmm,
                 driver="dm3058" if is_tcpip else dmm.driver,
                 resource=resource,
                 backend="lan" if is_tcpip else dmm.backend,
-                baudrate=dmm.baudrate,
-                bytesize=dmm.bytesize,
-                parity=dmm.parity,
-                stopbits=dmm.stopbits,
-                timeout_ms=dmm.timeout_ms,
-                settle_ms_before_read=dmm.settle_ms_before_read,
-                settle_ms_after_function_change=dmm.settle_ms_after_function_change,
-                options=dmm.options,
-                write_termination=dmm.write_termination,
-                read_termination=dmm.read_termination,
-                xonxoff=dmm.xonxoff,
-                rtscts=dmm.rtscts,
-                dsrdtr=dmm.dsrdtr,
-                access=dmm.access,
             ),
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=self.rf_source,
         )
 
     def with_rf_source_resource(self, resource: str) -> "WaveBenchConfig":
@@ -636,27 +501,7 @@ class WaveBenchConfig:
             driver="rigol.dsg830",
             resource=None,
         )
-        return WaveBenchConfig(
-            connection=self.connection,
-            scope=self.scope,
-            autoscale=self.autoscale,
-            waveform=self.waveform,
-            output=self.output,
-            source_path=self.source_path,
-            source=self.source,
-            power=self.power,
-            dmm=self.dmm,
-            quality=self.quality,
-            safety_limits=self.safety_limits,
-            tui=self.tui,
-            rf_source=RfSourceConfig(
-                driver=rf_source.driver,
-                resource=resource,
-                options=rf_source.options,
-                access=rf_source.access,
-                safety_ports=rf_source.safety_ports,
-            ),
-        )
+        return replace(self, rf_source=replace(rf_source, resource=resource))
 
 def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
     config_path = Path(path)
