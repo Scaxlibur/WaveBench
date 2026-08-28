@@ -200,7 +200,6 @@ if _TEXTUAL_IMPORT_ERROR is None:
             self._source_read_in_flight = False
             self._source_write_in_flight = False
             self._last_state: PowerPanelState | None = None
-            self._last_dmm_state: DmmPanelState | None = None
             self._last_source_state: SourcePanelState | None = None
             self._power_log_lines: tuple[str, ...] = ()
             self._dmm_log_lines: tuple[str, ...] = ()
@@ -812,7 +811,6 @@ if _TEXTUAL_IMPORT_ERROR is None:
             self._render_log()
 
         def _render_dmm_state(self, state: DmmPanelState) -> None:
-            self._last_dmm_state = state
             status = self.query_one("#dmm-status", Static)
             status.update(
                 f"万用表 / DMM\n"
