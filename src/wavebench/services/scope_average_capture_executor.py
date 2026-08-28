@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass
 from hashlib import sha256
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Mapping
 from uuid import uuid4
 
 from wavebench.config import normalize_waveform_points
@@ -36,6 +36,7 @@ from wavebench.transport.session import InstrumentSessionState, SessionHealth
 
 from .operation_specs import require_operation_spec
 from .scope_error_policy import ScopeErrorPolicyExecutor
+from .scope_extension_service import _json_safe
 from .scope_phase_coordinator import (
     OperationPhase,
     ScopeBaselineHandle,
@@ -52,18 +53,6 @@ _AVERAGE_MAIN_IO = {
     "write_bytes",
     "query_binary",
 }
-
-
-def _json_safe(value: Any) -> Any:
-    if is_dataclass(value):
-        return _json_safe(asdict(value))
-    if isinstance(value, Mapping):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, (str, int, float, bool, type(None))):
-        return value
-    return str(value)
 
 
 @dataclass(frozen=True, slots=True)

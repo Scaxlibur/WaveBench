@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from types import MappingProxyType
-from typing import Any
 
 import numpy as np
 
@@ -36,6 +35,7 @@ from wavebench.transport.session import InstrumentSessionState, SessionHealth
 
 from .operation_specs import OperationSpec, require_operation_spec
 from .scope_error_policy import ScopeErrorPolicyExecutor
+from .scope_extension_service import _json_safe
 from .scope_phase_coordinator import (
     OperationPhase,
     ScopeBaselineHandle,
@@ -53,18 +53,6 @@ _OPERATION_ID_BY_KIND = {
     "capture_multiple": "scope.capture_multiple",
 }
 _WaveformCallbackEvidence = tuple[object, str, tuple[int, ...], bytes]
-
-
-def _json_safe(value: Any) -> Any:
-    if is_dataclass(value):
-        return _json_safe(asdict(value))
-    if isinstance(value, Mapping):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, (str, int, float, bool, type(None))):
-        return value
-    return str(value)
 
 
 @dataclass(frozen=True, slots=True)
