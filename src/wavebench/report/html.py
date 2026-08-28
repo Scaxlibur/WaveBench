@@ -29,7 +29,7 @@ def write_run_report_html(run: RunPackage, output_path: str | Path | None = None
         for response in run.frequency_responses
     )
     plotly_asset = write_plotly_asset(path.parent) if has_surface else None
-    plotly_url = _relative_url(plotly_asset, path.parent) if plotly_asset is not None else None
+    plotly_url = artifact_url(plotly_asset, path.parent) if plotly_asset is not None else None
     path.write_text(
         render_run_report_html(run, output_dir=path.parent, plotly_url=plotly_url), encoding="utf-8"
     )
@@ -427,7 +427,7 @@ def _build_report_manifest(
         package_record = {
             "step_index": step_index,
             "package": package,
-            "path": _relative_url(package_dir, output_dir),
+            "path": artifact_url(package_dir, output_dir),
             "exists": package_dir.exists(),
         }
         capture_packages.append(package_record)
@@ -438,7 +438,7 @@ def _build_report_manifest(
             if npy_text:
                 npy_path = _resolve_capture_file_path(run.path, package_dir, str(npy_text))
                 npy_exists = npy_path.exists()
-                source_npy = _relative_url(npy_path, output_dir)
+                source_npy = artifact_url(npy_path, output_dir)
                 if not npy_exists:
                     warnings.append(f"step {step_index} ch{channel}: waveform npy missing: {npy_text}")
             else:
@@ -464,7 +464,7 @@ def _build_report_manifest(
             {
                 "step_index": reference.step_index,
                 "package": reference.package,
-                "path": _relative_url(package_dir, output_dir),
+                "path": artifact_url(package_dir, output_dir),
                 "exists": package_dir.exists(),
             }
         )
@@ -474,21 +474,21 @@ def _build_report_manifest(
             )
     return {
         "schema": "wavebench.report_manifest.v1",
-        "report": _relative_url(report_path, output_dir),
-        "run_json": _relative_url(run.run_json_path, output_dir),
-        "summary_csv": _relative_url(run.summary_csv_path, output_dir) if run.summary_csv_path is not None else None,
-        "frequency_response_csv": _relative_url(run.frequency_response_csv_path, output_dir)
+        "report": artifact_url(report_path, output_dir),
+        "run_json": artifact_url(run.run_json_path, output_dir),
+        "summary_csv": artifact_url(run.summary_csv_path, output_dir) if run.summary_csv_path is not None else None,
+        "frequency_response_csv": artifact_url(run.frequency_response_csv_path, output_dir)
         if run.frequency_response_csv_path is not None
         else None,
-        "frequency_response_fit_json": _relative_url(run.frequency_response_fit_path, output_dir)
+        "frequency_response_fit_json": artifact_url(run.frequency_response_fit_path, output_dir)
         if run.frequency_response_fit_path is not None
         else None,
-        "frequency_response_calibration_csv": _relative_url(
+        "frequency_response_calibration_csv": artifact_url(
             run.frequency_response_calibration_csv_path, output_dir
         )
         if run.frequency_response_calibration_csv_path is not None
         else None,
-        "frequency_response_calibration_json": _relative_url(
+        "frequency_response_calibration_json": artifact_url(
             run.frequency_response_calibration_path, output_dir
         )
         if run.frequency_response_calibration_path is not None
@@ -496,14 +496,14 @@ def _build_report_manifest(
         "frequency_responses": [
             {
                 "label": response.label,
-                "directory": _relative_url(response.directory, output_dir),
-                "csv": _relative_url(response.csv_path, output_dir)
+                "directory": artifact_url(response.directory, output_dir),
+                "csv": artifact_url(response.csv_path, output_dir)
                 if response.csv_path is not None
                 else None,
-                "baseline_json": _relative_url(response.baseline_path, output_dir)
+                "baseline_json": artifact_url(response.baseline_path, output_dir)
                 if response.baseline_path is not None
                 else None,
-                "calibration_json": _relative_url(response.calibration_path, output_dir)
+                "calibration_json": artifact_url(response.calibration_path, output_dir)
                 if response.calibration_path is not None
                 else None,
                 "status": response.manifest_entry.get("status"),
@@ -517,7 +517,7 @@ def _build_report_manifest(
             {
                 "step_index": item.step_index,
                 "package": item.package,
-                "path": _relative_url(item.path, output_dir),
+                "path": artifact_url(item.path, output_dir),
             }
             for item in screenshots
         ],
@@ -526,7 +526,7 @@ def _build_report_manifest(
             [
                 {
                     "kind": "plotly.js",
-                    "path": _relative_url(interactive_asset_path, output_dir),
+                    "path": artifact_url(interactive_asset_path, output_dir),
                     "exists": interactive_asset_path.exists(),
                 }
             ]
@@ -1970,7 +1970,7 @@ def _collect_artifact_links(
             step_index="-",
             kind="运行记录 / Run JSON",
             label="run.json",
-            href=_relative_url(run.run_json_path, output_dir),
+            href=artifact_url(run.run_json_path, output_dir),
             status=_availability_text(run.run_json_path.exists()),
         )
     ]
@@ -1980,7 +1980,7 @@ def _collect_artifact_links(
                 step_index="-",
                 kind="摘要 CSV / Summary CSV",
                 label="summary.csv",
-                href=_relative_url(run.summary_csv_path, output_dir),
+                href=artifact_url(run.summary_csv_path, output_dir),
                 status=_availability_text(run.summary_csv_path.exists()),
             )
         )
@@ -1990,7 +1990,7 @@ def _collect_artifact_links(
                 step_index="-",
                 kind="频率响应 CSV / Frequency response CSV",
                 label="frequency_response.csv",
-                href=_relative_url(run.frequency_response_csv_path, output_dir),
+                href=artifact_url(run.frequency_response_csv_path, output_dir),
                 status=_availability_text(run.frequency_response_csv_path.exists()),
             )
         )
@@ -2000,7 +2000,7 @@ def _collect_artifact_links(
                 step_index="-",
                 kind="频响拟合 JSON / Frequency response fit JSON",
                 label="frequency_response_fit.json",
-                href=_relative_url(run.frequency_response_fit_path, output_dir),
+                href=artifact_url(run.frequency_response_fit_path, output_dir),
                 status=_availability_text(run.frequency_response_fit_path.exists()),
             )
         )
@@ -2010,7 +2010,7 @@ def _collect_artifact_links(
                 step_index="-",
                 kind="二维校准 CSV / 2D calibration CSV",
                 label="frequency_response_calibration.csv",
-                href=_relative_url(run.frequency_response_calibration_csv_path, output_dir),
+                href=artifact_url(run.frequency_response_calibration_csv_path, output_dir),
                 status=_availability_text(run.frequency_response_calibration_csv_path.exists()),
             )
         )
@@ -2020,7 +2020,7 @@ def _collect_artifact_links(
                 step_index="-",
                 kind="二维校准 JSON / 2D calibration JSON",
                 label="frequency_response_calibration.json",
-                href=_relative_url(run.frequency_response_calibration_path, output_dir),
+                href=artifact_url(run.frequency_response_calibration_path, output_dir),
                 status=_availability_text(run.frequency_response_calibration_path.exists()),
             )
         )
@@ -2032,7 +2032,7 @@ def _collect_artifact_links(
                     step_index=str(response.step_index) if response.step_index is not None else "-",
                     kind=f"{prefix}软件基线 JSON / Software baseline JSON",
                     label="frequency_response_baseline.json",
-                    href=_relative_url(response.baseline_path, output_dir),
+                    href=artifact_url(response.baseline_path, output_dir),
                     status=_availability_text(response.baseline_path.exists()),
                 )
             )
@@ -2048,7 +2048,7 @@ def _collect_artifact_links(
                         step_index=str(response.step_index) if response.step_index is not None else "-",
                         kind=f"{prefix}定点 {name.upper()} / Fixed-point {name.upper()}",
                         label=path.name,
-                        href=_relative_url(path, output_dir),
+                        href=artifact_url(path, output_dir),
                         status=_availability_text(path.exists()),
                     )
                 )
@@ -2060,7 +2060,7 @@ def _collect_artifact_links(
                 step_index=reference.step_index,
                 kind="采集包 / Capture package",
                 label=reference.package,
-                href=_relative_url(package_dir, output_dir),
+                href=artifact_url(package_dir, output_dir),
                 status=_availability_text(package_dir.exists()),
             )
         )
@@ -2088,7 +2088,7 @@ def _collect_artifact_links(
                     step_index=reference.step_index,
                     kind="波形原始数据 / Waveform raw artifact",
                     label=f"ch{channel} {npy_name}",
-                    href=_relative_url(npy_path, output_dir),
+                    href=artifact_url(npy_path, output_dir),
                     status=_availability_text(True),
                 )
             )
@@ -2380,7 +2380,7 @@ def _collect_screenshots(run: RunPackage, output_dir: Path) -> list[ReportScreen
                 step_index=reference.step_index,
                 package=reference.package,
                 path=screenshot_path,
-                src=_relative_url(screenshot_path, output_dir),
+                src=artifact_url(screenshot_path, output_dir),
             )
         )
     return screenshots
@@ -2490,7 +2490,3 @@ def _project_root_from_run_path(run_path: Path) -> Path:
     if len(parts) >= 3 and parts[-3:-1] == ("data", "runs"):
         return Path(*parts[:-3]) if len(parts[:-3]) > 0 else Path(".")
     return run_path.parent
-
-
-def _relative_url(path: Path, output_dir: Path) -> str:
-    return artifact_url(path, output_dir)
