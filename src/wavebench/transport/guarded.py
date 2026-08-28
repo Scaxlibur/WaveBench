@@ -441,6 +441,16 @@ class GuardedAuditedTransport:
                 and self.session_state.health is SessionHealth.HEALTHY
             )
 
+    def _mark_bounded_waveform_backend_verified(self) -> None:
+        """Compatibility alias for the former waveform-specific internal marker."""
+
+        self._mark_bounded_binary_backend_verified()
+
+    def _has_verified_bounded_waveform_backend(self) -> bool:
+        """Compatibility alias for the former waveform-specific internal predicate."""
+
+        return self._has_verified_bounded_binary_backend()
+
     def _check_access(self, operation: str, *, write: bool = False) -> None:
         if write and self.access != "read_write":
             if operation == "write":
