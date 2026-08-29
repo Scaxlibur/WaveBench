@@ -1483,6 +1483,22 @@ def test_source_v2_coupling_read_model_separates_dimensions_and_parameters() -> 
         "kind": "amplitude_ratio",
         "value": 0.5,
     }
+    base = source_extensions()
+    mismatched_feature = module.SourceFeatureCapability(
+        feature=module.SourceFeature.COUPLING,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.READ,),
+        scope=module.SourceFacetScope.CHANNEL_SET,
+        channels=(1, 2),
+        applicability=module.SourceConstraintApplicability(),
+        profile=replace(profile, supported_channel_sets=((1, 3),)),
+    )
+    with pytest.raises(ValueError, match="channel set is not declared"):
+        replace(
+            base,
+            topology=module.SourceTopologyContract((1, 2, 3)),
+            features=(base.features[0], mismatched_feature, base.features[1]),
+        )
     with pytest.raises(ValueError, match="does not match its dimension"):
         module.SourceCouplingDimensionState(
             module.SourceCouplingDimension.PHASE,

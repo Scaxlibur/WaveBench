@@ -33,6 +33,12 @@ from wavebench.instruments.source_extensions import (
     SnapshotConsistencyState,
     SourceQueryExecutionRecord,
     SourceCrossChannelCapabilityProfile,
+    SourceCouplingCapabilityProfile,
+    SourceCouplingDimension,
+    SourceCouplingDimensionState,
+    SourceCouplingParameter,
+    SourceCouplingParameterKind,
+    SourceCouplingState,
     SourceFacetScope,
     SourceFacetQueryContract,
     SourceFeature,
@@ -197,6 +203,30 @@ def test_snapshot_v2_projects_channel_sync_and_validates_source_channel() -> Non
     with pytest.raises(SourceSnapshotContractError, match="undeclared source channel"):
         invalid_service.snapshot_v2()
 
+    invalid_profiles = (
+        (
+            replace(sync_profile, enabled_readable=False),
+            "unreadable enabled state",
+        ),
+        (
+            replace(sync_profile, polarity_readable=False),
+            "unreadable polarity",
+        ),
+    )
+    for profile, message in invalid_profiles:
+        invalid_extensions = replace(
+            extensions,
+            features=(*extensions.features[:-1], replace(sync_feature, profile=profile)),
+        )
+        invalid_driver = SourceV2FakeDriver(combined=True, sync_state=state)
+        invalid_service = make_service(invalid_driver)
+        invalid_service.descriptor = source_descriptor(
+            driver=invalid_driver,
+            extensions=invalid_extensions,
+        )
+        with pytest.raises(SourceSnapshotContractError, match=message):
+            invalid_service.snapshot_v2()
+
 
 def test_snapshot_v2_projects_noise_overlay_without_changing_basic_noise_kind() -> None:
     extensions = source_extensions()
@@ -288,6 +318,152 @@ def test_snapshot_v2_projects_noise_overlay_without_changing_basic_noise_kind() 
             ),
         )
         invalid_driver = SourceV2FakeDriver(combined=True, noise_overlay=noise)
+        invalid_service = make_service(invalid_driver)
+        invalid_service.descriptor = source_descriptor(
+            driver=invalid_driver,
+            extensions=invalid_extensions,
+        )
+        with pytest.raises(SourceSnapshotContractError, match=message):
+            invalid_service.snapshot_v2()
+
+
+def test_snapshot_v2_validates_coupling_readback_against_runtime_profile() -> None:
+    extensions = source_extensions()
+    profile = SourceCouplingCapabilityProfile(
+        dimensions=(
+            SourceCouplingDimension.AMPLITUDE,
+            SourceCouplingDimension.FREQUENCY,
+            SourceCouplingDimension.PHASE,
+        ),
+        parameter_kinds=(
+            SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+            SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+            SourceCouplingParameterKind.PHASE_DEVIATION_DEG,
+        ),
+        supported_channel_sets=((1, 2),),
+        global_state_readable=True,
+        reference_channel_readable=True,
+        relation_graph_readable=False,
+    )
+    coupling_feature = SourceFeatureCapability(
+        feature=SourceFeature.COUPLING,
+        support=SupportState.SUPPORTED,
+        directions=(SourceFeatureDirection.READ,),
+        scope=SourceFacetScope.CHANNEL_SET,
+        channels=(1, 2),
+        applicability=SourceConstraintApplicability(),
+        profile=profile,
+    )
+    coupling_query = SourceFacetQueryContract(
+        feature=SourceFeature.COUPLING,
+        scope=SourceFacetScope.CHANNEL_SET,
+        fields=(SourceFieldId.COUPLING,),
+        activation_any=(),
+        effect=SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    extensions = replace(
+        extensions,
+        topology=SourceTopologyContract((1, 2)),
+        features=(extensions.features[0], coupling_feature, extensions.features[1]),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                coupling_query,
+                extensions.query_contract.facets[2],
+            ),
+            max_queries=extensions.query_contract.max_queries + 1,
+        ),
+    )
+
+    def dimension(
+        kind: SourceCouplingDimension,
+        parameter_kind: SourceCouplingParameterKind,
+    ) -> SourceCouplingDimensionState:
+        return SourceCouplingDimensionState(
+            dimension=kind,
+            enabled=Observed.value_of(kind is not SourceCouplingDimension.PHASE),
+            parameter=Observed.value_of(SourceCouplingParameter(parameter_kind, 1.0)),
+        )
+
+    state = SourceCouplingState(
+        feature=SourceFeature.COUPLING,
+        channels=(1, 2),
+        enabled=Observed.value_of(True),
+        reference_channel=Observed.value_of(1),
+        dimensions=(
+            dimension(
+                SourceCouplingDimension.AMPLITUDE,
+                SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+            ),
+            dimension(
+                SourceCouplingDimension.FREQUENCY,
+                SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+            ),
+            dimension(
+                SourceCouplingDimension.PHASE,
+                SourceCouplingParameterKind.PHASE_DEVIATION_DEG,
+            ),
+        ),
+    )
+    driver = SourceV2FakeDriver(combined=True, coupling_state=state)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    assert service.snapshot_v2().cross_channel.value.relations == (state,)
+
+    invalid_cases = (
+        (
+            replace(profile, global_state_readable=False),
+            state,
+            "unreadable global state",
+        ),
+        (
+            replace(profile, reference_channel_readable=False),
+            state,
+            "unreadable reference channel",
+        ),
+        (
+            replace(
+                profile,
+                dimensions=(SourceCouplingDimension.AMPLITUDE,),
+                parameter_kinds=(
+                    SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+                ),
+            ),
+            state,
+            "dimensions do not match",
+        ),
+        (
+            replace(
+                profile,
+                parameter_kinds=(SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,),
+            ),
+            state,
+            "undeclared parameter kind",
+        ),
+        (
+            profile,
+            replace(state, channels=(1, 3)),
+            "does not match its channel set",
+        ),
+    )
+    for invalid_profile, invalid_state, message in invalid_cases:
+        invalid_extensions = replace(
+            extensions,
+            features=(
+                extensions.features[0],
+                replace(coupling_feature, profile=invalid_profile),
+                extensions.features[2],
+            ),
+        )
+        invalid_driver = SourceV2FakeDriver(
+            combined=True,
+            coupling_state=invalid_state,
+        )
         invalid_service = make_service(invalid_driver)
         invalid_service.descriptor = source_descriptor(
             driver=invalid_driver,

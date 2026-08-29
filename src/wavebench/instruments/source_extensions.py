@@ -4860,6 +4860,14 @@ class SourceDescriptorExtensions:
                 for channel_set in feature.profile.supported_channel_sets
             ):
                 raise ValueError("source coupling profile references an unknown channel")
+            if (
+                isinstance(feature.profile, SourceCouplingCapabilityProfile)
+                and feature.scope is SourceFacetScope.CHANNEL_SET
+                and feature.channels not in feature.profile.supported_channel_sets
+            ):
+                raise ValueError(
+                    "source coupling feature channel set is not declared by its profile"
+                )
         if not isinstance(self.query_contract, SourceQueryContract):
             raise ValueError("source descriptor query_contract has an invalid type")
         if not isinstance(self.safety_profile, SourceSafetyProfile):

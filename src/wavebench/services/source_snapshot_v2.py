@@ -579,6 +579,14 @@ def _channel_state(
         )
         if profile is None:
             raise SourceSnapshotContractError("source sync observation has no runtime profile")
+        if state.enabled.availability is Availability.VALUE and not profile.enabled_readable:
+            raise SourceSnapshotContractError(
+                "source sync observation reports unreadable enabled state"
+            )
+        if state.polarity.availability is Availability.VALUE and not profile.polarity_readable:
+            raise SourceSnapshotContractError(
+                "source sync observation reports unreadable polarity"
+            )
         if state.source_channel.availability is Availability.VALUE and (
             not profile.source_channel_readable
             or state.source_channel.value not in profile.source_channels
@@ -736,7 +744,46 @@ def _cross_channel_state(
             feature.feature,
         )
         if observed.availability is Availability.VALUE:
-            relations.append(observed.value)
+            if feature.feature is not SourceFeature.COUPLING:
+                relations.append(observed.value)
+                continue
+            profile = feature.profile
+            state = observed.value
+            if not isinstance(profile, SourceCouplingCapabilityProfile) or not isinstance(
+                state,
+                SourceCouplingState,
+            ):
+                raise SourceSnapshotContractError(
+                    "source coupling observation has an invalid runtime profile"
+                )
+            if state.channels != feature.channels:
+                raise SourceSnapshotContractError(
+                    "source coupling observation does not match its channel set"
+                )
+            if state.enabled.availability is Availability.VALUE and not profile.global_state_readable:
+                raise SourceSnapshotContractError(
+                    "source coupling observation reports unreadable global state"
+                )
+            if (
+                state.reference_channel.availability is Availability.VALUE
+                and not profile.reference_channel_readable
+            ):
+                raise SourceSnapshotContractError(
+                    "source coupling observation reports unreadable reference channel"
+                )
+            if tuple(item.dimension for item in state.dimensions) != profile.dimensions:
+                raise SourceSnapshotContractError(
+                    "source coupling observation dimensions do not match runtime profile"
+                )
+            if any(
+                item.parameter.availability is Availability.VALUE
+                and item.parameter.value.kind not in profile.parameter_kinds
+                for item in state.dimensions
+            ):
+                raise SourceSnapshotContractError(
+                    "source coupling observation uses an undeclared parameter kind"
+                )
+            relations.append(state)
         elif feature.feature is SourceFeature.COUPLING:
             profile = feature.profile
             if not isinstance(profile, SourceCouplingCapabilityProfile):

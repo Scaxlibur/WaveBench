@@ -1209,6 +1209,14 @@ Noise Overlay 的 `enabled_readable=False` 时，snapshot 不得返回 `enabled=
 `scales=VALUE` 携带的 scale kind 必须与 `scale_kinds` 完全一致；查询失败仍使用
 对应的非 `VALUE` availability，不得删除已声明的 kind 或补造默认值。
 
+Sync 的 `enabled_readable`、`polarity_readable` 和 `source_channel_readable` 也使用同样的
+单向诚实声明：未声明可读的字段不得返回 `VALUE`，运行时暂时无法取得时可以返回
+合适的非 `VALUE` availability。Coupling 的 `CHANNEL_SET` 必须存在于
+`supported_channel_sets`；snapshot 中的 dimensions 必须与 profile 完全一致，已返回的
+parameter kind 必须属于 `parameter_kinds`。`global_state_readable=False` 或
+`reference_channel_readable=False` 时，对应字段不得返回 `VALUE`。全局开关与各
+dimension 开关可以表示主开关和保留配置，核心不强制两者必须相等。
+
 ### facet 作用域
 
 ```python

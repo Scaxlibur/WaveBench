@@ -14,6 +14,7 @@ from wavebench.instruments.source_extensions import (
     SourceAmplitudeUnit,
     SourceBasicCapabilityProfile,
     SourceConstraintApplicability,
+    SourceCouplingState,
     SourceDescriptorExtensions,
     SourceFacetQueryContract,
     SourceFacetScope,
@@ -243,6 +244,7 @@ class SourceV2FakeDriver:
         anchor_unknown: bool = False,
         sync_state: SourceSyncState | None = None,
         noise_overlay: NoiseOverlayFacet | None = None,
+        coupling_state: SourceCouplingState | None = None,
     ) -> None:
         self.combined = combined
         self.drift = drift
@@ -250,6 +252,7 @@ class SourceV2FakeDriver:
         self.anchor_unknown = anchor_unknown
         self.sync_state = sync_state
         self.noise_overlay = noise_overlay
+        self.coupling_state = coupling_state
         self.plans = []
         self.closed = False
 
@@ -301,6 +304,10 @@ class SourceV2FakeDriver:
                     if self.noise_overlay is None:
                         raise AssertionError("noise overlay was not configured")
                     value = self.noise_overlay
+                elif field.field is SourceFieldId.COUPLING:
+                    if self.coupling_state is None:
+                        raise AssertionError("coupling state was not configured")
+                    value = self.coupling_state
                 else:
                     raise AssertionError(field)
                 observations.append(SourceTypedObservation(field, value))
