@@ -3929,6 +3929,7 @@ class SourceService(SessionStateAliasMixin):
             SourceFieldId.BURST,
             SourceFieldId.PULSE,
             SourceFieldId.ARBITRARY_SELECTION,
+            SourceFieldId.SYNC,
         }
         relation_fields = {
             SourceFieldId.COMBINE,
@@ -3941,7 +3942,6 @@ class SourceService(SessionStateAliasMixin):
             SourceFieldId.IDENTITY,
             SourceFieldId.RELATION_GRAPH,
             SourceFieldId.REFERENCE_CLOCK,
-            SourceFieldId.SYNC,
             SourceFieldId.CASCADE,
             SourceFieldId.SHARED_POWER,
         }
@@ -4073,6 +4073,7 @@ class SourceService(SessionStateAliasMixin):
                 SourceFieldId.BURST: target.burst,
                 SourceFieldId.PULSE: target.pulse,
                 SourceFieldId.ARBITRARY_SELECTION: target.arbitrary,
+                SourceFieldId.SYNC: target.sync,
             }
             if field.field is SourceFieldId.DISPLAY_LOAD:
                 if target.output.availability is not Availability.VALUE or not isinstance(
@@ -4113,7 +4114,6 @@ class SourceService(SessionStateAliasMixin):
             return snapshot.system
         system_values = {
             SourceFieldId.REFERENCE_CLOCK: snapshot.system.value.reference_clock,
-            SourceFieldId.SYNC: snapshot.system.value.sync,
             SourceFieldId.CASCADE: snapshot.system.value.cascade,
         }
         try:

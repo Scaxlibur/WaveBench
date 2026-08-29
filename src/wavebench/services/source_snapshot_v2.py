@@ -47,6 +47,8 @@ from wavebench.instruments.source_extensions import (
     SourceSemanticQueryPlan,
     SourceSnapshotConsistency,
     SourceSnapshotV2,
+    SourceSyncCapabilityProfile,
+    SourceSyncState,
     SourceSystemStateV2,
     SourceTypedObservation,
     SweepFacet,
@@ -553,6 +555,35 @@ def _channel_state(
     features: tuple[SourceFeatureCapability, ...],
 ) -> SourceChannelStateV2:
     target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+    sync = _field_value(
+        values,
+        SourceFieldRef(SourceFieldId.SYNC, target),
+        features,
+        SourceFeature.SYNC,
+    )
+    if sync.availability is Availability.VALUE:
+        state = sync.value
+        assert isinstance(state, SourceSyncState)
+        profile = next(
+            (
+                feature.profile
+                for feature in features
+                if feature.feature is SourceFeature.SYNC
+                and feature.scope is SourceFacetScope.CHANNEL
+                and feature.channels == (channel,)
+                and isinstance(feature.profile, SourceSyncCapabilityProfile)
+            ),
+            None,
+        )
+        if profile is None:
+            raise SourceSnapshotContractError("source sync observation has no runtime profile")
+        if state.source_channel.availability is Availability.VALUE and (
+            not profile.source_channel_readable
+            or state.source_channel.value not in profile.source_channels
+        ):
+            raise SourceSnapshotContractError(
+                "source sync observation references an undeclared source channel"
+            )
     return SourceChannelStateV2(
         channel=channel,
         basic=_field_value(
@@ -603,6 +634,7 @@ def _channel_state(
             features,
             SourceFeature.ARBITRARY,
         ),
+        sync=sync,
     )
 
 
@@ -632,12 +664,6 @@ def _system_state(
             SourceFieldRef(SourceFieldId.REFERENCE_CLOCK, instrument),
             features,
             SourceFeature.REFERENCE_CLOCK,
-        ),
-        sync=_field_value(
-            values,
-            SourceFieldRef(SourceFieldId.SYNC, instrument),
-            features,
-            SourceFeature.SYNC,
         ),
         cascade=_field_value(
             values,

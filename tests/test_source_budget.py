@@ -178,6 +178,7 @@ def _channel(
         burst=_missing(),
         pulse=_missing(),
         arbitrary=arbitrary or _missing(),
+        sync=_missing(),
     )
 
 

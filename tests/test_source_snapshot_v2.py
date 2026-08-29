@@ -28,13 +28,21 @@ from wavebench.instruments import InstrumentDescriptor
 from wavebench.instruments.source_extensions import (
     SOURCE_OPERATION_ARTIFACT_SCHEMA,
     SOURCE_SNAPSHOT_SCHEMA,
+    Observed,
     SnapshotConsistencyState,
     SourceQueryExecutionRecord,
     SourceCrossChannelCapabilityProfile,
     SourceFacetScope,
+    SourceFacetQueryContract,
     SourceFeature,
     SourceFeatureCapability,
+    SourceFeatureDirection,
+    SourceFieldId,
     SourceHarmonicPreset,
+    SourceQueryEffect,
+    SourceSyncCapabilityProfile,
+    SourceSyncPolarity,
+    SourceSyncState,
     SourceTopologyContract,
     SupportState,
     source_snapshot_v2_operation_artifact,
@@ -110,6 +118,79 @@ def test_snapshot_v2_accepts_combined_and_scalar_protocol_plans(
     assert snapshot.correlation_id == "test-correlation"
     assert len(driver.plans) == 1
     assert driver.plans[0].allowed_effects[0].value == "pure_read"
+
+
+def test_snapshot_v2_projects_channel_sync_and_validates_source_channel() -> None:
+    extensions = source_extensions_with_harmonics()
+    sync_profile = SourceSyncCapabilityProfile(
+        enabled_readable=True,
+        polarity_readable=True,
+        source_channel_readable=True,
+        source_channels=(1, 2),
+    )
+    sync_feature = SourceFeatureCapability(
+        feature=SourceFeature.SYNC,
+        support=SupportState.SUPPORTED,
+        directions=(SourceFeatureDirection.READ,),
+        scope=SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=SourceConstraintApplicability(),
+        profile=sync_profile,
+    )
+    sync_query = SourceFacetQueryContract(
+        feature=SourceFeature.SYNC,
+        scope=SourceFacetScope.CHANNEL,
+        fields=(SourceFieldId.SYNC,),
+        activation_any=(),
+        effect=SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    extensions = replace(
+        extensions,
+        topology=SourceTopologyContract((1, 2)),
+        features=(*extensions.features, sync_feature),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(*extensions.query_contract.facets, sync_query),
+            max_queries=extensions.query_contract.max_queries + 1,
+        ),
+    )
+    state = SourceSyncState(
+        enabled=Observed.value_of(False),
+        polarity=Observed.value_of(SourceSyncPolarity.NEGATIVE),
+        source_channel=Observed.value_of(2),
+    )
+    driver = SourceV2FakeDriver(combined=True, sync_state=state)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    snapshot = service.snapshot_v2()
+
+    assert snapshot.channels[0].sync.value == state
+    assert snapshot.channels[1].sync.availability.value == "unsupported"
+    sync_item = next(
+        item for item in driver.plans[0].items if item.feature is SourceFeature.SYNC
+    )
+    assert sync_item.target.scope is SourceFacetScope.CHANNEL
+    assert sync_item.target.channel == 1
+
+    invalid_sync = replace(
+        sync_feature,
+        profile=replace(sync_profile, source_channels=(1,)),
+    )
+    invalid_extensions = replace(
+        extensions,
+        features=(*extensions.features[:-1], invalid_sync),
+    )
+    invalid_driver = SourceV2FakeDriver(combined=True, sync_state=state)
+    invalid_service = make_service(invalid_driver)
+    invalid_service.descriptor = source_descriptor(
+        driver=invalid_driver,
+        extensions=invalid_extensions,
+    )
+    with pytest.raises(SourceSnapshotContractError, match="undeclared source channel"):
+        invalid_service.snapshot_v2()
 
 
 def test_snapshot_v2_runtime_identity_can_only_narrow_descriptor_features() -> None:

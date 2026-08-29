@@ -347,7 +347,6 @@ SourceBurstCapabilityProfile
 SourceBurstMode
 SourceCascadeState
 SourceChannelStateV2
-SourceClockSyncCapabilityProfile
 SourceComponentAmplitude
 SourceConstraintApplicability
 SourceCounterCapabilityProfile
@@ -587,6 +586,15 @@ SourceCouplingDimensionState
 SourceCouplingParameter
 SourceCouplingParameterKind
 SourceCouplingState
+```
+
+首次稳定版 Sync 只读模型修正在上述清单末尾追加以下精确条目：
+
+```text
+SourceReferenceClockCapabilityProfile
+SourceSyncCapabilityProfile
+SourceSyncPolarity
+SourceCascadeCapabilityProfile
 ```
 
 ### capability 与 Protocol
@@ -1002,6 +1010,7 @@ facet 辅助 enum 也使用封闭 value 集：
 
 - `SourceAmplitudeUnit`：`vpp`、`vrms`、`dbm`、`v`、`unknown`；
 - `SourceOutputPolarity`：`normal`、`inverted`、`unknown`；
+- `SourceSyncPolarity`：`positive`、`negative`、`unknown`；
 - `SourceLoadKind`：`high_impedance`、`resistive`、`unknown`；
 - `SourceModulationKind`：`am`、`dsb_am`、`fm`、`pm`、`pwm`、`ask`、`fsk`、`psk`、`other`；
 - `SourceModulationSource`：`internal`、`external`、`channel`、`unknown`；
@@ -1025,8 +1034,8 @@ facet 辅助 enum 也使用封闭 value 集：
 
 机器可读 feature ID 按作用域分为：
 
-- channel：`basic`、`output`、`harmonics`、`modulation`、`sweep`、`burst`、`pulse`、`arbitrary`；
-- system：`counter`、`reference_clock`、`sync`、`cascade`；
+- channel：`basic`、`output`、`harmonics`、`modulation`、`sweep`、`burst`、`pulse`、`arbitrary`、`sync`；
+- system：`counter`、`reference_clock`、`cascade`；
 - cross-channel：`combine`、`tracking`、`coupling`、`copy`、`phase_relation`、`shared_power`。
 
 正文中的 Harmonic、Sync、Combine 等首字母大写名称只是展示术语；注册表、artifact 和
@@ -1035,7 +1044,7 @@ descriptor 一律使用上述小写 ID，不允许通过大小写或单复数增
 feature 集合是核心注册表，不接受插件自定义任意字符串作为新安全语义。厂商专用功能可继续
 使用独立 capability，但未经核心注册时不进入通用 Source V2 预算或恢复。
 
-R2 冻结以下 11 个只读 capability profile。布尔字段只声明该值能否读取，不提供写授权；tuple
+R2 冻结以下只读 capability profile。布尔字段只声明该值能否读取，不提供写授权；tuple
 使用 enum value 或 ID 的升序并且不重复。
 
 ```python
@@ -1115,10 +1124,35 @@ class SourceCounterCapabilityProfile:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceClockSyncCapabilityProfile:
-    reference_clock_modes: tuple[SourceReferenceClockMode, ...]
-    sync_readable: bool
-    cascade_readable: bool
+class SourceReferenceClockCapabilityProfile:
+    modes: tuple[SourceReferenceClockMode, ...]
+    frequency_readable: bool
+    lock_state_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSyncCapabilityProfile:
+    enabled_readable: bool
+    polarity_readable: bool
+    source_channel_readable: bool
+    source_channels: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCascadeCapabilityProfile:
+    enabled_readable: bool
+    role_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingCapabilityProfile:
+    dimensions: tuple[SourceCouplingDimension, ...]
+    parameter_kinds: tuple[SourceCouplingParameterKind, ...]
+    supported_channel_sets: tuple[tuple[int, ...], ...]
+    global_state_readable: bool
+    reference_channel_readable: bool
+    relation_graph_readable: bool
+    configuration_readable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1143,7 +1177,10 @@ SourceFeatureProfile: TypeAlias = (
     | SourcePulseCapabilityProfile
     | SourceArbitraryCapabilityProfile
     | SourceCounterCapabilityProfile
-    | SourceClockSyncCapabilityProfile
+    | SourceReferenceClockCapabilityProfile
+    | SourceSyncCapabilityProfile
+    | SourceCascadeCapabilityProfile
+    | SourceCouplingCapabilityProfile
     | SourceCrossChannelCapabilityProfile
 )
 ```
@@ -1180,10 +1217,10 @@ class SourceTopologyContract:
 格式的 `input_id`；`INSTRUMENT` 不携带这些字段。所有通道必须属于 topology。
 `SourceTopologyContract.channels` 必须递增、唯一且非空；`input_ids` 必须排序稳定且不重复。
 
-- `basic`、`output`、`harmonics`、`modulation`、`pulse`、`sweep`、`burst` 和 `arbitrary`
+- `basic`、`output`、`harmonics`、`modulation`、`pulse`、`sweep`、`burst`、`arbitrary` 和 `sync`
   通常属于 `CHANNEL`；
 - `combine`、`coupling` 和 `tracking` 属于 `CHANNEL_SET`，并明确列出关系参与者；
-- `reference_clock`、`sync` 和 `cascade` 属于 `INSTRUMENT` 或 `CHANNEL_SET`；
+- `reference_clock` 和 `cascade` 属于 `INSTRUMENT`；
 - `counter` 通常属于独立 `INPUT`，只有存在已声明路由关系时才参与输出预算。
 
 descriptor 中的 topology 是静态上界。实际 capability 必须根据已验证的型号、固件、选件和
@@ -1216,7 +1253,7 @@ class SourceFieldId(StrEnum):
     PHASE_RELATION = "source.cross_channel.phase_relation"
     RELATION_GRAPH = "source.cross_channel.relation_graph"
     REFERENCE_CLOCK = "source.instrument.reference_clock"
-    SYNC = "source.instrument.sync"
+    SYNC = "source.channel.sync"
     CASCADE = "source.instrument.cascade"
     SHARED_POWER = "source.instrument.shared_power"
     COUNTER = "source.input.counter"
@@ -1534,13 +1571,12 @@ class ArbitraryFacet:
 class SourceSystemStateV2:
     counters: tuple[SourceCounterInputState, ...]
     reference_clock: Observed[SourceReferenceClockState]
-    sync: Observed[SourceSyncState]
     cascade: Observed[SourceCascadeState]
 
 
 @dataclass(frozen=True, slots=True)
 class SourceCrossChannelStateV2:
-    relations: tuple[SourceRelationState, ...]
+    relations: tuple[SourceRelationState | SourceCouplingState, ...]
     relation_graph: Observed[SourceRelationGraph]
     shared_power: Observed[SourceSharedPowerState]
 
@@ -1556,6 +1592,7 @@ class SourceChannelStateV2:
     burst: Observed[BurstFacet]
     pulse: Observed[PulseFacet]
     arbitrary: Observed[ArbitraryFacet]
+    sync: Observed[SourceSyncState]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1584,7 +1621,8 @@ class SourceSnapshotV2:
 gate_time_s, trigger_level_v, statistics_enabled)`、
 `SourceReferenceClockState(mode, frequency_hz, locked)`、
 `SourceSyncState(enabled, polarity, source_channel)`、`SourceCascadeState(enabled, role)`、
-`SourceRelationState(feature, channels, enabled)` 和
+`SourceRelationState(feature, channels, enabled)`、
+`SourceCouplingState(feature, channels, enabled, reference_channel, dimensions)` 和
 `SourceSharedPowerState(participants, active_power_upper_w, hard_limit_w)`。
 
 每个数值必须有限；频率、时间、阻抗、点数、阶次和功率等非负量不得为负；百分比范围为

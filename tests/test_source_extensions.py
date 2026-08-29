@@ -126,7 +126,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[relation_start + len(relation_exports) :] == match.group(1).splitlines()
+    coupling_exports = match.group(1).splitlines()
+    coupling_start = relation_start + len(relation_exports)
+    assert module.__all__[coupling_start : coupling_start + len(coupling_exports)] == coupling_exports
+    match = re.search(
+        r"首次稳定版 Sync 只读模型修正在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[coupling_start + len(coupling_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -242,10 +251,20 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "reference_channel",
             "dimensions",
         ),
-        "SourceClockSyncCapabilityProfile": (
-            "reference_clock_modes",
-            "sync_readable",
-            "cascade_readable",
+        "SourceReferenceClockCapabilityProfile": (
+            "modes",
+            "frequency_readable",
+            "lock_state_readable",
+        ),
+        "SourceSyncCapabilityProfile": (
+            "enabled_readable",
+            "polarity_readable",
+            "source_channel_readable",
+            "source_channels",
+        ),
+        "SourceCascadeCapabilityProfile": (
+            "enabled_readable",
+            "role_readable",
         ),
         "SourceCrossChannelCapabilityProfile": (
             "relation_kinds",
@@ -503,8 +522,19 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
         "SourceSystemStateV2": (
             "counters",
             "reference_clock",
-            "sync",
             "cascade",
+        ),
+        "SourceChannelStateV2": (
+            "channel",
+            "basic",
+            "output",
+            "harmonics",
+            "modulation",
+            "sweep",
+            "burst",
+            "pulse",
+            "arbitrary",
+            "sync",
         ),
         "SourceCrossChannelStateV2": (
             "relations",
@@ -1455,6 +1485,42 @@ def test_source_v2_coupling_read_model_separates_dimensions_and_parameters() -> 
             feature=module.SourceFeature.COUPLING,
             channels=(1, 2),
             enabled=Observed.value_of(True),
+        )
+
+
+def test_source_v2_sync_is_channel_scoped_and_uses_a_dedicated_profile() -> None:
+    profile = module.SourceSyncCapabilityProfile(
+        enabled_readable=True,
+        polarity_readable=True,
+        source_channel_readable=True,
+        source_channels=(1, 2),
+    )
+    feature = module.SourceFeatureCapability(
+        feature=module.SourceFeature.SYNC,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.READ,),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=profile,
+    )
+
+    assert feature.profile is profile
+    assert not hasattr(module, "SourceClockSyncCapabilityProfile")
+    with pytest.raises(ValueError, match="cannot use scope"):
+        module.SourceFieldRef(
+            module.SourceFieldId.SYNC,
+            module.SourceScopeRef(module.SourceFacetScope.INSTRUMENT),
+        )
+    with pytest.raises(ValueError, match="cannot use scope"):
+        replace(feature, scope=module.SourceFacetScope.INSTRUMENT, channels=())
+    with pytest.raises(ValueError, match="must not be empty"):
+        module.SourceSyncCapabilityProfile(True, False, True)
+    with pytest.raises(ValueError, match="polarity value has an invalid type"):
+        module.SourceSyncState(
+            enabled=Observed.value_of(False),
+            polarity=Observed.value_of(module.SourceOutputPolarity.NORMAL),
+            source_channel=Observed.value_of(1),
         )
 
 

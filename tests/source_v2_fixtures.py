@@ -38,6 +38,7 @@ from wavebench.instruments.source_extensions import (
     SourceRuntimeIdentity,
     SourceSafetyProfile,
     SourceTopologyContract,
+    SourceSyncState,
     SourceTypedObservation,
     SourceWaveformKind,
     SupportState,
@@ -239,11 +240,13 @@ class SourceV2FakeDriver:
         drift: bool = False,
         harmonic_unavailable: bool = False,
         anchor_unknown: bool = False,
+        sync_state: SourceSyncState | None = None,
     ) -> None:
         self.combined = combined
         self.drift = drift
         self.harmonic_unavailable = harmonic_unavailable
         self.anchor_unknown = anchor_unknown
+        self.sync_state = sync_state
         self.plans = []
         self.closed = False
 
@@ -287,6 +290,10 @@ class SourceV2FakeDriver:
                     value = output_facet(
                         enabled=(self.drift and item.phase.value == "anchor_after")
                     )
+                elif field.field is SourceFieldId.SYNC:
+                    if self.sync_state is None:
+                        raise AssertionError("sync state was not configured")
+                    value = self.sync_state
                 else:
                     raise AssertionError(field)
                 observations.append(SourceTypedObservation(field, value))

@@ -235,6 +235,12 @@ class SourceOutputPolarity(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SourceSyncPolarity(StrEnum):
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    UNKNOWN = "unknown"
+
+
 class SourceLoadKind(StrEnum):
     HIGH_IMPEDANCE = "high_impedance"
     RESISTIVE = "resistive"
@@ -691,19 +697,43 @@ class SourceCounterCapabilityProfile:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceClockSyncCapabilityProfile:
-    reference_clock_modes: tuple[SourceReferenceClockMode, ...]
-    sync_readable: bool
-    cascade_readable: bool
+class SourceReferenceClockCapabilityProfile:
+    modes: tuple[SourceReferenceClockMode, ...]
+    frequency_readable: bool
+    lock_state_readable: bool
 
     def __post_init__(self) -> None:
-        _require_enum_tuple(
-            self.reference_clock_modes,
-            SourceReferenceClockMode,
-            "clock reference_clock_modes",
+        _require_enum_tuple(self.modes, SourceReferenceClockMode, "reference clock modes")
+        _require_bool(self.frequency_readable, "reference clock frequency_readable")
+        _require_bool(self.lock_state_readable, "reference clock lock_state_readable")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSyncCapabilityProfile:
+    enabled_readable: bool
+    polarity_readable: bool
+    source_channel_readable: bool
+    source_channels: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_bool(self.enabled_readable, "sync enabled_readable")
+        _require_bool(self.polarity_readable, "sync polarity_readable")
+        _require_bool(self.source_channel_readable, "sync source_channel_readable")
+        _require_positive_channels(
+            self.source_channels,
+            "sync source_channels",
+            allow_empty=not self.source_channel_readable,
         )
-        _require_bool(self.sync_readable, "clock sync_readable")
-        _require_bool(self.cascade_readable, "clock cascade_readable")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCascadeCapabilityProfile:
+    enabled_readable: bool
+    role_readable: bool
+
+    def __post_init__(self) -> None:
+        _require_bool(self.enabled_readable, "cascade enabled_readable")
+        _require_bool(self.role_readable, "cascade role_readable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,7 +833,9 @@ SourceFeatureProfile: TypeAlias = (
     | SourcePulseCapabilityProfile
     | SourceArbitraryCapabilityProfile
     | SourceCounterCapabilityProfile
-    | SourceClockSyncCapabilityProfile
+    | SourceReferenceClockCapabilityProfile
+    | SourceSyncCapabilityProfile
+    | SourceCascadeCapabilityProfile
     | SourceCouplingCapabilityProfile
     | SourceCrossChannelCapabilityProfile
 )
@@ -873,7 +905,7 @@ class SourceFieldId(StrEnum):
     PHASE_RELATION = "source.cross_channel.phase_relation"
     RELATION_GRAPH = "source.cross_channel.relation_graph"
     REFERENCE_CLOCK = "source.instrument.reference_clock"
-    SYNC = "source.instrument.sync"
+    SYNC = "source.channel.sync"
     CASCADE = "source.instrument.cascade"
     SHARED_POWER = "source.instrument.shared_power"
     COUNTER = "source.input.counter"
@@ -900,12 +932,8 @@ _FIELD_SCOPES: dict[SourceFieldId, frozenset[SourceFacetScope]] = {
     SourceFieldId.PHASE_RELATION: frozenset({SourceFacetScope.CHANNEL_SET}),
     SourceFieldId.RELATION_GRAPH: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.REFERENCE_CLOCK: frozenset({SourceFacetScope.INSTRUMENT}),
-    SourceFieldId.SYNC: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
-    SourceFieldId.CASCADE: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
+    SourceFieldId.SYNC: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFieldId.CASCADE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.SHARED_POWER: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.COUNTER: frozenset({SourceFacetScope.INPUT}),
 }
@@ -1894,9 +1922,9 @@ _FEATURE_PROFILE_TYPES: dict[SourceFeature, type[object]] = {
     SourceFeature.PULSE: SourcePulseCapabilityProfile,
     SourceFeature.ARBITRARY: SourceArbitraryCapabilityProfile,
     SourceFeature.COUNTER: SourceCounterCapabilityProfile,
-    SourceFeature.REFERENCE_CLOCK: SourceClockSyncCapabilityProfile,
-    SourceFeature.SYNC: SourceClockSyncCapabilityProfile,
-    SourceFeature.CASCADE: SourceClockSyncCapabilityProfile,
+    SourceFeature.REFERENCE_CLOCK: SourceReferenceClockCapabilityProfile,
+    SourceFeature.SYNC: SourceSyncCapabilityProfile,
+    SourceFeature.CASCADE: SourceCascadeCapabilityProfile,
     SourceFeature.COMBINE: SourceCrossChannelCapabilityProfile,
     SourceFeature.TRACKING: SourceCrossChannelCapabilityProfile,
     SourceFeature.COUPLING: SourceCouplingCapabilityProfile,
@@ -1916,12 +1944,8 @@ _FEATURE_SCOPES: dict[SourceFeature, frozenset[SourceFacetScope]] = {
     SourceFeature.ARBITRARY: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.COUNTER: frozenset({SourceFacetScope.INPUT}),
     SourceFeature.REFERENCE_CLOCK: frozenset({SourceFacetScope.INSTRUMENT}),
-    SourceFeature.SYNC: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
-    SourceFeature.CASCADE: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
+    SourceFeature.SYNC: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFeature.CASCADE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFeature.COMBINE: frozenset(
         {SourceFacetScope.CHANNEL_SET, SourceFacetScope.INSTRUMENT}
     ),
@@ -4137,7 +4161,7 @@ class SourceReferenceClockState:
 @dataclass(frozen=True, slots=True)
 class SourceSyncState:
     enabled: Observed[bool]
-    polarity: Observed[SourceOutputPolarity]
+    polarity: Observed[SourceSyncPolarity]
     source_channel: Observed[int]
 
     def __post_init__(self) -> None:
@@ -4146,6 +4170,11 @@ class SourceSyncState:
         _require_observed(self.source_channel, "sync source_channel")
         if self.enabled.availability is Availability.VALUE:
             _require_bool(self.enabled.value, "sync enabled value")
+        if self.polarity.availability is Availability.VALUE and not isinstance(
+            self.polarity.value,
+            SourceSyncPolarity,
+        ):
+            raise ValueError("sync polarity value has an invalid type")
         if self.source_channel.availability is Availability.VALUE:
             _require_int(self.source_channel.value, "sync source_channel value", minimum=1)
 
@@ -4345,7 +4374,6 @@ class SourceSharedPowerState:
 class SourceSystemStateV2:
     counters: tuple[SourceCounterInputState, ...]
     reference_clock: Observed[SourceReferenceClockState]
-    sync: Observed[SourceSyncState]
     cascade: Observed[SourceCascadeState]
 
     def __post_init__(self) -> None:
@@ -4357,7 +4385,6 @@ class SourceSystemStateV2:
         if len(set(ids)) != len(ids) or tuple(sorted(ids)) != ids:
             raise ValueError("source system counters must be sorted by input_id and unique")
         _require_observed(self.reference_clock, "source system reference_clock")
-        _require_observed(self.sync, "source system sync")
         _require_observed(self.cascade, "source system cascade")
 
 
@@ -4391,6 +4418,7 @@ class SourceChannelStateV2:
     burst: Observed[BurstFacet]
     pulse: Observed[PulseFacet]
     arbitrary: Observed[ArbitraryFacet]
+    sync: Observed[SourceSyncState]
 
     def __post_init__(self) -> None:
         _require_int(self.channel, "source channel state channel", minimum=1)
@@ -4403,6 +4431,7 @@ class SourceChannelStateV2:
             ("burst", self.burst),
             ("pulse", self.pulse),
             ("arbitrary", self.arbitrary),
+            ("sync", self.sync),
         ):
             _require_observed(value, f"source channel state {name}")
 
@@ -4746,6 +4775,10 @@ class SourceDescriptorExtensions:
                 feature.profile.input_ids
             ) <= set(self.topology.input_ids):
                 raise ValueError("source counter profile references an unknown input_id")
+            if isinstance(feature.profile, SourceSyncCapabilityProfile) and not set(
+                feature.profile.source_channels
+            ) <= set(self.topology.channels):
+                raise ValueError("source sync profile references an unknown source channel")
             if isinstance(feature.profile, SourceCrossChannelCapabilityProfile) and any(
                 not set(channel_set) <= set(self.topology.channels)
                 for channel_set in feature.profile.supported_channel_sets
@@ -5149,7 +5182,6 @@ __all__ = [
     "SourceBurstMode",
     "SourceCascadeState",
     "SourceChannelStateV2",
-    "SourceClockSyncCapabilityProfile",
     "SourceComponentAmplitude",
     "SourceConstraintApplicability",
     "SourceCounterCapabilityProfile",
@@ -5326,4 +5358,8 @@ __all__ = [
     "SourceCouplingParameter",
     "SourceCouplingParameterKind",
     "SourceCouplingState",
+    "SourceReferenceClockCapabilityProfile",
+    "SourceSyncCapabilityProfile",
+    "SourceSyncPolarity",
+    "SourceCascadeCapabilityProfile",
 ]
