@@ -29,7 +29,12 @@ from wavebench.instruments.source_extensions import (
     OutputFacet,
     SourceCombineConfigureRequest,
     SourceConstraintApplicability,
+    SourceCouplingCapabilityProfile,
     SourceCouplingConfigureRequest,
+    SourceCouplingDimension,
+    SourceCouplingDimensionState,
+    SourceCouplingParameterKind,
+    SourceCouplingState,
     SourceCrossChannelCapabilityProfile,
     SourceCrossChannelConfigureResult,
     SourceFacetQueryContract,
@@ -239,7 +244,26 @@ class _CrossChannelWriteDriver:
             polarity=Observed.value_of(SourceOutputPolarity.NORMAL),
         )
 
-    def _relation(self, enabled: bool) -> SourceRelationState:
+    def _relation(self, enabled: bool) -> SourceRelationState | SourceCouplingState:
+        if self.feature is SourceFeature.COUPLING:
+            not_queried = Observed.missing(
+                Availability.NOT_QUERIED,
+                SourceReasonCode.NOT_REQUESTED,
+            )
+            return SourceCouplingState(
+                feature=SourceFeature.COUPLING,
+                channels=(1, 2),
+                enabled=Observed.value_of(enabled),
+                reference_channel=Observed.value_of(1),
+                dimensions=tuple(
+                    SourceCouplingDimensionState(
+                        dimension=dimension,
+                        enabled=Observed.value_of(enabled),
+                        parameter=not_queried,
+                    )
+                    for dimension in SourceCouplingDimension
+                ),
+            )
         return SourceRelationState(
             feature=self.feature,
             channels=(1, 2),
@@ -296,12 +320,28 @@ def _extensions(
 ):
     base = source_extensions()
     basic, output = base.features
-    profile = SourceCrossChannelCapabilityProfile(
-        relation_kinds=(feature,),
-        supported_channel_sets=((1, 2),),
-        relation_graph_readable=True,
-        shared_power_constraint_readable=False,
-        configuration_readable=configuration_readable,
+    profile = (
+        SourceCouplingCapabilityProfile(
+            dimensions=tuple(SourceCouplingDimension),
+            parameter_kinds=(
+                SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+                SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+                SourceCouplingParameterKind.PHASE_DEVIATION_DEG,
+            ),
+            supported_channel_sets=((1, 2),),
+            global_state_readable=True,
+            reference_channel_readable=True,
+            relation_graph_readable=True,
+            configuration_readable=configuration_readable,
+        )
+        if feature is SourceFeature.COUPLING
+        else SourceCrossChannelCapabilityProfile(
+            relation_kinds=(feature,),
+            supported_channel_sets=((1, 2),),
+            relation_graph_readable=True,
+            shared_power_constraint_readable=False,
+            configuration_readable=configuration_readable,
+        )
     )
     relation = SourceFeatureCapability(
         feature=feature,

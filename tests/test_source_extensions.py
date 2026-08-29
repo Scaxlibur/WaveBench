@@ -117,7 +117,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[arbitrary_start + len(arbitrary_exports) :] == match.group(1).splitlines()
+    relation_exports = match.group(1).splitlines()
+    relation_start = arbitrary_start + len(arbitrary_exports)
+    assert module.__all__[relation_start : relation_start + len(relation_exports)] == relation_exports
+    match = re.search(
+        r"首次稳定版 Coupling 只读模型修正在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[relation_start + len(relation_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -214,6 +223,24 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "measurement_kinds",
             "configuration_readable",
             "query_effect",
+        ),
+        "SourceCouplingCapabilityProfile": (
+            "dimensions",
+            "parameter_kinds",
+            "supported_channel_sets",
+            "global_state_readable",
+            "reference_channel_readable",
+            "relation_graph_readable",
+            "configuration_readable",
+        ),
+        "SourceCouplingParameter": ("kind", "value"),
+        "SourceCouplingDimensionState": ("dimension", "enabled", "parameter"),
+        "SourceCouplingState": (
+            "feature",
+            "channels",
+            "enabled",
+            "reference_channel",
+            "dimensions",
         ),
         "SourceClockSyncCapabilityProfile": (
             "reference_clock_modes",
@@ -1343,6 +1370,91 @@ def test_source_v2_cross_channel_write_models_are_closed_and_serializable() -> N
                 module.SourceRelationOutputState(channel=2, enabled=False),
                 module.SourceRelationOutputState(channel=1, enabled=False),
             ),
+        )
+
+
+def test_source_v2_coupling_read_model_separates_dimensions_and_parameters() -> None:
+    profile = module.SourceCouplingCapabilityProfile(
+        dimensions=(
+            module.SourceCouplingDimension.AMPLITUDE,
+            module.SourceCouplingDimension.FREQUENCY,
+            module.SourceCouplingDimension.PHASE,
+        ),
+        parameter_kinds=(
+            module.SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+            module.SourceCouplingParameterKind.AMPLITUDE_RATIO,
+            module.SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+            module.SourceCouplingParameterKind.FREQUENCY_RATIO,
+            module.SourceCouplingParameterKind.PHASE_DEVIATION_DEG,
+            module.SourceCouplingParameterKind.PHASE_RATIO,
+        ),
+        supported_channel_sets=((1, 2),),
+        global_state_readable=True,
+        reference_channel_readable=True,
+        relation_graph_readable=False,
+    )
+    missing = Observed.missing(
+        Availability.NOT_QUERIED,
+        SourceReasonCode.NOT_REQUESTED,
+    )
+    state = module.SourceCouplingState(
+        feature=module.SourceFeature.COUPLING,
+        channels=(1, 2),
+        enabled=missing,
+        reference_channel=Observed.value_of(1),
+        dimensions=(
+            module.SourceCouplingDimensionState(
+                module.SourceCouplingDimension.AMPLITUDE,
+                Observed.value_of(True),
+                Observed.value_of(
+                    module.SourceCouplingParameter(
+                        module.SourceCouplingParameterKind.AMPLITUDE_RATIO,
+                        0.5,
+                    )
+                ),
+            ),
+            module.SourceCouplingDimensionState(
+                module.SourceCouplingDimension.FREQUENCY,
+                Observed.value_of(True),
+                Observed.value_of(
+                    module.SourceCouplingParameter(
+                        module.SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+                        500.0,
+                    )
+                ),
+            ),
+            module.SourceCouplingDimensionState(
+                module.SourceCouplingDimension.PHASE,
+                Observed.value_of(False),
+                missing,
+            ),
+        ),
+    )
+
+    assert profile.configuration_readable is False
+    assert module.source_v2_to_data(state)["dimensions"][0]["parameter"]["value"] == {
+        "type": "SourceCouplingParameter",
+        "kind": "amplitude_ratio",
+        "value": 0.5,
+    }
+    with pytest.raises(ValueError, match="does not match its dimension"):
+        module.SourceCouplingDimensionState(
+            module.SourceCouplingDimension.PHASE,
+            Observed.value_of(True),
+            Observed.value_of(
+                module.SourceCouplingParameter(
+                    module.SourceCouplingParameterKind.FREQUENCY_RATIO,
+                    2.0,
+                )
+            ),
+        )
+    with pytest.raises(ValueError, match="must be a participant"):
+        replace(state, reference_channel=Observed.value_of(3))
+    with pytest.raises(ValueError, match="feature is not a relation"):
+        module.SourceRelationState(
+            feature=module.SourceFeature.COUPLING,
+            channels=(1, 2),
+            enabled=Observed.value_of(True),
         )
 
 

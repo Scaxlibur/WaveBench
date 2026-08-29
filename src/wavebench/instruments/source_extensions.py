@@ -351,6 +351,31 @@ class SourceInputCoupling(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SourceCouplingDimension(StrEnum):
+    AMPLITUDE = "amplitude"
+    FREQUENCY = "frequency"
+    PHASE = "phase"
+
+
+class SourceCouplingParameterKind(StrEnum):
+    AMPLITUDE_DEVIATION_VPP = "amplitude_deviation_vpp"
+    AMPLITUDE_RATIO = "amplitude_ratio"
+    FREQUENCY_DEVIATION_HZ = "frequency_deviation_hz"
+    FREQUENCY_RATIO = "frequency_ratio"
+    PHASE_DEVIATION_DEG = "phase_deviation_deg"
+    PHASE_RATIO = "phase_ratio"
+
+
+_COUPLING_PARAMETER_DIMENSIONS = {
+    SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP: SourceCouplingDimension.AMPLITUDE,
+    SourceCouplingParameterKind.AMPLITUDE_RATIO: SourceCouplingDimension.AMPLITUDE,
+    SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ: SourceCouplingDimension.FREQUENCY,
+    SourceCouplingParameterKind.FREQUENCY_RATIO: SourceCouplingDimension.FREQUENCY,
+    SourceCouplingParameterKind.PHASE_DEVIATION_DEG: SourceCouplingDimension.PHASE,
+    SourceCouplingParameterKind.PHASE_RATIO: SourceCouplingDimension.PHASE,
+}
+
+
 class SourceReferenceClockMode(StrEnum):
     INTERNAL = "internal"
     EXTERNAL = "external"
@@ -682,6 +707,52 @@ class SourceClockSyncCapabilityProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceCouplingCapabilityProfile:
+    dimensions: tuple[SourceCouplingDimension, ...]
+    parameter_kinds: tuple[SourceCouplingParameterKind, ...]
+    supported_channel_sets: tuple[tuple[int, ...], ...]
+    global_state_readable: bool
+    reference_channel_readable: bool
+    relation_graph_readable: bool
+    configuration_readable: bool = False
+
+    def __post_init__(self) -> None:
+        _require_enum_tuple(
+            self.dimensions,
+            SourceCouplingDimension,
+            "coupling dimensions",
+        )
+        _require_enum_tuple(
+            self.parameter_kinds,
+            SourceCouplingParameterKind,
+            "coupling parameter_kinds",
+        )
+        if any(
+            _COUPLING_PARAMETER_DIMENSIONS[kind] not in self.dimensions
+            for kind in self.parameter_kinds
+        ):
+            raise ValueError("coupling parameter_kinds reference an unsupported dimension")
+        if not isinstance(self.supported_channel_sets, tuple):
+            raise ValueError("coupling supported_channel_sets must be a tuple")
+        for channel_set in self.supported_channel_sets:
+            _require_positive_channels(channel_set, "coupling supported channel set")
+            if len(channel_set) < 2:
+                raise ValueError("coupling channel sets require at least two channels")
+        if (
+            len(set(self.supported_channel_sets)) != len(self.supported_channel_sets)
+            or tuple(sorted(self.supported_channel_sets)) != self.supported_channel_sets
+        ):
+            raise ValueError("coupling supported_channel_sets must be sorted and unique")
+        _require_bool(self.global_state_readable, "coupling global_state_readable")
+        _require_bool(
+            self.reference_channel_readable,
+            "coupling reference_channel_readable",
+        )
+        _require_bool(self.relation_graph_readable, "coupling relation_graph_readable")
+        _require_bool(self.configuration_readable, "coupling configuration_readable")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCrossChannelCapabilityProfile:
     relation_kinds: tuple[SourceFeature, ...]
     supported_channel_sets: tuple[tuple[int, ...], ...]
@@ -694,7 +765,6 @@ class SourceCrossChannelCapabilityProfile:
         allowed = {
             SourceFeature.COMBINE,
             SourceFeature.TRACKING,
-            SourceFeature.COUPLING,
             SourceFeature.COPY,
             SourceFeature.PHASE_RELATION,
             SourceFeature.SHARED_POWER,
@@ -734,6 +804,7 @@ SourceFeatureProfile: TypeAlias = (
     | SourceArbitraryCapabilityProfile
     | SourceCounterCapabilityProfile
     | SourceClockSyncCapabilityProfile
+    | SourceCouplingCapabilityProfile
     | SourceCrossChannelCapabilityProfile
 )
 
@@ -1828,7 +1899,7 @@ _FEATURE_PROFILE_TYPES: dict[SourceFeature, type[object]] = {
     SourceFeature.CASCADE: SourceClockSyncCapabilityProfile,
     SourceFeature.COMBINE: SourceCrossChannelCapabilityProfile,
     SourceFeature.TRACKING: SourceCrossChannelCapabilityProfile,
-    SourceFeature.COUPLING: SourceCrossChannelCapabilityProfile,
+    SourceFeature.COUPLING: SourceCouplingCapabilityProfile,
     SourceFeature.COPY: SourceCrossChannelCapabilityProfile,
     SourceFeature.PHASE_RELATION: SourceCrossChannelCapabilityProfile,
     SourceFeature.SHARED_POWER: SourceCrossChannelCapabilityProfile,
@@ -4080,6 +4151,72 @@ class SourceSyncState:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceCouplingParameter:
+    kind: SourceCouplingParameterKind
+    value: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, SourceCouplingParameterKind):
+            raise ValueError("source coupling parameter kind has an invalid type")
+        _require_finite(self.value, "source coupling parameter value")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingDimensionState:
+    dimension: SourceCouplingDimension
+    enabled: Observed[bool]
+    parameter: Observed[SourceCouplingParameter]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dimension, SourceCouplingDimension):
+            raise ValueError("source coupling dimension has an invalid type")
+        _require_observed(self.enabled, "source coupling dimension enabled")
+        _require_observed(self.parameter, "source coupling dimension parameter")
+        if self.enabled.availability is Availability.VALUE:
+            _require_bool(self.enabled.value, "source coupling dimension enabled value")
+        if self.parameter.availability is Availability.VALUE:
+            if not isinstance(self.parameter.value, SourceCouplingParameter):
+                raise ValueError("source coupling dimension parameter has an invalid type")
+            if _COUPLING_PARAMETER_DIMENSIONS[self.parameter.value.kind] is not self.dimension:
+                raise ValueError("source coupling parameter does not match its dimension")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingState:
+    feature: SourceFeature
+    channels: tuple[int, ...]
+    enabled: Observed[bool]
+    reference_channel: Observed[int]
+    dimensions: tuple[SourceCouplingDimensionState, ...]
+
+    def __post_init__(self) -> None:
+        if self.feature is not SourceFeature.COUPLING:
+            raise ValueError("source coupling state feature must be coupling")
+        _require_positive_channels(self.channels, "source coupling state channels")
+        if len(self.channels) < 2:
+            raise ValueError("source coupling state requires two or more channels")
+        _require_observed(self.enabled, "source coupling state enabled")
+        _require_observed(self.reference_channel, "source coupling state reference_channel")
+        if self.enabled.availability is Availability.VALUE:
+            _require_bool(self.enabled.value, "source coupling state enabled value")
+        if self.reference_channel.availability is Availability.VALUE:
+            _require_int(
+                self.reference_channel.value,
+                "source coupling state reference_channel value",
+                minimum=1,
+            )
+            if self.reference_channel.value not in self.channels:
+                raise ValueError("source coupling reference_channel must be a participant")
+        if not isinstance(self.dimensions, tuple) or not self.dimensions or any(
+            not isinstance(item, SourceCouplingDimensionState) for item in self.dimensions
+        ):
+            raise ValueError("source coupling dimensions have an invalid type")
+        keys = tuple(item.dimension.value for item in self.dimensions)
+        if len(set(keys)) != len(keys) or tuple(sorted(keys)) != keys:
+            raise ValueError("source coupling dimensions must be sorted and unique")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCascadeState:
     enabled: Observed[bool]
     role: Observed[str]
@@ -4103,7 +4240,6 @@ class SourceRelationState:
         if self.feature not in {
             SourceFeature.COMBINE,
             SourceFeature.TRACKING,
-            SourceFeature.COUPLING,
             SourceFeature.COPY,
             SourceFeature.PHASE_RELATION,
         }:
@@ -4137,7 +4273,7 @@ class SourceCrossChannelConfigureResult:
     feature: SourceFeature
     channels: tuple[int, ...]
     enabled: bool
-    relation: SourceRelationState
+    relation: SourceRelationState | SourceCouplingState
     outputs: tuple[SourceRelationOutputState, ...]
 
     def __post_init__(self) -> None:
@@ -4157,7 +4293,7 @@ class SourceCrossChannelConfigureResult:
                 "source cross-channel configure result requires two or more channels"
             )
         _require_bool(self.enabled, "source cross-channel configure result enabled")
-        if not isinstance(self.relation, SourceRelationState):
+        if not isinstance(self.relation, (SourceRelationState, SourceCouplingState)):
             raise ValueError(
                 "source cross-channel configure result relation has an invalid type"
             )
@@ -4227,13 +4363,14 @@ class SourceSystemStateV2:
 
 @dataclass(frozen=True, slots=True)
 class SourceCrossChannelStateV2:
-    relations: tuple[SourceRelationState, ...]
+    relations: tuple[SourceRelationState | SourceCouplingState, ...]
     relation_graph: Observed[SourceRelationGraph]
     shared_power: Observed[SourceSharedPowerState]
 
     def __post_init__(self) -> None:
         if not isinstance(self.relations, tuple) or any(
-            not isinstance(item, SourceRelationState) for item in self.relations
+            not isinstance(item, (SourceRelationState, SourceCouplingState))
+            for item in self.relations
         ):
             raise ValueError("source cross-channel relations have an invalid type")
         keys = tuple((item.feature.value, item.channels) for item in self.relations)
@@ -4455,6 +4592,7 @@ SourceObservationValue: TypeAlias = (
     | SourceCounterInputState
     | SourceReferenceClockState
     | SourceSyncState
+    | SourceCouplingState
     | SourceCascadeState
     | SourceRelationState
     | SourceRelationGraph
@@ -4479,7 +4617,7 @@ _OBSERVATION_TYPES: dict[SourceFieldId, type[object] | tuple[type[object], ...]]
     SourceFieldId.ARM_STATE: bool,
     SourceFieldId.TRIGGER_STATE: bool,
     SourceFieldId.COMBINE: SourceRelationState,
-    SourceFieldId.COUPLING: SourceRelationState,
+    SourceFieldId.COUPLING: SourceCouplingState,
     SourceFieldId.TRACKING: SourceRelationState,
     SourceFieldId.COPY: SourceRelationState,
     SourceFieldId.PHASE_RELATION: SourceRelationState,
@@ -4615,6 +4753,11 @@ class SourceDescriptorExtensions:
                 raise ValueError(
                     "source cross-channel profile references an unknown channel"
                 )
+            if isinstance(feature.profile, SourceCouplingCapabilityProfile) and any(
+                not set(channel_set) <= set(self.topology.channels)
+                for channel_set in feature.profile.supported_channel_sets
+            ):
+                raise ValueError("source coupling profile references an unknown channel")
         if not isinstance(self.query_contract, SourceQueryContract):
             raise ValueError("source descriptor query_contract has an invalid type")
         if not isinstance(self.safety_profile, SourceSafetyProfile):
@@ -5177,4 +5320,10 @@ __all__ = [
     "SourcePhaseRelationConfigureRequest",
     "SourcePhaseRelationConfigureV2Driver",
     "SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceCouplingCapabilityProfile",
+    "SourceCouplingDimension",
+    "SourceCouplingDimensionState",
+    "SourceCouplingParameter",
+    "SourceCouplingParameterKind",
+    "SourceCouplingState",
 ]

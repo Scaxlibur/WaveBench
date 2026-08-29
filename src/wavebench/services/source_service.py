@@ -117,8 +117,10 @@ from wavebench.instruments.source_extensions import (
     SourceBurstMode,
     SourceCombineConfigureRequest,
     SourceCombineConfigureV2Driver,
+    SourceCouplingCapabilityProfile,
     SourceCouplingConfigureRequest,
     SourceCouplingConfigureV2Driver,
+    SourceCouplingState,
     SourceCrossChannelCapabilityProfile,
     SourceCrossChannelConfigureResult,
     SourceFacetScope,
@@ -346,7 +348,7 @@ class _SourceCrossChannelClosure:
 
     feature: SourceFeature
     relation_field: SourceFieldId
-    relation: SourceRelationState
+    relation: SourceRelationState | SourceCouplingState
     relation_graph: SourceRelationGraph
     affected_channels: tuple[int, ...]
     fields: tuple[SourceFieldRef, ...]
@@ -3838,6 +3840,11 @@ class SourceService(SessionStateAliasMixin):
         feature: SourceFeature,
         operation: str,
     ) -> None:
+        profile_type = (
+            SourceCouplingCapabilityProfile
+            if feature is SourceFeature.COUPLING
+            else SourceCrossChannelCapabilityProfile
+        )
         configurable = next(
             (
                 item
@@ -3848,18 +3855,26 @@ class SourceService(SessionStateAliasMixin):
                 and item.support is SupportState.SUPPORTED
                 and SourceFeatureDirection.READ in item.directions
                 and SourceFeatureDirection.CONFIGURE in item.directions
-                and isinstance(item.profile, SourceCrossChannelCapabilityProfile)
+                and isinstance(item.profile, profile_type)
             ),
             None,
         )
         if configurable is None:
             raise ConfigError(f"{operation} is not available for the runtime channel set")
         profile = configurable.profile
-        if (
-            feature not in profile.relation_kinds
-            or channels not in profile.supported_channel_sets
-            or not profile.configuration_readable
-        ):
+        if isinstance(profile, SourceCouplingCapabilityProfile):
+            readable = (
+                channels in profile.supported_channel_sets
+                and profile.global_state_readable
+                and profile.configuration_readable
+            )
+        else:
+            readable = (
+                feature in profile.relation_kinds
+                and channels in profile.supported_channel_sets
+                and profile.configuration_readable
+            )
+        if not readable:
             raise ConfigError(f"{operation} requires readable declared relation configuration")
         graph = next(
             (
@@ -3869,7 +3884,7 @@ class SourceService(SessionStateAliasMixin):
                 and item.scope is SourceFacetScope.INSTRUMENT
                 and item.support is SupportState.SUPPORTED
                 and SourceFeatureDirection.READ in item.directions
-                and isinstance(item.profile, SourceCrossChannelCapabilityProfile)
+                and isinstance(item.profile, profile_type)
                 and item.profile.relation_graph_readable
             ),
             None,
@@ -3879,7 +3894,7 @@ class SourceService(SessionStateAliasMixin):
 
     def _source_cross_channel_fields(
         self,
-        relations: tuple[SourceRelationState, ...],
+        relations: tuple[SourceRelationState | SourceCouplingState, ...],
         *,
         feature: SourceFeature,
         relation_field: SourceFieldId,

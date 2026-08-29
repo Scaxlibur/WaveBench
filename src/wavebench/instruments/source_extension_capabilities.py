@@ -17,6 +17,7 @@ from .source_extensions import (
     SOURCE_SNAPSHOT_MIN_CORE_VERSION,
     SourceAmplitudeUnit,
     SourceArbitraryCapabilityProfile,
+    SourceCouplingCapabilityProfile,
     SourceCrossChannelCapabilityProfile,
     SourceDescriptorExtensions,
     SourceAnchorField,
@@ -641,6 +642,11 @@ def _validate_cross_channel_write_capability(
 ) -> None:
     if capability not in capabilities:
         return
+    profile_type = (
+        SourceCouplingCapabilityProfile
+        if feature_kind is SourceFeature.COUPLING
+        else SourceCrossChannelCapabilityProfile
+    )
     configurable = tuple(
         feature
         for feature in extensions.features
@@ -650,7 +656,7 @@ def _validate_cross_channel_write_capability(
             and feature.support is SupportState.SUPPORTED
             and SourceFeatureDirection.CONFIGURE in feature.directions
             and SourceFeatureDirection.READ in feature.directions
-            and isinstance(feature.profile, SourceCrossChannelCapabilityProfile)
+            and isinstance(feature.profile, profile_type)
         )
     )
     if not configurable:
@@ -659,11 +665,19 @@ def _validate_cross_channel_write_capability(
         )
     for feature in configurable:
         profile = feature.profile
-        if (
-            feature_kind not in profile.relation_kinds
-            or feature.channels not in profile.supported_channel_sets
-            or not profile.configuration_readable
-        ):
+        if isinstance(profile, SourceCouplingCapabilityProfile):
+            readable = (
+                feature.channels in profile.supported_channel_sets
+                and profile.global_state_readable
+                and profile.configuration_readable
+            )
+        else:
+            readable = (
+                feature_kind in profile.relation_kinds
+                and feature.channels in profile.supported_channel_sets
+                and profile.configuration_readable
+            )
+        if not readable:
             raise ConfigError(
                 f"{capability} requires readable declared {feature_kind.value} relation state"
             )
@@ -675,7 +689,7 @@ def _validate_cross_channel_write_capability(
             and feature.scope is SourceFacetScope.INSTRUMENT
             and feature.support is SupportState.SUPPORTED
             and SourceFeatureDirection.READ in feature.directions
-            and isinstance(feature.profile, SourceCrossChannelCapabilityProfile)
+            and isinstance(feature.profile, profile_type)
             and feature.profile.relation_graph_readable
         )
     )

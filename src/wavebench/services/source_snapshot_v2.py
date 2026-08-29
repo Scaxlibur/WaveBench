@@ -23,6 +23,9 @@ from wavebench.instruments.source_extensions import (
     SourceAnchorField,
     SourceChannelStateV2,
     SourceCounterInputState,
+    SourceCouplingCapabilityProfile,
+    SourceCouplingDimensionState,
+    SourceCouplingState,
     SourceCrossChannelStateV2,
     SourceDescriptorExtensions,
     SourceFacetQueryContract,
@@ -424,7 +427,7 @@ def _anchor_predicate_value(
         and isinstance(value, ArbitraryFacet)
     ):
         return _observed_value(value.playback_mode)
-    if isinstance(value, SourceRelationState):
+    if isinstance(value, (SourceRelationState, SourceCouplingState)):
         return _observed_value(value.enabled)
     return None
 
@@ -650,7 +653,7 @@ def _cross_channel_state(
     values: dict[SourceFieldRef, Observed[object]],
     features: tuple[SourceFeatureCapability, ...],
 ) -> SourceCrossChannelStateV2:
-    relations: list[SourceRelationState] = []
+    relations: list[SourceRelationState | SourceCouplingState] = []
     relation_fields = {
         SourceFeature.COMBINE: SourceFieldId.COMBINE,
         SourceFeature.TRACKING: SourceFieldId.TRACKING,
@@ -671,6 +674,28 @@ def _cross_channel_state(
         )
         if observed.availability is Availability.VALUE:
             relations.append(observed.value)
+        elif feature.feature is SourceFeature.COUPLING:
+            profile = feature.profile
+            if not isinstance(profile, SourceCouplingCapabilityProfile):
+                raise SourceSnapshotContractError(
+                    "source coupling feature has an invalid runtime profile"
+                )
+            relations.append(
+                SourceCouplingState(
+                    feature=SourceFeature.COUPLING,
+                    channels=feature.channels,
+                    enabled=observed,
+                    reference_channel=observed,
+                    dimensions=tuple(
+                        SourceCouplingDimensionState(
+                            dimension=dimension,
+                            enabled=observed,
+                            parameter=observed,
+                        )
+                        for dimension in profile.dimensions
+                    ),
+                )
+            )
         else:
             relations.append(
                 SourceRelationState(

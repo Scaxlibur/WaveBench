@@ -578,6 +578,17 @@ SourcePhaseRelationConfigureV2Driver
 SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+首次稳定版 Coupling 只读模型修正在上述清单末尾追加以下精确条目：
+
+```text
+SourceCouplingCapabilityProfile
+SourceCouplingDimension
+SourceCouplingDimensionState
+SourceCouplingParameter
+SourceCouplingParameterKind
+SourceCouplingState
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
