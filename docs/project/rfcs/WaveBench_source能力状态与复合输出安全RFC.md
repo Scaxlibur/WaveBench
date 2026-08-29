@@ -10,6 +10,9 @@
 > `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
 > M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 已完成；
 > 在该里程碑范围内，Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 与内部 Sweep 子项均具备公开 Service、CLI 与 run plan 入口。
+> 本分支另记录 R8 候选设计：修正 Coupling 写合同，并拆分 Noise Overlay 与 Sync 写事务。
+> 该候选设计尚未接受或实现；它不新增 Noise／Sync capability，也不改变已注册的 M6-C
+> 布尔 Coupling capability，不影响 R7 的公开行为。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -53,6 +56,7 @@ Harmonic、Modulation、Sweep、Burst、Pulse、Noise、DC、ARB、Counter、Com
 | R5 | Accepted | 冻结 M4.5 的 V1 写路由清单和 additive artifact 边界，并实现 C1 的受管 wheel/descriptor PEP 440 交叉门与 V1/V2 兼容 fixture；不注册任何 V2 写 capability |
 | R6 | Accepted | 冻结基本写入安全、核心接口归属和兼容边界；授权按 M5-A → M5-B → M5-C → M5-D → C2 → M6-A → M6-B → M6-C → M7 → C3 实施 |
 | R7 | Accepted | 为已关闭输出的 Harmonic 状态增加独立关闭 capability；不改变 basic 写入、V1 签名或输出 ON 准入 |
+| R8 候选 | Proposed | 为参数化 Coupling、Noise Overlay 和独立 Sync 物理端口设计写 capability 与恢复事务；不改变当前 capability 注册表 |
 
 ## Accepted R5 范围
 
@@ -3681,6 +3685,169 @@ relation graph 摘要、阶段和可选 recovery；不记录 raw SCPI、授权 t
 双合同插件声明 `source.coupling_configure_v2` 后，遗留 V1 `configure_coupling` 在任何仪器 I/O 前拒绝；
 声明任一 M6-C capability 后，V1 restore 也在 I/O 前拒绝。没有声明对应 capability 的 V1-only 或双合同插件继续走
 既有 V1 route。当前只有核心 A0 离线 fixture，未声明真实插件 capability，也没有执行实机验收。
+
+## R8 候选：Coupling、Noise Overlay 与 Sync 写事务
+
+本节是首次稳定版前的候选设计，不是 R7 的实施授权。当前 Core 已有 M6-C 的布尔
+`source.coupling_configure_v2` Service／CLI／run plan 骨架，但没有生产插件声明该 capability；
+Noise Overlay 与 Sync 仍只有类型化读取。R8 不改变这些当前事实，任何插件都不得依据本节自行
+声明参数化 Coupling、Noise Overlay 或 Sync 写能力。
+
+### 跨设备交集
+
+当前普通信号发生器证据来自 DG4000 与 SDG2000X，两者不能共用厂商命令模型：
+
+- DG4000 的 Coupling 使用 CH1／CH2 基准通道，以及 amplitude、frequency、phase 三个独立
+  deviation；SDG2000X 还存在 ratio／deviation 选择、方向和只在活动状态返回的字段。
+- DG4000 的 Noise Overlay 提供每通道 enabled 与 percent scale；SDG2000X 的 Noise Add
+  只证明 enabled 状态，不能假设存在相同比例语义。
+- DG4000 的 Sync 提供每通道 enabled 与 polarity；SDG2000X 提供 enabled 与 routing type，
+  但没有同构的 polarity。
+
+因此 Core 只保留已类型化的交集：Coupling 使用带 dimension 与 parameter kind 的目标；Noise
+Overlay 使用可为空的 typed scale tuple；Sync 的共同字段只有 enabled。DG 的基准通道、SDG 的
+ratio／direction 与 routing type 只有在公共类型能够无损表达时才进入 Core，不使用自由 mapping
+或厂商字符串补齐。
+
+### Coupling 合同修正
+
+现有、尚未稳定发布的 `source.coupling_configure_v2` 只接收 `channels + enabled`，与已经稳定的
+参数化 `SourceCouplingState` 不等价。首次稳定版前直接修正该 capability，不新增第二个
+`source.coupling_parameters_configure_v2`。当前没有生产插件声明该写 capability，因此无需保留两套
+重叠 API。
+
+候选公共类型为完整目标，不使用 partial patch：
+
+```python
+@dataclass(frozen=True, slots=True)
+class SourceCouplingDimensionTarget:
+    dimension: SourceCouplingDimension
+    enabled: bool
+    parameter: SourceCouplingParameter
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingConfigureRequest:
+    channels: tuple[int, ...]
+    enabled: bool
+    reference_channel: int
+    dimensions: tuple[SourceCouplingDimensionTarget, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingConfigureResult:
+    coupling: SourceCouplingState
+    outputs: tuple[SourceRelationOutputState, ...]
+```
+
+request 的 channel set 必须由 profile 声明；dimensions 必须与 profile 完全一致；parameter kind
+必须属于对应 dimension 和 profile。`configuration_readable`、`global_state_readable`、
+`reference_channel_readable` 与 `relation_graph_readable` 必须全部为真。无法完整读取配置、关系图或
+受影响端口时，Core 在 MAIN 前拒绝，不退回旧布尔关系写入。
+
+事务继续使用 `source.coupling_configure_v2`，direction 为 `CONFIGURE`，energy effect 为
+`POTENTIAL_WHILE_OFF`。Core 先冻结 relation graph closure，要求 closure 内全部主输出为 OFF，
+再调用一次 driver 方法。driver 可按设备协议执行多字段写入，但每个目标字段在 MAIN 中最多写一次；
+写后必须返回完整 Coupling state，Core 再用 fresh snapshot 独立验证 target、graph 和全部 OFF 状态。
+
+### Noise Overlay 合同
+
+新增候选 capability `source.noise_overlay_configure_v2`，required method 为
+`configure_source_noise_overlay_v2`。它只在目标主输出已经 OFF 时配置，不打开输出：
+
+```python
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayConfigureRequest:
+    channel: int
+    enabled: bool
+    scales: tuple[SourceNoiseOverlayScale, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayConfigureResult:
+    channel: int
+    noise_overlay: NoiseOverlayFacet
+    output_enabled: bool
+```
+
+request 的 scale kind tuple 必须与 runtime profile 完全一致；只支持 enabled 的设备使用空 tuple，
+不能伪造 percent 或默认 scale。descriptor 必须声明 Noise Overlay `READ`／`CONFIGURE`、
+`enabled_readable = true` 和完整配置回读；同一通道的 Output 必须支持 READ。
+
+该 operation 的 direction 为 `CONFIGURE`，energy effect 为 `POTENTIAL_WHILE_OFF`，字段闭包至少包含
+Identity、目标 Output 与 Noise Overlay。MAIN 只调用一次 driver 方法；postcondition 必须逐项确认
+enabled、scales 和 Output OFF。
+
+配置成功不构成后续输出 ON 授权。Noise Overlay 启用后，只有设备在当前 scale、型号、固件和基础
+波形范围内提供确定性硬边界时，严格复合预算才可能放行主输出。当前 `SourceNoisePeakConstraint`
+只描述基本 Noise 波形，不能替代 Noise Overlay 的独立边界；缺少该边界时继续返回
+`noise_overlay_bound_missing`。DG4000 手册只给出 `0–50 %` 的比例，没有确定性峰值保证，因此
+DG4202 即使未来声明配置 capability，也不能据此声明带 Noise Overlay 的输出 ON 已获准入。
+
+### Sync 配置与物理端口输出
+
+Sync 必须拆成配置和物理端口开关，不能把 polarity 写入与开始发出同步信号混为一个 operation：
+
+```text
+source.sync_configure_v2  capability -> configure_source_sync_v2
+source.sync_output_v2     capability -> set_source_sync_output_v2
+```
+
+两个 capability 都要求 Core 先建立 Sync 物理端口 topology：稳定 port ID、逻辑通道到物理端口的
+绑定，以及共享端口的 closure 规则。没有该绑定时，`SourceSyncState.enabled = false` 只能说明逻辑
+状态，不能证明目标物理端口已经 OFF，也不能确定 recovery OFF 的完整范围，因此 configure、enable
+和 disable 均不得注册。
+
+端口 topology 完成后，`source.sync_configure_v2` 只允许在对应 Sync 物理端口已证明为 OFF 时设置
+Core 已建模且 profile 声明可写的 polarity 或 source channel。它使用 feature-specific
+`PatchValue`，至少一个字段为 SET；driver result 和 fresh postcondition 必须返回完整、仍为 disabled
+的 `SourceSyncState`。SDG2000X 的 routing type 在当前 Core 模型中不可表达，因此不能通过该
+capability 写入。
+
+`source.sync_output_v2` 是一个 capability，并要求同一个 driver method。descriptor 的 `ENABLE`／
+`DISABLE` direction 分别映射到两个独立的 `SourceOperationContract` 与 `OperationSpec`：
+
+| operation | direction | energy effect | 最小门槛 |
+| --- | --- | --- | --- |
+| `source.sync_output_enable_v2` | `ENABLE` | `EMIT` | 明确物理端口、端接／电气上界、A5 接线证据和 fresh Sync state |
+| `source.sync_output_disable_v2` | `DISABLE` | `DECREASE_ONLY` | Sync enabled 可读、session 允许正常或 recovery I/O |
+
+当前 `SourceSyncState` 只描述逻辑通道，不足以证明物理端口。物理 topology 还必须为 enable 增加
+该端口的电压边界和端接要求。共享一个物理 Sync／Aux 端口的多个逻辑通道必须进入同一 closure。
+不得从主 Output 的 Vpp、显示负载或
+`max_source_vpp` 推断数字 Sync 端口安全，也不得将「主输出 OFF」解释为「Sync 端口 OFF」。
+
+在物理 port ID／binding／closure 进入 Core 前，任何通用 Sync 写 capability 都不得注册。该模型完成
+并通过 A0 后，可以先评审 configure 与 disable；enable 还必须等待电气 profile 和 A5 证据。
+
+### 恢复顺序与失败状态
+
+三个功能都使用 core-owned 完整 baseline；任何 baseline 字段不是 `VALUE`、snapshot 不一致或
+relation／port closure 不完整时，MAIN 前零写拒绝。恢复不会重新开启主输出，也不会自动重新开启
+Sync 物理端口。
+
+| 功能 | FAILURE_SAFE_STATE | FAILURE_RESTORE | CLEANUP_VERIFICATION |
+| --- | --- | --- | --- |
+| Coupling | 对冻结 closure 内每个主输出至多发送一次 V2 OFF | 仅在 session 仍允许 recovery 且 baseline 完整时，按一次完整 target 恢复 Coupling；设备适配器应先解除 Coupling，再恢复基准、参数和各维状态 | 完整 Coupling、relation graph 与全部主输出 OFF |
+| Noise Overlay | 目标主输出至多发送一次 V2 OFF | 先保持 Noise disabled，再恢复 scale，最后按 baseline 恢复 enabled；整个阶段主输出保持 OFF | Noise Overlay 完整 target 与主输出 OFF |
+| Sync 配置 | 在物理 port binding 已冻结后，对 closure 中的 Sync 端口至多发送一次 OFF；只在 descriptor 声明副作用时关闭相关主输出 | 在 Sync 端口保持 OFF 时恢复 polarity／source channel；不恢复原 Sync ON | Sync 完整配置与全部绑定物理端口 OFF |
+| Sync enable | 对目标 Sync 物理端口至多发送一次 OFF | 不执行重新供能的 restore | Sync 端口 OFF readback 与 session health |
+
+每个 MAIN 字段和每个恢复字段都至多尝试一次；结果未知不重试。`poisoned` session 只关闭连接，
+不发送 OFF 或验证查询。任一恢复或回读失败时，artifact 必须记录 partial／unknown 状态，并把后续
+输出 ON、Sync enable 和相关配置写入保持为失败关闭。
+
+### 实施顺序与退出门
+
+1. 先用 Core fake driver 替换尚未发布的布尔 Coupling request，并补完整 target、graph drift、
+   MAIN／restore 每步故障注入；此阶段不修改真实插件 descriptor。
+2. 增加 Noise Overlay configure 的类型、静态门和 OFF-only transaction；输出 ON 继续受独立硬边界阻断。
+3. 先增加 Sync port ID／binding／closure topology，再设计 configure 与 disable；enable 只有在至少
+   两种普通信号发生器协议形态完成 A0，并由具体型号完成电气 profile 与 A5 物理端口证据后才能评审。
+4. 每项分别增加 Service、CLI、run plan、V1 route 分类和 operation artifact；不得以一个通用 advanced
+   configure 入口合并。
+5. 完成 Core 全量回归、真实 wheel／sdist、插件包检查和双合同兼容矩阵后，才可将 R8 候选改为
+   Accepted。当前分支不执行这些写入，也不提升任何生产 descriptor。
 
 ### R6 延后事项
 
