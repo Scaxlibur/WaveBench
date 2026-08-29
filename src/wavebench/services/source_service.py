@@ -3930,6 +3930,7 @@ class SourceService(SessionStateAliasMixin):
             SourceFieldId.PULSE,
             SourceFieldId.ARBITRARY_SELECTION,
             SourceFieldId.SYNC,
+            SourceFieldId.NOISE_OVERLAY,
         }
         relation_fields = {
             SourceFieldId.COMBINE,
@@ -4074,6 +4075,7 @@ class SourceService(SessionStateAliasMixin):
                 SourceFieldId.PULSE: target.pulse,
                 SourceFieldId.ARBITRARY_SELECTION: target.arbitrary,
                 SourceFieldId.SYNC: target.sync,
+                SourceFieldId.NOISE_OVERLAY: target.noise_overlay,
             }
             if field.field is SourceFieldId.DISPLAY_LOAD:
                 if target.output.availability is not Availability.VALUE or not isinstance(

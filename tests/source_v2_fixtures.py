@@ -7,6 +7,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_CONTRACT_VERSION,
     Availability,
     BasicWaveFacet,
+    NoiseOverlayFacet,
     Observed,
     OutputFacet,
     SourceAmplitude,
@@ -241,12 +242,14 @@ class SourceV2FakeDriver:
         harmonic_unavailable: bool = False,
         anchor_unknown: bool = False,
         sync_state: SourceSyncState | None = None,
+        noise_overlay: NoiseOverlayFacet | None = None,
     ) -> None:
         self.combined = combined
         self.drift = drift
         self.harmonic_unavailable = harmonic_unavailable
         self.anchor_unknown = anchor_unknown
         self.sync_state = sync_state
+        self.noise_overlay = noise_overlay
         self.plans = []
         self.closed = False
 
@@ -294,6 +297,10 @@ class SourceV2FakeDriver:
                     if self.sync_state is None:
                         raise AssertionError("sync state was not configured")
                     value = self.sync_state
+                elif field.field is SourceFieldId.NOISE_OVERLAY:
+                    if self.noise_overlay is None:
+                        raise AssertionError("noise overlay was not configured")
+                    value = self.noise_overlay
                 else:
                     raise AssertionError(field)
                 observations.append(SourceTypedObservation(field, value))

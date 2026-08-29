@@ -597,6 +597,15 @@ SourceSyncPolarity
 SourceCascadeCapabilityProfile
 ```
 
+首次稳定版 Noise Overlay 只读模型在上述清单末尾追加以下精确条目：
+
+```text
+NoiseOverlayFacet
+SourceNoiseOverlayCapabilityProfile
+SourceNoiseOverlayScale
+SourceNoiseOverlayScaleKind
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -1011,6 +1020,7 @@ facet 辅助 enum 也使用封闭 value 集：
 - `SourceAmplitudeUnit`：`vpp`、`vrms`、`dbm`、`v`、`unknown`；
 - `SourceOutputPolarity`：`normal`、`inverted`、`unknown`；
 - `SourceSyncPolarity`：`positive`、`negative`、`unknown`；
+- `SourceNoiseOverlayScaleKind`：`percent`、`ratio`、`ratio_db`；
 - `SourceLoadKind`：`high_impedance`、`resistive`、`unknown`；
 - `SourceModulationKind`：`am`、`dsb_am`、`fm`、`pm`、`pwm`、`ask`、`fsk`、`psk`、`other`；
 - `SourceModulationSource`：`internal`、`external`、`channel`、`unknown`；
@@ -1034,7 +1044,7 @@ facet 辅助 enum 也使用封闭 value 集：
 
 机器可读 feature ID 按作用域分为：
 
-- channel：`basic`、`output`、`harmonics`、`modulation`、`sweep`、`burst`、`pulse`、`arbitrary`、`sync`；
+- channel：`basic`、`output`、`noise_overlay`、`harmonics`、`modulation`、`sweep`、`burst`、`pulse`、`arbitrary`、`sync`；
 - system：`counter`、`reference_clock`、`cascade`；
 - cross-channel：`combine`、`tracking`、`coupling`、`copy`、`phase_relation`、`shared_power`。
 
@@ -1063,6 +1073,12 @@ class SourceOutputCapabilityProfile:
     output_readable: bool
     display_load_readable: bool
     polarity_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayCapabilityProfile:
+    enabled_readable: bool
+    scale_kinds: tuple[SourceNoiseOverlayScaleKind, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1170,6 +1186,7 @@ class SourceCrossChannelCapabilityProfile:
 SourceFeatureProfile: TypeAlias = (
     SourceBasicCapabilityProfile
     | SourceOutputCapabilityProfile
+    | SourceNoiseOverlayCapabilityProfile
     | SourceHarmonicCapabilityProfile
     | SourceModulationCapabilityProfile
     | SourceSweepCapabilityProfile
@@ -1187,6 +1204,10 @@ SourceFeatureProfile: TypeAlias = (
 
 feature 与 profile 类型使用固定映射；例如 `HARMONICS` 只能使用
 `SourceHarmonicCapabilityProfile`。union 新增成员属于公共合同扩展，必须由核心注册并补版本门。
+
+Noise Overlay 的 `enabled_readable=False` 时，snapshot 不得返回 `enabled=VALUE`。
+`scales=VALUE` 携带的 scale kind 必须与 `scale_kinds` 完全一致；查询失败仍使用
+对应的非 `VALUE` availability，不得删除已声明的 kind 或补造默认值。
 
 ### facet 作用域
 
@@ -1217,7 +1238,7 @@ class SourceTopologyContract:
 格式的 `input_id`；`INSTRUMENT` 不携带这些字段。所有通道必须属于 topology。
 `SourceTopologyContract.channels` 必须递增、唯一且非空；`input_ids` 必须排序稳定且不重复。
 
-- `basic`、`output`、`harmonics`、`modulation`、`pulse`、`sweep`、`burst`、`arbitrary` 和 `sync`
+- `basic`、`output`、`noise_overlay`、`harmonics`、`modulation`、`pulse`、`sweep`、`burst`、`arbitrary` 和 `sync`
   通常属于 `CHANNEL`；
 - `combine`、`coupling` 和 `tracking` 属于 `CHANNEL_SET`，并明确列出关系参与者；
 - `reference_clock` 和 `cascade` 属于 `INSTRUMENT`；
@@ -1236,6 +1257,7 @@ class SourceFieldId(StrEnum):
     IDENTITY = "source.identity"
     BASIC = "source.channel.basic"
     OUTPUT = "source.channel.output"
+    NOISE_OVERLAY = "source.channel.noise_overlay"
     DISPLAY_LOAD = "source.channel.display_load"
     HARMONICS = "source.channel.harmonics"
     MODULATION = "source.channel.modulation"
@@ -1568,6 +1590,12 @@ class ArbitraryFacet:
 
 
 @dataclass(frozen=True, slots=True)
+class NoiseOverlayFacet:
+    enabled: Observed[bool]
+    scales: Observed[tuple[SourceNoiseOverlayScale, ...]]
+
+
+@dataclass(frozen=True, slots=True)
 class SourceSystemStateV2:
     counters: tuple[SourceCounterInputState, ...]
     reference_clock: Observed[SourceReferenceClockState]
@@ -1593,6 +1621,7 @@ class SourceChannelStateV2:
     pulse: Observed[PulseFacet]
     arbitrary: Observed[ArbitraryFacet]
     sync: Observed[SourceSyncState]
+    noise_overlay: Observed[NoiseOverlayFacet]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1621,6 +1650,7 @@ class SourceSnapshotV2:
 gate_time_s, trigger_level_v, statistics_enabled)`、
 `SourceReferenceClockState(mode, frequency_hz, locked)`、
 `SourceSyncState(enabled, polarity, source_channel)`、`SourceCascadeState(enabled, role)`、
+`SourceNoiseOverlayScale(kind, value)`、
 `SourceRelationState(feature, channels, enabled)`、
 `SourceCouplingState(feature, channels, enabled, reference_channel, dimensions)` 和
 `SourceSharedPowerState(participants, active_power_upper_w, hard_limit_w)`。
@@ -2135,6 +2165,7 @@ class SourceBudgetBlockerCode(StrEnum):
     MODULATION_CONSTRAINT_MISSING = "modulation_constraint_missing"
     ARBITRARY_OVERSHOOT_MISSING = "arbitrary_overshoot_missing"
     NOISE_PEAK_MISSING = "noise_peak_missing"
+    NOISE_OVERLAY_BOUND_MISSING = "noise_overlay_bound_missing"
     SWEEP_DERATING_MISSING = "sweep_derating_missing"
     ACTIVE_CHANNEL_UNKNOWN = "active_channel_unknown"
     COMBINE_STATE_UNAVAILABLE = "combine_state_unavailable"
@@ -2303,6 +2334,10 @@ vpp_upper_v = maximum_v_upper - minimum_v_lower
 - ARB 必须计入样本归一化、输出滤波或插值可能产生的 overshoot 边界；无法给出边界时为 `UNKNOWN`；
 - Sweep 在完整频率范围内取最大边界并应用频率降额；
 - Noise 只有在型号和固件范围内存在已审计的硬峰值上界时，才能进入 `HARD_CONSERVATIVE`；
+- Noise Overlay 与基本 Noise 波形是两个独立 contributor。当前只读模型没有冻结叠加噪声的硬电压
+  边界；只有 runtime 明确为 `UNSUPPORTED`／`NOT_APPLICABLE`，或 `enabled=VALUE(False)` 时，
+  才能沿用基本波形预算。已启用或启用状态不是 `VALUE` 时返回
+  `NOISE_OVERLAY_BOUND_MISSING`；`SourceNoisePeakConstraint` 不得替代该边界；
 - RMS 无法保守计算时可以为 `None`，但若配置了 RMS 上限，该缺失会成为 blocker；
 - 多通道共享功率限制必须由 typed constraint 表示或返回可审查的计算结果，不允许使用自由文本声明。
 

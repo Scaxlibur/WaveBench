@@ -28,6 +28,7 @@ from wavebench.instruments import InstrumentDescriptor
 from wavebench.instruments.source_extensions import (
     SOURCE_OPERATION_ARTIFACT_SCHEMA,
     SOURCE_SNAPSHOT_SCHEMA,
+    NoiseOverlayFacet,
     Observed,
     SnapshotConsistencyState,
     SourceQueryExecutionRecord,
@@ -39,6 +40,9 @@ from wavebench.instruments.source_extensions import (
     SourceFeatureDirection,
     SourceFieldId,
     SourceHarmonicPreset,
+    SourceNoiseOverlayCapabilityProfile,
+    SourceNoiseOverlayScale,
+    SourceNoiseOverlayScaleKind,
     SourceQueryEffect,
     SourceSyncCapabilityProfile,
     SourceSyncPolarity,
@@ -61,6 +65,7 @@ from wavebench.transport.contracts import (
 from tests.source_v2_fixtures import (
     SourceV2FakeDriver,
     source_descriptor,
+    source_extensions,
     source_extensions_with_harmonics,
 )
 from wavebench.instruments.source_extensions import SourceConstraintApplicability
@@ -191,6 +196,105 @@ def test_snapshot_v2_projects_channel_sync_and_validates_source_channel() -> Non
     )
     with pytest.raises(SourceSnapshotContractError, match="undeclared source channel"):
         invalid_service.snapshot_v2()
+
+
+def test_snapshot_v2_projects_noise_overlay_without_changing_basic_noise_kind() -> None:
+    extensions = source_extensions()
+    noise_feature = SourceFeatureCapability(
+        feature=SourceFeature.NOISE_OVERLAY,
+        support=SupportState.SUPPORTED,
+        directions=(SourceFeatureDirection.READ,),
+        scope=SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=SourceConstraintApplicability(),
+        profile=SourceNoiseOverlayCapabilityProfile(
+            enabled_readable=True,
+            scale_kinds=(SourceNoiseOverlayScaleKind.PERCENT,),
+        ),
+    )
+    noise_query = SourceFacetQueryContract(
+        feature=SourceFeature.NOISE_OVERLAY,
+        scope=SourceFacetScope.CHANNEL,
+        fields=(SourceFieldId.NOISE_OVERLAY,),
+        activation_any=(),
+        effect=SourceQueryEffect.PURE_READ,
+        max_queries=2,
+        required=True,
+    )
+    extensions = replace(
+        extensions,
+        features=(extensions.features[0], noise_feature, extensions.features[1]),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                noise_query,
+                extensions.query_contract.facets[2],
+            ),
+            max_queries=extensions.query_contract.max_queries + 2,
+        ),
+    )
+    noise = NoiseOverlayFacet(
+        enabled=Observed.value_of(False),
+        scales=Observed.value_of(
+            (
+                SourceNoiseOverlayScale(
+                    SourceNoiseOverlayScaleKind.PERCENT,
+                    10.0,
+                ),
+            )
+        ),
+    )
+    driver = SourceV2FakeDriver(combined=True, noise_overlay=noise)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    snapshot = service.snapshot_v2()
+
+    assert snapshot.channels[0].noise_overlay.value == noise
+    assert snapshot.channels[0].basic.value.waveform_kind.value.value == "sine"
+    noise_item = next(
+        item
+        for item in driver.plans[0].items
+        if item.feature is SourceFeature.NOISE_OVERLAY
+    )
+    assert noise_item.target.scope is SourceFacetScope.CHANNEL
+    assert noise_item.max_queries == 2
+
+    invalid_profiles = (
+        (
+            SourceNoiseOverlayCapabilityProfile(
+                enabled_readable=False,
+                scale_kinds=(SourceNoiseOverlayScaleKind.PERCENT,),
+            ),
+            "unreadable enabled state",
+        ),
+        (
+            SourceNoiseOverlayCapabilityProfile(
+                enabled_readable=True,
+                scale_kinds=(SourceNoiseOverlayScaleKind.RATIO,),
+            ),
+            "scale kinds do not match",
+        ),
+    )
+    for profile, message in invalid_profiles:
+        invalid_extensions = replace(
+            extensions,
+            features=(
+                extensions.features[0],
+                replace(noise_feature, profile=profile),
+                extensions.features[2],
+            ),
+        )
+        invalid_driver = SourceV2FakeDriver(combined=True, noise_overlay=noise)
+        invalid_service = make_service(invalid_driver)
+        invalid_service.descriptor = source_descriptor(
+            driver=invalid_driver,
+            extensions=invalid_extensions,
+        )
+        with pytest.raises(SourceSnapshotContractError, match=message):
+            invalid_service.snapshot_v2()
 
 
 def test_snapshot_v2_runtime_identity_can_only_narrow_descriptor_features() -> None:

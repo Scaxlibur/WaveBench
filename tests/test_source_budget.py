@@ -14,6 +14,7 @@ from wavebench.instruments.source_extensions import (
     HarmonicCompleteness,
     HarmonicFacet,
     ModulationFacet,
+    NoiseOverlayFacet,
     Observed,
     OutputFacet,
     ResistanceBounds,
@@ -22,6 +23,7 @@ from wavebench.instruments.source_extensions import (
     SourceAmplitudeUnit,
     SourceArbitraryOvershootConstraint,
     SourceArbitraryPlaybackMode,
+    SourceBudgetBlockerCode,
     SourceChannelStateV2,
     SourceComponentAmplitude,
     SourceConstraintApplicability,
@@ -42,6 +44,8 @@ from wavebench.instruments.source_extensions import (
     SourceModulationEnvelopeConstraint,
     SourceModulationKind,
     SourceModulationSource,
+    SourceNoiseOverlayScale,
+    SourceNoiseOverlayScaleKind,
     SourceOutputPolarity,
     SourceNoisePeakConstraint,
     SourceReasonCode,
@@ -145,6 +149,7 @@ def _channel(
     modulation: Observed[ModulationFacet] | None = None,
     sweep: Observed[SweepFacet] | None = None,
     arbitrary: Observed[ArbitraryFacet] | None = None,
+    noise_overlay: Observed[NoiseOverlayFacet] | None = None,
 ) -> SourceChannelStateV2:
     return SourceChannelStateV2(
         channel=channel,
@@ -179,6 +184,7 @@ def _channel(
         pulse=_missing(),
         arbitrary=arbitrary or _missing(),
         sync=_missing(),
+        noise_overlay=noise_overlay or _missing(),
     )
 
 
@@ -352,6 +358,122 @@ def test_basic_open_circuit_budget_is_pure_and_authorizable() -> None:
     assert budget.bounds.value.maximum_v_upper == pytest.approx(0.5)
     assert budget.bounds.value.vpp_upper_v == pytest.approx(1.0)
     assert budget.shared_power.availability is Availability.NOT_APPLICABLE
+
+
+def test_disabled_noise_overlay_preserves_the_basic_waveform_budget() -> None:
+    extensions = _extensions(safety_profile=_constraints())
+    without_overlay = _snapshot(extensions, (_channel(1),))
+    with_overlay = _snapshot(
+        extensions,
+        (
+            _channel(
+                1,
+                noise_overlay=Observed.value_of(
+                    NoiseOverlayFacet(
+                        enabled=Observed.value_of(False),
+                        scales=Observed.value_of(
+                            (
+                                SourceNoiseOverlayScale(
+                                    SourceNoiseOverlayScaleKind.PERCENT,
+                                    10.0,
+                                ),
+                            )
+                        ),
+                    )
+                ),
+            ),
+        ),
+    )
+
+    assert evaluate_source_output_budget(
+        _request(
+            with_overlay,
+            extensions,
+            terminations=(_termination(with_overlay, 1),),
+        )
+    ) == evaluate_source_output_budget(
+        _request(
+            without_overlay,
+            extensions,
+            terminations=(_termination(without_overlay, 1),),
+        )
+    )
+
+
+def test_enabled_noise_overlay_does_not_reuse_standalone_noise_peak_constraint() -> None:
+    extensions = _extensions(
+        safety_profile=_constraints(
+            _constraint(
+                "safety.noise",
+                SourceSafetyConstraintKind.NOISE_PEAK,
+                SourceNoisePeakConstraint(0.25),
+            )
+        )
+    )
+    snapshot = _snapshot(
+        extensions,
+        (
+            _channel(
+                1,
+                noise_overlay=Observed.value_of(
+                    NoiseOverlayFacet(
+                        enabled=Observed.value_of(True),
+                        scales=Observed.value_of(
+                            (
+                                SourceNoiseOverlayScale(
+                                    SourceNoiseOverlayScaleKind.PERCENT,
+                                    10.0,
+                                ),
+                            )
+                        ),
+                    )
+                ),
+            ),
+        ),
+    )
+
+    budget = evaluate_source_output_budget(
+        _request(snapshot, extensions, terminations=(_termination(snapshot, 1),))
+    )
+
+    assert not budget.can_authorize_energy
+    assert budget.bounds.availability is Availability.NOT_QUERIED
+    assert budget.blockers == (SourceBudgetBlockerCode.NOISE_OVERLAY_BOUND_MISSING,)
+
+
+@pytest.mark.parametrize(
+    "noise_overlay",
+    (
+        pytest.param(
+            _missing(Availability.NOT_QUERIED),
+            id="facet-not-queried",
+        ),
+        pytest.param(
+            Observed.value_of(
+                NoiseOverlayFacet(
+                    enabled=_missing(Availability.NOT_QUERIED),
+                    scales=_missing(Availability.NOT_QUERIED),
+                )
+            ),
+            id="enabled-not-queried",
+        ),
+    ),
+)
+def test_unknown_noise_overlay_state_fails_closed(
+    noise_overlay: Observed[NoiseOverlayFacet],
+) -> None:
+    extensions = _extensions(safety_profile=_constraints())
+    snapshot = _snapshot(
+        extensions,
+        (_channel(1, noise_overlay=noise_overlay),),
+    )
+
+    budget = evaluate_source_output_budget(
+        _request(snapshot, extensions, terminations=(_termination(snapshot, 1),))
+    )
+
+    assert not budget.can_authorize_energy
+    assert SourceBudgetBlockerCode.NOISE_OVERLAY_BOUND_MISSING in budget.blockers
 
 
 def test_missing_or_non_resistive_termination_fails_closed() -> None:

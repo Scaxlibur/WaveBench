@@ -255,6 +255,7 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
     field_features = {
         SourceFieldId.BASIC: frozenset({SourceFeature.BASIC}),
         SourceFieldId.OUTPUT: frozenset({SourceFeature.OUTPUT}),
+        SourceFieldId.NOISE_OVERLAY: frozenset({SourceFeature.NOISE_OVERLAY}),
         SourceFieldId.DISPLAY_LOAD: frozenset({SourceFeature.OUTPUT}),
         SourceFieldId.HARMONICS: frozenset({SourceFeature.HARMONICS}),
         SourceFieldId.MODULATION: frozenset({SourceFeature.MODULATION}),

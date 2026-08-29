@@ -165,6 +165,7 @@ def _contains_nonfinite(value: object) -> bool:
 class SourceFeature(StrEnum):
     BASIC = "basic"
     OUTPUT = "output"
+    NOISE_OVERLAY = "noise_overlay"
     HARMONICS = "harmonics"
     MODULATION = "modulation"
     SWEEP = "sweep"
@@ -239,6 +240,12 @@ class SourceSyncPolarity(StrEnum):
     POSITIVE = "positive"
     NEGATIVE = "negative"
     UNKNOWN = "unknown"
+
+
+class SourceNoiseOverlayScaleKind(StrEnum):
+    PERCENT = "percent"
+    RATIO = "ratio"
+    RATIO_DB = "ratio_db"
 
 
 class SourceLoadKind(StrEnum):
@@ -519,6 +526,21 @@ class SourceOutputCapabilityProfile:
         _require_bool(self.output_readable, "output output_readable")
         _require_bool(self.display_load_readable, "output display_load_readable")
         _require_bool(self.polarity_readable, "output polarity_readable")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayCapabilityProfile:
+    enabled_readable: bool
+    scale_kinds: tuple[SourceNoiseOverlayScaleKind, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_bool(self.enabled_readable, "noise overlay enabled_readable")
+        _require_enum_tuple(
+            self.scale_kinds,
+            SourceNoiseOverlayScaleKind,
+            "noise overlay scale_kinds",
+            allow_empty=True,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -826,6 +848,7 @@ class SourceCrossChannelCapabilityProfile:
 SourceFeatureProfile: TypeAlias = (
     SourceBasicCapabilityProfile
     | SourceOutputCapabilityProfile
+    | SourceNoiseOverlayCapabilityProfile
     | SourceHarmonicCapabilityProfile
     | SourceModulationCapabilityProfile
     | SourceSweepCapabilityProfile
@@ -888,6 +911,7 @@ class SourceFieldId(StrEnum):
     IDENTITY = "source.identity"
     BASIC = "source.channel.basic"
     OUTPUT = "source.channel.output"
+    NOISE_OVERLAY = "source.channel.noise_overlay"
     DISPLAY_LOAD = "source.channel.display_load"
     HARMONICS = "source.channel.harmonics"
     MODULATION = "source.channel.modulation"
@@ -915,6 +939,7 @@ _FIELD_SCOPES: dict[SourceFieldId, frozenset[SourceFacetScope]] = {
     SourceFieldId.IDENTITY: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.BASIC: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.OUTPUT: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFieldId.NOISE_OVERLAY: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.DISPLAY_LOAD: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.HARMONICS: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.MODULATION: frozenset({SourceFacetScope.CHANNEL}),
@@ -1915,6 +1940,7 @@ class SourceRuntimeIdentity:
 _FEATURE_PROFILE_TYPES: dict[SourceFeature, type[object]] = {
     SourceFeature.BASIC: SourceBasicCapabilityProfile,
     SourceFeature.OUTPUT: SourceOutputCapabilityProfile,
+    SourceFeature.NOISE_OVERLAY: SourceNoiseOverlayCapabilityProfile,
     SourceFeature.HARMONICS: SourceHarmonicCapabilityProfile,
     SourceFeature.MODULATION: SourceModulationCapabilityProfile,
     SourceFeature.SWEEP: SourceSweepCapabilityProfile,
@@ -1936,6 +1962,7 @@ _FEATURE_PROFILE_TYPES: dict[SourceFeature, type[object]] = {
 _FEATURE_SCOPES: dict[SourceFeature, frozenset[SourceFacetScope]] = {
     SourceFeature.BASIC: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.OUTPUT: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFeature.NOISE_OVERLAY: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.HARMONICS: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.MODULATION: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.SWEEP: frozenset({SourceFacetScope.CHANNEL}),
@@ -2113,6 +2140,7 @@ class SourceBudgetBlockerCode(StrEnum):
     MODULATION_CONSTRAINT_MISSING = "modulation_constraint_missing"
     ARBITRARY_OVERSHOOT_MISSING = "arbitrary_overshoot_missing"
     NOISE_PEAK_MISSING = "noise_peak_missing"
+    NOISE_OVERLAY_BOUND_MISSING = "noise_overlay_bound_missing"
     SWEEP_DERATING_MISSING = "sweep_derating_missing"
     ACTIVE_CHANNEL_UNKNOWN = "active_channel_unknown"
     COMBINE_STATE_UNAVAILABLE = "combine_state_unavailable"
@@ -2658,6 +2686,43 @@ class OutputFacet:
         _require_observed(self.polarity, "output polarity")
         if self.enabled.availability is Availability.VALUE:
             _require_bool(self.enabled.value, "output enabled value")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayScale:
+    kind: SourceNoiseOverlayScaleKind
+    value: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, SourceNoiseOverlayScaleKind):
+            raise ValueError("noise overlay scale kind has an invalid type")
+        _require_finite(
+            self.value,
+            "noise overlay scale value",
+            minimum=None if self.kind is SourceNoiseOverlayScaleKind.RATIO_DB else 0.0,
+            maximum=100.0 if self.kind is SourceNoiseOverlayScaleKind.PERCENT else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NoiseOverlayFacet:
+    enabled: Observed[bool]
+    scales: Observed[tuple[SourceNoiseOverlayScale, ...]]
+
+    def __post_init__(self) -> None:
+        _require_observed(self.enabled, "noise overlay enabled")
+        _require_observed(self.scales, "noise overlay scales")
+        if self.enabled.availability is Availability.VALUE:
+            _require_bool(self.enabled.value, "noise overlay enabled value")
+        if self.scales.availability is Availability.VALUE:
+            scales = self.scales.value
+            if not isinstance(scales, tuple) or any(
+                not isinstance(item, SourceNoiseOverlayScale) for item in scales
+            ):
+                raise ValueError("noise overlay scales value has an invalid type")
+            keys = tuple(item.kind.value for item in scales)
+            if len(set(keys)) != len(keys) or tuple(sorted(keys)) != keys:
+                raise ValueError("noise overlay scales must be sorted and unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -4419,6 +4484,7 @@ class SourceChannelStateV2:
     pulse: Observed[PulseFacet]
     arbitrary: Observed[ArbitraryFacet]
     sync: Observed[SourceSyncState]
+    noise_overlay: Observed[NoiseOverlayFacet]
 
     def __post_init__(self) -> None:
         _require_int(self.channel, "source channel state channel", minimum=1)
@@ -4432,6 +4498,7 @@ class SourceChannelStateV2:
             ("pulse", self.pulse),
             ("arbitrary", self.arbitrary),
             ("sync", self.sync),
+            ("noise_overlay", self.noise_overlay),
         ):
             _require_observed(value, f"source channel state {name}")
 
@@ -4611,6 +4678,7 @@ SourceObservationValue: TypeAlias = (
     SourceRuntimeIdentity
     | BasicWaveFacet
     | OutputFacet
+    | NoiseOverlayFacet
     | SourceDisplayLoad
     | HarmonicFacet
     | ModulationFacet
@@ -4635,6 +4703,7 @@ _OBSERVATION_TYPES: dict[SourceFieldId, type[object] | tuple[type[object], ...]]
     SourceFieldId.IDENTITY: SourceRuntimeIdentity,
     SourceFieldId.BASIC: BasicWaveFacet,
     SourceFieldId.OUTPUT: OutputFacet,
+    SourceFieldId.NOISE_OVERLAY: NoiseOverlayFacet,
     SourceFieldId.DISPLAY_LOAD: SourceDisplayLoad,
     SourceFieldId.HARMONICS: HarmonicFacet,
     SourceFieldId.MODULATION: ModulationFacet,
@@ -5362,4 +5431,8 @@ __all__ = [
     "SourceSyncCapabilityProfile",
     "SourceSyncPolarity",
     "SourceCascadeCapabilityProfile",
+    "NoiseOverlayFacet",
+    "SourceNoiseOverlayCapabilityProfile",
+    "SourceNoiseOverlayScale",
+    "SourceNoiseOverlayScaleKind",
 ]

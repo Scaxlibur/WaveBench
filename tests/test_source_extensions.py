@@ -135,7 +135,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[coupling_start + len(coupling_exports) :] == match.group(1).splitlines()
+    sync_exports = match.group(1).splitlines()
+    sync_start = coupling_start + len(coupling_exports)
+    assert module.__all__[sync_start : sync_start + len(sync_exports)] == sync_exports
+    match = re.search(
+        r"首次稳定版 Noise Overlay 只读模型在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[sync_start + len(sync_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -182,6 +191,12 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "display_load_readable",
             "polarity_readable",
         ),
+        "SourceNoiseOverlayCapabilityProfile": (
+            "enabled_readable",
+            "scale_kinds",
+        ),
+        "SourceNoiseOverlayScale": ("kind", "value"),
+        "NoiseOverlayFacet": ("enabled", "scales"),
         "SourceHarmonicCapabilityProfile": (
             "minimum_order",
             "maximum_order",
@@ -535,6 +550,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "pulse",
             "arbitrary",
             "sync",
+            "noise_overlay",
         ),
         "SourceCrossChannelStateV2": (
             "relations",
@@ -1521,6 +1537,64 @@ def test_source_v2_sync_is_channel_scoped_and_uses_a_dedicated_profile() -> None
             enabled=Observed.value_of(False),
             polarity=Observed.value_of(module.SourceOutputPolarity.NORMAL),
             source_channel=Observed.value_of(1),
+        )
+
+
+def test_source_v2_noise_overlay_is_distinct_from_the_noise_waveform() -> None:
+    profile = module.SourceNoiseOverlayCapabilityProfile(
+        enabled_readable=True,
+        scale_kinds=(
+            module.SourceNoiseOverlayScaleKind.PERCENT,
+            module.SourceNoiseOverlayScaleKind.RATIO,
+            module.SourceNoiseOverlayScaleKind.RATIO_DB,
+        ),
+    )
+    facet = module.NoiseOverlayFacet(
+        enabled=Observed.value_of(True),
+        scales=Observed.value_of(
+            (
+                module.SourceNoiseOverlayScale(
+                    module.SourceNoiseOverlayScaleKind.PERCENT,
+                    25.0,
+                ),
+                module.SourceNoiseOverlayScale(
+                    module.SourceNoiseOverlayScaleKind.RATIO,
+                    0.25,
+                ),
+                module.SourceNoiseOverlayScale(
+                    module.SourceNoiseOverlayScaleKind.RATIO_DB,
+                    -12.0412,
+                ),
+            )
+        ),
+    )
+
+    assert profile.scale_kinds[-1] is module.SourceNoiseOverlayScaleKind.RATIO_DB
+    assert module.source_v2_to_data(facet)["scales"]["value"][0] == {
+        "type": "SourceNoiseOverlayScale",
+        "kind": "percent",
+        "value": 25.0,
+    }
+    assert module.SourceFeature.NOISE_OVERLAY is not module.SourceFeature.BASIC
+    assert module.SourceFieldId.NOISE_OVERLAY.value == "source.channel.noise_overlay"
+    assert module.SourceNoiseOverlayScale(
+        module.SourceNoiseOverlayScaleKind.PERCENT,
+        100.0,
+    ).value == 100.0
+    with pytest.raises(ValueError, match="must be >= 0"):
+        module.SourceNoiseOverlayScale(
+            module.SourceNoiseOverlayScaleKind.RATIO,
+            -0.1,
+        )
+    with pytest.raises(ValueError, match="must be <= 100"):
+        module.SourceNoiseOverlayScale(
+            module.SourceNoiseOverlayScaleKind.PERCENT,
+            100.1,
+        )
+    with pytest.raises(ValueError, match="sorted and unique"):
+        replace(
+            facet,
+            scales=Observed.value_of(tuple(reversed(facet.scales.value))),
         )
 
 

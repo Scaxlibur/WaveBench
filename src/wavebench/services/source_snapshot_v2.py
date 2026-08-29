@@ -15,6 +15,7 @@ from wavebench.instruments.source_extensions import (
     BurstFacet,
     HarmonicFacet,
     ModulationFacet,
+    NoiseOverlayFacet,
     Observed,
     OutputFacet,
     SnapshotConsistencyState,
@@ -34,6 +35,7 @@ from wavebench.instruments.source_extensions import (
     SourceFeatureCapability,
     SourceFieldId,
     SourceFieldRef,
+    SourceNoiseOverlayCapabilityProfile,
     SourceQueryExecutionRecord,
     SourceQueryEffect,
     SourceQueryItemOutcome,
@@ -584,6 +586,40 @@ def _channel_state(
             raise SourceSnapshotContractError(
                 "source sync observation references an undeclared source channel"
             )
+    noise_overlay = _field_value(
+        values,
+        SourceFieldRef(SourceFieldId.NOISE_OVERLAY, target),
+        features,
+        SourceFeature.NOISE_OVERLAY,
+    )
+    if noise_overlay.availability is Availability.VALUE:
+        state = noise_overlay.value
+        assert isinstance(state, NoiseOverlayFacet)
+        profile = next(
+            (
+                feature.profile
+                for feature in features
+                if feature.feature is SourceFeature.NOISE_OVERLAY
+                and feature.scope is SourceFacetScope.CHANNEL
+                and feature.channels == (channel,)
+                and isinstance(feature.profile, SourceNoiseOverlayCapabilityProfile)
+            ),
+            None,
+        )
+        if profile is None:
+            raise SourceSnapshotContractError(
+                "source noise overlay observation has no runtime profile"
+            )
+        if state.enabled.availability is Availability.VALUE and not profile.enabled_readable:
+            raise SourceSnapshotContractError(
+                "source noise overlay observation reports unreadable enabled state"
+            )
+        if state.scales.availability is Availability.VALUE and tuple(
+            scale.kind for scale in state.scales.value
+        ) != profile.scale_kinds:
+            raise SourceSnapshotContractError(
+                "source noise overlay observation scale kinds do not match runtime profile"
+            )
     return SourceChannelStateV2(
         channel=channel,
         basic=_field_value(
@@ -635,6 +671,7 @@ def _channel_state(
             SourceFeature.ARBITRARY,
         ),
         sync=sync,
+        noise_overlay=noise_overlay,
     )
 
 

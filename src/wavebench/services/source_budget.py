@@ -541,6 +541,20 @@ def _reference_bounds(
     proof = BudgetProofStrength.HARD_CONSERVATIVE
     constraint_ids: set[str] = set()
 
+    if channel.noise_overlay.availability not in {
+        Availability.UNSUPPORTED,
+        Availability.NOT_APPLICABLE,
+    }:
+        if channel.noise_overlay.availability is not Availability.VALUE:
+            blockers.add(SourceBudgetBlockerCode.NOISE_OVERLAY_BOUND_MISSING)
+        else:
+            noise_overlay = channel.noise_overlay.value
+            if (
+                noise_overlay.enabled.availability is not Availability.VALUE
+                or noise_overlay.enabled.value
+            ):
+                blockers.add(SourceBudgetBlockerCode.NOISE_OVERLAY_BOUND_MISSING)
+
     if facts.waveform_kind is SourceWaveformKind.NOISE:
         constraints, noise_proof = _constraints(
             request,
