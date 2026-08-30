@@ -360,6 +360,8 @@ def _write_extensions(
     include_output: bool,
     live_frequency: bool = False,
     live_amplitude_vpp: bool = False,
+    waveform_kinds: tuple[SourceWaveformKind, ...] = (SourceWaveformKind.SINE,),
+    square_duty_readable: bool = False,
 ):
     extensions = source_extensions()
     basic, output = extensions.features
@@ -376,6 +378,8 @@ def _write_extensions(
                     basic.profile,
                     live_frequency_configurable=live_frequency,
                     live_amplitude_vpp_configurable=live_amplitude_vpp,
+                    waveform_kinds=waveform_kinds,
+                    square_duty_readable=square_duty_readable,
                 ),
             ),
             replace(
@@ -405,6 +409,8 @@ def _service(
     postcondition_frequency_hz: float | None = None,
     raise_after_write: bool = False,
     limits: SafetyLimitsConfig = SafetyLimitsConfig(),
+    waveform_kinds: tuple[SourceWaveformKind, ...] = (SourceWaveformKind.SINE,),
+    square_duty_readable: bool = False,
 ) -> tuple[SourceService, _BasicWriteDriver]:
     session_state = InstrumentSessionState(epoch_id="source-basic-v2")
     driver = _BasicWriteDriver(
@@ -419,6 +425,8 @@ def _service(
         include_output=include_output,
         live_frequency=(include_live and live_frequency),
         live_amplitude_vpp=(include_live and live_amplitude_vpp),
+        waveform_kinds=waveform_kinds,
+        square_duty_readable=square_duty_readable,
     )
     capabilities = ["source.snapshot_v2", "source.basic_configure_v2"]
     if include_output:
@@ -842,13 +850,61 @@ def test_v1_restore_route_uses_v2_basic_and_output_transactions() -> None:
             channel=1,
             patch=SourceBasicPatch(
                 waveform_kind=PatchValue(PatchAction.SET, SourceWaveformKind.SINE),
-                frequency_hz=PatchValue(PatchAction.SET, 1_000.0),
+            ),
+        ),
+        SourceBasicConfigureRequest(
+            channel=1,
+            patch=SourceBasicPatch(
                 amplitude_vpp=PatchValue(PatchAction.SET, 1.0),
             ),
-        )
+        ),
+        SourceBasicConfigureRequest(
+            channel=1,
+            patch=SourceBasicPatch(
+                frequency_hz=PatchValue(PatchAction.SET, 1_000.0),
+            ),
+        ),
     ]
     assert driver.output_requests == []
-    assert driver.transport.counters.write_requests == 1
+    assert driver.transport.counters.write_requests == 3
+
+
+def test_v1_restore_v2_splits_square_duty_after_waveform_restore() -> None:
+    service, driver = _service(
+        waveform_kinds=(SourceWaveformKind.SINE, SourceWaveformKind.SQUARE),
+        square_duty_readable=True,
+    )
+
+    service.restore_restorable_state(
+        RestorableSourceState(
+            channel=1,
+            output="OFF",
+            function="SQU",
+            frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+            amplitude_unit="VPP",
+            square_duty_cycle_percent=25.0,
+        )
+    )
+
+    assert [
+        next(
+            name
+            for name, value in (
+                ("waveform_kind", request.patch.waveform_kind),
+                ("amplitude_vpp", request.patch.amplitude_vpp),
+                ("frequency_hz", request.patch.frequency_hz),
+                ("square_duty_cycle_percent", request.patch.square_duty_cycle_percent),
+            )
+            if value.action is PatchAction.SET
+        )
+        for request in driver.basic_requests
+    ] == [
+        "waveform_kind",
+        "amplitude_vpp",
+        "frequency_hz",
+        "square_duty_cycle_percent",
+    ]
 
 
 def test_restorable_snapshot_uses_v2_when_the_full_restore_route_is_declared() -> None:
@@ -907,8 +963,8 @@ def test_v1_restore_route_restores_original_on_state_through_v2_output() -> None
         SourceOutputRequest(channel=1, enabled=False),
         SourceOutputRequest(channel=1, enabled=True),
     ]
-    assert len(driver.basic_requests) == 1
-    assert driver.transport.counters.write_requests == 3
+    assert len(driver.basic_requests) == 3
+    assert driver.transport.counters.write_requests == 5
 
 
 def test_v1_restore_route_rejects_partial_v2_restore_before_io() -> None:

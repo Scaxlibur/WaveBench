@@ -9005,27 +9005,60 @@ class SourceService(SessionStateAliasMixin):
 
     def restore_restorable_state(self, state: RestorableSourceState) -> SourceStatus:
         if self._declares_source_v2_basic_restore():
-            request = SourceBasicConfigureRequest(
-                channel=state.channel,
-                patch=SourceBasicPatch(
-                    waveform_kind=PatchValue(
-                        PatchAction.SET,
-                        self._source_v2_waveform_from_v1(state.function),
+            # Basic V2 MAIN phases permit exactly one bounded driver write.
+            # Build every request before turning output OFF, then preserve the
+            # legacy restore order with separate transactions.
+            requests = (
+                SourceBasicConfigureRequest(
+                    channel=state.channel,
+                    patch=SourceBasicPatch(
+                        waveform_kind=PatchValue(
+                            PatchAction.SET,
+                            self._source_v2_waveform_from_v1(state.function),
+                        ),
                     ),
-                    frequency_hz=PatchValue(PatchAction.SET, state.frequency_hz),
-                    amplitude_vpp=PatchValue(PatchAction.SET, state.amplitude_vpp),
-                    square_duty_cycle_percent=(
-                        PatchValue(PatchAction.SET, state.square_duty_cycle_percent)
-                        if state.square_duty_cycle_percent is not None
-                        else PatchValue(PatchAction.KEEP)
+                ),
+                SourceBasicConfigureRequest(
+                    channel=state.channel,
+                    patch=SourceBasicPatch(
+                        amplitude_vpp=PatchValue(
+                            PatchAction.SET,
+                            state.amplitude_vpp,
+                        ),
                     ),
+                ),
+                SourceBasicConfigureRequest(
+                    channel=state.channel,
+                    patch=SourceBasicPatch(
+                        frequency_hz=PatchValue(
+                            PatchAction.SET,
+                            state.frequency_hz,
+                        ),
+                    ),
+                ),
+                *(
+                    (
+                        SourceBasicConfigureRequest(
+                            channel=state.channel,
+                            patch=SourceBasicPatch(
+                                square_duty_cycle_percent=PatchValue(
+                                    PatchAction.SET,
+                                    state.square_duty_cycle_percent,
+                                ),
+                            ),
+                        ),
+                    )
+                    if state.square_duty_cycle_percent is not None
+                    else ()
                 ),
             )
             self._set_output_v2_transaction(
                 SourceOutputRequest(channel=state.channel, enabled=False),
             )
-            basic = self._configure_basic_v2_transaction(request)
-            final_snapshot = basic.snapshot
+            final_snapshot = None
+            for request in requests:
+                final_snapshot = self._configure_basic_v2_transaction(request).snapshot
+            assert final_snapshot is not None
             if state.output == "ON":
                 output = self._set_output_v2_transaction(
                     SourceOutputRequest(channel=state.channel, enabled=True),
