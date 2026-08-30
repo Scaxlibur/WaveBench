@@ -358,6 +358,22 @@ class SourceCounterMeasurementKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SourceCounterConfigurationField(StrEnum):
+    """A counter setting with a portable, independently readable meaning.
+
+    The deliberately short set excludes vendor presets (for example an
+    ``AUTO`` gate-time action), display preferences, and destructive
+    statistics clears.  Those need their own contract instead of becoming
+    incidental side effects of a measurement request.
+    """
+
+    COUPLING = "coupling"
+    IMPEDANCE_OHM = "impedance_ohm"
+    ATTENUATION = "attenuation"
+    TRIGGER_LEVEL_V = "trigger_level_v"
+    STATISTICS_ENABLED = "statistics_enabled"
+
+
 class SourceInputCoupling(StrEnum):
     AC = "ac"
     DC = "dc"
@@ -672,6 +688,9 @@ class SourceArbitraryCapabilityProfile:
     storage_slot_metadata_readable: bool = False
     storage_write_modes: tuple[SourceStorageWriteMode, ...] = ()
     storage_max_payload_bytes: int | None = None
+    volatile_replace_min_points: int | None = None
+    volatile_replace_max_points: int | None = None
+    volatile_replace_max_payload_bytes: int | None = None
 
     def __post_init__(self) -> None:
         _require_enum_tuple(
@@ -705,6 +724,38 @@ class SourceArbitraryCapabilityProfile:
             raise ValueError(
                 "arbitrary storage_max_payload_bytes requires storage_write_modes"
             )
+        volatile_limits = (
+            self.volatile_replace_min_points,
+            self.volatile_replace_max_points,
+            self.volatile_replace_max_payload_bytes,
+        )
+        if any(value is not None for value in volatile_limits):
+            if any(value is None for value in volatile_limits):
+                raise ValueError(
+                    "arbitrary volatile replace limits must be provided together"
+                )
+            _require_int(
+                self.volatile_replace_min_points,
+                "arbitrary volatile_replace_min_points",
+                minimum=1,
+            )
+            _require_int(
+                self.volatile_replace_max_points,
+                "arbitrary volatile_replace_max_points",
+                minimum=1,
+            )
+            _require_int(
+                self.volatile_replace_max_payload_bytes,
+                "arbitrary volatile_replace_max_payload_bytes",
+                minimum=1,
+            )
+            assert self.volatile_replace_min_points is not None
+            assert self.volatile_replace_max_points is not None
+            if self.volatile_replace_min_points > self.volatile_replace_max_points:
+                raise ValueError(
+                    "arbitrary volatile_replace_min_points must not exceed "
+                    "volatile_replace_max_points"
+                )
 
 
 class SourceQueryEffect(StrEnum):
@@ -720,6 +771,9 @@ class SourceCounterCapabilityProfile:
     measurement_kinds: tuple[SourceCounterMeasurementKind, ...]
     configuration_readable: bool
     query_effect: SourceQueryEffect
+    readable_configuration_fields: tuple[SourceCounterConfigurationField, ...] = ()
+    configurable_fields: tuple[SourceCounterConfigurationField, ...] = ()
+    enabled_configurable: bool = False
 
     def __post_init__(self) -> None:
         _require_token_tuple(self.input_ids, "counter input_ids", allow_empty=False)
@@ -731,6 +785,27 @@ class SourceCounterCapabilityProfile:
         _require_bool(self.configuration_readable, "counter configuration_readable")
         if not isinstance(self.query_effect, SourceQueryEffect):
             raise ValueError("counter query_effect has an invalid type")
+        _require_enum_tuple(
+            self.readable_configuration_fields,
+            SourceCounterConfigurationField,
+            "counter readable_configuration_fields",
+            allow_empty=True,
+        )
+        _require_enum_tuple(
+            self.configurable_fields,
+            SourceCounterConfigurationField,
+            "counter configurable_fields",
+            allow_empty=True,
+        )
+        _require_bool(self.enabled_configurable, "counter enabled_configurable")
+        if self.readable_configuration_fields and not self.configuration_readable:
+            raise ValueError(
+                "counter readable_configuration_fields require configuration_readable"
+            )
+        if not set(self.configurable_fields) <= set(self.readable_configuration_fields):
+            raise ValueError(
+                "counter configurable_fields require matching readable_configuration_fields"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1686,6 +1761,99 @@ SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT = SourceOperationContract(
     cleanup_verification_fields=(SourceFieldId.OUTPUT,),
     v1_equivalent_routes=(),
     v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.arbitrary_volatile_replace_v2",
+    capability="source.arbitrary_volatile_replace_v2",
+    feature=SourceFeature.ARBITRARY,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.REPLACE,
+    required_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.ARBITRARY_STORAGE,
+        SourceFieldId.BASIC,
+    ),
+    postcondition_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.counter_configure_v2",
+    capability="source.counter_configure_v2",
+    feature=SourceFeature.COUNTER,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.NONE,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(SourceFieldId.IDENTITY, SourceFieldId.COUNTER),
+    changed_fields=(SourceFieldId.COUNTER,),
+    postcondition_fields=(SourceFieldId.COUNTER,),
+    cleanup_verification_fields=(),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.counter_enable_v2",
+    capability="source.counter_enable_v2",
+    feature=SourceFeature.COUNTER,
+    direction=SourceFeatureDirection.ENABLE,
+    energy_effect=SourceEnergyEffect.NONE,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(SourceFieldId.IDENTITY, SourceFieldId.COUNTER),
+    changed_fields=(SourceFieldId.COUNTER,),
+    postcondition_fields=(SourceFieldId.COUNTER,),
+    cleanup_verification_fields=(),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.counter_disable_v2",
+    capability="source.counter_enable_v2",
+    feature=SourceFeature.COUNTER,
+    direction=SourceFeatureDirection.DISABLE,
+    energy_effect=SourceEnergyEffect.DECREASE_ONLY,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(SourceFieldId.IDENTITY, SourceFieldId.COUNTER),
+    changed_fields=(SourceFieldId.COUNTER,),
+    postcondition_fields=(SourceFieldId.COUNTER,),
+    cleanup_verification_fields=(),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(),
     operation_timeout_ms=5_000,
     main_max_steps=1,
     recovery_max_steps=1,
@@ -2949,6 +3117,40 @@ class SourceArbitraryStorageRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArbitraryVolatileReplaceRequest:
+    """Replace one channel's un-named, volatile arbitrary-waveform workspace.
+
+    ``payload`` is intentionally passed separately to the driver.  The request
+    carries only a host-computed identity for those exact bytes; it does not
+    pretend that a device can expose a named slot, CAS token, or authoritative
+    payload digest.
+    """
+
+    channel: int
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source arbitrary volatile replace channel", minimum=1)
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary volatile replace payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary volatile replace payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary volatile replace point_count",
+            minimum=1,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceArbitraryStorageSlot:
     channel: int
     slot_id: str
@@ -3015,6 +3217,89 @@ class SourceArbitrarySelectRequest:
         )
         if self.sample_rate_hz <= 0:
             raise ValueError("source arbitrary true-ARB sample_rate_hz must be > 0")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterConfigurationPatch:
+    """One explicit, independently verified counter configuration change."""
+
+    coupling: PatchValue[SourceInputCoupling] = PatchValue(PatchAction.KEEP)
+    impedance_ohm: PatchValue[float] = PatchValue(PatchAction.KEEP)
+    attenuation: PatchValue[int] = PatchValue(PatchAction.KEEP)
+    trigger_level_v: PatchValue[float] = PatchValue(PatchAction.KEEP)
+    statistics_enabled: PatchValue[bool] = PatchValue(PatchAction.KEEP)
+
+    def __post_init__(self) -> None:
+        values = (
+            ("coupling", self.coupling),
+            ("impedance_ohm", self.impedance_ohm),
+            ("attenuation", self.attenuation),
+            ("trigger_level_v", self.trigger_level_v),
+            ("statistics_enabled", self.statistics_enabled),
+        )
+        if any(not isinstance(value, PatchValue) for _, value in values):
+            raise ValueError("counter configuration patch values must be PatchValue")
+        if sum(value.action is PatchAction.SET for _, value in values) != 1:
+            raise ValueError("counter configuration patch requires exactly one SET value")
+        if self.coupling.action is PatchAction.SET and self.coupling.value not in {
+            SourceInputCoupling.AC,
+            SourceInputCoupling.DC,
+        }:
+            raise ValueError("counter configuration patch coupling must be AC or DC")
+        if self.impedance_ohm.action is PatchAction.SET:
+            _require_finite(
+                self.impedance_ohm.value,
+                "counter configuration patch impedance_ohm",
+                minimum=0.0,
+            )
+            assert self.impedance_ohm.value is not None
+            if self.impedance_ohm.value <= 0:
+                raise ValueError("counter configuration patch impedance_ohm must be > 0")
+        if self.attenuation.action is PatchAction.SET:
+            _require_int(
+                self.attenuation.value,
+                "counter configuration patch attenuation",
+                minimum=1,
+            )
+        if self.trigger_level_v.action is PatchAction.SET:
+            _require_finite(
+                self.trigger_level_v.value,
+                "counter configuration patch trigger_level_v",
+            )
+        if self.statistics_enabled.action is PatchAction.SET:
+            _require_bool(
+                self.statistics_enabled.value,
+                "counter configuration patch statistics_enabled",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterConfigureRequest:
+    input_id: str
+    patch: SourceCounterConfigurationPatch
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter configure input_id")
+        if not isinstance(self.patch, SourceCounterConfigurationPatch):
+            raise ValueError("source counter configure patch has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterEnableRequest:
+    input_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter enable input_id")
+        _require_bool(self.enabled, "source counter enable enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterMeasureRequest:
+    input_id: str
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter measure input_id")
 
 
 def _validate_cross_channel_configure_request(
@@ -3512,6 +3797,60 @@ class SourceArbitraryStorageResult:
             raise ValueError("source arbitrary storage result requires write_completed=True")
         if not self.readback_verified:
             raise ValueError("source arbitrary storage result requires readback_verified=True")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryVolatileReplaceResult:
+    channel: int
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+    selected_waveform_id: str
+    write_completed: bool
+    content_readback_verified: bool
+    previous_content_restorable: bool
+
+    def __post_init__(self) -> None:
+        _require_int(
+            self.channel,
+            "source arbitrary volatile replace result channel",
+            minimum=1,
+        )
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary volatile replace result payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary volatile replace result payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary volatile replace result point_count",
+            minimum=1,
+        )
+        _require_token(
+            self.selected_waveform_id,
+            "source arbitrary volatile replace result selected_waveform_id",
+        )
+        _require_bool(
+            self.write_completed,
+            "source arbitrary volatile replace result write_completed",
+        )
+        _require_bool(
+            self.content_readback_verified,
+            "source arbitrary volatile replace result content_readback_verified",
+        )
+        _require_bool(
+            self.previous_content_restorable,
+            "source arbitrary volatile replace result previous_content_restorable",
+        )
+        if not self.write_completed:
+            raise ValueError(
+                "source arbitrary volatile replace result requires write_completed=True"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -4399,6 +4738,49 @@ class SourceCounterInputState:
             _require_finite(self.gate_time_s.value, "counter gate_time_s", minimum=0.0)
         if self.trigger_level_v.availability is Availability.VALUE:
             _require_finite(self.trigger_level_v.value, "counter trigger_level_v")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterConfigureResult:
+    input_id: str
+    state: SourceCounterInputState
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter configure result input_id")
+        if not isinstance(self.state, SourceCounterInputState):
+            raise ValueError("source counter configure result state has an invalid type")
+        if self.state.input_id != self.input_id:
+            raise ValueError("source counter configure result input_id does not match state")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterEnableResult:
+    input_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter enable result input_id")
+        _require_bool(self.enabled, "source counter enable result enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterMeasureResult:
+    input_id: str
+    measurements: tuple[SourceCounterMeasurementV2, ...]
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter measure result input_id")
+        if not isinstance(self.measurements, tuple) or not self.measurements:
+            raise ValueError("source counter measure result requires measurements")
+        if any(not isinstance(item, SourceCounterMeasurementV2) for item in self.measurements):
+            raise ValueError(
+                "source counter measure result measurements have an invalid type"
+            )
+        kinds = tuple(item.kind.value for item in self.measurements)
+        if len(set(kinds)) != len(kinds) or tuple(sorted(kinds)) != kinds:
+            raise ValueError(
+                "source counter measure result measurements must be sorted by kind and unique"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -5306,11 +5688,44 @@ class SourceArbitraryStorageV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceArbitraryVolatileReplaceV2Driver(InstrumentDriver, Protocol):
+    def replace_source_arbitrary_volatile_v2(
+        self,
+        request: SourceArbitraryVolatileReplaceRequest,
+        payload: bytes,
+    ) -> SourceArbitraryVolatileReplaceResult: ...
+
+
+@runtime_checkable
 class SourceArbitrarySelectV2Driver(InstrumentDriver, Protocol):
     def select_source_arbitrary_v2(
         self,
         request: SourceArbitrarySelectRequest,
     ) -> SourceArbitrarySelectResult: ...
+
+
+@runtime_checkable
+class SourceCounterConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_counter_v2(
+        self,
+        request: SourceCounterConfigureRequest,
+    ) -> SourceCounterConfigureResult: ...
+
+
+@runtime_checkable
+class SourceCounterEnableV2Driver(InstrumentDriver, Protocol):
+    def set_source_counter_enabled_v2(
+        self,
+        request: SourceCounterEnableRequest,
+    ) -> SourceCounterEnableResult: ...
+
+
+@runtime_checkable
+class SourceCounterMeasureV2Driver(InstrumentDriver, Protocol):
+    def measure_source_counter_v2(
+        self,
+        request: SourceCounterMeasureRequest,
+    ) -> SourceCounterMeasureResult: ...
 
 
 @runtime_checkable
@@ -5670,4 +6085,22 @@ __all__ = [
     "SourceSweepFireV2Driver",
     "SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT",
     "SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT",
+    "SourceArbitraryVolatileReplaceRequest",
+    "SourceArbitraryVolatileReplaceResult",
+    "SourceArbitraryVolatileReplaceV2Driver",
+    "SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT",
+    "SourceCounterConfigurationField",
+    "SourceCounterConfigurationPatch",
+    "SourceCounterConfigureRequest",
+    "SourceCounterConfigureResult",
+    "SourceCounterConfigureV2Driver",
+    "SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceCounterEnableRequest",
+    "SourceCounterEnableResult",
+    "SourceCounterEnableV2Driver",
+    "SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT",
+    "SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT",
+    "SourceCounterMeasureRequest",
+    "SourceCounterMeasureResult",
+    "SourceCounterMeasureV2Driver",
 ]

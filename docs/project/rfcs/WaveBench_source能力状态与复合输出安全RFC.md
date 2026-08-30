@@ -630,6 +630,29 @@ SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT
 SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT
 ```
 
+D1-4／volatile ARB 与 Counter 收口在上述清单末尾追加以下精确条目：
+
+```text
+SourceArbitraryVolatileReplaceRequest
+SourceArbitraryVolatileReplaceResult
+SourceArbitraryVolatileReplaceV2Driver
+SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT
+SourceCounterConfigurationField
+SourceCounterConfigurationPatch
+SourceCounterConfigureRequest
+SourceCounterConfigureResult
+SourceCounterConfigureV2Driver
+SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT
+SourceCounterEnableRequest
+SourceCounterEnableResult
+SourceCounterEnableV2Driver
+SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT
+SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT
+SourceCounterMeasureRequest
+SourceCounterMeasureResult
+SourceCounterMeasureV2Driver
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -672,6 +695,10 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | `source.burst_configure_v2` | `configure_source_burst_v2` | Burst 配置 |
 | `source.arbitrary_storage_v2` | `mutate_source_arbitrary_storage_v2` | 创建或覆盖 ARB 存储槽位 |
 | `source.arbitrary_select_v2` | `select_source_arbitrary_v2` | 选择并配置已存在的 ARB |
+| `source.arbitrary_volatile_replace_v2` | `replace_source_arbitrary_volatile_v2` | 替换通道唯一的易失 ARB 工作区；上传会选择该工作区 |
+| `source.counter_configure_v2` | `configure_source_counter_v2` | 单字段 Counter 输入配置 |
+| `source.counter_enable_v2` | `set_source_counter_enabled_v2` | 单独启用或关闭 Counter |
+| `source.counter_measure_v2` | `measure_source_counter_v2` | 对已启用 Counter 的只读测量 |
 | `source.combine_configure_v2` | `configure_source_combine_v2` | Combine 关系 |
 | `source.coupling_configure_v2` | `configure_source_coupling_v2` | Coupling 关系 |
 | `source.tracking_configure_v2` | `configure_source_tracking_v2` | Tracking 关系 |
@@ -3648,6 +3675,36 @@ driver 异常、结果类型错误或后置条件失败时，Core 清除 receipt
 同 session receipt 有效时映射到本 operation。现有 CLI 与 run step 仍构造默认 internal 请求；为保持已有
 operation artifact 字节形状，默认 `trigger_source=internal` 不写入 request payload，manual 请求则显式记录该字段。
 物理发出能力必须在具体插件的 A4 实机验收中由外部测量证明。
+
+### D1-4 合同冻结：volatile ARB 与 Counter
+
+`source.arbitrary_storage_v2` 继续只表示可命名、可读回摘要和大小、可在写前执行
+CAS 的存储槽位。它的写入后置条件要求选中状态和输出状态保持不变。单一的易失
+ARB 工作区不满足这些前提，必须使用独立的
+`source.arbitrary_volatile_replace_v2`。其 request 只含 channel、传入精确 bytes 的
+SHA-256、字节数和点数；实际 bytes 不进入 request、artifact 或 run JSON。
+
+volatile replace 明确承认上传会选择该工作区，并可能改变与波形长度相关的设备状态。
+前置条件为目标输出 OFF；主写只能调用一次；后置条件独立确认 ARB waveform 已选中、
+basic waveform 为 arbitrary、输出仍 OFF。结果必须分别记录 host bytes 的身份、当前
+selected waveform ID、内容是否能由设备读回验证、以及旧 volatile 内容是否可恢复。
+不能读取摘要或原始 bytes 的设备不得把 host digest 填为设备 readback，也不得声称
+可恢复旧内容。二进制写一旦尝试且后续失败，Core 只可尝试一次输出 OFF 收敛；旧内容
+保持 `unrecoverable`，不得重传或 rollback。
+
+Counter 按副作用拆开，而不是继续沿用 V1 的“完整 profile 一次设置”模型：
+
+- `source.counter_configure_v2` 只允许一个显式字段：AC/DC coupling、输入阻抗、衰减、
+  trigger level 或 statistics enable。每个字段均需独立回读；不会暗中写 50 Ω、默认
+  gate time 或其它默认值。
+- `source.counter_enable_v2` 只改变 counter ON/OFF；它不会配置输入、清零统计或取得测量。
+- `source.counter_measure_v2` 仅对已启用的 counter 做读取；它不会 enable、调用 AUTO、
+  写 gate time 或统计 clear。
+
+`AUTO` gate-time、无法精确表达的厂商 preset、HF rejection、sensitivity、statistics display
+和 statistics clear 不进入这组首版合同。前四项需要各自可读的通用状态模型；clear 是
+破坏性动作，必须以后续单独 capability 明确授权。D1-4 只冻结 model、Protocol 和操作
+元数据，不注册 capability、不改变 CLI 或 run schema，也不授权任何真实插件写入。
 
 ### M6-B 已实现：ARB storage 与 selection
 

@@ -162,7 +162,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[live_start + len(live_exports) :] == match.group(1).splitlines()
+    fire_exports = match.group(1).splitlines()
+    fire_start = live_start + len(live_exports)
+    assert module.__all__[fire_start : fire_start + len(fire_exports)] == fire_exports
+    match = re.search(
+        r"D1-4／volatile ARB 与 Counter 收口在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[fire_start + len(fire_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -262,12 +271,18 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "storage_slot_metadata_readable",
             "storage_write_modes",
             "storage_max_payload_bytes",
+            "volatile_replace_min_points",
+            "volatile_replace_max_points",
+            "volatile_replace_max_payload_bytes",
         ),
         "SourceCounterCapabilityProfile": (
             "input_ids",
             "measurement_kinds",
             "configuration_readable",
             "query_effect",
+            "readable_configuration_fields",
+            "configurable_fields",
+            "enabled_configurable",
         ),
         "SourceCouplingCapabilityProfile": (
             "dimensions",
@@ -1408,6 +1423,151 @@ def test_source_v2_arbitrary_write_models_keep_payload_out_of_public_data() -> N
     assert selected.arbitrary.selected_waveform_id.value == "slot_a"
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceArbitrarySelectResult(1, basic, arbitrary, True)
+
+
+def test_source_v2_volatile_arb_and_counter_contract_models_are_explicit() -> None:
+    digest = "sha256:" + "c" * 64
+    request = module.SourceArbitraryVolatileReplaceRequest(
+        channel=1,
+        payload_sha256=digest,
+        payload_size_bytes=128,
+        point_count=64,
+    )
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceArbitraryVolatileReplaceRequest",
+        "channel": 1,
+        "payload_sha256": digest,
+        "payload_size_bytes": 128,
+        "point_count": 64,
+    }
+    assert (
+        module.SourceArbitraryVolatileReplaceResult(
+            1,
+            digest,
+            128,
+            64,
+            "USER",
+            True,
+            False,
+            False,
+        ).previous_content_restorable
+        is False
+    )
+    with pytest.raises(ValueError, match="point_count"):
+        module.SourceArbitraryVolatileReplaceRequest(1, digest, 128, 0)
+    with pytest.raises(ValueError, match="write_completed=True"):
+        module.SourceArbitraryVolatileReplaceResult(
+            1,
+            digest,
+            128,
+            64,
+            "USER",
+            False,
+            False,
+            False,
+        )
+
+    profile = module.SourceArbitraryCapabilityProfile(
+        playback_modes=(module.SourceArbitraryPlaybackMode.DDS,),
+        selection_readable=True,
+        storage_metadata_readable=False,
+        sample_rate_readable=False,
+        volatile_replace_min_points=2,
+        volatile_replace_max_points=16_384,
+        volatile_replace_max_payload_bytes=32_768,
+    )
+    assert profile.volatile_replace_max_points == 16_384
+    with pytest.raises(ValueError, match="provided together"):
+        module.SourceArbitraryCapabilityProfile(
+            playback_modes=(module.SourceArbitraryPlaybackMode.DDS,),
+            selection_readable=True,
+            storage_metadata_readable=False,
+            sample_rate_readable=False,
+            volatile_replace_min_points=2,
+        )
+
+    counter_profile = module.SourceCounterCapabilityProfile(
+        input_ids=("counter",),
+        measurement_kinds=(module.SourceCounterMeasurementKind.FREQUENCY_HZ,),
+        configuration_readable=True,
+        query_effect=module.SourceQueryEffect.PURE_READ,
+        readable_configuration_fields=(
+            module.SourceCounterConfigurationField.ATTENUATION,
+            module.SourceCounterConfigurationField.COUPLING,
+            module.SourceCounterConfigurationField.IMPEDANCE_OHM,
+            module.SourceCounterConfigurationField.STATISTICS_ENABLED,
+            module.SourceCounterConfigurationField.TRIGGER_LEVEL_V,
+        ),
+        configurable_fields=(
+            module.SourceCounterConfigurationField.COUPLING,
+            module.SourceCounterConfigurationField.IMPEDANCE_OHM,
+        ),
+        enabled_configurable=True,
+    )
+    assert counter_profile.enabled_configurable is True
+    with pytest.raises(ValueError, match="matching readable"):
+        module.SourceCounterCapabilityProfile(
+            input_ids=("counter",),
+            measurement_kinds=(module.SourceCounterMeasurementKind.FREQUENCY_HZ,),
+            configuration_readable=True,
+            query_effect=module.SourceQueryEffect.PURE_READ,
+            configurable_fields=(module.SourceCounterConfigurationField.COUPLING,),
+        )
+
+    patch = module.SourceCounterConfigurationPatch(
+        coupling=module.PatchValue(
+            module.PatchAction.SET,
+            module.SourceInputCoupling.AC,
+        )
+    )
+    configured = module.SourceCounterConfigureRequest("counter", patch)
+    assert module.source_v2_to_data(configured)["patch"]["coupling"]["value"] == "ac"
+    with pytest.raises(ValueError, match="exactly one SET"):
+        module.SourceCounterConfigurationPatch()
+    with pytest.raises(ValueError, match="exactly one SET"):
+        module.SourceCounterConfigurationPatch(
+            coupling=module.PatchValue(
+                module.PatchAction.SET,
+                module.SourceInputCoupling.AC,
+            ),
+            impedance_ohm=module.PatchValue(module.PatchAction.SET, 1_000_000.0),
+        )
+    with pytest.raises(ValueError, match="AC or DC"):
+        module.SourceCounterConfigurationPatch(
+            coupling=module.PatchValue(
+                module.PatchAction.SET,
+                module.SourceInputCoupling.UNKNOWN,
+            )
+        )
+
+    state = module.SourceCounterInputState(
+        input_id="counter",
+        enabled=Observed.value_of(False),
+        measurements=Observed.value_of(()),
+        coupling=Observed.value_of(module.SourceInputCoupling.AC),
+        impedance_ohm=Observed.value_of(1_000_000.0),
+        attenuation=Observed.value_of(1),
+        gate_time_s=Observed.missing(
+            Availability.UNSUPPORTED,
+            module.SourceReasonCode.DESCRIPTOR_UNSUPPORTED,
+        ),
+        trigger_level_v=Observed.value_of(0.0),
+        statistics_enabled=Observed.value_of(False),
+    )
+    assert module.SourceCounterConfigureResult("counter", state).state is state
+    assert module.SourceCounterEnableRequest("counter", True).enabled is True
+    measured = module.SourceCounterMeasureResult(
+        "counter",
+        (
+            module.SourceCounterMeasurementV2(
+                module.SourceCounterMeasurementKind.FREQUENCY_HZ,
+                1_000.0,
+            ),
+        ),
+    )
+    assert measured.measurements[0].value == 1_000.0
+    with pytest.raises(ValueError, match="requires measurements"):
+        module.SourceCounterMeasureResult("counter", ())
 
 
 def test_source_v2_cross_channel_write_models_are_closed_and_serializable() -> None:
