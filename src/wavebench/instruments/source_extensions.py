@@ -5398,6 +5398,7 @@ class SourceDescriptorExtensions:
     features: tuple[SourceFeatureCapability, ...]
     query_contract: SourceQueryContract
     safety_profile: SourceSafetyProfile = SourceSafetyProfile()
+    v1_route_migration_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.contract_version != SOURCE_CONTRACT_VERSION:
@@ -5448,6 +5449,10 @@ class SourceDescriptorExtensions:
             raise ValueError("source descriptor query_contract has an invalid type")
         if not isinstance(self.safety_profile, SourceSafetyProfile):
             raise ValueError("source descriptor safety_profile has an invalid type")
+        _require_bool(
+            self.v1_route_migration_enabled,
+            "source descriptor v1_route_migration_enabled",
+        )
 
 
 class SnapshotConsistencyState(StrEnum):

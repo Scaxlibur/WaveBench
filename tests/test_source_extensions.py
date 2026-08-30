@@ -220,6 +220,14 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "display_load_readable",
             "polarity_readable",
         ),
+        "SourceDescriptorExtensions": (
+            "contract_version",
+            "topology",
+            "features",
+            "query_contract",
+            "safety_profile",
+            "v1_route_migration_enabled",
+        ),
         "SourceNoiseOverlayCapabilityProfile": (
             "enabled_readable",
             "scale_kinds",

@@ -75,6 +75,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
     }
     expected_v2_run_steps = {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
@@ -134,6 +135,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
     with TemporaryDirectory() as tmp:
         valid_steps = {
             "source.basic_configure_v2": "channel = 1\nfrequency_hz = 1000\n",
+            "source.basic_live_configure_v2": "channel = 1\nfrequency_hz = 1000\n",
             "source.output_enable_v2": "channel = 1\n",
             "source.output_disable_v2": "channel = 1\n",
             "source.harmonics_configure_v2": "channel = 1\norder = 8\npreset = \"odd\"\n",

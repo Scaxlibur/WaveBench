@@ -279,7 +279,11 @@ def _json_payload(value: object) -> object:
     return value
 
 
-def _source_basic_configure_v2_request(args: argparse.Namespace):
+def _source_basic_configure_v2_request(
+    args: argparse.Namespace,
+    *,
+    command: str = "basic-configure-v2",
+):
     from .instruments.source_extensions import (
         PatchAction,
         PatchValue,
@@ -289,18 +293,18 @@ def _source_basic_configure_v2_request(args: argparse.Namespace):
     )
 
     values = {
-        "waveform_kind": args.waveform,
-        "frequency_hz": args.frequency_hz,
-        "amplitude_vpp": args.amplitude_vpp,
-        "offset_v": args.offset_v,
-        "square_duty_cycle_percent": args.square_duty_cycle_percent,
+        "waveform_kind": getattr(args, "waveform", None),
+        "frequency_hz": getattr(args, "frequency_hz", None),
+        "amplitude_vpp": getattr(args, "amplitude_vpp", None),
+        "offset_v": getattr(args, "offset_v", None),
+        "square_duty_cycle_percent": getattr(args, "square_duty_cycle_percent", None),
     }
     if all(value is None for value in values.values()):
-        raise ConfigError("source basic-configure-v2 requires at least one basic field")
+        raise ConfigError(f"source {command} requires at least one basic field")
 
     waveform = (
-        PatchValue(PatchAction.SET, SourceWaveformKind(args.waveform))
-        if args.waveform is not None
+        PatchValue(PatchAction.SET, SourceWaveformKind(values["waveform_kind"]))
+        if values["waveform_kind"] is not None
         else PatchValue(PatchAction.KEEP)
     )
 
@@ -315,10 +319,10 @@ def _source_basic_configure_v2_request(args: argparse.Namespace):
         channel=args.channel,
         patch=SourceBasicPatch(
             waveform_kind=waveform,
-            frequency_hz=patch_value(args.frequency_hz),
-            amplitude_vpp=patch_value(args.amplitude_vpp),
-            offset_v=patch_value(args.offset_v),
-            square_duty_cycle_percent=patch_value(args.square_duty_cycle_percent),
+            frequency_hz=patch_value(values["frequency_hz"]),
+            amplitude_vpp=patch_value(values["amplitude_vpp"]),
+            offset_v=patch_value(values["offset_v"]),
+            square_duty_cycle_percent=patch_value(values["square_duty_cycle_percent"]),
         ),
     )
 
@@ -1398,6 +1402,18 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "basic-configure-v2":
                 _, payload = service.configure_basic_v2(
                     _source_basic_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "basic-live-configure-v2":
+                _, payload = service.configure_basic_live_v2(
+                    _source_basic_configure_v2_request(
+                        args,
+                        command="basic-live-configure-v2",
+                    )
                 )
                 if args.json:
                     _emit_json_result(payload)

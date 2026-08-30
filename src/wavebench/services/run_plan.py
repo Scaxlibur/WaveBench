@@ -41,6 +41,7 @@ ALLOWED_STEP_KINDS = {
     "source.set_duty",
     "source.output",
     "source.basic_configure_v2",
+    "source.basic_live_configure_v2",
     "source.output_enable_v2",
     "source.output_disable_v2",
     "source.harmonics_configure_v2",
@@ -104,6 +105,7 @@ _REQUIRED_FIELDS = {
     "rf_source.output_enable": ("port_id",),
     "rf_source.output_disable": ("port_id",),
     "source.basic_configure_v2": ("channel",),
+    "source.basic_live_configure_v2": ("channel",),
     "source.output_enable_v2": ("channel",),
     "source.output_disable_v2": ("channel",),
     "source.harmonics_configure_v2": ("channel", "order", "preset"),
@@ -244,6 +246,11 @@ _OPTIONAL_FIELDS = {
         "square_duty_cycle_percent",
         "on_failure",
     },
+    "source.basic_live_configure_v2": {
+        "frequency_hz",
+        "amplitude_vpp",
+        "on_failure",
+    },
     "source.output_enable_v2": {"on_failure"},
     "source.output_disable_v2": {"on_failure"},
     "source.harmonics_configure_v2": {"on_failure"},
@@ -306,6 +313,7 @@ _STEP_NOTES = {
     "source.set_duty": "Set square-wave duty cycle in percent; valid range is 0 < duty_percent < 100.",
     "source.output": "Turn source channel output on or off.",
     "source.basic_configure_v2": "Configure one Source V2 channel while its output is OFF. At least one basic field is required.",
+    "source.basic_live_configure_v2": "Change exactly one declared frequency or Vpp field while one Source V2 channel remains enabled.",
     "source.output_enable_v2": "Turn one Source V2 channel output on after a fresh V2 readback.",
     "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
     "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
@@ -841,6 +849,18 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             if not 0 <= duty <= 100:
                 raise ConfigError(f"{prefix}.square_duty_cycle_percent must be in [0, 100]")
             fields["square_duty_cycle_percent"] = duty
+    elif kind == "source.basic_live_configure_v2":
+        live_fields = {"frequency_hz", "amplitude_vpp"}
+        selected = live_fields & fields.keys()
+        if len(selected) != 1:
+            raise ConfigError(
+                f"{prefix} source.basic_live_configure_v2 requires exactly one frequency_hz or amplitude_vpp"
+            )
+        field = next(iter(selected))
+        value = _finite_float(fields[field], f"{prefix}.{field}")
+        if value < 0:
+            raise ConfigError(f"{prefix}.{field} must be >= 0")
+        fields[field] = value
     elif kind == "source.harmonics_configure_v2":
         order = fields["order"]
         if isinstance(order, bool) or not isinstance(order, int):

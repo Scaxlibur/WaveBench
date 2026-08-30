@@ -538,6 +538,14 @@ class RunService:
                     add("source", "source.status")
             elif step.kind == "source.basic_configure_v2":
                 add("source", "source.snapshot_v2", "source.basic_configure_v2")
+            elif step.kind == "source.basic_live_configure_v2":
+                add(
+                    "source",
+                    "source.snapshot_v2",
+                    "source.basic_configure_v2",
+                    "source.basic_live_configure_v2",
+                    "source.output_v2",
+                )
             elif step.kind in {"source.output_enable_v2", "source.output_disable_v2"}:
                 add("source", "source.snapshot_v2", "source.output_v2")
             elif step.kind == "source.harmonics_configure_v2":
@@ -1385,9 +1393,15 @@ class RunService:
                 )
             )
             artifact = {"rf_source_operation": rf_source_operation}
-        elif step.kind == "source.basic_configure_v2":
+        elif step.kind in {"source.basic_configure_v2", "source.basic_live_configure_v2"}:
             fields = step.fields
-            _, source_operation = self._source_service(services=services).configure_basic_v2(
+            source_service = self._source_service(services=services)
+            configure = (
+                source_service.configure_basic_live_v2
+                if step.kind == "source.basic_live_configure_v2"
+                else source_service.configure_basic_v2
+            )
+            _, source_operation = configure(
                 SourceBasicConfigureRequest(
                     channel=fields["channel"],
                     patch=SourceBasicPatch(

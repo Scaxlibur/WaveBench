@@ -250,6 +250,7 @@ class SourceDescriptorExtensions:
     features: tuple[SourceFeatureCapability, ...]
     query_contract: SourceQueryContract
     safety_profile: SourceSafetyProfile = SourceSafetyProfile()
+    v1_route_migration_enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +278,12 @@ class SourceFeatureCapability:
 - 多声明的方法不生成隐式 capability；
 - profile 只能收紧核心数值上限、deadline 和恢复步骤，不能放宽；
 - 使用 Source V2 的插件必须提高 wheel 与 descriptor 的最低核心版本。
+
+`v1_route_migration_enabled` 是 append-only 的 descriptor 迁移策略，默认值为 `true`。默认策略下，
+核心按已注册 V2 capability 接管可无损映射的 V1 route，或在无法无损映射时于 I/O 前拒绝。
+设为 `false` 时，显式 V2 Service、CLI 与 run step 仍可用，但 Basic／Output 的既有 V1 setter、
+restore、ARB upload 与 trigger 不因这几个 V2 capability 自动换路。该开关不取消其它已单独声明
+V2 capability 的重叠 route 安全门。
 
 R2 不改变现有 eager factory 合同：factory 可以调用 `DriverContext.open_transport()`。因此
 Protocol 方法缺失能够保证「零 Source operation 命令」，不能保证「零连接建立」。离线 A0 与插件
@@ -926,7 +933,7 @@ session、operation context 和 postcondition。
 | 路径 | 统一要求 |
 | --- | --- |
 | V2 输出 ON | fresh 一致 snapshot + 预算 + 写后回读 |
-| V1 同义写入口调用双合同驱动 | 在 Service 边界映射到对应 V2 operation，无法无损映射时在 I/O 前拒绝 |
+| V1 同义写入口调用双合同驱动 | 当 descriptor 未关闭 V1 route migration 时，在 Service 边界映射到对应 V2 operation；无法无损映射时在 I/O 前拒绝 |
 | `source.arb_load output_on=true` | 先在输出 OFF 的配置 phase 完成上传或选择，再用 fresh snapshot 签发只授权下一次 ON 的新决定 |
 | 输出 ON 时的 Source V2 setter/patch | 仅 `source.basic_live_configure_v2` 可单独修改频率或 Vpp；其它 patch 在 I/O 前拒绝 |
 | arm/fire/trigger | 在可能发出信号前完成预算与接线证据检查 |
@@ -937,10 +944,11 @@ V1 驱动未 opt in 时继续使用现有 V1 路径，不伪装成已获得 Sour
 行为，但不因此获得 Source V2 的 live mutation 安全保证。
 
 每个 V2 写 capability 必须在 `SourceOperationContract` 中登记其 V1 等价入口、重叠字段和可能发出
-信号的间接入口。双合同驱动声明该 capability 后，只有落入这些集合的 V1 路径必须映射到 V2
-operation 或在 I/O 前拒绝；字段闭包完全不相交的 V1 operation 可以继续走 V1。核心仍需审计完整
-V1 写表面，防止遗漏隐式副作用。OFF 不需要复合预算，但不能绕过 access、session health、
-operation context 和必要回读。插件不能通过保留旧方法名重新引入同字段或同发信号路径的旁路。
+信号的间接入口。双合同驱动默认对落入这些集合的 V1 路径映射到 V2 operation 或在 I/O 前拒绝；
+若 descriptor 明确关闭 V1 route migration，则保留完整 V1 合同，只有显式 V2 入口调用新 operation。
+字段闭包完全不相交的 V1 operation 可以继续走 V1。核心仍需审计完整 V1 写表面，防止遗漏隐式副作用。
+OFF 不需要复合预算，但不能绕过 access、session health、operation context 和必要回读。插件不能通过
+保留旧方法名重新引入同字段或同发信号路径的旁路。
 
 `source.output_v2` 的等价集合至少包括 V1 `set_output(ON)`、ARB 的 `output_on=True`、会发出信号的
 trigger/fire 和恢复 ON；`source.arbitrary_storage_v2` 至少接管 V1 上传入口，但不因此接管无关的
@@ -2754,7 +2762,8 @@ scheme、原始等级、按 `wavebench.source.a0-a5.v1` 重新评定的等级和
 | 新核心 + 旧插件 | `source_extensions=None`，保持 V1 路径，不推导 V2 写能力 |
 | 旧核心 + 新插件 | 受管安装由 wheel `Requires-Dist` 在 entry point import 前拒绝；绕过 package inspection 的直接 `pip --no-deps` 或手工安装不承诺零导入，且不属于支持组合 |
 | 新核心 + 新插件 | 只对明确声明并通过验证的 Source V2 capability 使用新合同 |
-| 新核心 + 同时声明 V1/V2 的新插件 | 新 operation 只使用 V2；同义或副作用重叠的旧写入口映射／拒绝，不相交的旧 operation 保持 V1；单次事务不混用两套安全视图 |
+| 新核心 + 同时声明 V1/V2 的新插件 | 新 operation 只使用 V2；默认策略下，同义或副作用重叠的旧写入口映射／拒绝，不相交的旧 operation 保持 V1；单次事务不混用两套安全视图 |
+| 新核心 + `v1_route_migration_enabled=false` 的双合同插件 | 只有显式 V2 operation 使用 V2；既有 V1 route 保持原合同，不能用不完整的 V2 组合替换 legacy composite transaction |
 
 R2 决定保持 `wavebench.instrument.v2`。`source_extensions` 是带默认值的末尾扩展，新 Protocol
 不改变现有 `SourceDriver`，新 capability 通过最低核心版本门显式 opt in。只有删除 Source V1、
@@ -3175,8 +3184,9 @@ Vpp、Offset 和输出状态的设备正常使用信号发生器功能，而不�
 MAIN 只调用一次 `configure_source_basic_live_v2()`。结果与 fresh postcondition 必须逐项证明请求值、
 最终 Vpp、Offset 和输出仍为 ON。结果未知、driver 异常或后置条件失败时不重试，也不恢复 ON；Core
 只允许一次 `source.output_v2` OFF recovery 与独立回读。V1 `set_frequency()` 和
-`set_amplitude_vpp()` 可按已证明的输出状态选择 OFF-only 或 live operation。D1-2 不增加 CLI 命令
-或 run plan step，频响、离散扫频与 TUI 继续复用既有 setter。
+`set_amplitude_vpp()` 只在 descriptor 保持默认 migration 策略时，才按已证明的输出状态选择
+OFF-only 或 live operation。显式 P1 入口为 `basic-live-configure-v2` CLI 与
+`source.basic_live_configure_v2` run step；频响、离散扫频与 TUI 继续复用既有 setter。
 
 Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使用 `offset ± Vpp / 2`；不要求独立
 `SourceNoisePeakConstraint`。若设备只能提供标称值、RMS 或载波幅度，插件不得为该模式声明
@@ -3198,10 +3208,11 @@ Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使�
   artifact 和错误路径，不能用一个方向不明确的 contract 混合表示。
 - 新类型、descriptor 字段和 artifact 键必须 append-only；既有 `SourceDriver`、`SourceStatus`、
   V1 CLI、V1 run step、V1 JSON 和 V1 artifact 不改变语义。
-- V1-only 插件继续执行 V1 路径。双合同插件声明某项 V2 capability 后，核心在 M5-D 将同义或副作用
-  重叠的 V1 route 映射到 V2。`set_function` 有一项兼容例外：目标波形未在当前 V2 Basic profile 声明，
-  或 V2 preflight 无法为当前旧状态提供最终 Vpp／Offset 时，核心继续调用既有 V1 setter，不进入 V2 MAIN
-  写入；其余无法无损映射的重叠 route 在仪器 I/O 前拒绝。不相交的 V1 route 保持原行为。
+- V1-only 插件继续执行 V1 路径。双合同插件默认在 M5-D 将同义或副作用重叠的 V1 route 映射到 V2；
+  `v1_route_migration_enabled=false` 可使显式 V2 surface 与完整 legacy V1 transaction 并存。
+  `set_function` 有一项兼容例外：目标波形未在当前 V2 Basic profile 声明，或 V2 preflight 无法为当前
+  旧状态提供最终 Vpp／Offset 时，核心继续调用既有 V1 setter，不进入 V2 MAIN 写入；其余无法无损映射
+  的重叠 route 在仪器 I/O 前拒绝。不相交的 V1 route 保持原行为。
 - M5-D 在同一开发线内先完成 Service／CLI，再增加 V2 run plan step、intent 和 artifact；中间不发布
   稳定写接口。
 
@@ -3297,33 +3308,38 @@ M5-D 将 M5-B／M5-C 的唯一核心事务开放为以下 Service 方法：
 
 ```python
 SourceService.configure_basic_v2(request, *, correlation_id=None)
+SourceService.configure_basic_live_v2(request, *, correlation_id=None)
 SourceService.set_output_v2(request, *, correlation_id=None)
 ```
 
-两者分别返回 `(typed_result, operation_artifact)`。`typed_result` 是已冻结的
+三者分别返回 `(typed_result, operation_artifact)`。`typed_result` 是已冻结的
 `SourceBasicConfigureResult` 或 `SourceOutputResult`；`operation_artifact` 使用
 `wavebench.source.operation.v1`。Service 不重新实现 preflight、写入、回读、recovery 或 session health
-逻辑，所有入口继续复用 M5-B／M5-C 事务。
+逻辑，所有入口继续复用 M5-B／M5-C 与 D1-2 事务。
 
-CLI 是 additive 的两个新子命令：
+CLI 是 additive 的三个新子命令：
 
 ```text
 wavebench source basic-configure-v2 --channel N \
   [--waveform sine|square|ramp|pulse|noise|dc] \
   [--frequency-hz HZ] [--amplitude-vpp VPP] [--offset-v V] \
   [--square-duty-cycle-percent PERCENT]
+wavebench source basic-live-configure-v2 --channel N \
+  [--frequency-hz HZ | --amplitude-vpp VPP]
 wavebench source output-v2 --channel N on|off
 ```
 
-`basic-configure-v2` 至少需要一个 basic 字段。普通模式直接输出 operation artifact；`--json` 将它置于
-`wavebench.cli.result.v1.result`。写后失败时，CLI 的 `wavebench.error.v1` 会附加脱敏的
-`source_operation_artifact`。两个新命令不改变既有 V1 CLI 参数或成功 JSON。
+`basic-configure-v2` 至少需要一个 basic 字段。`basic-live-configure-v2` 只接受一个 frequency 或
+Vpp 字段，且由 Service 证明输出为 ON、模式为 FIX。普通模式直接输出 operation artifact；`--json` 将它
+置于 `wavebench.cli.result.v1.result`。写后失败时，CLI 的 `wavebench.error.v1` 会附加脱敏的
+`source_operation_artifact`。三个新命令不改变既有 V1 CLI 参数或成功 JSON。
 
-run plan 使用三个有方向 step，避免在 intent 中把 ON／OFF 混为同一 operation：
+run plan 使用四个有方向 step，避免在 intent 中把 ON／OFF 混为同一 operation：
 
 | step kind | 必填字段 | 允许的额外字段 | 对应 operation |
 | --- | --- | --- | --- |
 | `source.basic_configure_v2` | `channel` | `waveform_kind`、`frequency_hz`、`amplitude_vpp`、`offset_v`、`square_duty_cycle_percent`；至少一个 | `source.basic_configure_v2` |
+| `source.basic_live_configure_v2` | `channel` | `frequency_hz` 或 `amplitude_vpp`；恰好一个 | `source.basic_live_configure_v2` |
 | `source.output_enable_v2` | `channel` | 无 | `source.output_enable_v2` |
 | `source.output_disable_v2` | `channel` | 无 | `source.output_disable_v2` |
 
@@ -3333,7 +3349,8 @@ run plan 使用三个有方向 step，避免在 intent 中把 ON／OFF 混为同
 operation artifact 同时保存到 step 的 `artifact.source_operation` 和非空根键
 `run.json.source_operations`；写后失败带来的 artifact 也会保存。没有 V2 step 的 V1 run 保持没有该根键。
 
-双合同插件按当前已注册 V2 contract 路由，不混用 V1 状态视图来做 V2 安全决策：
+`v1_route_migration_enabled=true` 的双合同插件按当前已注册 V2 contract 路由，不混用 V1 状态视图
+来做 V2 安全决策：
 
 | 已声明 V2 capability | V1 route | M5-D 行为 |
 | --- | --- | --- |
@@ -3343,8 +3360,10 @@ operation artifact 同时保存到 step 的 `artifact.source_operation` 和非�
 | `source.output_v2` | `trigger_burst`、`trigger_sweep` | 属于可能发信号的重叠 route，在仪器 I/O 前拒绝。 |
 | 当前两个写 capability 均未覆盖 | `configure_coupling`、`configure_harmonics`、AM／FM／PM／PWM、`configure_pulse`、`configure_burst`、`configure_sweep` | 保持 V1 路径，等待对应 feature 的 V2 capability。 |
 
-V1-only 插件继续使用原 V1 route。双合同 V1 setter 的返回值仅为兼容显示而从 V2 postcondition
-flatten 为 `SourceStatus`；该 adapter 不参与 V2 preflight、预算、恢复或 capability 决策。
+设为 `false` 的双合同插件保留上述所有 V1 route；只有显式 V2 Service、CLI 或 run step 调用 V2
+transaction。该选择适用于 V1 composite transaction 无法由当前的窄 V2 operation 等价表示的设备。
+V1-only 插件继续使用原 V1 route。默认迁移的双合同 V1 setter 返回值仅为兼容显示而从 V2
+postcondition flatten 为 `SourceStatus`；该 adapter 不参与 V2 preflight、预算、恢复或 capability 决策。
 
 ### C2 核心兼容与候选发布门
 
@@ -3692,7 +3711,7 @@ selected waveform ID、内容是否能由设备读回验证、以及旧 volatile
 可恢复旧内容。二进制写一旦尝试且后续失败，Core 只可尝试一次输出 OFF 收敛；旧内容
 保持 `unrecoverable`，不得重传或 rollback。
 
-Counter 按副作用拆开，而不是继续沿用 V1 的“完整 profile 一次设置”模型：
+Counter 按副作用拆开，而不是继续沿用 V1 的「完整 profile 一次设置」模型：
 
 - `source.counter_configure_v2` 只允许一个显式字段：AC/DC coupling、输入阻抗、衰减、
   trigger level 或 statistics enable。每个字段均需独立回读；不会暗中写 50 Ω、默认

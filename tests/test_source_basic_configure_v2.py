@@ -301,6 +301,93 @@ class _DualContractDriver(_BasicWriteDriver):
         raise AttributeError(name)
 
 
+class _AdditiveV2Driver(_BasicWriteDriver):
+    """Expose V2 explicitly while retaining the complete legacy V1 routes."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.v1_frequency_requests: list[tuple[int, float, bool, bool]] = []
+        self.v1_function_requests: list[tuple[int, str, bool]] = []
+        self.v1_amplitude_requests: list[tuple[int, float, bool]] = []
+        self.v1_output_requests: list[tuple[int, bool, bool]] = []
+        self.v1_upload_calls = 0
+
+    def get_status(self, channel: int) -> SourceStatus:
+        return SourceStatus(
+            channel=channel,
+            output="ON" if self.output_enabled else "OFF",
+            function="SIN",
+            frequency_hz=1_000.0,
+            amplitude=1.0,
+            amplitude_unit="VPP",
+            offset_v=0.0,
+            phase_deg=0.0,
+            frequency_mode="FIX",
+            sweep_enabled="OFF",
+            apply_raw=None,
+            square_duty_cycle_percent=50.0,
+        )
+
+    def set_frequency(
+        self,
+        channel: int,
+        value_hz: float,
+        *,
+        ensure_fix_mode: bool,
+        check_errors: bool,
+    ) -> SourceStatus:
+        self.v1_frequency_requests.append((channel, value_hz, ensure_fix_mode, check_errors))
+        return replace(self.get_status(channel), frequency_hz=value_hz)
+
+    def set_function(
+        self,
+        channel: int,
+        function: str,
+        *,
+        check_errors: bool,
+    ) -> SourceStatus:
+        self.v1_function_requests.append((channel, function, check_errors))
+        return replace(self.get_status(channel), function=function.strip().upper())
+
+    def set_amplitude_vpp(
+        self,
+        channel: int,
+        value_vpp: float,
+        *,
+        check_errors: bool,
+    ) -> SourceStatus:
+        self.v1_amplitude_requests.append((channel, value_vpp, check_errors))
+        return replace(self.get_status(channel), amplitude=value_vpp)
+
+    def set_output(
+        self,
+        channel: int,
+        enabled: bool,
+        *,
+        check_errors: bool,
+    ) -> SourceStatus:
+        self.v1_output_requests.append((channel, enabled, check_errors))
+        self.output_enabled = enabled
+        return self.get_status(channel)
+
+    def upload_dg4000_dac14_block(self, **kwargs: object) -> SourceStatus:
+        self.v1_upload_calls += 1
+        return SourceStatus(
+            channel=kwargs["channel"],  # type: ignore[arg-type]
+            output="ON" if kwargs["output_on"] else "OFF",
+            function="USER",
+            frequency_hz=kwargs["playback_frequency_hz"],  # type: ignore[arg-type]
+            amplitude=kwargs["amplitude_vpp"],  # type: ignore[arg-type]
+            amplitude_unit="VPP",
+            offset_v=kwargs["offset_v"],  # type: ignore[arg-type]
+            phase_deg=0.0,
+            frequency_mode="FIX",
+            sweep_enabled="OFF",
+            apply_raw=None,
+            square_duty_cycle_percent=None,
+        )
+
+
 class _LegacyWaveformFallbackDriver(_BasicWriteDriver):
     """V1 function support retained outside a narrower V2 basic profile."""
 
@@ -514,6 +601,52 @@ def _dual_contract_service() -> tuple[SourceService, _DualContractDriver]:
             "source.basic_configure_v2",
             "source.output_v2",
             *_DUAL_CONTRACT_V1_CAPABILITIES,
+        ),
+    )
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, driver)
+    config = _config()
+    assert config.source is not None
+    config = replace(config, source=replace(config.source, check_errors=False))
+    return (
+        SourceService(
+            config=config,
+            logger=CommandLogger(),
+            session=driver,  # type: ignore[arg-type]
+            descriptor=descriptor,
+            transport=driver.transport,
+            session_state=session_state,
+        ),
+        driver,
+    )
+
+
+def _additive_v2_service() -> tuple[SourceService, _AdditiveV2Driver]:
+    session_state = InstrumentSessionState(epoch_id="source-additive-v2")
+    driver = _AdditiveV2Driver(session_state=session_state, combined=True)
+    descriptor = replace(
+        source_descriptor(
+            driver=driver,
+            extensions=replace(
+                _write_extensions(
+                    include_output=True,
+                    live_frequency=True,
+                    live_amplitude_vpp=True,
+                ),
+                v1_route_migration_enabled=False,
+            ),
+        ),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+            "source.basic_live_configure_v2",
+            "source.output_v2",
+            "source.status",
+            "source.set_frequency",
+            "source.set_function",
+            "source.set_amplitude_vpp",
+            "source.output",
+            "source.arbitrary_upload",
         ),
     )
     validate_source_descriptor(descriptor)
@@ -983,6 +1116,82 @@ def test_v1_restore_route_rejects_partial_v2_restore_before_io() -> None:
         )
 
     assert driver.transport.counters.write_requests == 0
+
+
+def test_additive_v2_keeps_legacy_routes_and_exposes_explicit_v2(tmp_path: Path) -> None:
+    service, driver = _additive_v2_service()
+
+    status = service.set_frequency(channel=1, value_hz=2_000.0)
+
+    assert status.frequency_hz == 2_000.0
+    assert driver.v1_frequency_requests == [(1, 2_000.0, True, False)]
+    assert driver.basic_requests == []
+    assert service._declares_source_v2_basic_restore() is False
+
+    result, _ = service.configure_basic_v2(_frequency_request(3_000.0))
+
+    assert result.basic.frequency_hz.value == 3_000.0
+    assert driver.basic_requests == [_frequency_request(3_000.0)]
+
+    output = service.set_output(channel=1, enabled=True)
+
+    assert output.output == "ON"
+    assert driver.v1_output_requests == [(1, True, False)]
+    assert driver.output_requests == []
+
+    service.set_output(channel=1, enabled=False)
+    waveform = tmp_path / "waveform.csv"
+    waveform.write_text("0\n1\n", encoding="utf-8")
+    uploaded = service.upload_arbitrary_waveform(
+        channel=1,
+        file_path=str(waveform),
+        playback_frequency_hz=1_000.0,
+        amplitude_vpp=1.0,
+    )
+
+    assert uploaded.function == "USER"
+    assert driver.v1_upload_calls == 1
+
+    restored = service.restore_restorable_state(
+        RestorableSourceState(
+            channel=1,
+            output="ON",
+            function="SIN",
+            frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+            amplitude_unit="VPP",
+        )
+    )
+
+    assert restored.output == "ON"
+    assert driver.v1_function_requests == [(1, "SIN", False)]
+    assert driver.v1_amplitude_requests == [(1, 1.0, False)]
+    assert driver.v1_frequency_requests[-1] == (1, 1_000.0, True, False)
+    assert driver.v1_output_requests[-2:] == [(1, False, False), (1, True, False)]
+    assert driver.output_requests == []
+
+
+def test_migrating_v2_keeps_v1_arbitrary_upload_rejected_before_file_load() -> None:
+    service, driver = _additive_v2_service()
+    assert service.descriptor is not None
+    assert service.descriptor.source_extensions is not None
+    service.descriptor = replace(
+        service.descriptor,
+        source_extensions=replace(
+            service.descriptor.source_extensions,
+            v1_route_migration_enabled=True,
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.upload_arbitrary_waveform(
+            channel=1,
+            file_path="does-not-exist.csv",
+            playback_frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+        )
+
+    assert driver.v1_upload_calls == 0
 
 
 @pytest.mark.parametrize(

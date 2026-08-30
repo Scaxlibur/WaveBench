@@ -842,6 +842,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(source_basic_configure_v2)
 
+    source_basic_live_configure_v2 = source_sub.add_parser(
+        "basic-live-configure-v2",
+        help="Change one enabled Source V2 channel frequency or Vpp without output cycling",
+    )
+    source_basic_live_configure_v2.add_argument("--channel", type=int, required=True)
+    source_basic_live_configure_v2.add_argument("--frequency-hz", type=float, default=None)
+    source_basic_live_configure_v2.add_argument("--amplitude-vpp", type=float, default=None)
+    add_runtime_options(source_basic_live_configure_v2)
+
     source_output_v2 = source_sub.add_parser(
         "output-v2",
         help="Turn one Source V2 channel output on or off",

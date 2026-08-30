@@ -481,9 +481,26 @@ class SourceService(SessionStateAliasMixin):
     def _declares_source_v2_capability(self, capability: str) -> bool:
         return capability in self._declared_source_capabilities()
 
+    def _maps_v1_routes_to_source_v2(self, capability: str) -> bool:
+        """Return whether a declared V2 capability owns its legacy V1 routes."""
+
+        self._declared_source_capabilities()
+        extensions = None if self.descriptor is None else getattr(
+            self.descriptor,
+            "source_extensions",
+            None,
+        )
+        return (
+            self._declares_source_v2_capability(capability)
+            and (
+                not isinstance(extensions, SourceDescriptorExtensions)
+                or extensions.v1_route_migration_enabled
+            )
+        )
+
     def _declares_source_v2_basic_restore(self) -> bool:
         capabilities = set(self._declared_source_capabilities())
-        return {
+        return self._maps_v1_routes_to_source_v2("source.basic_configure_v2") and {
             "source.snapshot_v2",
             "source.basic_configure_v2",
             "source.output_v2",
@@ -10061,13 +10078,15 @@ class SourceService(SessionStateAliasMixin):
     def trigger_burst(self, channel: int | None = None) -> None:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.burst_fire_v2"):
+        if self._maps_v1_routes_to_source_v2("source.burst_fire_v2"):
             self.fire_burst_v2(SourceFireRequest(channel=channel))
             return
+        overlapping = ["source.burst_configure_v2"]
+        if self._maps_v1_routes_to_source_v2("source.output_v2"):
+            overlapping.append("source.output_v2")
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.TRIGGER_BURST,
-            "source.output_v2",
-            "source.burst_configure_v2",
+            *overlapping,
         )
         required = ["source.burst_trigger"]
         if source_cfg.check_errors:
@@ -10130,13 +10149,15 @@ class SourceService(SessionStateAliasMixin):
     def trigger_sweep(self, channel: int | None = None) -> None:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.sweep_fire_v2"):
+        if self._maps_v1_routes_to_source_v2("source.sweep_fire_v2"):
             self.fire_sweep_v2(SourceFireRequest(channel=channel))
             return
+        overlapping = ["source.sweep_configure_v2"]
+        if self._maps_v1_routes_to_source_v2("source.output_v2"):
+            overlapping.append("source.output_v2")
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.TRIGGER_SWEEP,
-            "source.output_v2",
-            "source.sweep_configure_v2",
+            *overlapping,
         )
         required = ["source.sweep_trigger"]
         if source_cfg.check_errors:
@@ -10229,9 +10250,7 @@ class SourceService(SessionStateAliasMixin):
             status = self._source_status_from_v2_snapshot(final_snapshot, state.channel)
             self._state_guard_after_write(status)
             return status
-        self._reject_v1_route_for_source_v2(
-            SourceV1WriteRouteId.RESTORE,
-            "source.basic_configure_v2",
+        overlapping = [
             "source.harmonics_configure_v2",
             "source.harmonics_disable_v2",
             "source.modulation_configure_v2",
@@ -10245,8 +10264,12 @@ class SourceService(SessionStateAliasMixin):
             "source.coupling_configure_v2",
             "source.tracking_configure_v2",
             "source.phase_relation_configure_v2",
-            "source.output_v2",
-        )
+        ]
+        if self._maps_v1_routes_to_source_v2("source.basic_configure_v2"):
+            overlapping.append("source.basic_configure_v2")
+        if self._maps_v1_routes_to_source_v2("source.output_v2"):
+            overlapping.append("source.output_v2")
+        self._reject_v1_route_for_source_v2(SourceV1WriteRouteId.RESTORE, *overlapping)
         self.set_output(channel=state.channel, enabled=False)
         self.set_function(channel=state.channel, function=state.function)
         self.set_amplitude_vpp(channel=state.channel, value_vpp=state.amplitude_vpp)
@@ -10261,14 +10284,14 @@ class SourceService(SessionStateAliasMixin):
     def set_frequency(self, channel: int | None, value_hz: float) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.basic_configure_v2"):
+        if self._maps_v1_routes_to_source_v2("source.basic_configure_v2"):
             request = SourceBasicConfigureRequest(
                 channel=channel,
                 patch=SourceBasicPatch(
                     frequency_hz=PatchValue(PatchAction.SET, value_hz),
                 ),
             )
-            if self._declares_source_v2_capability("source.basic_live_configure_v2"):
+            if self._maps_v1_routes_to_source_v2("source.basic_live_configure_v2"):
                 try:
                     transaction = self._configure_basic_live_v2_transaction(request)
                 except _SourceV2BasicRequiresOffMutation:
@@ -10305,7 +10328,7 @@ class SourceService(SessionStateAliasMixin):
     def set_output(self, channel: int | None, enabled: bool) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.output_v2"):
+        if self._maps_v1_routes_to_source_v2("source.output_v2"):
             transaction = self._set_output_v2_transaction(
                 SourceOutputRequest(channel=channel, enabled=enabled),
             )
@@ -10379,7 +10402,7 @@ class SourceService(SessionStateAliasMixin):
     def set_function(self, channel: int | None, function: str) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.basic_configure_v2"):
+        if self._maps_v1_routes_to_source_v2("source.basic_configure_v2"):
             waveform = self._source_v2_waveform_from_v1(function)
             if self._source_v2_basic_declares_waveform(
                 channel=channel,
@@ -10412,7 +10435,7 @@ class SourceService(SessionStateAliasMixin):
     def set_square_duty_cycle(self, channel: int | None, duty_percent: float) -> SourceStatus:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.basic_configure_v2"):
+        if self._maps_v1_routes_to_source_v2("source.basic_configure_v2"):
             transaction = self._configure_basic_v2_transaction(
                 SourceBasicConfigureRequest(
                     channel=channel,
@@ -10442,14 +10465,14 @@ class SourceService(SessionStateAliasMixin):
         source_cfg = self._source_config()
         self._check_source_vpp(value_vpp, field="source amplitude / 信号源幅度")
         channel = source_cfg.default_channel if channel is None else channel
-        if self._declares_source_v2_capability("source.basic_configure_v2"):
+        if self._maps_v1_routes_to_source_v2("source.basic_configure_v2"):
             request = SourceBasicConfigureRequest(
                 channel=channel,
                 patch=SourceBasicPatch(
                     amplitude_vpp=PatchValue(PatchAction.SET, value_vpp),
                 ),
             )
-            if self._declares_source_v2_capability("source.basic_live_configure_v2"):
+            if self._maps_v1_routes_to_source_v2("source.basic_live_configure_v2"):
                 try:
                     transaction = self._configure_basic_live_v2_transaction(request)
                 except _SourceV2BasicRequiresOffMutation:
@@ -10488,13 +10511,18 @@ class SourceService(SessionStateAliasMixin):
         output_on: bool = False,
     ) -> SourceStatus:
         source_cfg = self._source_config()
-        self._reject_v1_route_for_source_v2(
-            SourceV1WriteRouteId.UPLOAD_ARBITRARY,
-            "source.basic_configure_v2",
-            "source.output_v2",
+        overlapping = [
             "source.arbitrary_storage_v2",
             "source.arbitrary_select_v2",
             "source.arbitrary_volatile_replace_v2",
+        ]
+        if self._maps_v1_routes_to_source_v2("source.basic_configure_v2"):
+            overlapping.append("source.basic_configure_v2")
+        if self._maps_v1_routes_to_source_v2("source.output_v2"):
+            overlapping.append("source.output_v2")
+        self._reject_v1_route_for_source_v2(
+            SourceV1WriteRouteId.UPLOAD_ARBITRARY,
+            *overlapping,
         )
         self._require_finite(
             playback_frequency_hz,

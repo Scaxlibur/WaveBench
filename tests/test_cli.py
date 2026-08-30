@@ -648,6 +648,16 @@ class CliTests(unittest.TestCase):
                 "1.5",
             ]
         )
+        live = build_parser().parse_args(
+            [
+                "source",
+                "basic-live-configure-v2",
+                "--channel",
+                "2",
+                "--frequency-hz",
+                "2000",
+            ]
+        )
         output = build_parser().parse_args(["source", "output-v2", "--channel", "2", "on"])
         harmonics = build_parser().parse_args(
             [
@@ -768,6 +778,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(basic.waveform, "square")
         self.assertEqual(basic.frequency_hz, 1000.0)
         self.assertEqual(basic.amplitude_vpp, 1.5)
+        self.assertEqual(live.command, "basic-live-configure-v2")
+        self.assertEqual(live.channel, 2)
+        self.assertEqual(live.frequency_hz, 2000.0)
+        self.assertIsNone(live.amplitude_vpp)
         self.assertEqual(output.command, "output-v2")
         self.assertEqual(output.channel, 2)
         self.assertEqual(output.state, "on")
@@ -813,6 +827,33 @@ class CliTests(unittest.TestCase):
         self.assertEqual(burst.phase_deg, 30.0)
         self.assertEqual(burst.internal_period_s, 0.25)
         self.assertEqual(burst.delay_s, 0.5)
+
+    def test_source_basic_live_configure_v2_dispatches_typed_request(self):
+        payload = {
+            "schema": "wavebench.source.operation.v1",
+            "operation": "source.basic_live_configure_v2",
+        }
+        service = Mock()
+        service.configure_basic_live_v2.return_value = (object(), payload)
+        stdout = io.StringIO()
+
+        with patch("wavebench.cli._load_source_service", return_value=service), redirect_stdout(stdout):
+            code = main(
+                [
+                    "source",
+                    "basic-live-configure-v2",
+                    "--channel",
+                    "2",
+                    "--amplitude-vpp",
+                    "1.5",
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        request = service.configure_basic_live_v2.call_args.args[0]
+        self.assertEqual(request.channel, 2)
+        self.assertEqual(request.patch.amplitude_vpp.value, 1.5)
+        self.assertEqual(json.loads(stdout.getvalue()), payload)
 
     def test_source_harmonics_disable_v2_dispatches_typed_request(self):
         payload = {
