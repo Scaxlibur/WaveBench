@@ -3722,8 +3722,37 @@ Counter 按副作用拆开，而不是继续沿用 V1 的「完整 profile 一�
 
 `AUTO` gate-time、无法精确表达的厂商 preset、HF rejection、sensitivity、statistics display
 和 statistics clear 不进入这组首版合同。前四项需要各自可读的通用状态模型；clear 是
-破坏性动作，必须以后续单独 capability 明确授权。D1-4 只冻结 model、Protocol 和操作
-元数据，不注册 capability、不改变 CLI 或 run schema，也不授权任何真实插件写入。
+破坏性动作，必须以后续单独 capability 明确授权。D1-4 冻结 model、Protocol 和操作
+元数据；D6 在不改变 V1 路由的前提下，逐项注册以下 capability：
+
+```text
+source.counter_configure_v2
+source.counter_enable_v2
+source.counter_measure_v2
+```
+
+### D6 已实现：Counter V2 入口与安全语义
+
+Core 提供四个显式 CLI 入口：
+
+```text
+wavebench source counter-configure-v2 --input-id INPUT_ID <one configuration option>
+wavebench source counter-enable-v2 --input-id INPUT_ID
+wavebench source counter-disable-v2 --input-id INPUT_ID
+wavebench source counter-measure-v2 --input-id INPUT_ID
+```
+
+run plan 对应 `source.counter_configure_v2`、`source.counter_enable_v2`、
+`source.counter_disable_v2` 与 `source.counter_measure_v2`。配置 step 必须恰好指定一个
+字段；measure 只写入该 step 的 `counter_measurement` typed artifact，不伪造 mutation
+artifact，也不写入 `run.json.source_operations`。
+
+Counter 在刚启用或无输入时可能返回暂未形成的零测量。V2 snapshot 将这种已收到但不合法的
+测量标为 `UNAVAILABLE`／`response_invalid_value`，仍保留已读到的 enabled 与配置字段，
+以便安全 disable 事务继续执行。legacy `source.counter_profile` 与
+`source.counter_measure_v2` 保持严格：前者仍拒绝不完整 profile，后者仍只接受有效五元组。
+当 run step 抛出预期的 WaveBench 错误且计划配置了 safety gate 时，Core 先执行已授权的
+输出 OFF，再把失败写入 run artifact。
 
 ### M6-B 已实现：ARB storage 与 selection
 
