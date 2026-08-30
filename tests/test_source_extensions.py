@@ -153,7 +153,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[noise_start + len(noise_exports) :] == match.group(1).splitlines()
+    live_exports = match.group(1).splitlines()
+    live_start = noise_start + len(noise_exports)
+    assert module.__all__[live_start : live_start + len(live_exports)] == live_exports
+    match = re.search(
+        r"D1-3／Burst 与 Sweep fire 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[live_start + len(live_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -237,6 +246,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "timing_readable",
             "gate_readable",
             "triggered_internal_configuration_readable",
+            "triggered_manual_configuration_readable",
         ),
         "SourcePulseCapabilityProfile": (
             "hold_modes",
@@ -366,6 +376,8 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
         "SourceBasicConfigureRequest": ("channel", "patch", "mode"),
         "SourceBasicConfigureResult": ("channel", "basic", "output_enabled"),
         "SourceBasicLiveConfigureResult": ("channel", "basic", "output_enabled"),
+        "SourceFireRequest": ("channel",),
+        "SourceFireResult": ("channel",),
         "SourceOutputRequest": ("channel", "enabled"),
         "SourceOutputResult": (
             "channel",
@@ -395,6 +407,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "phase_deg",
             "internal_period_s",
             "delay_s",
+            "trigger_source",
         ),
         "SourceBurstConfigureResult": ("channel", "burst", "output_enabled"),
         "SourceFmModulationConfigureRequest": (
@@ -417,6 +430,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "spacing",
             "steps",
             "sweep_time_s",
+            "trigger_source",
         ),
         "SourceSweepConfigureResult": ("channel", "basic", "sweep", "output_enabled"),
         "SourcePulseConfigureRequest": (
@@ -622,9 +636,11 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
         "source.burst_configure_v2": ("configure_source_burst_v2",),
+        "source.burst_fire_v2": ("fire_source_burst_v2",),
         "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
             "source.sweep_configure_v2": ("configure_source_sweep_v2",),
+            "source.sweep_fire_v2": ("fire_source_sweep_v2",),
             "source.output_v2": ("set_source_output_v2",),
             "source.arbitrary_storage_v2": (
                 "read_source_arbitrary_storage_v2",
@@ -673,6 +689,11 @@ def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
     assert keep.action is module.PatchAction.KEEP
     assert module.SourceBasicConfigureResult(1, basic_facet(), False).output_enabled is False
     assert module.SourceBasicLiveConfigureResult(1, basic_facet(), True).output_enabled is True
+    assert module.source_v2_to_data(module.SourceFireRequest(1)) == {
+        "type": "SourceFireRequest",
+        "channel": 1,
+    }
+    assert module.SourceFireResult(1).channel == 1
     assert module.SourceOutputResult(1, False) == module.SourceOutputResult(1, False)
 
     with pytest.raises(ValueError, match="SET patch values"):
@@ -958,15 +979,25 @@ def test_source_v2_burst_write_models_are_closed_and_serializable() -> None:
         "phase_deg": 30.0,
         "internal_period_s": 0.25,
         "delay_s": 0.5,
+        "trigger_source": "internal",
     }
     assert result.burst.mode.value is module.SourceBurstMode.TRIGGERED
     with pytest.raises(ValueError, match="must be <= 500000"):
         module.SourceBurstConfigureRequest(1, 500_001, 30.0, 0.25, 0.5)
     with pytest.raises(ValueError, match="must be > 0"):
         module.SourceBurstConfigureRequest(1, 12, 30.0, 0.0, 0.5)
+    with pytest.raises(ValueError, match="internal or manual"):
+        module.SourceBurstConfigureRequest(
+            1,
+            12,
+            30.0,
+            0.25,
+            0.5,
+            module.SourceTriggerSource.EXTERNAL,
+        )
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceBurstConfigureResult(1, burst, True)
-    with pytest.raises(ValueError, match="internal trigger readback"):
+    with pytest.raises(ValueError, match="internal or manual trigger readback"):
         module.SourceBurstConfigureResult(
             1,
             replace(
@@ -1161,6 +1192,7 @@ def test_source_v2_sweep_write_models_are_closed_and_serializable() -> None:
         "spacing": "linear",
         "steps": 101,
         "sweep_time_s": 1.0,
+        "trigger_source": "internal",
     }
     assert result.sweep.spacing.value is module.SourceSweepSpacing.LINEAR
     with pytest.raises(ValueError, match="start_hz must be > 0"):
@@ -1189,6 +1221,16 @@ def test_source_v2_sweep_write_models_are_closed_and_serializable() -> None:
             module.SourceSweepSpacing.LINEAR,
             2_049,
             1.0,
+        )
+    with pytest.raises(ValueError, match="internal or manual"):
+        module.SourceSweepConfigureRequest(
+            1,
+            100.0,
+            1_000.0,
+            module.SourceSweepSpacing.LINEAR,
+            101,
+            1.0,
+            module.SourceTriggerSource.BUS,
         )
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceSweepConfigureResult(1, basic, sweep, True)
@@ -2614,7 +2656,7 @@ def test_source_v2_pulse_write_requires_width_direction_and_readback() -> None:
         )
 
 
-def test_source_v2_burst_write_requires_triggered_internal_direction_and_readback() -> None:
+def test_source_v2_burst_write_requires_supported_trigger_direction_and_readback() -> None:
     extensions = source_extensions()
     basic, output = extensions.features
     burst = module.SourceFeatureCapability(
@@ -2681,7 +2723,7 @@ def test_source_v2_burst_write_requires_triggered_internal_direction_and_readbac
                 ),
             )
         )
-    with pytest.raises(ConfigError, match="readable internal triggered burst configuration"):
+    with pytest.raises(ConfigError, match="readable internal or manual triggered burst"):
         validate_source_descriptor(
             replace(
                 descriptor,
@@ -2729,7 +2771,7 @@ def test_source_v2_burst_write_requires_triggered_internal_direction_and_readbac
         )
 
 
-def test_source_v2_sweep_write_requires_internal_direction_and_readback() -> None:
+def test_source_v2_sweep_write_requires_supported_trigger_direction_and_readback() -> None:
     extensions = source_extensions()
     basic, output = extensions.features
     basic = replace(
@@ -2810,7 +2852,7 @@ def test_source_v2_sweep_write_requires_internal_direction_and_readback() -> Non
                 ),
             )
         )
-    with pytest.raises(ConfigError, match="readable internal sweep configuration"):
+    with pytest.raises(ConfigError, match="readable internal or manual sweep configuration"):
         validate_source_descriptor(
             replace(
                 descriptor,

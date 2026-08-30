@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from hashlib import sha256
 from math import isfinite
 import time
@@ -78,6 +78,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT,
     SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_CONTRACT_VERSION,
@@ -92,6 +93,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT,
     SOURCE_TRACKING_CONFIGURE_V2_OPERATION_CONTRACT,
     SnapshotConsistencyState,
     SourceDescriptorExtensions,
@@ -117,6 +119,7 @@ from wavebench.instruments.source_extensions import (
     SourceBurstConfigureRequest,
     SourceBurstConfigureResult,
     SourceBurstConfigureV2Driver,
+    SourceBurstFireV2Driver,
     SourceBurstMode,
     SourceCombineConfigureRequest,
     SourceCombineConfigureV2Driver,
@@ -135,6 +138,8 @@ from wavebench.instruments.source_extensions import (
     SourceFmModulationConfigureRequest,
     SourceFmModulationConfigureResult,
     SourceFmModulationConfigureV2Driver,
+    SourceFireRequest,
+    SourceFireResult,
     SourceHarmonicCapabilityProfile,
     SourceHarmonicDisableRequest,
     SourceHarmonicDisableResult,
@@ -173,6 +178,7 @@ from wavebench.instruments.source_extensions import (
     SourceSweepConfigureRequest,
     SourceSweepConfigureResult,
     SourceSweepConfigureV2Driver,
+    SourceSweepFireV2Driver,
     SourceSweepMarker,
     SourceSnapshotV2,
     SourceSnapshotV2Driver,
@@ -309,6 +315,15 @@ class _SourceBurstConfigureV2Transaction:
 
 
 @dataclass(frozen=True, slots=True)
+class _SourceFireV2Transaction:
+    """Core transaction result shared by Burst and Sweep fire routes."""
+
+    result: SourceFireResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
 class _SourcePulseConfigureV2Transaction:
     """Core transaction result shared by the WIDTH Pulse public route."""
 
@@ -376,6 +391,12 @@ class SourceService(SessionStateAliasMixin):
     session_state: InstrumentSessionState | None = None
     lease: ResourceLease | None = None
     state_guard: SourceStateGuard | None = None
+    _v2_fire_receipts: dict[tuple[SourceFeature, int, str], str] = dataclass_field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def _require(self, operation: str, *capabilities: str) -> None:
         source = self._source_config()
@@ -424,6 +445,49 @@ class SourceService(SessionStateAliasMixin):
             "source.basic_configure_v2",
             "source.output_v2",
         }.issubset(capabilities)
+
+    def _clear_source_v2_fire_receipt(
+        self,
+        feature: SourceFeature,
+        channel: int,
+    ) -> None:
+        for receipt in tuple(self._v2_fire_receipts):
+            if receipt[:2] == (feature, channel):
+                del self._v2_fire_receipts[receipt]
+
+    def _record_source_v2_fire_receipt(
+        self,
+        feature: SourceFeature,
+        channel: int,
+        feature_state: BurstFacet | SweepFacet,
+    ) -> None:
+        session_state = self.session_state
+        if self.session is None or session_state is None:
+            return
+        self._v2_fire_receipts[(feature, channel, session_state.epoch_id)] = (
+            source_v2_digest(feature_state)
+        )
+
+    def _require_source_v2_fire_receipt(
+        self,
+        feature: SourceFeature,
+        channel: int,
+        *,
+        operation: str,
+    ) -> str:
+        if self.session is None:
+            raise ConfigError(f"{operation} requires a persistent source session")
+        session_state = self.session_state
+        if session_state is None:
+            raise ConfigError(f"{operation} requires a connection-bound session state")
+        receipt = self._v2_fire_receipts.get(
+            (feature, channel, session_state.epoch_id)
+        )
+        if receipt is None:
+            raise ConfigError(
+                f"{operation} requires {feature.value} configuration from the same session"
+            )
+        return receipt
 
     def _reject_v1_route_for_source_v2(
         self,
@@ -666,8 +730,32 @@ class SourceService(SessionStateAliasMixin):
     ) -> tuple[SourceSweepConfigureResult, dict[str, object]]:
         """Configure one OFF source channel with the declared internal Sweep scope."""
 
-        transaction = self._configure_sweep_v2_transaction(
+        if isinstance(request, SourceSweepConfigureRequest):
+            self._clear_source_v2_fire_receipt(SourceFeature.SWEEP, request.channel)
+        transaction = self._configure_sweep_v2_transaction(request, correlation_id=correlation_id)
+        _, configured_sweep, _ = self._source_v2_sweep_target(
+            transaction.snapshot,
+            transaction.result.channel,
+            operation="source.sweep_configure_v2",
+        )
+        self._record_source_v2_fire_receipt(
+            SourceFeature.SWEEP,
+            transaction.result.channel,
+            configured_sweep,
+        )
+        return transaction.result, transaction.artifact
+
+    def fire_sweep_v2(
+        self,
+        request: SourceFireRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceFireResult, dict[str, object]]:
+        """Fire one configured internal Sweep on its persistent source session."""
+
+        transaction = self._fire_source_v2_transaction(
             request,
+            feature=SourceFeature.SWEEP,
             correlation_id=correlation_id,
         )
         return transaction.result, transaction.artifact
@@ -680,8 +768,32 @@ class SourceService(SessionStateAliasMixin):
     ) -> tuple[SourceBurstConfigureResult, dict[str, object]]:
         """Configure one OFF source channel with the internal Triggered Burst scope."""
 
-        transaction = self._configure_burst_v2_transaction(
+        if isinstance(request, SourceBurstConfigureRequest):
+            self._clear_source_v2_fire_receipt(SourceFeature.BURST, request.channel)
+        transaction = self._configure_burst_v2_transaction(request, correlation_id=correlation_id)
+        configured_burst, _ = self._source_v2_burst_target(
+            transaction.snapshot,
+            transaction.result.channel,
+            operation="source.burst_configure_v2",
+        )
+        self._record_source_v2_fire_receipt(
+            SourceFeature.BURST,
+            transaction.result.channel,
+            configured_burst,
+        )
+        return transaction.result, transaction.artifact
+
+    def fire_burst_v2(
+        self,
+        request: SourceFireRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceFireResult, dict[str, object]]:
+        """Fire one configured internal Burst on its persistent source session."""
+
+        transaction = self._fire_source_v2_transaction(
             request,
+            feature=SourceFeature.BURST,
             correlation_id=correlation_id,
         )
         return transaction.result, transaction.artifact
@@ -2942,6 +3054,251 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _fire_source_v2_transaction(
+        self,
+        request: SourceFireRequest,
+        *,
+        feature: SourceFeature,
+        correlation_id: str | None = None,
+    ) -> _SourceFireV2Transaction:
+        """Fire one configured Burst or Sweep without retrying the command."""
+
+        if feature is SourceFeature.BURST:
+            operation = "source.burst_fire_v2"
+            capability = "source.burst_fire_v2"
+            configure_capability = "source.burst_configure_v2"
+            contract = SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT
+            feature_field_id = SourceFieldId.BURST
+        elif feature is SourceFeature.SWEEP:
+            operation = "source.sweep_fire_v2"
+            capability = "source.sweep_fire_v2"
+            configure_capability = "source.sweep_configure_v2"
+            contract = SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT
+            feature_field_id = SourceFieldId.SWEEP
+        else:  # pragma: no cover - private callers pass one of the two declared features.
+            raise ValueError("source fire feature must be Burst or Sweep")
+        if not isinstance(request, SourceFireRequest):
+            raise ConfigError(f"{operation} requires SourceFireRequest")
+        self._require(
+            operation,
+            "source.snapshot_v2",
+            capability,
+            configure_capability,
+            "source.output_v2",
+        )
+        configuration_digest = self._require_source_v2_fire_receipt(
+            feature,
+            request.channel,
+            operation=operation,
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            fields = self._source_fire_v2_fields(request.channel, feature_field_id)
+            feature_field = next(field for field in fields if field.field is feature_field_id)
+            output_field = next(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            target_scope = SourceScopeRef(
+                SourceFacetScope.CHANNEL,
+                channel=request.channel,
+            )
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=contract,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(),
+                emergency_off_outputs=(target_scope,),
+                restore_order=(),
+                non_restorable_fields=tuple(
+                    item
+                    for item in fields
+                    if item.field in {feature_field_id, SourceFieldId.OUTPUT}
+                ),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceFireResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    preflight_basic, preflight_feature, preflight_output = (
+                        self._source_v2_fire_target(
+                            preflight_snapshot,
+                            request.channel,
+                            feature=feature,
+                            operation=operation,
+                        )
+                    )
+                    self._validate_source_fire_v2_preflight(
+                        request,
+                        feature=feature,
+                        snapshot=preflight_snapshot,
+                        basic=preflight_basic,
+                        feature_state=preflight_feature,
+                        output=preflight_output,
+                        configuration_digest=configuration_digest,
+                        operation=operation,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest(
+                            (
+                                request.channel,
+                                preflight_basic,
+                                preflight_feature,
+                                preflight_output,
+                            )
+                        )
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write"},
+                    fields=(feature_field,),
+                    max_steps=contract.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        if feature is SourceFeature.BURST:
+                            result = cast(
+                                SourceBurstFireV2Driver,
+                                source,
+                            ).fire_source_burst_v2(request)
+                        else:
+                            result = cast(
+                                SourceSweepFireV2Driver,
+                                source,
+                            ).fire_source_sweep_v2(request)
+                        self._validate_source_fire_v2_result(
+                            request,
+                            result,
+                            operation=operation,
+                        )
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=fields,
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            post_basic, post_feature, post_output = (
+                                self._source_v2_fire_target(
+                                    postcondition_snapshot,
+                                    request.channel,
+                                    feature=feature,
+                                    operation=operation,
+                                )
+                            )
+                            self._validate_source_fire_v2_postcondition(
+                                request,
+                                feature=feature,
+                                snapshot=postcondition_snapshot,
+                                basic=post_basic,
+                                feature_state=post_feature,
+                                output=post_output,
+                                configuration_digest=configuration_digest,
+                                operation=operation,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=fields,
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        self._clear_source_v2_fire_receipt(feature, request.channel)
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_output_off(
+                                context,
+                                source,
+                                request.channel,
+                                extensions,
+                                output_field,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_fire_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            feature=feature,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceFireV2Transaction(
+                    result=result,
+                    artifact=self._source_fire_v2_artifact(
+                        context=context,
+                        request=request,
+                        feature=feature,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
     def _configure_pulse_v2_transaction(
         self,
         request: SourcePulseConfigureRequest,
@@ -4424,6 +4781,36 @@ class SourceService(SessionStateAliasMixin):
         )
 
     @staticmethod
+    def _source_fire_v2_fields(
+        channel: int,
+        feature_field: SourceFieldId,
+    ) -> tuple[SourceFieldRef, ...]:
+        if feature_field not in {SourceFieldId.BURST, SourceFieldId.SWEEP}:
+            raise ValueError("source fire field must be Burst or Sweep")
+        target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+        fields = (
+            SourceFieldRef(SourceFieldId.BASIC, target),
+            SourceFieldRef(feature_field, target),
+            SourceFieldRef(SourceFieldId.OUTPUT, target),
+            SourceFieldRef(
+                SourceFieldId.IDENTITY,
+                SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda item: (
+                    item.field.value,
+                    item.target.scope.value,
+                    -1 if item.target.channel is None else item.target.channel,
+                    item.target.channels,
+                    "" if item.target.input_id is None else item.target.input_id,
+                ),
+            )
+        )
+
+    @staticmethod
     def _source_pulse_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
         target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
         fields = (
@@ -4674,6 +5061,34 @@ class SourceService(SessionStateAliasMixin):
         ):
             raise ConfigError(f"{operation} requires readable output state")
         return target.basic.value, target.sweep.value, target.output.value
+
+    def _source_v2_fire_target(
+        self,
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        *,
+        feature: SourceFeature,
+        operation: str,
+    ) -> tuple[BasicWaveFacet, BurstFacet | SweepFacet, OutputFacet]:
+        if feature is SourceFeature.SWEEP:
+            return self._source_v2_sweep_target(
+                snapshot,
+                channel,
+                operation=operation,
+            )
+        if feature is SourceFeature.BURST:
+            basic, output = self._source_v2_target(
+                snapshot,
+                channel,
+                operation=operation,
+            )
+            burst, _ = self._source_v2_burst_target(
+                snapshot,
+                channel,
+                operation=operation,
+            )
+            return basic, burst, output
+        raise ValueError("source fire feature must be Burst or Sweep")
 
     @staticmethod
     def _source_v2_arbitrary_target(
@@ -5722,6 +6137,7 @@ class SourceService(SessionStateAliasMixin):
         *,
         channel: int,
         operation: str,
+        direction: SourceFeatureDirection = SourceFeatureDirection.CONFIGURE,
     ) -> SourceSweepCapabilityProfile:
         feature = next(
             (
@@ -5731,7 +6147,7 @@ class SourceService(SessionStateAliasMixin):
                 and candidate.scope is SourceFacetScope.CHANNEL
                 and channel in candidate.channels
                 and candidate.support is SupportState.SUPPORTED
-                and SourceFeatureDirection.CONFIGURE in candidate.directions
+                and direction in candidate.directions
             ),
             None,
         )
@@ -5783,8 +6199,10 @@ class SourceService(SessionStateAliasMixin):
         )
         if request.spacing not in profile.spacing_modes:
             raise ConfigError(f"{operation} spacing is not supported by the runtime profile")
-        if SourceTriggerSource.INTERNAL not in profile.trigger_sources:
-            raise ConfigError(f"{operation} internal trigger is not supported by the runtime profile")
+        if request.trigger_source not in profile.trigger_sources:
+            raise ConfigError(
+                f"{operation} requested trigger source is not supported by the runtime profile"
+            )
         if not profile.timing_readable or not profile.marker_readable:
             raise ConfigError(f"{operation} requires sweep timing and marker readback")
         if not profile.configuration_readable:
@@ -5836,9 +6254,9 @@ class SourceService(SessionStateAliasMixin):
         trigger = sweep.trigger.value
         if (
             trigger.source.availability is not Availability.VALUE
-            or trigger.source.value is not SourceTriggerSource.INTERNAL
+            or trigger.source.value is not request.trigger_source
         ):
-            raise ConfigError(f"{operation} trigger source does not match scope")
+            raise ConfigError(f"{operation} trigger source does not match request")
         if (
             trigger.slope.availability is not Availability.VALUE
             or trigger.slope.value is not SourceTriggerSlope.POSITIVE
@@ -6197,6 +6615,7 @@ class SourceService(SessionStateAliasMixin):
         *,
         channel: int,
         operation: str,
+        direction: SourceFeatureDirection = SourceFeatureDirection.CONFIGURE,
     ) -> SourceBurstCapabilityProfile:
         feature = next(
             (
@@ -6206,7 +6625,7 @@ class SourceService(SessionStateAliasMixin):
                 and candidate.scope is SourceFacetScope.CHANNEL
                 and channel in candidate.channels
                 and candidate.support is SupportState.SUPPORTED
-                and SourceFeatureDirection.CONFIGURE in candidate.directions
+                and direction in candidate.directions
             ),
             None,
         )
@@ -6234,12 +6653,22 @@ class SourceService(SessionStateAliasMixin):
         )
         if SourceBurstMode.TRIGGERED not in profile.modes:
             raise ConfigError(f"{operation} triggered mode is not supported by the runtime profile")
-        if SourceTriggerSource.INTERNAL not in profile.trigger_sources:
-            raise ConfigError(f"{operation} internal trigger is not supported by the runtime profile")
+        if request.trigger_source not in profile.trigger_sources:
+            raise ConfigError(
+                f"{operation} requested trigger source is not supported by the runtime profile"
+            )
         if not profile.timing_readable:
             raise ConfigError(f"{operation} requires burst timing readback")
-        if not profile.triggered_internal_configuration_readable:
-            raise ConfigError(f"{operation} requires configured internal triggered burst readback")
+        configuration_readable = (
+            profile.triggered_internal_configuration_readable
+            if request.trigger_source is SourceTriggerSource.INTERNAL
+            else profile.triggered_manual_configuration_readable
+        )
+        if not configuration_readable:
+            raise ConfigError(
+                f"{operation} requires configured {request.trigger_source.value} "
+                "triggered burst readback"
+            )
 
     @staticmethod
     def _validate_source_burst_v2_readback(
@@ -6271,9 +6700,9 @@ class SourceService(SessionStateAliasMixin):
         trigger = burst.trigger.value
         if (
             trigger.source.availability is not Availability.VALUE
-            or trigger.source.value is not SourceTriggerSource.INTERNAL
+            or trigger.source.value is not request.trigger_source
         ):
-            raise ConfigError(f"{operation} trigger source does not match scope")
+            raise ConfigError(f"{operation} trigger source does not match request")
         if (
             trigger.slope.availability is not Availability.VALUE
             or trigger.slope.value is not SourceTriggerSlope.POSITIVE
@@ -6320,6 +6749,111 @@ class SourceService(SessionStateAliasMixin):
         if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
             raise ConfigError(f"{operation} postcondition reports output ON")
         self._validate_source_burst_v2_readback(request, burst, operation=operation)
+
+    def _validate_source_fire_v2_preflight(
+        self,
+        request: SourceFireRequest,
+        *,
+        feature: SourceFeature,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        feature_state: BurstFacet | SweepFacet,
+        output: OutputFacet,
+        configuration_digest: str,
+        operation: str,
+    ) -> None:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not True:
+            raise ConfigError(f"{operation} requires target output ON")
+        if feature is SourceFeature.BURST:
+            if not isinstance(feature_state, BurstFacet):
+                raise ConfigError(f"{operation} requires readable burst state")
+            profile = self._source_burst_runtime_profile(
+                snapshot,
+                channel=request.channel,
+                operation=operation,
+                direction=SourceFeatureDirection.FIRE,
+            )
+            if (
+                SourceBurstMode.TRIGGERED not in profile.modes
+                or SourceTriggerSource.MANUAL not in profile.trigger_sources
+                or not profile.timing_readable
+                or not profile.triggered_manual_configuration_readable
+            ):
+                raise ConfigError(f"{operation} runtime Burst profile cannot prove fire scope")
+        elif feature is SourceFeature.SWEEP:
+            if not isinstance(feature_state, SweepFacet):
+                raise ConfigError(f"{operation} requires readable sweep state")
+            profile = self._source_sweep_runtime_profile(
+                snapshot,
+                channel=request.channel,
+                operation=operation,
+                direction=SourceFeatureDirection.FIRE,
+            )
+            if (
+                SourceTriggerSource.MANUAL not in profile.trigger_sources
+                or not profile.timing_readable
+                or not profile.marker_readable
+                or not profile.configuration_readable
+            ):
+                raise ConfigError(f"{operation} runtime Sweep profile cannot prove fire scope")
+            if (
+                basic.frequency_mode.availability is not Availability.VALUE
+                or basic.frequency_mode.value is not SourceFrequencyMode.SWEEP
+            ):
+                raise ConfigError(f"{operation} requires sweep frequency mode")
+        else:  # pragma: no cover - private callers pass one of the two declared features.
+            raise ValueError("source fire feature must be Burst or Sweep")
+        trigger = feature_state.trigger
+        if (
+            trigger.availability is not Availability.VALUE
+            or not isinstance(trigger.value, SourceTriggerState)
+            or trigger.value.source.availability is not Availability.VALUE
+            or trigger.value.source.value is not SourceTriggerSource.MANUAL
+        ):
+            raise ConfigError(f"{operation} requires manual trigger source")
+        if source_v2_digest(feature_state) != configuration_digest:
+            raise ConfigError(
+                f"{operation} configured feature state no longer matches the same-session receipt"
+            )
+        vpp, offset = self._source_v2_amplitude_offset(basic, operation=operation)
+        self._check_source_v2_final_output_limits(vpp, offset, operation=operation)
+
+    @staticmethod
+    def _validate_source_fire_v2_result(
+        request: SourceFireRequest,
+        result: object,
+        *,
+        operation: str,
+    ) -> None:
+        if not isinstance(result, SourceFireResult):
+            raise ConfigError(f"{operation} driver returned an invalid SourceFireResult")
+        if result.channel != request.channel:
+            raise ConfigError(f"{operation} result channel does not match request")
+
+    def _validate_source_fire_v2_postcondition(
+        self,
+        request: SourceFireRequest,
+        *,
+        feature: SourceFeature,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        feature_state: BurstFacet | SweepFacet,
+        output: OutputFacet,
+        configuration_digest: str,
+        operation: str,
+    ) -> None:
+        self._validate_source_fire_v2_preflight(
+            request,
+            feature=feature,
+            snapshot=snapshot,
+            basic=basic,
+            feature_state=feature_state,
+            output=output,
+            configuration_digest=configuration_digest,
+            operation=operation,
+        )
 
     @staticmethod
     def _source_pulse_runtime_profile(
@@ -7345,7 +7879,11 @@ class SourceService(SessionStateAliasMixin):
             "contract_version": SOURCE_CONTRACT_VERSION,
             "descriptor_digest": descriptor_digest,
         }
-        artifact["request"] = source_v2_to_data(request)
+        request_data = cast(dict[str, object], source_v2_to_data(request))
+        if request.trigger_source is SourceTriggerSource.INTERNAL:
+            request_data = dict(request_data)
+            request_data.pop("trigger_source", None)
+        artifact["request"] = request_data
         if preflight_snapshot is not None:
             artifact["preflight"] = {
                 "target_channel": request.channel,
@@ -7518,7 +8056,11 @@ class SourceService(SessionStateAliasMixin):
             "contract_version": SOURCE_CONTRACT_VERSION,
             "descriptor_digest": descriptor_digest,
         }
-        artifact["request"] = source_v2_to_data(request)
+        request_data = cast(dict[str, object], source_v2_to_data(request))
+        if request.trigger_source is SourceTriggerSource.INTERNAL:
+            request_data = dict(request_data)
+            request_data.pop("trigger_source", None)
+        artifact["request"] = request_data
         if preflight_snapshot is not None:
             artifact["preflight"] = {
                 "target_channel": request.channel,
@@ -7547,6 +8089,72 @@ class SourceService(SessionStateAliasMixin):
                     else preflight_snapshot.runtime_profile.features
                 )
                 for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
+    def _source_fire_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceFireRequest,
+        feature: SourceFeature,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceFireResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        capability = (
+            "source.burst_fire_v2"
+            if feature is SourceFeature.BURST
+            else "source.sweep_fire_v2"
+        )
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": capability,
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        artifact["persistent_session_verified"] = True
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_channel": request.channel,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {
+                "result": source_v2_to_data(result),
+                "command_completed": True,
+            }
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+                "emission_verified": False,
+                "external_measurement_required": True,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "output_expected": "off" if recovery is not None else "on",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for declared_feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in declared_feature.evidence_refs
             }
         )
         return artifact
@@ -7856,6 +8464,16 @@ class SourceService(SessionStateAliasMixin):
     ) -> None:
         try:
             setattr(exc, "source_operation_artifact", self._source_burst_v2_artifact(**kwargs))
+        except Exception:
+            pass
+
+    def _attach_source_fire_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(exc, "source_operation_artifact", self._source_fire_v2_artifact(**kwargs))
         except Exception:
             pass
 
@@ -8281,6 +8899,9 @@ class SourceService(SessionStateAliasMixin):
     def trigger_burst(self, channel: int | None = None) -> None:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.burst_fire_v2"):
+            self.fire_burst_v2(SourceFireRequest(channel=channel))
+            return
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.TRIGGER_BURST,
             "source.output_v2",
@@ -8347,6 +8968,9 @@ class SourceService(SessionStateAliasMixin):
     def trigger_sweep(self, channel: int | None = None) -> None:
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
+        if self._declares_source_v2_capability("source.sweep_fire_v2"):
+            self.fire_sweep_v2(SourceFireRequest(channel=channel))
+            return
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.TRIGGER_SWEEP,
             "source.output_v2",

@@ -443,6 +443,59 @@ def test_unknown_effect_and_reenergizing_restore_are_rejected_without_io() -> No
     assert transport.audit_snapshot()["counters"]["query_calls"] == 0
 
 
+def test_fire_effect_allows_output_on_baseline_but_requires_emergency_off() -> None:
+    transport = GuardedAuditedTransport(_TextTransport())  # type: ignore[arg-type]
+    contract = SourceOperationContract(
+        operation="source.test_fire_v2",
+        capability="source.test_fire_v2",
+        feature=SourceFeature.BASIC,
+        direction=SourceFeatureDirection.FIRE,
+        energy_effect=SourceEnergyEffect.EMIT,
+        storage_effect=SourceStorageEffect.NONE,
+        required_fields=(
+            SourceFieldId.BASIC,
+            SourceFieldId.OUTPUT,
+            SourceFieldId.IDENTITY,
+        ),
+        changed_fields=(SourceFieldId.BASIC,),
+        postcondition_fields=(SourceFieldId.BASIC,),
+        cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+        v1_equivalent_routes=(SourceV1WriteRouteId.SET_FREQUENCY,),
+        v1_overlapping_routes=(),
+        operation_timeout_ms=5_000,
+        main_max_steps=1,
+        recovery_max_steps=1,
+        verification_max_steps=2,
+    )
+    context = SourceOperationContextCoordinator(
+        session_state=transport.session_state,
+        operation_spec=_spec(contract),
+        operation_contract=contract,
+        connection_timeout_ms=1_000,
+        baseline_snapshot_digest="sha256:" + "1" * 64,
+        fields=FIELDS,
+        required_off_outputs=(),
+        emergency_off_outputs=(SourceScopeRef(SourceFacetScope.CHANNEL, channel=1),),
+        restore_order=(),
+        non_restorable_fields=(BASIC, OUTPUT),
+    )
+    context.complete()
+
+    with pytest.raises(ValueError, match="fire operations require explicit emergency OFF"):
+        SourceOperationContextCoordinator(
+            session_state=transport.session_state,
+            operation_spec=_spec(contract),
+            operation_contract=contract,
+            connection_timeout_ms=1_000,
+            baseline_snapshot_digest="sha256:" + "1" * 64,
+            fields=FIELDS,
+            required_off_outputs=(),
+            emergency_off_outputs=(),
+            restore_order=(),
+            non_restorable_fields=(BASIC, OUTPUT),
+        )
+
+
 def test_affected_closure_digest_rejects_tampering() -> None:
     transport, context = _context()
     closure = context.closure

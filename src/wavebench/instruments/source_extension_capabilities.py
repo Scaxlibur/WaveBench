@@ -59,9 +59,11 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
         "source.burst_configure_v2": ("configure_source_burst_v2",),
+        "source.burst_fire_v2": ("fire_source_burst_v2",),
         "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
         "source.sweep_configure_v2": ("configure_source_sweep_v2",),
+        "source.sweep_fire_v2": ("fire_source_sweep_v2",),
         "source.output_v2": ("set_source_output_v2",),
         "source.arbitrary_storage_v2": (
             "read_source_arbitrary_storage_v2",
@@ -87,9 +89,11 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.pulse_configure_v2",
         "source.modulation_pm_configure_v2",
         "source.burst_configure_v2",
+        "source.burst_fire_v2",
         "source.modulation_fm_configure_v2",
         "source.modulation_pwm_configure_v2",
         "source.sweep_configure_v2",
+        "source.sweep_fire_v2",
         "source.output_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
@@ -557,15 +561,40 @@ def _validate_write_contract(
             raise ConfigError(
                 "source.burst_configure_v2 requires burst feature CONFIGURE directions"
             )
-        readable = _channels_with_burst_triggered_internal_configuration_readback(extensions)
+        readable = _channels_with_burst_triggered_configuration_readback(extensions)
         if not configurable <= readable:
             raise ConfigError(
-                "source.burst_configure_v2 requires readable internal triggered burst "
+                "source.burst_configure_v2 requires readable internal or manual triggered burst "
                 "configuration on every channel"
             )
         if not configurable <= output_readable:
             raise ConfigError(
                 "source.burst_configure_v2 requires readable output state on every channel"
+            )
+
+    if "source.burst_fire_v2" in capabilities:
+        required = {"source.burst_configure_v2", "source.output_v2"}
+        if not required <= capabilities:
+            raise ConfigError(
+                "source.burst_fire_v2 requires source.burst_configure_v2 and source.output_v2"
+            )
+        fireable = _channels_with_direction(
+            extensions,
+            SourceFeature.BURST,
+            SourceFeatureDirection.FIRE,
+        )
+        readable = _channels_with_burst_triggered_configuration_readback(
+            extensions,
+            trigger_source=SourceTriggerSource.MANUAL,
+        )
+        if not fireable or not fireable <= readable:
+            raise ConfigError(
+                "source.burst_fire_v2 requires readable manual triggered burst "
+                "configuration on every FIRE channel"
+            )
+        if not fireable <= basic_readable or not fireable <= output_readable:
+            raise ConfigError(
+                "source.burst_fire_v2 requires readable final VPP, Offset and output state"
             )
 
     if "source.sweep_configure_v2" in capabilities:
@@ -581,12 +610,37 @@ def _validate_write_contract(
         readable = _channels_with_sweep_configuration_readback(extensions)
         if not configurable <= readable:
             raise ConfigError(
-                "source.sweep_configure_v2 requires readable internal sweep configuration "
+                "source.sweep_configure_v2 requires readable internal or manual sweep configuration "
                 "and sweep frequency mode on every channel"
             )
         if not configurable <= output_readable:
             raise ConfigError(
                 "source.sweep_configure_v2 requires readable output state on every channel"
+            )
+
+    if "source.sweep_fire_v2" in capabilities:
+        required = {"source.sweep_configure_v2", "source.output_v2"}
+        if not required <= capabilities:
+            raise ConfigError(
+                "source.sweep_fire_v2 requires source.sweep_configure_v2 and source.output_v2"
+            )
+        fireable = _channels_with_direction(
+            extensions,
+            SourceFeature.SWEEP,
+            SourceFeatureDirection.FIRE,
+        )
+        readable = _channels_with_sweep_configuration_readback(
+            extensions,
+            trigger_source=SourceTriggerSource.MANUAL,
+        )
+        if not fireable or not fireable <= readable:
+            raise ConfigError(
+                "source.sweep_fire_v2 requires readable manual sweep configuration "
+                "on every FIRE channel"
+            )
+        if not fireable <= basic_readable or not fireable <= output_readable:
+            raise ConfigError(
+                "source.sweep_fire_v2 requires readable final VPP, Offset and output state"
             )
 
     if "source.arbitrary_storage_v2" in capabilities:
@@ -962,9 +1016,16 @@ def _channels_with_pulse_width_configuration_readback(
     )
 
 
-def _channels_with_burst_triggered_internal_configuration_readback(
+def _channels_with_burst_triggered_configuration_readback(
     extensions: SourceDescriptorExtensions,
+    *,
+    trigger_source: SourceTriggerSource | None = None,
 ) -> frozenset[int]:
+    allowed_sources = (
+        {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
+        if trigger_source is None
+        else {trigger_source}
+    )
     return frozenset(
         channel
         for feature in extensions.features
@@ -975,9 +1036,19 @@ def _channels_with_burst_triggered_internal_configuration_readback(
             and SourceFeatureDirection.READ in feature.directions
             and isinstance(feature.profile, SourceBurstCapabilityProfile)
             and SourceBurstMode.TRIGGERED in feature.profile.modes
-            and SourceTriggerSource.INTERNAL in feature.profile.trigger_sources
             and feature.profile.timing_readable
-            and feature.profile.triggered_internal_configuration_readable
+            and (
+                (
+                    SourceTriggerSource.INTERNAL in allowed_sources
+                    and SourceTriggerSource.INTERNAL in feature.profile.trigger_sources
+                    and feature.profile.triggered_internal_configuration_readable
+                )
+                or (
+                    SourceTriggerSource.MANUAL in allowed_sources
+                    and SourceTriggerSource.MANUAL in feature.profile.trigger_sources
+                    and feature.profile.triggered_manual_configuration_readable
+                )
+            )
         )
         for channel in feature.channels
     )
@@ -985,7 +1056,14 @@ def _channels_with_burst_triggered_internal_configuration_readback(
 
 def _channels_with_sweep_configuration_readback(
     extensions: SourceDescriptorExtensions,
+    *,
+    trigger_source: SourceTriggerSource | None = None,
 ) -> frozenset[int]:
+    allowed_sources = (
+        {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
+        if trigger_source is None
+        else {trigger_source}
+    )
     sweep_channels = frozenset(
         channel
         for feature in extensions.features
@@ -996,7 +1074,10 @@ def _channels_with_sweep_configuration_readback(
             and SourceFeatureDirection.READ in feature.directions
             and isinstance(feature.profile, SourceSweepCapabilityProfile)
             and bool(feature.profile.spacing_modes)
-            and SourceTriggerSource.INTERNAL in feature.profile.trigger_sources
+            and any(
+                source in feature.profile.trigger_sources
+                for source in allowed_sources
+            )
             and feature.profile.timing_readable
             and feature.profile.marker_readable
             and feature.profile.configuration_readable
@@ -1114,8 +1195,14 @@ def _validate_declared_write_directions(
         (SourceFeature.BURST, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.burst_configure_v2"}
         ),
+        (SourceFeature.BURST, SourceFeatureDirection.FIRE): frozenset(
+            {"source.burst_fire_v2"}
+        ),
         (SourceFeature.SWEEP, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.sweep_configure_v2"}
+        ),
+        (SourceFeature.SWEEP, SourceFeatureDirection.FIRE): frozenset(
+            {"source.sweep_fire_v2"}
         ),
         (SourceFeature.ARBITRARY, SourceFeatureDirection.CONFIGURE): frozenset(
             {

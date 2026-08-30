@@ -30,6 +30,8 @@ from wavebench.instruments.source_extensions import (
     SourceFeatureCapability,
     SourceFeatureDirection,
     SourceFieldId,
+    SourceFireRequest,
+    SourceFireResult,
     SourceFrequencyMode,
     SourceOutputPolarity,
     SourceOutputRequest,
@@ -91,6 +93,7 @@ def _sweep(
     spacing: SourceSweepSpacing = SourceSweepSpacing.LINEAR,
     steps: int = 101,
     sweep_time_s: float = 1.0,
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL,
 ) -> SweepFacet:
     return SweepFacet(
         enabled=Observed.value_of(enabled),
@@ -104,7 +107,7 @@ def _sweep(
         return_time_s=Observed.value_of(0.0),
         trigger=Observed.value_of(
             SourceTriggerState(
-                source=Observed.value_of(SourceTriggerSource.INTERNAL),
+                source=Observed.value_of(trigger_source),
                 slope=Observed.value_of(SourceTriggerSlope.POSITIVE),
                 output=Observed.value_of(SourceTriggerOutput.OFF),
             )
@@ -128,6 +131,8 @@ class _SweepWriteDriver:
         session_state: InstrumentSessionState,
         output_enabled: bool = False,
         postcondition_mismatch: bool = False,
+        post_fire_mismatch: bool = False,
+        raise_after_fire: bool = False,
     ) -> None:
         self.transport = GuardedAuditedTransport(
             _TextTransport(),
@@ -135,9 +140,12 @@ class _SweepWriteDriver:
         )
         self.output_enabled = output_enabled
         self.postcondition_mismatch = postcondition_mismatch
+        self.post_fire_mismatch = post_fire_mismatch
+        self.raise_after_fire = raise_after_fire
         self.basic = basic_facet()
         self.sweep = _sweep()
         self.sweep_requests: list[SourceSweepConfigureRequest] = []
+        self.fire_requests: list[SourceFireRequest] = []
         self.output_requests: list[SourceOutputRequest] = []
         self.v1_sweep_configure_calls = 0
         self.v1_sweep_trigger_calls = 0
@@ -202,6 +210,7 @@ class _SweepWriteDriver:
             spacing=request.spacing,
             steps=request.steps,
             sweep_time_s=request.sweep_time_s,
+            trigger_source=request.trigger_source,
         )
         return SourceSweepConfigureResult(
             channel=request.channel,
@@ -210,12 +219,24 @@ class _SweepWriteDriver:
             output_enabled=False,
         )
 
+    def fire_source_sweep_v2(self, request: SourceFireRequest) -> SourceFireResult:
+        self.transport.write("SOURCE:SWEEP:FIRE")
+        self.fire_requests.append(request)
+        if self.raise_after_fire:
+            raise ConfigError("fake Sweep fire failed after write")
+        return SourceFireResult(channel=request.channel)
+
     def set_source_output_v2(self, request: SourceOutputRequest) -> SourceOutputResult:
         self.transport.write("SOURCE:OUTPUT")
         self.output_requests.append(request)
         self.output_enabled = request.enabled
         if request.enabled:
-            raise AssertionError("the Sweep fixture only uses recovery OFF")
+            return SourceOutputResult(
+                channel=request.channel,
+                enabled=True,
+                final_amplitude=self.basic.amplitude.value,
+                final_offset_v=self.basic.offset_v.value,
+            )
         return SourceOutputResult(channel=request.channel, enabled=False)
 
     def configure_sweep(self, *args: object, **kwargs: object) -> object:
@@ -244,6 +265,8 @@ class _SweepWriteDriver:
         )
 
     def _readback_sweep(self) -> SweepFacet:
+        if self.post_fire_mismatch and self.fire_requests:
+            return replace(self.sweep, sweep_time_s=Observed.value_of(2.0))
         if not self.postcondition_mismatch or not self.sweep_requests:
             return self.sweep
         return replace(self.sweep, sweep_time_s=Observed.value_of(2.0))
@@ -256,6 +279,7 @@ def _extensions(
         SourceSweepSpacing.LOGARITHMIC,
         SourceSweepSpacing.STEP,
     ),
+    include_fire: bool = False,
 ):
     base = source_extensions()
     basic, output = base.features
@@ -272,13 +296,20 @@ def _extensions(
     sweep = SourceFeatureCapability(
         feature=SourceFeature.SWEEP,
         support=SupportState.SUPPORTED,
-        directions=(SourceFeatureDirection.CONFIGURE, SourceFeatureDirection.READ),
+        directions=(
+            SourceFeatureDirection.CONFIGURE,
+            *((SourceFeatureDirection.FIRE,) if include_fire else ()),
+            SourceFeatureDirection.READ,
+        ),
         scope=SourceFacetScope.CHANNEL,
         channels=(1,),
         applicability=SourceConstraintApplicability(),
         profile=SourceSweepCapabilityProfile(
             spacing_modes=spacing_modes,
-            trigger_sources=(SourceTriggerSource.INTERNAL,),
+            trigger_sources=(
+                SourceTriggerSource.INTERNAL,
+                *((SourceTriggerSource.MANUAL,) if include_fire else ()),
+            ),
             timing_readable=True,
             marker_readable=True,
             configuration_readable=True,
@@ -344,7 +375,10 @@ def _service(
     *,
     output_enabled: bool = False,
     postcondition_mismatch: bool = False,
+    post_fire_mismatch: bool = False,
+    raise_after_fire: bool = False,
     dual_contract: bool = False,
+    include_fire: bool = False,
     spacing_modes: tuple[SourceSweepSpacing, ...] = (
         SourceSweepSpacing.LINEAR,
         SourceSweepSpacing.LOGARITHMIC,
@@ -356,16 +390,26 @@ def _service(
         session_state=session_state,
         output_enabled=output_enabled,
         postcondition_mismatch=postcondition_mismatch,
+        post_fire_mismatch=post_fire_mismatch,
+        raise_after_fire=raise_after_fire,
     )
     capabilities = [
         "source.snapshot_v2",
         "source.sweep_configure_v2",
         "source.output_v2",
     ]
+    if include_fire:
+        capabilities.append("source.sweep_fire_v2")
     if dual_contract:
         capabilities.extend(("source.sweep_configure", "source.sweep_trigger"))
     descriptor = replace(
-        source_descriptor(driver=driver, extensions=_extensions(spacing_modes=spacing_modes)),
+        source_descriptor(
+            driver=driver,
+            extensions=_extensions(
+                spacing_modes=spacing_modes,
+                include_fire=include_fire,
+            ),
+        ),
         capabilities=tuple(capabilities),
     )
     validate_source_descriptor(descriptor)
@@ -386,6 +430,7 @@ def _service(
 def _request(
     *,
     spacing: SourceSweepSpacing = SourceSweepSpacing.LINEAR,
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL,
 ) -> SourceSweepConfigureRequest:
     return SourceSweepConfigureRequest(
         channel=1,
@@ -394,7 +439,43 @@ def _request(
         spacing=spacing,
         steps=101,
         sweep_time_s=1.0,
+        trigger_source=trigger_source,
     )
+
+
+def test_sweep_fire_capability_requires_manual_configuration_readback() -> None:
+    session_state = InstrumentSessionState(epoch_id="source-sweep-fire-profile")
+    driver = _SweepWriteDriver(session_state=session_state)
+    extensions = _extensions(include_fire=True)
+    basic, output, sweep = extensions.features
+    descriptor = replace(
+        source_descriptor(
+            driver=driver,
+            extensions=replace(
+                extensions,
+                features=(
+                    basic,
+                    output,
+                    replace(
+                        sweep,
+                        profile=replace(
+                            sweep.profile,
+                            trigger_sources=(SourceTriggerSource.INTERNAL,),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.sweep_configure_v2",
+            "source.sweep_fire_v2",
+            "source.output_v2",
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="readable manual sweep"):
+        validate_source_descriptor(descriptor)
 
 
 def test_sweep_configure_v2_writes_once_and_keeps_output_off() -> None:
@@ -491,3 +572,108 @@ def test_v1_restore_rejects_before_io_for_a_sweep_v2_driver() -> None:
 
     assert driver.transport.counters.write_requests == 0
     assert driver.transport.counters.query_calls == 0
+
+
+def test_sweep_fire_v2_reuses_configuring_session_and_keeps_output_on() -> None:
+    service, driver = _service(include_fire=True)
+    configured, configure_artifact = service.configure_sweep_v2(
+        _request(trigger_source=SourceTriggerSource.MANUAL)
+    )
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    result, artifact = service.fire_sweep_v2(
+        SourceFireRequest(channel=1),
+        correlation_id="sweep-fire",
+    )
+
+    assert result == SourceFireResult(channel=1)
+    assert configured.sweep.trigger.value.source.value is SourceTriggerSource.MANUAL
+    assert configure_artifact["request"]["trigger_source"] == "manual"
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.output_enabled is True
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=True)]
+    assert artifact["operation"] == "source.sweep_fire_v2"
+    assert artifact["persistent_session_verified"] is True
+    assert artifact["postcondition"]["emission_verified"] is False
+    assert artifact["postcondition"]["external_measurement_required"] is True
+    assert artifact["final_state"] == {
+        "session_health": "healthy",
+        "output_expected": "on",
+    }
+
+
+def test_sweep_fire_v2_requires_same_session_configuration_before_io() -> None:
+    service, driver = _service(include_fire=True)
+
+    with pytest.raises(ConfigError, match="configuration from the same session"):
+        service.fire_sweep_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == []
+    assert driver.transport.counters.query_calls == 0
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_sweep_fire_v2_requires_output_on_before_fire_write() -> None:
+    service, driver = _service(include_fire=True)
+    service.configure_sweep_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+
+    with pytest.raises(ConfigError, match="target output ON"):
+        service.fire_sweep_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == []
+    assert driver.output_requests == []
+
+
+def test_sweep_fire_v2_rejects_internal_trigger_configuration() -> None:
+    service, driver = _service(include_fire=True)
+    service.configure_sweep_v2(_request())
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    with pytest.raises(ConfigError, match="manual trigger source"):
+        service.fire_sweep_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == []
+    assert driver.output_enabled is True
+
+
+def test_sweep_fire_v2_failure_is_not_retried_and_recovers_off() -> None:
+    service, driver = _service(include_fire=True, raise_after_fire=True)
+    service.configure_sweep_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    with pytest.raises(ConfigError, match="failed after write") as raised:
+        service.fire_sweep_v2(SourceFireRequest(channel=1))
+
+    artifact = raised.value.source_operation_artifact
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.output_requests == [
+        SourceOutputRequest(channel=1, enabled=True),
+        SourceOutputRequest(channel=1, enabled=False),
+    ]
+    assert driver.output_enabled is False
+    assert artifact["recovery"]["status"] == "off_verified"
+    assert artifact["final_state"]["output_expected"] == "off"
+
+
+def test_sweep_fire_v2_postcondition_mismatch_recovers_off() -> None:
+    service, driver = _service(include_fire=True, post_fire_mismatch=True)
+    service.configure_sweep_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    with pytest.raises(ConfigError, match="same-session receipt"):
+        service.fire_sweep_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.output_requests[-1] == SourceOutputRequest(channel=1, enabled=False)
+    assert driver.output_enabled is False
+
+
+def test_v1_sweep_trigger_maps_to_fire_v2_when_declared() -> None:
+    service, driver = _service(include_fire=True, dual_contract=True)
+    service.configure_sweep_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    service.trigger_sweep(channel=1)
+
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.v1_sweep_trigger_calls == 0

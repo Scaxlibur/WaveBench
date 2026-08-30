@@ -8,6 +8,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT,
     SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -18,6 +19,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT,
     SourceEnergyEffect,
 )
 from wavebench.services.operation_specs import (
@@ -297,6 +299,23 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     assert SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT.energy_effect is (
         SourceEnergyEffect.DECREASE_ONLY
     )
+
+    for contract, configure_capability in (
+        (SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT, "source.burst_configure_v2"),
+        (SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT, "source.sweep_configure_v2"),
+    ):
+        spec = require_operation_spec(contract.operation)
+        assert contract.energy_effect is SourceEnergyEffect.EMIT
+        assert spec.required_capabilities == (
+            contract.capability,
+            configure_capability,
+            "source.output_v2",
+        )
+        assert spec.postcondition_fields == tuple(
+            field.value for field in contract.postcondition_fields
+        )
+        assert "persistent_session_required" in spec.risk_flags
+        assert "no_retry" in spec.risk_flags
 
 
 def test_registry_is_read_only_and_filters_by_instrument_kind() -> None:

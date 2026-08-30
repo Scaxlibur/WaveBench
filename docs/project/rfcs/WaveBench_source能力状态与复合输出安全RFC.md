@@ -619,6 +619,17 @@ SourceBasicLiveConfigureV2Driver
 SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+D1-3／Burst 与 Sweep fire 在上述清单末尾追加以下精确条目：
+
+```text
+SourceFireRequest
+SourceFireResult
+SourceBurstFireV2Driver
+SourceSweepFireV2Driver
+SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT
+SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -676,8 +687,8 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 R6／M6-A 将 `source.modulation_pm_configure_v2`、`source.burst_configure_v2` 与
 `source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2` 明确加入已授权的窄 capability。
 现有 `source.modulation_configure_v2` 保持内部 AM 的首版语义，不因 PM 子项扩张；分离 capability 使 PM-only
-插件不会改变 V1 AM route，也使 AM-only 插件无需提供 PM 入口。Burst capability 也不授权 arm、fire 或任何
-输出开启路径。
+插件不会改变 V1 AM route，也使 AM-only 插件无需提供 PM 入口。配置 capability 不授权 arm、fire 或任何
+输出开启路径。D1-3 另行注册 `source.burst_fire_v2` 与 `source.sweep_fire_v2`；两者仍不授权 arm。
 
 Source V2 驱动不接收 `SessionAuthorization`、`InstrumentSessionState` 或 raw transport handle。
 核心在授权 phase 中调用已冻结的 driver 方法，driver 只返回公共类型化 model。
@@ -3471,27 +3482,29 @@ descriptor 必须同时声明 Modulation `READ`／`CONFIGURE`、`pm`、`internal
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写
 capability 声明或实机验收。
 
-### M6-A 已实现子能力：内部 Triggered Burst
+### M6-A 已实现子能力：受控 Triggered Burst
 
 M6-A 的后续单通道能力按以下顺序开发：内部 FM、内部 PWM、Sweep。每个子项各自
 拥有 capability、typed request/result、descriptor readback 条件、OFF-only 事务、V1 路由审计、CLI 与 run plan
 step；不得借已完成子项扩大其它高级功能的范围。该顺序只决定核心开发节奏，不要求插件同时声明全部能力。
 
-`source.burst_configure_v2` 覆盖单通道、输出 OFF 时的内部 Triggered Burst。
-typed request 固定为 `channel`、`cycles`、`phase_deg`、`internal_period_s` 与 `delay_s`。配置完成后 Burst 必为
-enabled、mode 必为 `triggered`、trigger source 必为 `internal`、trigger slope 必为 `positive`、trigger output
+`source.burst_configure_v2` 覆盖单通道、输出 OFF 时的受控 Triggered Burst。
+typed request 包含 `channel`、`cycles`、`phase_deg`、`internal_period_s`、`delay_s` 与末尾默认值为
+`internal` 的 `trigger_source`；触发源只允许 `internal` 或 `manual`。配置完成后 Burst 必为
+enabled、mode 必为 `triggered`、trigger source 必须与请求一致、trigger slope 必为 `positive`、trigger output
 必为 `off`。`cycles` 为 `[1, 500000]` 的整数，`phase_deg` 为 `[0, 360]` 的有限值，
-`internal_period_s` 为有限正值，`delay_s` 为 `[0, 85]` 的有限值。这些是内部 Triggered 配置的类型边界，
+`internal_period_s` 为有限正值，`delay_s` 为 `[0, 85]` 的有限值。这些是受控 Triggered 配置的类型边界，
 不是额外的负载、RMS、热或共享功率安全门。
 
-首版不包含 Gated、Infinity、外部／手动 trigger、Gate polarity、trigger slope／output 自定义、disable、
+配置 capability 不包含 Gated、Infinity、外部 trigger、Gate polarity、trigger slope／output 自定义、disable、
 partial patch、arm、fire、同步、自动波形切换、输出 ON 或输出恢复。配置不会发出 Burst，也不会为后续输出 ON
 提供额外授权；`source.output_v2` 仍按 R6 的基础 Vpp／Offset 规则独立决策。
 
 `SourceBurstCapabilityProfile` 在现有字段末尾追加
-`triggered_internal_configuration_readable: bool = False`。该字段为真时，表示 enabled、mode、cycles、phase、
-internal period、delay 和完整 trigger state 都能以纯读 snapshot 独立回读。声明本 capability 的 descriptor
-还必须在同一 channel 声明 Burst `READ`／`CONFIGURE`、`triggered` mode、`internal` trigger source、
+`triggered_internal_configuration_readable: bool = False` 和
+`triggered_manual_configuration_readable: bool = False`。两个字段分别表示对应触发源下的 enabled、mode、cycles、
+phase、internal period、delay 和完整 trigger state 都能以纯读 snapshot 独立回读。声明本 capability 的 descriptor
+还必须在同一 channel 声明 Burst `READ`／`CONFIGURE`、`triggered` mode、至少一个受支持的 trigger source、
 `timing_readable = true`，以及 Output `READ` 与 output state readback。
 
 该 operation 使用 `POTENTIAL_WHILE_OFF`，静态字段闭包为同一 channel 的 Burst／Output 和仪器 Identity。
@@ -3499,9 +3512,10 @@ internal period、delay 和完整 trigger state 都能以纯读 snapshot 独立�
 V2 OFF recovery；postcondition 必须逐项确认 request 值、固定 Triggered 语义及 output 仍为 OFF。它不恢复先前
 Burst state。
 
-双合同插件声明 `source.burst_configure_v2` 后，V1 `configure_burst`、`trigger_burst` 与 restore 路径必须在
-仪器 I/O 前拒绝：V1 route 可表示 Gated、Infinity、手动／外部 trigger 和实际 fire，不能无损映射到这个
-仅配置的 V2 子集。V1-only 插件及未声明该 capability 的双合同插件继续走 V1 路径。
+双合同插件只声明 `source.burst_configure_v2` 时，V1 `configure_burst`、`trigger_burst` 与 restore 路径必须在
+仪器 I/O 前拒绝：V1 route 可表示 Gated、Infinity、外部 trigger 和实际 fire，不能无损映射到这个仅配置的
+V2 子集。插件另行声明 `source.burst_fire_v2` 后，V1 `trigger_burst` 可映射到独立 fire operation；V1-only
+插件及未声明相关 capability 的双合同插件继续走 V1 路径。
 
 当前核心开发线已提供 `SourceService.configure_burst_v2()`、
 `wavebench source burst-configure-v2 --channel N --cycles N --phase-deg DEG --internal-period-s S --delay-s S` 和
@@ -3578,19 +3592,21 @@ capability 独立决定。
 
 Sweep 的窄 capability、typed model 与 descriptor readback 条件已冻结，并由下列公开事务完成接口收口。
 
-### M6-A 已实现子能力：内部 Sweep
+### M6-A 已实现子能力：受控 Sweep
 
-`source.sweep_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内建 Sweep 配置。typed request 固定为
-`channel`、`start_hz`、`stop_hz`、`spacing`、`steps` 和 `sweep_time_s`：频率必须为有限正值且
+`source.sweep_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内建 Sweep 配置。typed request 包含
+`channel`、`start_hz`、`stop_hz`、`spacing`、`steps`、`sweep_time_s` 与末尾默认值为 `internal` 的
+`trigger_source`；触发源只允许 `internal` 或 `manual`。频率必须为有限正值且
 `start_hz <= stop_hz`；`spacing` 只能是 `linear`、`logarithmic` 或 `step`；steps 位于 `[2, 2048]`，
 sweep time 位于 `[0.001, 300]` 秒。这些值域沿用既有 Source V1 的配置合同，不作为新的电气安全预算。
 
-配置完成后 Sweep 必为 enabled，三个 hold／return 时间均为零；trigger 固定为 internal、positive、trigger output OFF，
+配置完成后 Sweep 必为 enabled，三个 hold／return 时间均为零；trigger source 必须与请求一致，slope 固定为
+positive，trigger output 固定为 OFF，
 marker 固定为 disabled。Basic 的 `frequency_mode` 必须独立回读为 `sweep`，因此该 operation 的字段闭包包含同一
-channel 的 Basic／Sweep／Output 和仪器 Identity。它不提供 center/span、partial patch、hold／return 自定义、marker、
-外部／手动／BUS trigger、arm、fire、trigger output、隐式输出 ON 或从 Sweep 回到固定频率。
+channel 的 Basic／Sweep／Output 和仪器 Identity。配置 capability 不提供 center/span、partial patch、
+hold／return 自定义、marker、外部／BUS trigger、arm、fire、trigger output、隐式输出 ON 或从 Sweep 回到固定频率。
 
-descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、internal trigger、timing／marker 与完整配置
+descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、internal 或 manual trigger、timing／marker 与完整配置
 readback；同一 channel 的 Basic `READ` 必须声明 `sweep` frequency mode，Output `READ` 与 output state readback
 也为必需。核心在运行时按 request 检查所选 spacing，不要求每个设备支持全部三种 spacing。
 
@@ -3598,15 +3614,40 @@ readback；同一 channel 的 Basic `READ` 必须声明 `sweep` frequency mode�
 postcondition 和主写入后的最多一次 V2 OFF recovery；没有额外 RMS、端接、热、共享功率或 trigger 接线门。本子项只
 授权配置，不构成任何 fire 或输出 ON 授权。
 
-双合同插件声明 `source.sweep_configure_v2` 后，V1 `configure_sweep`、`trigger_sweep` 与 restore 必须在仪器
-I/O 前拒绝，不能把 V1 的 center/span、外部／手动 trigger、marker 或 fire 语义部分映射进本范围。V1-only 插件和
-未声明该 capability 的双合同插件继续使用既有 V1 Sweep 路径。
+双合同插件只声明 `source.sweep_configure_v2` 时，V1 `configure_sweep`、`trigger_sweep` 与 restore 必须在仪器
+I/O 前拒绝，不能把 V1 的 center/span、外部 trigger、marker 或 fire 语义部分映射进本范围。插件另行声明
+`source.sweep_fire_v2` 后，V1 `trigger_sweep` 可映射到独立 fire operation；V1-only 插件和未声明相关
+capability 的双合同插件继续使用既有 V1 Sweep 路径。
 
 当前核心开发线已提供 `SourceService.configure_sweep_v2()`、
 `wavebench source sweep-configure-v2 --channel N --start-hz F --stop-hz F --spacing linear|logarithmic|step --steps N --sweep-time-s S` 和
 `source.sweep_configure_v2` run plan step。三者只接受同一类型化 request，复用 fresh snapshot、目标 output OFF、单写、
 独立回读、写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写 capability 声明或实机验收。
+
+### D1-3 已实现子能力：Burst 与 Sweep fire
+
+`source.burst_fire_v2` 与 `source.sweep_fire_v2` 使用共享的 `SourceFireRequest(channel)` 和
+`SourceFireResult(channel)`，但保留独立 capability、driver Protocol、operation contract 和 artifact。fire
+capability 分别依赖对应 configure capability 与 `source.output_v2`；descriptor 必须在同一 channel 声明
+`FIRE` direction、manual trigger、manual 模式下的完整配置回读、最终 Vpp／Offset 和输出状态回读。
+
+Core 只接受由同一个 `SourceService` 和 session epoch 成功完成的对应 V2 配置。配置成功后形成绑定已验证
+Burst／Sweep facet 摘要的内存 receipt；重新配置开始前清除旧 receipt，连接代次改变或 fire 主写入失败后也
+不再接受旧 receipt。receipt 不写入插件，也不替代 fire 前的 fresh snapshot。
+
+fire preflight 必须证明 snapshot 一致、目标输出为 ON、Vpp／Offset 满足 R6 数值门，并且当前 Burst 或 Sweep
+配置仍使用 manual trigger，且与同 session receipt 的 facet 摘要一致。MAIN 只调用一次
+`fire_source_burst_v2()` 或
+`fire_source_sweep_v2()`；结果未知不得重试。postcondition 只证明输出仍为 ON、配置未改变和 session 健康，
+不能证明物理端口已经产生 Burst 或 Sweep。artifact 固定记录 `emission_verified = false` 与
+`external_measurement_required = true`。
+
+driver 异常、结果类型错误或后置条件失败时，Core 清除 receipt，只允许一次 V2 output OFF recovery 与独立回读，
+不会重新 fire 或恢复 ON。D1-3 不增加 CLI 命令或 run plan step；现有 V1 trigger 仅在对应 fire capability 已声明且
+同 session receipt 有效时映射到本 operation。现有 CLI 与 run step 仍构造默认 internal 请求；为保持已有
+operation artifact 字节形状，默认 `trigger_source=internal` 不写入 request payload，manual 请求则显式记录该字段。
+物理发出能力必须在具体插件的 A4 实机验收中由外部测量证明。
 
 ### M6-B 已实现：ARB storage 与 selection
 

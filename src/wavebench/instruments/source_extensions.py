@@ -629,6 +629,7 @@ class SourceBurstCapabilityProfile:
     timing_readable: bool
     gate_readable: bool
     triggered_internal_configuration_readable: bool = False
+    triggered_manual_configuration_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.modes, SourceBurstMode, "burst modes")
@@ -638,6 +639,10 @@ class SourceBurstCapabilityProfile:
         _require_bool(
             self.triggered_internal_configuration_readable,
             "burst triggered_internal_configuration_readable",
+        )
+        _require_bool(
+            self.triggered_manual_configuration_readable,
+            "burst triggered_manual_configuration_readable",
         )
 
 
@@ -1385,6 +1390,38 @@ SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
 )
 
 
+SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.burst_fire_v2",
+    capability="source.burst_fire_v2",
+    feature=SourceFeature.BURST,
+    direction=SourceFeatureDirection.FIRE,
+    energy_effect=SourceEnergyEffect.EMIT,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.BURST,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.BURST,),
+    postcondition_fields=(
+        SourceFieldId.BURST,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(SourceV1WriteRouteId.TRIGGER_BURST,),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_BURST,
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.SET_OUTPUT,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
 SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation="source.sweep_configure_v2",
     capability="source.sweep_configure_v2",
@@ -1413,6 +1450,38 @@ SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
         SourceV1WriteRouteId.CONFIGURE_SWEEP,
         SourceV1WriteRouteId.RESTORE,
         SourceV1WriteRouteId.TRIGGER_SWEEP,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.sweep_fire_v2",
+    capability="source.sweep_fire_v2",
+    feature=SourceFeature.SWEEP,
+    direction=SourceFeatureDirection.FIRE,
+    energy_effect=SourceEnergyEffect.EMIT,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.SWEEP,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.SWEEP,),
+    postcondition_fields=(
+        SourceFieldId.OUTPUT,
+        SourceFieldId.SWEEP,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(SourceV1WriteRouteId.TRIGGER_SWEEP,),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_SWEEP,
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.SET_OUTPUT,
     ),
     operation_timeout_ms=5_000,
     main_max_steps=1,
@@ -3088,6 +3157,7 @@ class SourceBurstConfigureRequest:
     phase_deg: float
     internal_period_s: float
     delay_s: float
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL
 
     def __post_init__(self) -> None:
         _require_int(self.channel, "source burst configure channel", minimum=1)
@@ -3113,6 +3183,13 @@ class SourceBurstConfigureRequest:
             minimum=0.0,
             maximum=85.0,
         )
+        if not isinstance(self.trigger_source, SourceTriggerSource) or self.trigger_source not in {
+            SourceTriggerSource.INTERNAL,
+            SourceTriggerSource.MANUAL,
+        }:
+            raise ValueError(
+                "source burst configure trigger_source must be internal or manual"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3123,6 +3200,7 @@ class SourceSweepConfigureRequest:
     spacing: SourceSweepSpacing
     steps: int
     sweep_time_s: float
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL
 
     def __post_init__(self) -> None:
         _require_int(self.channel, "source sweep configure channel", minimum=1)
@@ -3150,6 +3228,29 @@ class SourceSweepConfigureRequest:
             minimum=0.001,
             maximum=300.0,
         )
+        if not isinstance(self.trigger_source, SourceTriggerSource) or self.trigger_source not in {
+            SourceTriggerSource.INTERNAL,
+            SourceTriggerSource.MANUAL,
+        }:
+            raise ValueError(
+                "source sweep configure trigger_source must be internal or manual"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFireRequest:
+    channel: int
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source fire channel", minimum=1)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFireResult:
+    channel: int
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source fire result channel", minimum=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3718,13 +3819,6 @@ class SourceBurstConfigureResult:
             if observed.availability is not Availability.VALUE:
                 raise ValueError(f"source burst configure result requires {label} readback")
             values[label] = observed.value
-        SourceBurstConfigureRequest(
-            channel=self.channel,
-            cycles=values["cycles"],  # type: ignore[arg-type]
-            phase_deg=values["phase_deg"],  # type: ignore[arg-type]
-            internal_period_s=values["internal_period_s"],  # type: ignore[arg-type]
-            delay_s=values["delay_s"],  # type: ignore[arg-type]
-        )
         if self.burst.trigger.availability is not Availability.VALUE or not isinstance(
             self.burst.trigger.value,
             SourceTriggerState,
@@ -3733,9 +3827,20 @@ class SourceBurstConfigureResult:
         trigger = self.burst.trigger.value
         if (
             trigger.source.availability is not Availability.VALUE
-            or trigger.source.value is not SourceTriggerSource.INTERNAL
+            or trigger.source.value
+            not in {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
         ):
-            raise ValueError("source burst configure result requires internal trigger readback")
+            raise ValueError(
+                "source burst configure result requires internal or manual trigger readback"
+            )
+        SourceBurstConfigureRequest(
+            channel=self.channel,
+            cycles=values["cycles"],  # type: ignore[arg-type]
+            phase_deg=values["phase_deg"],  # type: ignore[arg-type]
+            internal_period_s=values["internal_period_s"],  # type: ignore[arg-type]
+            delay_s=values["delay_s"],  # type: ignore[arg-type]
+            trigger_source=trigger.source.value,
+        )
         if (
             trigger.slope.availability is not Availability.VALUE
             or trigger.slope.value is not SourceTriggerSlope.POSITIVE
@@ -3994,14 +4099,6 @@ class SourceSweepConfigureResult:
             if observed.availability is not Availability.VALUE:
                 raise ValueError(f"source sweep configure result requires {label} readback")
             values[label] = observed.value
-        SourceSweepConfigureRequest(
-            channel=self.channel,
-            start_hz=values["start_hz"],  # type: ignore[arg-type]
-            stop_hz=values["stop_hz"],  # type: ignore[arg-type]
-            spacing=values["spacing"],  # type: ignore[arg-type]
-            steps=values["steps"],  # type: ignore[arg-type]
-            sweep_time_s=values["sweep_time_s"],  # type: ignore[arg-type]
-        )
         for label, observed in (
             ("start_hold_s", self.sweep.start_hold_s),
             ("stop_hold_s", self.sweep.stop_hold_s),
@@ -4019,9 +4116,21 @@ class SourceSweepConfigureResult:
         trigger = self.sweep.trigger.value
         if (
             trigger.source.availability is not Availability.VALUE
-            or trigger.source.value is not SourceTriggerSource.INTERNAL
+            or trigger.source.value
+            not in {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
         ):
-            raise ValueError("source sweep configure result requires internal trigger readback")
+            raise ValueError(
+                "source sweep configure result requires internal or manual trigger readback"
+            )
+        SourceSweepConfigureRequest(
+            channel=self.channel,
+            start_hz=values["start_hz"],  # type: ignore[arg-type]
+            stop_hz=values["stop_hz"],  # type: ignore[arg-type]
+            spacing=values["spacing"],  # type: ignore[arg-type]
+            steps=values["steps"],  # type: ignore[arg-type]
+            sweep_time_s=values["sweep_time_s"],  # type: ignore[arg-type]
+            trigger_source=trigger.source.value,
+        )
         if (
             trigger.slope.availability is not Availability.VALUE
             or trigger.slope.value is not SourceTriggerSlope.POSITIVE
@@ -5126,6 +5235,14 @@ class SourceBurstConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceBurstFireV2Driver(InstrumentDriver, Protocol):
+    def fire_source_burst_v2(
+        self,
+        request: SourceFireRequest,
+    ) -> SourceFireResult: ...
+
+
+@runtime_checkable
 class SourceFmModulationConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_fm_modulation_v2(
         self,
@@ -5147,6 +5264,14 @@ class SourceSweepConfigureV2Driver(InstrumentDriver, Protocol):
         self,
         request: SourceSweepConfigureRequest,
     ) -> SourceSweepConfigureResult: ...
+
+
+@runtime_checkable
+class SourceSweepFireV2Driver(InstrumentDriver, Protocol):
+    def fire_source_sweep_v2(
+        self,
+        request: SourceFireRequest,
+    ) -> SourceFireResult: ...
 
 
 @runtime_checkable
@@ -5539,4 +5664,10 @@ __all__ = [
     "SourceBasicLiveConfigureResult",
     "SourceBasicLiveConfigureV2Driver",
     "SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceFireRequest",
+    "SourceFireResult",
+    "SourceBurstFireV2Driver",
+    "SourceSweepFireV2Driver",
+    "SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT",
+    "SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT",
 ]

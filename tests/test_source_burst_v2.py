@@ -36,6 +36,8 @@ from wavebench.instruments.source_extensions import (
     SourceFeatureCapability,
     SourceFeatureDirection,
     SourceFieldId,
+    SourceFireRequest,
+    SourceFireResult,
     SourceGatePolarity,
     SourceOutputPolarity,
     SourceOutputRequest,
@@ -89,6 +91,7 @@ def _burst(
     phase_deg: float = 30.0,
     internal_period_s: float = 0.25,
     delay_s: float = 0.5,
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL,
 ) -> BurstFacet:
     return BurstFacet(
         enabled=Observed.value_of(True),
@@ -100,7 +103,7 @@ def _burst(
         gate_polarity=Observed.value_of(SourceGatePolarity.NORMAL),
         trigger=Observed.value_of(
             SourceTriggerState(
-                source=Observed.value_of(SourceTriggerSource.INTERNAL),
+                source=Observed.value_of(trigger_source),
                 slope=Observed.value_of(SourceTriggerSlope.POSITIVE),
                 output=Observed.value_of(SourceTriggerOutput.OFF),
             )
@@ -115,6 +118,8 @@ class _BurstWriteDriver:
         session_state: InstrumentSessionState,
         output_enabled: bool = False,
         postcondition_mismatch: bool = False,
+        post_fire_mismatch: bool = False,
+        raise_after_fire: bool = False,
     ) -> None:
         self.transport = GuardedAuditedTransport(
             _TextTransport(),
@@ -122,8 +127,11 @@ class _BurstWriteDriver:
         )
         self.output_enabled = output_enabled
         self.postcondition_mismatch = postcondition_mismatch
+        self.post_fire_mismatch = post_fire_mismatch
+        self.raise_after_fire = raise_after_fire
         self.burst = _burst()
         self.burst_requests: list[SourceBurstConfigureRequest] = []
+        self.fire_requests: list[SourceFireRequest] = []
         self.output_requests: list[SourceOutputRequest] = []
         self.v1_burst_calls = 0
         self.v1_trigger_calls = 0
@@ -182,6 +190,7 @@ class _BurstWriteDriver:
             phase_deg=request.phase_deg,
             internal_period_s=request.internal_period_s,
             delay_s=request.delay_s,
+            trigger_source=request.trigger_source,
         )
         return SourceBurstConfigureResult(
             channel=request.channel,
@@ -189,12 +198,25 @@ class _BurstWriteDriver:
             output_enabled=False,
         )
 
+    def fire_source_burst_v2(self, request: SourceFireRequest) -> SourceFireResult:
+        self.transport.write("SOURCE:BURST:FIRE")
+        self.fire_requests.append(request)
+        if self.raise_after_fire:
+            raise ConfigError("fake Burst fire failed after write")
+        return SourceFireResult(channel=request.channel)
+
     def set_source_output_v2(self, request: SourceOutputRequest) -> SourceOutputResult:
         self.transport.write("SOURCE:OUTPUT")
         self.output_requests.append(request)
         self.output_enabled = request.enabled
         if request.enabled:
-            raise AssertionError("the Burst fixture only uses recovery OFF")
+            basic = basic_facet()
+            return SourceOutputResult(
+                channel=request.channel,
+                enabled=True,
+                final_amplitude=basic.amplitude.value,
+                final_offset_v=basic.offset_v.value,
+            )
         return SourceOutputResult(channel=request.channel, enabled=False)
 
     def configure_burst(self, *args: object, **kwargs: object) -> object:
@@ -215,6 +237,11 @@ class _BurstWriteDriver:
         )
 
     def _readback_burst(self) -> BurstFacet:
+        if self.post_fire_mismatch and self.fire_requests:
+            return _burst(
+                delay_s=self.burst.delay_s.value * 2.0,
+                trigger_source=self.burst.trigger.value.source.value,
+            )
         if not self.postcondition_mismatch or not self.burst_requests:
             return self.burst
         request = self.burst_requests[-1]
@@ -226,22 +253,30 @@ class _BurstWriteDriver:
         )
 
 
-def _extensions():
+def _extensions(*, include_fire: bool = False):
     base = source_extensions()
     basic, output = base.features
     burst = SourceFeatureCapability(
         feature=SourceFeature.BURST,
         support=SupportState.SUPPORTED,
-        directions=(SourceFeatureDirection.CONFIGURE, SourceFeatureDirection.READ),
+        directions=(
+            SourceFeatureDirection.CONFIGURE,
+            *((SourceFeatureDirection.FIRE,) if include_fire else ()),
+            SourceFeatureDirection.READ,
+        ),
         scope=SourceFacetScope.CHANNEL,
         channels=(1,),
         applicability=SourceConstraintApplicability(),
         profile=SourceBurstCapabilityProfile(
             modes=(SourceBurstMode.TRIGGERED,),
-            trigger_sources=(SourceTriggerSource.INTERNAL,),
+            trigger_sources=(
+                SourceTriggerSource.INTERNAL,
+                *((SourceTriggerSource.MANUAL,) if include_fire else ()),
+            ),
             timing_readable=True,
             gate_readable=False,
             triggered_internal_configuration_readable=True,
+            triggered_manual_configuration_readable=include_fire,
         ),
     )
     burst_query = SourceFacetQueryContract(
@@ -304,23 +339,30 @@ def _service(
     *,
     output_enabled: bool = False,
     postcondition_mismatch: bool = False,
+    post_fire_mismatch: bool = False,
+    raise_after_fire: bool = False,
     dual_contract: bool = False,
+    include_fire: bool = False,
 ) -> tuple[SourceService, _BurstWriteDriver]:
     session_state = InstrumentSessionState(epoch_id="source-burst-v2")
     driver = _BurstWriteDriver(
         session_state=session_state,
         output_enabled=output_enabled,
         postcondition_mismatch=postcondition_mismatch,
+        post_fire_mismatch=post_fire_mismatch,
+        raise_after_fire=raise_after_fire,
     )
     capabilities = [
         "source.snapshot_v2",
         "source.burst_configure_v2",
         "source.output_v2",
     ]
+    if include_fire:
+        capabilities.append("source.burst_fire_v2")
     if dual_contract:
         capabilities.extend(("source.burst_configure", "source.burst_trigger"))
     descriptor = replace(
-        source_descriptor(driver=driver, extensions=_extensions()),
+        source_descriptor(driver=driver, extensions=_extensions(include_fire=include_fire)),
         capabilities=tuple(capabilities),
     )
     validate_source_descriptor(descriptor)
@@ -338,14 +380,53 @@ def _service(
     )
 
 
-def _request() -> SourceBurstConfigureRequest:
+def _request(
+    *,
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL,
+) -> SourceBurstConfigureRequest:
     return SourceBurstConfigureRequest(
         channel=1,
         cycles=12,
         phase_deg=30.0,
         internal_period_s=0.25,
         delay_s=0.5,
+        trigger_source=trigger_source,
     )
+
+
+def test_burst_fire_capability_requires_manual_configuration_readback() -> None:
+    session_state = InstrumentSessionState(epoch_id="source-burst-fire-profile")
+    driver = _BurstWriteDriver(session_state=session_state)
+    extensions = _extensions(include_fire=True)
+    basic, burst, output = extensions.features
+    descriptor = replace(
+        source_descriptor(
+            driver=driver,
+            extensions=replace(
+                extensions,
+                features=(
+                    basic,
+                    replace(
+                        burst,
+                        profile=replace(
+                            burst.profile,
+                            triggered_manual_configuration_readable=False,
+                        ),
+                    ),
+                    output,
+                ),
+            ),
+        ),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.burst_configure_v2",
+            "source.burst_fire_v2",
+            "source.output_v2",
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="readable manual triggered burst"):
+        validate_source_descriptor(descriptor)
 
 
 def test_burst_configure_v2_writes_once_and_keeps_output_off() -> None:
@@ -440,3 +521,120 @@ def test_v1_restore_rejects_before_io_for_a_burst_v2_driver() -> None:
 
     assert driver.transport.counters.write_requests == 0
     assert driver.transport.counters.query_calls == 0
+
+
+def test_burst_fire_v2_reuses_configuring_session_and_keeps_output_on() -> None:
+    service, driver = _service(include_fire=True)
+    configured, configure_artifact = service.configure_burst_v2(
+        _request(trigger_source=SourceTriggerSource.MANUAL)
+    )
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    result, artifact = service.fire_burst_v2(
+        SourceFireRequest(channel=1),
+        correlation_id="burst-fire",
+    )
+
+    assert result == SourceFireResult(channel=1)
+    assert configured.burst.trigger.value.source.value is SourceTriggerSource.MANUAL
+    assert configure_artifact["request"]["trigger_source"] == "manual"
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.output_enabled is True
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=True)]
+    assert artifact["operation"] == "source.burst_fire_v2"
+    assert artifact["persistent_session_verified"] is True
+    assert artifact["postcondition"]["emission_verified"] is False
+    assert artifact["postcondition"]["external_measurement_required"] is True
+    assert artifact["final_state"] == {
+        "session_health": "healthy",
+        "output_expected": "on",
+    }
+
+
+def test_burst_fire_v2_requires_same_session_configuration_before_io() -> None:
+    service, driver = _service(include_fire=True)
+
+    with pytest.raises(ConfigError, match="configuration from the same session"):
+        service.fire_burst_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == []
+    assert driver.transport.counters.query_calls == 0
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_burst_fire_v2_requires_persistent_session_before_io() -> None:
+    service, driver = _service(include_fire=True)
+    service.session = None
+
+    with pytest.raises(ConfigError, match="persistent source session"):
+        service.fire_burst_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == []
+    assert driver.transport.counters.query_calls == 0
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_burst_fire_v2_requires_output_on_before_fire_write() -> None:
+    service, driver = _service(include_fire=True)
+    service.configure_burst_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+
+    with pytest.raises(ConfigError, match="target output ON"):
+        service.fire_burst_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == []
+    assert driver.output_requests == []
+
+
+def test_burst_fire_v2_rejects_internal_trigger_configuration() -> None:
+    service, driver = _service(include_fire=True)
+    service.configure_burst_v2(_request())
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    with pytest.raises(ConfigError, match="manual trigger source"):
+        service.fire_burst_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == []
+    assert driver.output_enabled is True
+
+
+def test_burst_fire_v2_failure_is_not_retried_and_recovers_off() -> None:
+    service, driver = _service(include_fire=True, raise_after_fire=True)
+    service.configure_burst_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    with pytest.raises(ConfigError, match="failed after write") as raised:
+        service.fire_burst_v2(SourceFireRequest(channel=1))
+
+    artifact = raised.value.source_operation_artifact
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.output_requests == [
+        SourceOutputRequest(channel=1, enabled=True),
+        SourceOutputRequest(channel=1, enabled=False),
+    ]
+    assert driver.output_enabled is False
+    assert artifact["recovery"]["status"] == "off_verified"
+    assert artifact["final_state"]["output_expected"] == "off"
+
+
+def test_burst_fire_v2_postcondition_mismatch_recovers_off() -> None:
+    service, driver = _service(include_fire=True, post_fire_mismatch=True)
+    service.configure_burst_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    with pytest.raises(ConfigError, match="same-session receipt"):
+        service.fire_burst_v2(SourceFireRequest(channel=1))
+
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.output_requests[-1] == SourceOutputRequest(channel=1, enabled=False)
+    assert driver.output_enabled is False
+
+
+def test_v1_burst_trigger_maps_to_fire_v2_when_declared() -> None:
+    service, driver = _service(include_fire=True, dual_contract=True)
+    service.configure_burst_v2(_request(trigger_source=SourceTriggerSource.MANUAL))
+    service.set_output_v2(SourceOutputRequest(channel=1, enabled=True))
+
+    service.trigger_burst(channel=1)
+
+    assert driver.fire_requests == [SourceFireRequest(channel=1)]
+    assert driver.v1_trigger_calls == 0
