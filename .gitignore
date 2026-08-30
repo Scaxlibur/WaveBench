@@ -1,5 +1,6 @@
 # Rei scratchpad / local helper workspace
 tool-of-rei/
+.codegraph/
 
 # Local agent/Codex metadata
 /.agents/*
