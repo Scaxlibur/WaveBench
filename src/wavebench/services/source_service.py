@@ -76,6 +76,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT,
     SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -109,6 +110,8 @@ from wavebench.instruments.source_extensions import (
     SourceBasicConfigureRequest,
     SourceBasicConfigureResult,
     SourceBasicConfigureV2Driver,
+    SourceBasicLiveConfigureResult,
+    SourceBasicLiveConfigureV2Driver,
     SourceBasicPatch,
     SourceBurstCapabilityProfile,
     SourceBurstConfigureRequest,
@@ -216,13 +219,21 @@ from wavebench.transport.session import SessionHealth
 class _SourceBasicConfigureV2Transaction:
     """Core transaction result shared by public and V1-adapter routes."""
 
-    result: SourceBasicConfigureResult
+    result: SourceBasicConfigureResult | SourceBasicLiveConfigureResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
 
 class _SourceV2BasicLegacyFallback(ConfigError):
     """A V1 setter has no lossless representation in the active V2 basic profile."""
+
+
+class _SourceV2BasicRequiresLiveMutation(ConfigError):
+    """An OFF-only basic transaction found the target output enabled."""
+
+
+class _SourceV2BasicRequiresOffMutation(ConfigError):
+    """A live basic transaction found the target output disabled."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +556,22 @@ class SourceService(SessionStateAliasMixin):
             request,
             correlation_id=correlation_id,
         )
+        assert isinstance(transaction.result, SourceBasicConfigureResult)
+        return transaction.result, transaction.artifact
+
+    def configure_basic_live_v2(
+        self,
+        request: SourceBasicConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceBasicLiveConfigureResult, dict[str, object]]:
+        """Change one declared frequency or Vpp field while output remains enabled."""
+
+        transaction = self._configure_basic_live_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+        )
+        assert isinstance(transaction.result, SourceBasicLiveConfigureResult)
         return transaction.result, transaction.artifact
 
     def configure_harmonics_v2(
@@ -850,46 +877,54 @@ class SourceService(SessionStateAliasMixin):
         request: SourceBasicConfigureRequest,
         *,
         correlation_id: str | None = None,
+        _live: bool = False,
     ) -> _SourceBasicConfigureV2Transaction:
-        """Execute the private M5-B basic-write transaction.
+        """Execute the shared OFF-only or restricted live basic transaction."""
 
-        This method deliberately remains private until M5-D owns the public
-        Service, CLI, run-plan and V1 dual-contract routes.  It is the single
-        core path that M5-B tests use to prove the write/recovery contract.
-        """
-
-        if not isinstance(request, SourceBasicConfigureRequest):
-            raise ConfigError("source.basic_configure_v2 requires SourceBasicConfigureRequest")
-        self._require(
-            "source.basic_configure_v2",
-            "source.snapshot_v2",
-            "source.basic_configure_v2",
+        operation = (
+            "source.basic_live_configure_v2"
+            if _live
+            else "source.basic_configure_v2"
         )
+        contract = (
+            SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT
+            if _live
+            else SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT
+        )
+        if not isinstance(request, SourceBasicConfigureRequest):
+            raise ConfigError(f"{operation} requires SourceBasicConfigureRequest")
+        capabilities = ["source.snapshot_v2", contract.capability]
+        if _live:
+            capabilities.extend(("source.basic_configure_v2", "source.output_v2"))
+        self._require(operation, *capabilities)
         with self._source_session() as source:
             descriptor = self.descriptor
             extensions = None if descriptor is None else descriptor.source_extensions
             session_state = self.session_state
             if not isinstance(extensions, SourceDescriptorExtensions):
-                raise ConfigError(
-                    "source.basic_configure_v2 requires validated source_extensions"
-                )
+                raise ConfigError(f"{operation} requires validated source_extensions")
             if session_state is None:
-                raise ConfigError(
-                    "source.basic_configure_v2 requires a connection-bound session state"
-                )
+                raise ConfigError(f"{operation} requires a connection-bound session state")
             fields = self._source_basic_v2_fields(request.channel)
             output_field = next(
                 field for field in fields if field.field is SourceFieldId.OUTPUT
             )
             context = SourceOperationContextCoordinator(
                 session_state=session_state,
-                operation_spec=require_operation_spec("source.basic_configure_v2"),
-                operation_contract=SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=contract,
                 connection_timeout_ms=self.config.connection.timeout_ms,
                 baseline_snapshot_digest=None,
                 fields=fields,
                 required_off_outputs=(
-                    SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel),
+                    ()
+                    if _live
+                    else (
+                        SourceScopeRef(
+                            SourceFacetScope.CHANNEL,
+                            channel=request.channel,
+                        ),
+                    )
                 ),
                 emergency_off_outputs=(
                     SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel),
@@ -903,7 +938,7 @@ class SourceService(SessionStateAliasMixin):
             )
             preflight_snapshot: SourceSnapshotV2 | None = None
             postcondition_snapshot: SourceSnapshotV2 | None = None
-            result: SourceBasicConfigureResult | None = None
+            result: SourceBasicConfigureResult | SourceBasicLiveConfigureResult | None = None
             main_entered = False
             failure: BaseException | None = None
             recovery: dict[str, object] | None = None
@@ -924,14 +959,22 @@ class SourceService(SessionStateAliasMixin):
                     preflight_basic, preflight_output = self._source_v2_target(
                         preflight_snapshot,
                         request.channel,
-                        operation="source.basic_configure_v2",
+                        operation=operation,
                     )
-                    self._validate_source_basic_v2_preflight(
-                        request,
-                        preflight_snapshot,
-                        preflight_basic,
-                        preflight_output,
-                    )
+                    if _live:
+                        self._validate_source_basic_live_v2_preflight(
+                            request,
+                            preflight_snapshot,
+                            preflight_basic,
+                            preflight_output,
+                        )
+                    else:
+                        self._validate_source_basic_v2_preflight(
+                            request,
+                            preflight_snapshot,
+                            preflight_basic,
+                            preflight_output,
+                        )
                     context.bind_baseline_snapshot_digest(
                         source_v2_digest((request.channel, preflight_basic, preflight_output))
                     )
@@ -947,15 +990,23 @@ class SourceService(SessionStateAliasMixin):
                     fields=(
                         next(field for field in fields if field.field is SourceFieldId.BASIC),
                     ),
-                    max_steps=SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT.main_max_steps,
+                    max_steps=contract.main_max_steps,
                 )
                 try:
                     with context.authorize_phase(main):
                         main_entered = True
-                        result = cast(SourceBasicConfigureV2Driver, source).configure_source_basic_v2(
-                            request
-                        )
-                        self._validate_source_basic_v2_result(request, result)
+                        if _live:
+                            result = cast(
+                                SourceBasicLiveConfigureV2Driver,
+                                source,
+                            ).configure_source_basic_live_v2(request)
+                            self._validate_source_basic_live_v2_result(request, result)
+                        else:
+                            result = cast(
+                                SourceBasicConfigureV2Driver,
+                                source,
+                            ).configure_source_basic_v2(request)
+                            self._validate_source_basic_v2_result(request, result)
                 except BaseException as exc:
                     failure = exc
 
@@ -984,17 +1035,28 @@ class SourceService(SessionStateAliasMixin):
                                 self._source_v2_target(
                                     postcondition_snapshot,
                                     request.channel,
-                                    operation="source.basic_configure_v2",
+                                    operation=operation,
                                 )
                             )
                             assert result is not None
-                            self._validate_source_basic_v2_postcondition(
-                                request,
-                                result,
-                                postcondition_snapshot,
-                                postcondition_basic,
-                                postcondition_output,
-                            )
+                            if _live:
+                                assert isinstance(result, SourceBasicLiveConfigureResult)
+                                self._validate_source_basic_live_v2_postcondition(
+                                    request,
+                                    result,
+                                    postcondition_snapshot,
+                                    postcondition_basic,
+                                    postcondition_output,
+                                )
+                            else:
+                                assert isinstance(result, SourceBasicConfigureResult)
+                                self._validate_source_basic_v2_postcondition(
+                                    request,
+                                    result,
+                                    postcondition_snapshot,
+                                    postcondition_basic,
+                                    postcondition_output,
+                                )
                             context.complete_phase_verification(
                                 authorization,
                                 io_kind="query",
@@ -1020,7 +1082,7 @@ class SourceService(SessionStateAliasMixin):
                                 request.channel,
                                 extensions,
                                 output_field,
-                                operation="source.basic_configure_v2",
+                                operation=operation,
                             )
                         except BaseException:
                             recovery = {
@@ -1037,6 +1099,8 @@ class SourceService(SessionStateAliasMixin):
                             postcondition_snapshot=postcondition_snapshot,
                             result=result,
                             recovery=recovery,
+                            capability=contract.capability,
+                            output_expected=("on" if _live else "off"),
                         )
                     raise failure
 
@@ -1052,6 +1116,8 @@ class SourceService(SessionStateAliasMixin):
                         preflight_snapshot=preflight_snapshot,
                         postcondition_snapshot=postcondition_snapshot,
                         result=result,
+                        capability=contract.capability,
+                        output_expected=("on" if _live else "off"),
                     ),
                     snapshot=postcondition_snapshot,
                 )
@@ -1059,6 +1125,18 @@ class SourceService(SessionStateAliasMixin):
                 if not context.terminal:
                     context.complete()
                 raise
+
+    def _configure_basic_live_v2_transaction(
+        self,
+        request: SourceBasicConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> _SourceBasicConfigureV2Transaction:
+        return self._configure_basic_v2_transaction(
+            request,
+            correlation_id=correlation_id,
+            _live=True,
+        )
 
     def _set_output_v2_transaction(
         self,
@@ -4782,8 +4860,12 @@ class SourceService(SessionStateAliasMixin):
     ) -> None:
         if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
             raise ConfigError("source.basic_configure_v2 requires a fresh consistent snapshot")
-        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
+        if output.enabled.availability is not Availability.VALUE:
             raise ConfigError("source.basic_configure_v2 requires target output OFF")
+        if output.enabled.value is not False:
+            raise _SourceV2BasicRequiresLiveMutation(
+                "source.basic_configure_v2 requires target output OFF"
+            )
         if not any(
             feature.feature is SourceFeature.BASIC
             and feature.scope is SourceFacetScope.CHANNEL
@@ -4839,6 +4921,88 @@ class SourceService(SessionStateAliasMixin):
             requested_vpp,
             requested_offset,
             operation="source.basic_configure_v2",
+        )
+
+    def _validate_source_basic_live_v2_preflight(
+        self,
+        request: SourceBasicConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        output: OutputFacet,
+    ) -> None:
+        operation = "source.basic_live_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if output.enabled.availability is not Availability.VALUE:
+            raise ConfigError(f"{operation} requires target output ON")
+        if output.enabled.value is not True:
+            raise _SourceV2BasicRequiresOffMutation(
+                f"{operation} requires target output ON"
+            )
+        runtime_basic = next(
+            (
+                feature
+                for feature in snapshot.runtime_profile.features
+                if feature.feature is SourceFeature.BASIC
+                and feature.scope is SourceFacetScope.CHANNEL
+                and request.channel in feature.channels
+                and feature.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in feature.directions
+            ),
+            None,
+        )
+        if runtime_basic is None or not isinstance(
+            runtime_basic.profile,
+            SourceBasicCapabilityProfile,
+        ):
+            raise ConfigError(
+                f"{operation} is not available for the runtime target channel"
+            )
+        patch = request.patch
+        set_fields = tuple(
+            name
+            for name, value in (
+                ("waveform_kind", patch.waveform_kind),
+                ("frequency_hz", patch.frequency_hz),
+                ("amplitude_vpp", patch.amplitude_vpp),
+                ("offset_v", patch.offset_v),
+                ("square_duty_cycle_percent", patch.square_duty_cycle_percent),
+            )
+            if value.action is PatchAction.SET
+        )
+        if len(set_fields) != 1 or set_fields[0] not in {
+            "frequency_hz",
+            "amplitude_vpp",
+        }:
+            raise ConfigError(
+                f"{operation} requires exactly one frequency_hz or amplitude_vpp SET"
+            )
+        profile = runtime_basic.profile
+        if set_fields[0] == "frequency_hz" and not profile.live_frequency_configurable:
+            raise ConfigError(f"{operation} frequency_hz is not declared live-configurable")
+        if (
+            set_fields[0] == "amplitude_vpp"
+            and not profile.live_amplitude_vpp_configurable
+        ):
+            raise ConfigError(f"{operation} amplitude_vpp is not declared live-configurable")
+        if (
+            basic.frequency_mode.availability is not Availability.VALUE
+            or basic.frequency_mode.value is not SourceFrequencyMode.FIXED
+        ):
+            raise ConfigError(f"{operation} requires fixed frequency mode")
+        current_vpp, current_offset = self._source_v2_amplitude_offset(
+            basic,
+            operation=operation,
+        )
+        requested_vpp = (
+            float(patch.amplitude_vpp.value)
+            if patch.amplitude_vpp.action is PatchAction.SET
+            else current_vpp
+        )
+        self._check_source_v2_final_output_limits(
+            requested_vpp,
+            current_offset,
+            operation=operation,
         )
 
     @staticmethod
@@ -6286,6 +6450,32 @@ class SourceService(SessionStateAliasMixin):
         )
         self._validate_source_basic_v2_patch_readback(request, result.basic)
 
+    def _validate_source_basic_live_v2_result(
+        self,
+        request: SourceBasicConfigureRequest,
+        result: object,
+    ) -> None:
+        operation = "source.basic_live_configure_v2"
+        if not isinstance(result, SourceBasicLiveConfigureResult):
+            raise ConfigError(
+                "configure_source_basic_live_v2() returned an invalid "
+                "SourceBasicLiveConfigureResult"
+            )
+        if result.channel != request.channel:
+            raise ConfigError(f"{operation} result channel does not match request")
+        if not result.output_enabled:
+            raise ConfigError(f"{operation} result reports output OFF")
+        vpp, offset = self._source_v2_amplitude_offset(
+            result.basic,
+            operation=operation,
+        )
+        self._check_source_v2_final_output_limits(vpp, offset, operation=operation)
+        self._validate_source_basic_v2_patch_readback(
+            request,
+            result.basic,
+            operation=operation,
+        )
+
     def _validate_source_basic_v2_postcondition(
         self,
         request: SourceBasicConfigureRequest,
@@ -6317,6 +6507,42 @@ class SourceService(SessionStateAliasMixin):
             operation="source.basic_configure_v2",
         )
 
+    def _validate_source_basic_live_v2_postcondition(
+        self,
+        request: SourceBasicConfigureRequest,
+        result: SourceBasicLiveConfigureResult,
+        snapshot: SourceSnapshotV2,
+        basic: BasicWaveFacet,
+        output: OutputFacet,
+    ) -> None:
+        operation = "source.basic_live_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if output.enabled.availability is not Availability.VALUE or output.enabled.value is not True:
+            raise ConfigError(f"{operation} postcondition reports output OFF")
+        self._validate_source_basic_v2_patch_readback(
+            request,
+            basic,
+            operation=operation,
+        )
+        result_vpp, result_offset = self._source_v2_amplitude_offset(
+            result.basic,
+            operation=operation,
+        )
+        post_vpp, post_offset = self._source_v2_amplitude_offset(
+            basic,
+            operation=operation,
+        )
+        if (result_vpp, result_offset) != (post_vpp, post_offset):
+            raise ConfigError(
+                f"{operation} final amplitude or offset readback does not match"
+            )
+        self._check_source_v2_final_output_limits(
+            post_vpp,
+            post_offset,
+            operation=operation,
+        )
+
     @staticmethod
     def _source_v2_amplitude_offset(
         basic: BasicWaveFacet,
@@ -6340,6 +6566,8 @@ class SourceService(SessionStateAliasMixin):
     def _validate_source_basic_v2_patch_readback(
         request: SourceBasicConfigureRequest,
         basic: BasicWaveFacet,
+        *,
+        operation: str = "source.basic_configure_v2",
     ) -> None:
         patch = request.patch
         values = (
@@ -6357,16 +6585,16 @@ class SourceService(SessionStateAliasMixin):
                 continue
             if observed.availability is not Availability.VALUE or observed.value != patch_value.value:
                 raise ConfigError(
-                    f"source.basic_configure_v2 {name} readback does not match request"
+                    f"{operation} {name} readback does not match request"
                 )
         if patch.amplitude_vpp.action is PatchAction.SET:
             actual_vpp, _ = SourceService._source_v2_amplitude_offset(
                 basic,
-                operation="source.basic_configure_v2",
+                operation=operation,
             )
             if actual_vpp != patch.amplitude_vpp.value:
                 raise ConfigError(
-                    "source.basic_configure_v2 amplitude_vpp readback does not match request"
+                    f"{operation} amplitude_vpp readback does not match request"
                 )
 
     def _check_source_v2_final_output_limits(
@@ -6719,8 +6947,10 @@ class SourceService(SessionStateAliasMixin):
         request: SourceBasicConfigureRequest,
         preflight_snapshot: SourceSnapshotV2 | None,
         postcondition_snapshot: SourceSnapshotV2 | None,
-        result: SourceBasicConfigureResult | None,
+        result: SourceBasicConfigureResult | SourceBasicLiveConfigureResult | None,
         recovery: dict[str, object] | None = None,
+        capability: str = "source.basic_configure_v2",
+        output_expected: str = "off",
     ) -> dict[str, object]:
         artifact = context.artifact()
         descriptor_digest = (
@@ -6729,7 +6959,7 @@ class SourceService(SessionStateAliasMixin):
             else preflight_snapshot.runtime_profile.descriptor_digest
         )
         artifact["capability_decision"] = {
-            "capability": "source.basic_configure_v2",
+            "capability": capability,
             "contract_version": SOURCE_CONTRACT_VERSION,
             "descriptor_digest": descriptor_digest,
         }
@@ -6751,7 +6981,7 @@ class SourceService(SessionStateAliasMixin):
             artifact["recovery"] = dict(recovery)
         artifact["final_state"] = {
             "session_health": context.session_state.health.value,
-            "output_expected": "off",
+            "output_expected": output_expected,
         }
         artifact["evidence_refs"] = sorted(
             {
@@ -8213,14 +8443,19 @@ class SourceService(SessionStateAliasMixin):
         source_cfg = self._source_config()
         channel = source_cfg.default_channel if channel is None else channel
         if self._declares_source_v2_capability("source.basic_configure_v2"):
-            transaction = self._configure_basic_v2_transaction(
-                SourceBasicConfigureRequest(
-                    channel=channel,
-                    patch=SourceBasicPatch(
-                        frequency_hz=PatchValue(PatchAction.SET, value_hz),
-                    ),
-                )
+            request = SourceBasicConfigureRequest(
+                channel=channel,
+                patch=SourceBasicPatch(
+                    frequency_hz=PatchValue(PatchAction.SET, value_hz),
+                ),
             )
+            if self._declares_source_v2_capability("source.basic_live_configure_v2"):
+                try:
+                    transaction = self._configure_basic_live_v2_transaction(request)
+                except _SourceV2BasicRequiresOffMutation:
+                    transaction = self._configure_basic_v2_transaction(request)
+            else:
+                transaction = self._configure_basic_v2_transaction(request)
             status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
             self._state_guard_after_write(status)
             return status
@@ -8389,14 +8624,19 @@ class SourceService(SessionStateAliasMixin):
         self._check_source_vpp(value_vpp, field="source amplitude / 信号源幅度")
         channel = source_cfg.default_channel if channel is None else channel
         if self._declares_source_v2_capability("source.basic_configure_v2"):
-            transaction = self._configure_basic_v2_transaction(
-                SourceBasicConfigureRequest(
-                    channel=channel,
-                    patch=SourceBasicPatch(
-                        amplitude_vpp=PatchValue(PatchAction.SET, value_vpp),
-                    ),
-                )
+            request = SourceBasicConfigureRequest(
+                channel=channel,
+                patch=SourceBasicPatch(
+                    amplitude_vpp=PatchValue(PatchAction.SET, value_vpp),
+                ),
             )
+            if self._declares_source_v2_capability("source.basic_live_configure_v2"):
+                try:
+                    transaction = self._configure_basic_live_v2_transaction(request)
+                except _SourceV2BasicRequiresOffMutation:
+                    transaction = self._configure_basic_v2_transaction(request)
+            else:
+                transaction = self._configure_basic_v2_transaction(request)
             status = self._source_status_from_v2_snapshot(transaction.snapshot, channel)
             self._state_guard_after_write(status)
             return status

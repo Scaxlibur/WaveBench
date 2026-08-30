@@ -31,6 +31,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
     assert inventoried_operations <= source_write_operations
     assert source_write_operations - inventoried_operations == {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
@@ -94,6 +95,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
     } == expected_v1_run_steps | expected_v2_run_steps
     expected_v2_operations = {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",

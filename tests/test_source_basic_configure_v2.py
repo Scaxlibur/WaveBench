@@ -26,6 +26,7 @@ from wavebench.instruments.source_extensions import (
     SourceAmplitudeUnit,
     SourceBasicConfigureRequest,
     SourceBasicConfigureResult,
+    SourceBasicLiveConfigureResult,
     SourceBasicPatch,
     SourceFeatureDirection,
     SourceFieldId,
@@ -109,6 +110,7 @@ class _BasicWriteDriver:
         self.raise_after_write = raise_after_write
         self.basic = basic_facet()
         self.basic_requests: list[SourceBasicConfigureRequest] = []
+        self.live_basic_requests: list[SourceBasicConfigureRequest] = []
         self.output_requests: list[SourceOutputRequest] = []
         self.v1_output_calls = 0
         self.closed = False
@@ -170,6 +172,21 @@ class _BasicWriteDriver:
             output_enabled=False,
         )
 
+    def configure_source_basic_live_v2(
+        self,
+        request: SourceBasicConfigureRequest,
+    ) -> SourceBasicLiveConfigureResult:
+        self.transport.write("SOURCE:LIVE CONFIGURE")
+        self.live_basic_requests.append(request)
+        self.basic = self._apply_patch(request)
+        if self.raise_after_write:
+            raise ConfigError("fake live basic configure failed after write")
+        return SourceBasicLiveConfigureResult(
+            channel=request.channel,
+            basic=self.basic,
+            output_enabled=True,
+        )
+
     def set_source_output_v2(self, request: SourceOutputRequest) -> SourceOutputResult:
         self.transport.write("SOURCE:OUTPUT OFF")
         self.output_requests.append(request)
@@ -189,7 +206,9 @@ class _BasicWriteDriver:
         raise AssertionError("M5-B recovery must not fall back to the V1 output route")
 
     def _readback_basic(self):
-        if self.postcondition_frequency_hz is None or not self.basic_requests:
+        if self.postcondition_frequency_hz is None or not (
+            self.basic_requests or self.live_basic_requests
+        ):
             return self.basic
         return replace(
             self.basic,
@@ -336,7 +355,12 @@ def _config(*, limits: SafetyLimitsConfig = SafetyLimitsConfig()) -> WaveBenchCo
     )
 
 
-def _write_extensions(*, include_output: bool):
+def _write_extensions(
+    *,
+    include_output: bool,
+    live_frequency: bool = False,
+    live_amplitude_vpp: bool = False,
+):
     extensions = source_extensions()
     basic, output = extensions.features
     return replace(
@@ -347,6 +371,11 @@ def _write_extensions(*, include_output: bool):
                 directions=(
                     SourceFeatureDirection.CONFIGURE,
                     SourceFeatureDirection.READ,
+                ),
+                profile=replace(
+                    basic.profile,
+                    live_frequency_configurable=live_frequency,
+                    live_amplitude_vpp_configurable=live_amplitude_vpp,
                 ),
             ),
             replace(
@@ -369,6 +398,9 @@ def _service(
     *,
     combined: bool = True,
     include_output: bool = True,
+    include_live: bool = False,
+    live_frequency: bool = True,
+    live_amplitude_vpp: bool = True,
     output_enabled: bool = False,
     postcondition_frequency_hz: float | None = None,
     raise_after_write: bool = False,
@@ -383,10 +415,16 @@ def _service(
         raise_after_write=raise_after_write,
     )
 
-    extensions = _write_extensions(include_output=include_output)
+    extensions = _write_extensions(
+        include_output=include_output,
+        live_frequency=(include_live and live_frequency),
+        live_amplitude_vpp=(include_live and live_amplitude_vpp),
+    )
     capabilities = ["source.snapshot_v2", "source.basic_configure_v2"]
     if include_output:
         capabilities.append("source.output_v2")
+    if include_live:
+        capabilities.append("source.basic_live_configure_v2")
     descriptor = replace(
         source_descriptor(driver=driver, extensions=extensions),
         capabilities=tuple(capabilities),
@@ -497,6 +535,48 @@ def _frequency_request(value_hz: float = 2_000.0) -> SourceBasicConfigureRequest
     )
 
 
+def test_basic_live_capability_requires_off_basic_and_output_transactions() -> None:
+    driver = _BasicWriteDriver(
+        session_state=InstrumentSessionState(epoch_id="source-live-dependencies"),
+        combined=True,
+    )
+    descriptor = replace(
+        source_descriptor(
+            driver=driver,
+            extensions=_write_extensions(
+                include_output=False,
+                live_frequency=True,
+            ),
+        ),
+        capabilities=("source.snapshot_v2", "source.basic_live_configure_v2"),
+    )
+
+    with pytest.raises(ConfigError, match="requires source.basic_configure_v2"):
+        validate_source_descriptor(descriptor)
+
+
+def test_basic_live_capability_requires_explicit_per_field_profile() -> None:
+    driver = _BasicWriteDriver(
+        session_state=InstrumentSessionState(epoch_id="source-live-profile"),
+        combined=True,
+    )
+    descriptor = replace(
+        source_descriptor(
+            driver=driver,
+            extensions=_write_extensions(include_output=True),
+        ),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+            "source.output_v2",
+            "source.basic_live_configure_v2",
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="per-channel fixed-mode live"):
+        validate_source_descriptor(descriptor)
+
+
 @pytest.mark.parametrize("combined", (True, False))
 def test_basic_configure_v2_public_service_supports_combined_and_scalar_queries(
     combined: bool,
@@ -523,6 +603,150 @@ def test_basic_configure_v2_public_service_supports_combined_and_scalar_queries(
     ]
     assert "fake-source-v2" not in repr(artifact)
     assert "SOURCE:STATE?" not in repr(artifact)
+
+
+def test_basic_live_configure_v2_public_service_keeps_output_on() -> None:
+    service, driver = _service(output_enabled=True, include_live=True)
+    request = _frequency_request()
+
+    result, artifact = service.configure_basic_live_v2(
+        request,
+        correlation_id="basic-live-write",
+    )
+
+    assert result.output_enabled is True
+    assert result.basic.frequency_hz.value == 2_000.0
+    assert driver.basic_requests == []
+    assert driver.live_basic_requests == [request]
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_completed == 1
+    assert driver.transport.counters.query_calls == 2
+    assert artifact["operation"] == "source.basic_live_configure_v2"
+    assert artifact["capability_decision"]["capability"] == (
+        "source.basic_live_configure_v2"
+    )
+    assert artifact["final_state"] == {
+        "session_health": "healthy",
+        "output_expected": "on",
+    }
+
+
+def test_v1_live_capable_basic_route_uses_off_transaction_when_output_is_off() -> None:
+    service, driver = _service(include_live=True)
+
+    status = service.set_frequency(channel=1, value_hz=2_000.0)
+
+    assert status.output == "OFF"
+    assert driver.basic_requests == [_frequency_request()]
+    assert driver.live_basic_requests == []
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_completed == 1
+
+
+@pytest.mark.parametrize(
+    ("method", "value", "expected_field"),
+    (
+        ("set_frequency", 2_000.0, "frequency_hz"),
+        ("set_amplitude_vpp", 1.5, "amplitude_vpp"),
+    ),
+)
+def test_v1_live_basic_routes_do_not_cycle_output(
+    method: str,
+    value: float,
+    expected_field: str,
+) -> None:
+    service, driver = _service(output_enabled=True, include_live=True)
+
+    status = getattr(service, method)(channel=1, **{
+        "value_hz" if method == "set_frequency" else "value_vpp": value,
+    })
+
+    assert status.output == "ON"
+    assert driver.basic_requests == []
+    assert len(driver.live_basic_requests) == 1
+    assert getattr(driver.live_basic_requests[0].patch, expected_field).value == value
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_completed == 1
+    assert driver.transport.counters.query_calls == 2
+
+
+def test_frequency_response_style_live_sequence_never_cycles_output() -> None:
+    service, driver = _service(output_enabled=True, include_live=True)
+
+    for amplitude_vpp in (0.5, 1.0):
+        service.set_amplitude_vpp(channel=1, value_vpp=amplitude_vpp)
+        for frequency_hz in (100.0, 1_000.0):
+            status = service.set_frequency(channel=1, value_hz=frequency_hz)
+            assert status.output == "ON"
+
+    assert len(driver.live_basic_requests) == 6
+    assert driver.basic_requests == []
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_completed == 6
+    assert driver.transport.counters.query_calls == 12
+
+
+def test_basic_live_configure_v2_rejects_output_off_before_write() -> None:
+    service, driver = _service(include_live=True)
+
+    with pytest.raises(ConfigError, match="target output ON"):
+        service.configure_basic_live_v2(_frequency_request())
+
+    assert driver.live_basic_requests == []
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_basic_live_configure_v2_rejects_multiple_fields_before_write() -> None:
+    service, driver = _service(output_enabled=True, include_live=True)
+    request = SourceBasicConfigureRequest(
+        channel=1,
+        patch=SourceBasicPatch(
+            frequency_hz=PatchValue(PatchAction.SET, 2_000.0),
+            amplitude_vpp=PatchValue(PatchAction.SET, 1.5),
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="exactly one"):
+        service.configure_basic_live_v2(request)
+
+    assert driver.live_basic_requests == []
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_basic_live_configure_v2_enforces_per_field_profile() -> None:
+    service, driver = _service(
+        output_enabled=True,
+        include_live=True,
+        live_frequency=False,
+        live_amplitude_vpp=True,
+    )
+
+    with pytest.raises(ConfigError, match="frequency_hz is not declared"):
+        service.configure_basic_live_v2(_frequency_request())
+
+    assert driver.live_basic_requests == []
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_basic_live_configure_v2_rejects_safety_limit_before_write() -> None:
+    service, driver = _service(
+        output_enabled=True,
+        include_live=True,
+        limits=SafetyLimitsConfig(max_source_vpp=2.0),
+    )
+    request = SourceBasicConfigureRequest(
+        channel=1,
+        patch=SourceBasicPatch(
+            amplitude_vpp=PatchValue(PatchAction.SET, 2.5),
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="max_source_vpp"):
+        service.configure_basic_live_v2(request)
+
+    assert driver.live_basic_requests == []
+    assert driver.transport.counters.write_requests == 0
 
 
 def test_v1_frequency_route_maps_to_v2_for_a_dual_contract_driver() -> None:
@@ -938,6 +1162,47 @@ def test_basic_configure_v2_postcondition_mismatch_runs_one_off_recovery() -> No
     assert artifact["final_state"]["session_health"] == "uncertain"
     assert service.session_state is not None
     assert service.session_state.health is SessionHealth.UNCERTAIN
+
+
+def test_basic_live_configure_v2_postcondition_mismatch_runs_one_off_recovery() -> None:
+    service, driver = _service(
+        output_enabled=True,
+        include_live=True,
+        postcondition_frequency_hz=2_001.0,
+    )
+
+    with pytest.raises(ConfigError, match="frequency_hz readback") as raised:
+        service.configure_basic_live_v2(_frequency_request())
+
+    artifact = raised.value.source_operation_artifact
+    assert driver.basic_requests == []
+    assert driver.live_basic_requests == [_frequency_request()]
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=False)]
+    assert driver.transport.counters.write_completed == 2
+    assert artifact["operation"] == "source.basic_live_configure_v2"
+    assert artifact["recovery"] == {
+        "status": "off_verified",
+        "session_health": "uncertain",
+    }
+    assert artifact["safe_state_verified"] is True
+    assert artifact["final_state"]["session_health"] == "uncertain"
+    assert service.session_state is not None
+    assert service.session_state.health is SessionHealth.UNCERTAIN
+
+
+def test_basic_live_configure_v2_failure_is_not_retried() -> None:
+    service, driver = _service(
+        output_enabled=True,
+        include_live=True,
+        raise_after_write=True,
+    )
+
+    with pytest.raises(ConfigError, match="failed after write"):
+        service.configure_basic_live_v2(_frequency_request())
+
+    assert driver.live_basic_requests == [_frequency_request()]
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=False)]
+    assert driver.transport.counters.write_requests == 2
 
 
 def test_basic_configure_v2_never_falls_back_to_v1_output_for_recovery() -> None:

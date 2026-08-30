@@ -497,6 +497,38 @@ _BUILTIN_SPECS = (
         risk_flags=("source_v2", "output_must_be_off"),
     ),
     _spec(
+        "source.basic_live_configure_v2",
+        "source",
+        required_capabilities=(
+            "source.basic_live_configure_v2",
+            "source.basic_configure_v2",
+            "source.output_v2",
+        ),
+        effect="write",
+        lease_mode="exclusive",
+        changed_fields=("source.channel.basic",),
+        restore_coverage="source-v2-live-basic",
+        required_verified_fields=(
+            "source.identity",
+            "source.channel.basic",
+            "source.channel.output",
+        ),
+        verification_fields=(
+            "source.identity",
+            "source.channel.basic",
+            "source.channel.output",
+        ),
+        postcondition_fields=(
+            "source.channel.basic",
+            "source.channel.output",
+        ),
+        cleanup_verification_fields=("source.channel.output",),
+        timeout_source="operation.timeout_ms",
+        operation_timeout_ms=5_000,
+        error_check_minimum="disabled",
+        risk_flags=("source_v2", "output_must_be_on", "live_signal_mutation"),
+    ),
+    _spec(
         "source.harmonics_configure_v2",
         "source",
         required_capabilities=("source.harmonics_configure_v2",),

@@ -144,7 +144,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[sync_start + len(sync_exports) :] == match.group(1).splitlines()
+    noise_exports = match.group(1).splitlines()
+    noise_start = sync_start + len(sync_exports)
+    assert module.__all__[noise_start : noise_start + len(noise_exports)] == noise_exports
+    match = re.search(
+        r"D1-2／输出开启时的受限 Basic 修改在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[noise_start + len(noise_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -185,6 +194,8 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "offset_readable",
             "phase_readable",
             "square_duty_readable",
+            "live_frequency_configurable",
+            "live_amplitude_vpp_configurable",
         ),
         "SourceOutputCapabilityProfile": (
             "output_readable",
@@ -354,6 +365,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
         ),
         "SourceBasicConfigureRequest": ("channel", "patch", "mode"),
         "SourceBasicConfigureResult": ("channel", "basic", "output_enabled"),
+        "SourceBasicLiveConfigureResult": ("channel", "basic", "output_enabled"),
         "SourceOutputRequest": ("channel", "enabled"),
         "SourceOutputResult": (
             "channel",
@@ -603,6 +615,7 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
     expected = {
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.basic_live_configure_v2": ("configure_source_basic_live_v2",),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
         "source.harmonics_disable_v2": ("disable_source_harmonics_v2",),
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
@@ -659,6 +672,7 @@ def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
     }
     assert keep.action is module.PatchAction.KEEP
     assert module.SourceBasicConfigureResult(1, basic_facet(), False).output_enabled is False
+    assert module.SourceBasicLiveConfigureResult(1, basic_facet(), True).output_enabled is True
     assert module.SourceOutputResult(1, False) == module.SourceOutputResult(1, False)
 
     with pytest.raises(ValueError, match="SET patch values"):
@@ -684,6 +698,8 @@ def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
         )
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceBasicConfigureResult(1, basic_facet(), True)
+    with pytest.raises(ValueError, match="output_enabled=True"):
+        module.SourceBasicLiveConfigureResult(1, basic_facet(), False)
     with pytest.raises(ValueError, match="final VPP amplitude"):
         module.SourceBasicConfigureResult(
             1,

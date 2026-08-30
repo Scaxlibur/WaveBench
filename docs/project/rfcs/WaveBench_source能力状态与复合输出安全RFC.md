@@ -216,8 +216,9 @@ mutation 或恢复写入的规则仍作为对应写 capability 的后续准入�
 15. artifact 不记录授权 token、baseline nonce、完整仪器响应、真实资源串、序列号或凭据。
 16. 插件未声明 Source V2 时，核心不会从型号、方法存在或 V1 profile 自动推导 V2 写能力。
 17. Source V2 能量增加操作必须显式配置 Vpp 与端口绝对电压上下限；缺失不表示无限制。
-18. Source V2 首个可写修订只允许相关输出 OFF 时配置；该限制不追溯改变 V1 行为，也不表示
-    仪器硬件不支持 live mutation。
+18. `source.basic_configure_v2` 与高级配置仍只允许相关输出 OFF 时执行。只有独立声明
+    `source.basic_live_configure_v2` 的设备，才允许在输出已证明为 ON 时执行受限单字段修改；该能力
+    不追溯改变未声明能力的 V1 行为。
 19. storage mutation、波形选择/配置和输出 ON 是三个独立 operation，不共享一次准入决定。
 
 ## R2 公共集成合同
@@ -610,6 +611,14 @@ SourceNoiseOverlayScale
 SourceNoiseOverlayScaleKind
 ```
 
+D1-2／输出开启时的受限 Basic 修改在上述清单末尾追加以下精确条目：
+
+```text
+SourceBasicLiveConfigureResult
+SourceBasicLiveConfigureV2Driver
+SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -639,6 +648,7 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | capability | required method | 范围 |
 | --- | --- | --- |
 | `source.basic_configure_v2` | `configure_source_basic_v2` | 基础函数、频率、Vpp、偏置和方波参数 |
+| `source.basic_live_configure_v2` | `configure_source_basic_live_v2` | 输出 ON 时单独修改频率或 Vpp |
 | `source.output_v2` | `set_source_output_v2` | 单独的 ON/OFF 转换 |
 | `source.harmonics_configure_v2` | `configure_source_harmonics_v2` | 谐波配置 |
 | `source.harmonics_disable_v2` | `disable_source_harmonics_v2` | 关闭 Harmonic 状态 |
@@ -868,6 +878,8 @@ epoch 和 baseline。R4 已把这些两个 model、固定 phase 和 core-only co
 
 `UNKNOWN` energy/storage effect 在 I/O 前拒绝。`POTENTIAL_WHILE_OFF` 要求全部
 `required_off_outputs` 已通过 fresh readback 证明 OFF，并且 operation 本身不能打开输出。
+`LIVE_MUTATION` 要求目标输出已通过 fresh readback 证明 ON，并且只能执行 capability 明确声明的
+单字段修改；失败恢复只能关闭输出。
 `MAY_INCREASE` 与 `EMIT` 必须通过统一预算门。`DECREASE_ONLY` 不需要预算，但仍需 access、
 session、operation context 和 postcondition。
 
@@ -878,13 +890,13 @@ session、operation context 和 postcondition。
 | V2 输出 ON | fresh 一致 snapshot + 预算 + 写后回读 |
 | V1 同义写入口调用双合同驱动 | 在 Service 边界映射到对应 V2 operation，无法无损映射时在 I/O 前拒绝 |
 | `source.arb_load output_on=true` | 先在输出 OFF 的配置 phase 完成上传或选择，再用 fresh snapshot 签发只授权下一次 ON 的新决定 |
-| 输出 ON 时的 Source V2 setter/patch | 首版在 I/O 前拒绝；未来若允许 live mutation，必须对完整目标状态使用专项预算合同 |
+| 输出 ON 时的 Source V2 setter/patch | 仅 `source.basic_live_configure_v2` 可单独修改频率或 Vpp；其它 patch 在 I/O 前拒绝 |
 | arm/fire/trigger | 在可能发出信号前完成预算与接线证据检查 |
 | 恢复为 ON | 作为独立、显式授权的 ON 操作重新计算预算 |
 
 V1 驱动未 opt in 时继续使用现有 V1 路径，不伪装成已获得 Source V2 复合安全保证。
-Source V2 的首版 live-mutation 禁令不追溯改变 V1 驱动的既有行为，也不表示硬件本身不支持
-ON 状态写入。
+未声明 `source.basic_live_configure_v2` 的 V2 驱动继续拒绝 ON 状态配置。V1-only 驱动保持既有
+行为，但不因此获得 Source V2 的 live mutation 安全保证。
 
 每个 V2 写 capability 必须在 `SourceOperationContract` 中登记其 V1 等价入口、重叠字段和可能发出
 信号的间接入口。双合同驱动声明该 capability 后，只有落入这些集合的 V1 路径必须映射到 V2
@@ -2398,8 +2410,9 @@ class SafetyLimitsConfig:
 V1 CLI 或未 opt in 的 V1 driver。
 
 缺少显式安全轴仍允许 `source.snapshot_v2`、正常 OFF、disable，以及已经证明不会发出信号的
-输出 OFF 配置或独立 storage mutation。ON、fire、恢复 ON、可能发出信号的 trigger、live mutation，
-以及能量影响为 unknown 的 operation 必须零仪器 I/O 拒绝。
+输出 OFF 配置或独立 storage mutation。ON、fire、恢复 ON、可能发出信号的 trigger、严格预算型
+live mutation，以及能量影响为 unknown 的 operation 必须零仪器 I/O 拒绝。D1-2 的受限 Basic
+live mutation 使用 R6 数值门，不要求 R3 的完整复合预算模型。
 
 示例配置中的「缺失表示不限」只能继续描述 V1。Source V2 文案必须明确：缺失表示没有能量转换
 授权，而不是无限制。
@@ -2513,9 +2526,9 @@ topology 或 profile 只要声明共享功率关系，就必须提供完整 type
 context 结束都会使它失效；获准的 ON/fire/trigger action 会一次性消费它。首版禁止用一个决定
 同时授权 ARB 上传和 ON，也禁止输出 ON 时执行多字段 live patch。
 
-R2 规定未来 Source V2 首个可写修订中，高级配置只允许在所有相关输出 OFF 时执行，不自动执行
-「关闭 → 配置 → 重新开启」。未来若允许 live mutation，必须通过本 RFC 修订并复用同一
-写后预算门。该规则不追溯改变未 opt in 的 V1 驱动行为。
+高级配置只允许在所有相关输出 OFF 时执行，不自动执行「关闭 → 配置 → 重新开启」。D1-2 仅为
+Basic 的频率与 Vpp 增加独立单字段 live operation，不授权波形、Offset、占空比、高级功能、ARB
+或跨通道关系的 ON 状态修改。该规则不追溯改变未 opt in 的 V1 驱动行为。
 
 OFF 不需要复合预算，但仍需要正常 OFF 权限或核心签发的 recovery 授权。`poisoned` 连接不得
 为了 OFF 再发送协议 I/O。
@@ -2829,7 +2842,7 @@ status、output 和基础 setter，也包括已经发布的 profile、configure�
 双合同驱动声明某项 V2 写 capability 后，同义或副作用闭包重叠的 V1 写入口必须在 Service 边界
 映射到对应 V2 operation，无法无损映射时在 I/O 前拒绝；经审计确认字段闭包和发信号路径均不相交
 的 V1 operation 可以继续保持原行为。未声明 V2 写 capability 的 V1-only 驱动保持原行为；
-Source V2 首版禁止 live mutation 不追溯改变该路径。
+未声明 `source.basic_live_configure_v2` 的 V2 驱动仍不得经 V1 setter 绕过 ON 状态门。
 
 ### 独立 P0 缺陷修复
 
@@ -3066,7 +3079,8 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 - 复合预算由核心统一消费；插件提供厂商状态、typed constraint 和协议回读。
 - `max_source_vpp` 与端口绝对电压上下限必须显式配置，不能互相推导；缺失时 V2 能量操作失败关闭。
 - 只有 `HARD_CONSERVATIVE` 可以支持输出 ON 准入。
-- Source V2 首个可写修订禁止 live mutation；未 opt in 的 V1 行为不变。
+- Basic live mutation 是独立 capability，只允许输出 ON 时单独修改频率或 Vpp；未 opt in 的 V1
+  行为不变。
 - ARB storage、selection/configuration 和 ON 使用三个独立 operation。
 - Source 事务复用核心 session health 和授权底座，不新增平行 `state_uncertain` 布尔值。
 - 失败恢复默认以 OFF 结束；重新 ON 是新的授权操作。
@@ -3099,8 +3113,8 @@ Vpp、Offset 和输出状态的设备正常使用信号发生器功能，而不�
    基础 Source V2 功能。
 3. 若同时配置了 `min_source_port_voltage_v` 和 `max_source_port_voltage_v`，核心以
    `offset ± Vpp / 2` 检查该端口区间；两个配置均缺失时，不增加额外端口电压限制。
-4. 基础配置要求目标通道在写前为 OFF；不支持 V2 live mutation。独立端口可以同时保持 ON，核心
-   不为缺少共享功率或热模型而全局拒绝。
+4. `source.basic_configure_v2` 要求目标通道在写前为 OFF。独立端口可以同时保持 ON，核心不为
+   缺少共享功率或热模型而全局拒绝。
 5. 每个目标字段最多写入一次；写后必须独立回读。结果不明时不得重试；在 session 仍允许 recovery
    I/O 时请求受影响端口 OFF，`poisoned` session 仍遵守 transport RFC 的 close-only 规则。
 6. `source.output_v2` 的 OFF 不因 Vpp、Offset、端接或预算信息缺失而拒绝；ON 使用 fresh snapshot
@@ -3109,6 +3123,22 @@ Vpp、Offset 和输出状态的设备正常使用信号发生器功能，而不�
 基础写入不要求 `SourceTerminationEvidence`、`CompositeOutputBudget`、RMS、Noise crest factor、ARB
 插值上界、复杂负载或共享热功率模型。R3 的严格预算模型继续保留给明确选择它的后续 capability，
 不能反向限制 R6 的 basic/output 正常路径。
+
+### D1-2 受限 Basic live mutation
+
+`source.basic_live_configure_v2` 是独立 capability，不改变 `source.basic_configure_v2` 的 OFF-only
+语义。descriptor 必须同时声明 `source.snapshot_v2`、`source.basic_configure_v2`、
+`source.output_v2`，并在每个 Basic profile 中逐字段声明是否允许在线修改频率和 Vpp。
+
+每次请求只允许 `frequency_hz` 或 `amplitude_vpp` 中一个字段为 `SET`；waveform、Offset、占空比和
+多字段 patch 在 MAIN 前拒绝。preflight 必须证明 snapshot 一致、目标输出为 ON、频率模式为 FIXED，
+并取得最终 Vpp 与 Offset。目标和回读值继续使用 R6 的 `max_source_vpp` 与端口绝对电压检查。
+
+MAIN 只调用一次 `configure_source_basic_live_v2()`。结果与 fresh postcondition 必须逐项证明请求值、
+最终 Vpp、Offset 和输出仍为 ON。结果未知、driver 异常或后置条件失败时不重试，也不恢复 ON；Core
+只允许一次 `source.output_v2` OFF recovery 与独立回读。V1 `set_frequency()` 和
+`set_amplitude_vpp()` 可按已证明的输出状态选择 OFF-only 或 live operation。D1-2 不增加 CLI 命令
+或 run plan step，频响、离散扫频与 TUI 继续复用既有 setter。
 
 Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使用 `offset ± Vpp / 2`；不要求独立
 `SourceNoisePeakConstraint`。若设备只能提供标称值、RMS 或载波幅度，插件不得为该模式声明

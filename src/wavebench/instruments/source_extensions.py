@@ -506,6 +506,8 @@ class SourceBasicCapabilityProfile:
     offset_readable: bool
     phase_readable: bool
     square_duty_readable: bool
+    live_frequency_configurable: bool = False
+    live_amplitude_vpp_configurable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.waveform_kinds, SourceWaveformKind, "basic waveform_kinds")
@@ -514,6 +516,14 @@ class SourceBasicCapabilityProfile:
         _require_bool(self.offset_readable, "basic offset_readable")
         _require_bool(self.phase_readable, "basic phase_readable")
         _require_bool(self.square_duty_readable, "basic square_duty_readable")
+        _require_bool(
+            self.live_frequency_configurable,
+            "basic live_frequency_configurable",
+        )
+        _require_bool(
+            self.live_amplitude_vpp_configurable,
+            "basic live_amplitude_vpp_configurable",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -984,6 +994,7 @@ class SourceEnergyEffect(StrEnum):
     NONE = "none"
     DECREASE_ONLY = "decrease_only"
     POTENTIAL_WHILE_OFF = "potential_while_off"
+    LIVE_MUTATION = "live_mutation"
     MAY_INCREASE = "may_increase"
     EMIT = "emit"
     UNKNOWN = "unknown"
@@ -1178,6 +1189,39 @@ SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
         SourceV1WriteRouteId.SET_FREQUENCY,
         SourceV1WriteRouteId.SET_FUNCTION,
         SourceV1WriteRouteId.SET_SQUARE_DUTY_CYCLE,
+    ),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.UPLOAD_ARBITRARY,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=2,
+    verification_max_steps=2,
+)
+
+
+SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.basic_live_configure_v2",
+    capability="source.basic_live_configure_v2",
+    feature=SourceFeature.BASIC,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.LIVE_MUTATION,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.BASIC,),
+    postcondition_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(
+        SourceV1WriteRouteId.SET_AMPLITUDE_VPP,
+        SourceV1WriteRouteId.SET_FREQUENCY,
     ),
     v1_overlapping_routes=(
         SourceV1WriteRouteId.RESTORE,
@@ -3261,6 +3305,47 @@ class SourceBasicConfigureResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceBasicLiveConfigureResult:
+    channel: int
+    basic: BasicWaveFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source basic live configure result channel", minimum=1)
+        if not isinstance(self.basic, BasicWaveFacet):
+            raise ValueError("source basic live configure result basic has an invalid type")
+        _require_bool(
+            self.output_enabled,
+            "source basic live configure result output_enabled",
+        )
+        if not self.output_enabled:
+            raise ValueError(
+                "source basic live configure result requires output_enabled=True"
+            )
+        if (
+            self.basic.amplitude.availability is not Availability.VALUE
+            or not isinstance(self.basic.amplitude.value, SourceAmplitude)
+            or self.basic.amplitude.value.unit is not SourceAmplitudeUnit.VPP
+        ):
+            raise ValueError(
+                "source basic live configure result requires a final VPP amplitude readback"
+            )
+        _require_finite(
+            self.basic.amplitude.value.value,
+            "source basic live configure result final_amplitude",
+            minimum=0.0,
+        )
+        if self.basic.offset_v.availability is not Availability.VALUE:
+            raise ValueError(
+                "source basic live configure result requires a final offset readback"
+            )
+        _require_finite(
+            self.basic.offset_v.value,
+            "source basic live configure result final_offset_v",
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceOutputResult:
     channel: int
     enabled: bool
@@ -4993,6 +5078,14 @@ class SourceBasicConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceBasicLiveConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_basic_live_v2(
+        self,
+        request: SourceBasicConfigureRequest,
+    ) -> SourceBasicLiveConfigureResult: ...
+
+
+@runtime_checkable
 class SourceHarmonicConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_harmonics_v2(
         self,
@@ -5443,4 +5536,7 @@ __all__ = [
     "SourceNoiseOverlayCapabilityProfile",
     "SourceNoiseOverlayScale",
     "SourceNoiseOverlayScaleKind",
+    "SourceBasicLiveConfigureResult",
+    "SourceBasicLiveConfigureV2Driver",
+    "SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT",
 ]

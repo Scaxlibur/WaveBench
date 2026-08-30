@@ -50,6 +50,9 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
     {
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.basic_live_configure_v2": (
+            "configure_source_basic_live_v2",
+        ),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
         "source.harmonics_disable_v2": ("disable_source_harmonics_v2",),
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
@@ -77,6 +80,7 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
 _SOURCE_WRITE_CAPABILITIES = frozenset(
     {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.harmonics_configure_v2",
         "source.harmonics_disable_v2",
         "source.modulation_configure_v2",
@@ -350,6 +354,51 @@ def _validate_write_contract(
         if not configurable <= output_readable:
             raise ConfigError(
                 "source.basic_configure_v2 requires readable output state on every channel"
+            )
+
+    if "source.basic_live_configure_v2" in capabilities:
+        required = {"source.basic_configure_v2", "source.output_v2"}
+        missing = required - capabilities
+        if missing:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires source.basic_configure_v2 "
+                "and source.output_v2"
+            )
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.BASIC,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        live_configurable = frozenset(
+            channel
+            for feature in extensions.features
+            if (
+                feature.feature is SourceFeature.BASIC
+                and feature.scope is SourceFacetScope.CHANNEL
+                and feature.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in feature.directions
+                and isinstance(feature.profile, SourceBasicCapabilityProfile)
+                and SourceFrequencyMode.FIXED in feature.profile.frequency_modes
+                and (
+                    feature.profile.live_frequency_configurable
+                    or feature.profile.live_amplitude_vpp_configurable
+                )
+            )
+            for channel in feature.channels
+        )
+        if not configurable or not configurable <= live_configurable:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires per-channel fixed-mode live "
+                "frequency or Vpp declarations"
+            )
+        if not configurable <= basic_readable:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires readable final VPP and Offset "
+                "on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires readable output state on every channel"
             )
 
     if "source.harmonics_configure_v2" in capabilities:
@@ -1040,7 +1089,10 @@ def _validate_declared_write_directions(
 ) -> None:
     capabilities_by_direction = {
         (SourceFeature.BASIC, SourceFeatureDirection.CONFIGURE): frozenset(
-            {"source.basic_configure_v2"}
+            {
+                "source.basic_configure_v2",
+                "source.basic_live_configure_v2",
+            }
         ),
         (SourceFeature.HARMONICS, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.harmonics_configure_v2"}
