@@ -327,6 +327,44 @@ def _source_basic_configure_v2_request(
     )
 
 
+def _source_counter_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        PatchAction,
+        PatchValue,
+        SourceCounterConfigurationPatch,
+        SourceCounterConfigureRequest,
+        SourceInputCoupling,
+    )
+
+    coupling = getattr(args, "coupling", None)
+    statistics_enabled = getattr(args, "statistics_enabled", None)
+
+    def patch_value(value: object):
+        return (
+            PatchValue(PatchAction.SET, value)
+            if value is not None
+            else PatchValue(PatchAction.KEEP)
+        )
+
+    try:
+        return SourceCounterConfigureRequest(
+            input_id=args.input_id,
+            patch=SourceCounterConfigurationPatch(
+                coupling=patch_value(
+                    SourceInputCoupling(coupling) if coupling is not None else None
+                ),
+                impedance_ohm=patch_value(getattr(args, "impedance_ohm", None)),
+                attenuation=patch_value(getattr(args, "attenuation", None)),
+                trigger_level_v=patch_value(getattr(args, "trigger_level_v", None)),
+                statistics_enabled=patch_value(
+                    statistics_enabled == "on" if statistics_enabled is not None else None
+                ),
+            ),
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _source_cross_channel_configure_v2_request(
     args: argparse.Namespace,
     request_type: type[object],
@@ -1427,6 +1465,45 @@ def _main(argv: list[str] | None = None) -> int:
                     SourceOutputRequest(
                         channel=args.channel,
                         enabled=args.state == "on",
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "counter-configure-v2":
+                _, payload = service.configure_counter_v2(
+                    _source_counter_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command in {"counter-enable-v2", "counter-disable-v2"}:
+                from wavebench.instruments.source_extensions import SourceCounterEnableRequest
+
+                _, payload = service.set_counter_enabled_v2(
+                    SourceCounterEnableRequest(
+                        input_id=args.input_id,
+                        enabled=args.command == "counter-enable-v2",
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "counter-measure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceCounterMeasureRequest,
+                    source_v2_to_data,
+                )
+
+                payload = source_v2_to_data(
+                    service.measure_counter_v2(
+                        SourceCounterMeasureRequest(input_id=args.input_id)
                     )
                 )
                 if args.json:

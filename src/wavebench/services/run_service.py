@@ -45,11 +45,16 @@ from wavebench.instruments.source_extensions import (
     SourceBasicPatch,
     SourceBurstConfigureRequest,
     SourceCombineConfigureRequest,
+    SourceCounterConfigurationPatch,
+    SourceCounterConfigureRequest,
+    SourceCounterEnableRequest,
+    SourceCounterMeasureRequest,
     SourceCouplingConfigureRequest,
     SourceFmModulationConfigureRequest,
     SourceHarmonicConfigureRequest,
     SourceHarmonicDisableRequest,
     SourceHarmonicPreset,
+    SourceInputCoupling,
     SourceModulationConfigureRequest,
     SourceOutputRequest,
     SourcePhaseRelationConfigureRequest,
@@ -61,6 +66,7 @@ from wavebench.instruments.source_extensions import (
     SourceTrackingConfigureRequest,
     SourceWaveformKind,
     SourceStorageWriteMode,
+    source_v2_to_data,
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.power_service import PowerService
@@ -548,6 +554,12 @@ class RunService:
                 )
             elif step.kind in {"source.output_enable_v2", "source.output_disable_v2"}:
                 add("source", "source.snapshot_v2", "source.output_v2")
+            elif step.kind == "source.counter_configure_v2":
+                add("source", "source.snapshot_v2", "source.counter_configure_v2")
+            elif step.kind in {"source.counter_enable_v2", "source.counter_disable_v2"}:
+                add("source", "source.snapshot_v2", "source.counter_enable_v2")
+            elif step.kind == "source.counter_measure_v2":
+                add("source", "source.snapshot_v2", "source.counter_measure_v2")
             elif step.kind == "source.harmonics_configure_v2":
                 add("source", "source.snapshot_v2", "source.harmonics_configure_v2")
             elif step.kind == "source.harmonics_disable_v2":
@@ -780,6 +792,22 @@ class RunService:
                             },
                         )
                     except (TransportIOError, SessionHealthError) as exc:
+                        step_failure = exc
+                        record = RunStepRecord(
+                            index=step.index,
+                            kind=step.kind,
+                            status="failed",
+                            fields=step.fields,
+                            artifact={
+                                "error": error_envelope(
+                                    exc,
+                                    operation=f"run.step.{step.kind}",
+                                )
+                            },
+                        )
+                    except WaveBenchError as exc:
+                        if not self._safety_gate_for_step(plan, step)["enabled"]:
+                            raise
                         step_failure = exc
                         record = RunStepRecord(
                             index=step.index,
@@ -1447,6 +1475,57 @@ class RunService:
                 SourceOutputRequest(channel=step.fields["channel"], enabled=False)
             )
             artifact = {"source_operation": source_operation}
+        elif step.kind == "source.counter_configure_v2":
+            fields = step.fields
+            _, source_operation = self._source_service(services=services).configure_counter_v2(
+                SourceCounterConfigureRequest(
+                    input_id=fields["input_id"],
+                    patch=SourceCounterConfigurationPatch(
+                        coupling=(
+                            PatchValue(
+                                PatchAction.SET,
+                                SourceInputCoupling(fields["coupling"]),
+                            )
+                            if "coupling" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        impedance_ohm=(
+                            PatchValue(PatchAction.SET, fields["impedance_ohm"])
+                            if "impedance_ohm" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        attenuation=(
+                            PatchValue(PatchAction.SET, fields["attenuation"])
+                            if "attenuation" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        trigger_level_v=(
+                            PatchValue(PatchAction.SET, fields["trigger_level_v"])
+                            if "trigger_level_v" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                        statistics_enabled=(
+                            PatchValue(PatchAction.SET, fields["statistics_enabled"])
+                            if "statistics_enabled" in fields
+                            else PatchValue(PatchAction.KEEP)
+                        ),
+                    ),
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind in {"source.counter_enable_v2", "source.counter_disable_v2"}:
+            _, source_operation = self._source_service(services=services).set_counter_enabled_v2(
+                SourceCounterEnableRequest(
+                    input_id=step.fields["input_id"],
+                    enabled=step.kind == "source.counter_enable_v2",
+                )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.counter_measure_v2":
+            result = self._source_service(services=services).measure_counter_v2(
+                SourceCounterMeasureRequest(input_id=step.fields["input_id"])
+            )
+            artifact = {"counter_measurement": source_v2_to_data(result)}
         elif step.kind == "source.harmonics_configure_v2":
             _, source_operation = self._source_service(services=services).configure_harmonics_v2(
                 SourceHarmonicConfigureRequest(

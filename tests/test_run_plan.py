@@ -615,6 +615,60 @@ amplitude_vpp = 1.5
         with self.assertRaisesRegex(ConfigError, "requires exactly one"):
             load_run_plan(two_fields)
 
+    def test_source_counter_v2_steps_require_one_config_field(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+coupling = "DC"
+
+[[steps]]
+kind = "source.counter_enable_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_measure_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_disable_v2"
+input_id = "counter"
+"""))
+
+        self.assertEqual(
+            plan.steps[0].fields,
+            {"input_id": "counter", "coupling": "dc"},
+        )
+        self.assertEqual(plan.steps[1].fields, {"input_id": "counter"})
+        self.assertEqual(plan.steps[2].fields, {"input_id": "counter"})
+        self.assertEqual(plan.steps[3].fields, {"input_id": "counter"})
+
+        no_field = self._write_plan("""
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+""")
+        with self.assertRaisesRegex(ConfigError, "requires exactly one Counter field"):
+            load_run_plan(no_field)
+
+        two_fields = self._write_plan("""
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+coupling = "ac"
+attenuation = 10
+""")
+        with self.assertRaisesRegex(ConfigError, "requires exactly one Counter field"):
+            load_run_plan(two_fields)
+
+        invalid_input = self._write_plan("""
+[[steps]]
+kind = "source.counter_measure_v2"
+input_id = ""
+""")
+        with self.assertRaisesRegex(ConfigError, "input_id"):
+            load_run_plan(invalid_input)
+
     def test_source_v2_harmonic_disable_step_accepts_only_channel(self):
         plan = load_run_plan(self._write_plan("""
 [[steps]]
@@ -640,6 +694,8 @@ order = 8
         self.assertIn("source.basic_configure_v2", text)
         self.assertIn("source.basic_live_configure_v2", text)
         self.assertIn("source.output_enable_v2", text)
+        self.assertIn("source.counter_configure_v2", text)
+        self.assertIn("source.counter_measure_v2", text)
         self.assertIn("source.harmonics_configure_v2", text)
         self.assertIn("source.harmonics_disable_v2", text)
         self.assertIn("source.modulation_configure_v2", text)

@@ -659,6 +659,25 @@ class CliTests(unittest.TestCase):
             ]
         )
         output = build_parser().parse_args(["source", "output-v2", "--channel", "2", "on"])
+        counter_configure = build_parser().parse_args(
+            [
+                "source",
+                "counter-configure-v2",
+                "--input-id",
+                "counter",
+                "--coupling",
+                "dc",
+            ]
+        )
+        counter_enable = build_parser().parse_args(
+            ["source", "counter-enable-v2", "--input-id", "counter"]
+        )
+        counter_disable = build_parser().parse_args(
+            ["source", "counter-disable-v2", "--input-id", "counter"]
+        )
+        counter_measure = build_parser().parse_args(
+            ["source", "counter-measure-v2", "--input-id", "counter"]
+        )
         harmonics = build_parser().parse_args(
             [
                 "source",
@@ -785,6 +804,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual(output.command, "output-v2")
         self.assertEqual(output.channel, 2)
         self.assertEqual(output.state, "on")
+        self.assertEqual(counter_configure.command, "counter-configure-v2")
+        self.assertEqual(counter_configure.input_id, "counter")
+        self.assertEqual(counter_configure.coupling, "dc")
+        self.assertEqual(counter_enable.command, "counter-enable-v2")
+        self.assertEqual(counter_enable.input_id, "counter")
+        self.assertEqual(counter_disable.command, "counter-disable-v2")
+        self.assertEqual(counter_disable.input_id, "counter")
+        self.assertEqual(counter_measure.command, "counter-measure-v2")
+        self.assertEqual(counter_measure.input_id, "counter")
         self.assertEqual(harmonics.command, "harmonics-configure-v2")
         self.assertEqual(harmonics.channel, 2)
         self.assertEqual(harmonics.order, 8)
@@ -854,6 +882,89 @@ class CliTests(unittest.TestCase):
         self.assertEqual(request.channel, 2)
         self.assertEqual(request.patch.amplitude_vpp.value, 1.5)
         self.assertEqual(json.loads(stdout.getvalue()), payload)
+
+    def test_source_counter_v2_commands_dispatch_typed_requests(self):
+        from wavebench.instruments.source_extensions import (
+            SourceCounterMeasureResult,
+            SourceCounterMeasurementKind,
+            SourceCounterMeasurementV2,
+            SourceInputCoupling,
+        )
+
+        configure_payload = {
+            "schema": "wavebench.source.operation.v1",
+            "operation": "source.counter_configure_v2",
+        }
+        enable_payload = {
+            "schema": "wavebench.source.operation.v1",
+            "operation": "source.counter_enable_v2",
+        }
+        service = Mock()
+        service.configure_counter_v2.return_value = (object(), configure_payload)
+        service.set_counter_enabled_v2.return_value = (object(), enable_payload)
+        service.measure_counter_v2.return_value = SourceCounterMeasureResult(
+            "counter",
+            (
+                SourceCounterMeasurementV2(SourceCounterMeasurementKind.DUTY_PERCENT, 50.0),
+                SourceCounterMeasurementV2(
+                    SourceCounterMeasurementKind.FREQUENCY_HZ,
+                    1_000.0,
+                ),
+            ),
+        )
+
+        with patch("wavebench.cli._load_source_service", return_value=service):
+            self.assertEqual(
+                main(
+                    [
+                        "source",
+                        "counter-configure-v2",
+                        "--input-id",
+                        "counter",
+                        "--coupling",
+                        "dc",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(["source", "counter-enable-v2", "--input-id", "counter"]),
+                0,
+            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(
+                    main(["source", "counter-measure-v2", "--input-id", "counter"]),
+                    0,
+                )
+
+        configure_request = service.configure_counter_v2.call_args.args[0]
+        self.assertEqual(configure_request.input_id, "counter")
+        self.assertEqual(configure_request.patch.coupling.value, SourceInputCoupling.DC)
+        enable_request = service.set_counter_enabled_v2.call_args.args[0]
+        self.assertEqual(enable_request.input_id, "counter")
+        self.assertTrue(enable_request.enabled)
+        measure_request = service.measure_counter_v2.call_args.args[0]
+        self.assertEqual(measure_request.input_id, "counter")
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "type": "SourceCounterMeasureResult",
+                "input_id": "counter",
+                "measurements": [
+                    {
+                        "type": "SourceCounterMeasurementV2",
+                        "kind": "duty_percent",
+                        "value": 50.0,
+                    },
+                    {
+                        "type": "SourceCounterMeasurementV2",
+                        "kind": "frequency_hz",
+                        "value": 1_000.0,
+                    },
+                ],
+            },
+        )
 
     def test_source_harmonics_disable_v2_dispatches_typed_request(self):
         payload = {

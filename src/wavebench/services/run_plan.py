@@ -44,6 +44,10 @@ ALLOWED_STEP_KINDS = {
     "source.basic_live_configure_v2",
     "source.output_enable_v2",
     "source.output_disable_v2",
+    "source.counter_configure_v2",
+    "source.counter_enable_v2",
+    "source.counter_disable_v2",
+    "source.counter_measure_v2",
     "source.harmonics_configure_v2",
     "source.harmonics_disable_v2",
     "source.modulation_configure_v2",
@@ -108,6 +112,10 @@ _REQUIRED_FIELDS = {
     "source.basic_live_configure_v2": ("channel",),
     "source.output_enable_v2": ("channel",),
     "source.output_disable_v2": ("channel",),
+    "source.counter_configure_v2": ("input_id",),
+    "source.counter_enable_v2": ("input_id",),
+    "source.counter_disable_v2": ("input_id",),
+    "source.counter_measure_v2": ("input_id",),
     "source.harmonics_configure_v2": ("channel", "order", "preset"),
     "source.harmonics_disable_v2": ("channel",),
     "source.modulation_configure_v2": ("channel", "depth_percent", "internal_frequency_hz"),
@@ -253,6 +261,17 @@ _OPTIONAL_FIELDS = {
     },
     "source.output_enable_v2": {"on_failure"},
     "source.output_disable_v2": {"on_failure"},
+    "source.counter_configure_v2": {
+        "coupling",
+        "impedance_ohm",
+        "attenuation",
+        "trigger_level_v",
+        "statistics_enabled",
+        "on_failure",
+    },
+    "source.counter_enable_v2": {"on_failure"},
+    "source.counter_disable_v2": {"on_failure"},
+    "source.counter_measure_v2": {"on_failure"},
     "source.harmonics_configure_v2": {"on_failure"},
     "source.harmonics_disable_v2": {"on_failure"},
     "source.modulation_configure_v2": {"on_failure"},
@@ -316,6 +335,10 @@ _STEP_NOTES = {
     "source.basic_live_configure_v2": "Change exactly one declared frequency or Vpp field while one Source V2 channel remains enabled.",
     "source.output_enable_v2": "Turn one Source V2 channel output on after a fresh V2 readback.",
     "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
+    "source.counter_configure_v2": "Configure exactly one declared Source V2 Counter field without enabling the Counter.",
+    "source.counter_enable_v2": "Enable one declared Source V2 Counter input after a fresh V2 readback.",
+    "source.counter_disable_v2": "Disable one declared Source V2 Counter input without changing its configuration.",
+    "source.counter_measure_v2": "Read one already-enabled Source V2 Counter input without changing its configuration.",
     "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
     "source.harmonics_disable_v2": "Disable Harmonic on one OFF Source V2 channel; it does not enable output.",
     "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
@@ -861,6 +884,40 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         if value < 0:
             raise ConfigError(f"{prefix}.{field} must be >= 0")
         fields[field] = value
+    elif kind == "source.counter_configure_v2":
+        fields["input_id"] = _non_empty_str(fields["input_id"], f"{prefix}.input_id")
+        configurable = {
+            "coupling",
+            "impedance_ohm",
+            "attenuation",
+            "trigger_level_v",
+            "statistics_enabled",
+        }
+        selected = configurable & fields.keys()
+        if len(selected) != 1:
+            raise ConfigError(
+                f"{prefix} source.counter_configure_v2 requires exactly one Counter field"
+            )
+        field = next(iter(selected))
+        if field == "coupling":
+            coupling = _non_empty_str(fields[field], f"{prefix}.{field}").lower()
+            if coupling not in {"ac", "dc"}:
+                raise ConfigError(f"{prefix}.{field} must be 'ac' or 'dc'")
+            fields[field] = coupling
+        elif field == "impedance_ohm":
+            fields[field] = _positive_float(fields[field], f"{prefix}.{field}")
+        elif field == "attenuation":
+            fields[field] = _positive_int(fields[field], f"{prefix}.{field}")
+        elif field == "trigger_level_v":
+            fields[field] = _finite_float(fields[field], f"{prefix}.{field}")
+        elif not isinstance(fields[field], bool):
+            raise ConfigError(f"{prefix}.{field} must be true or false")
+    elif kind in {
+        "source.counter_enable_v2",
+        "source.counter_disable_v2",
+        "source.counter_measure_v2",
+    }:
+        fields["input_id"] = _non_empty_str(fields["input_id"], f"{prefix}.input_id")
     elif kind == "source.harmonics_configure_v2":
         order = fields["order"]
         if isinstance(order, bool) or not isinstance(order, int):

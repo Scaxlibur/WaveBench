@@ -859,6 +859,38 @@ def build_parser() -> argparse.ArgumentParser:
     source_output_v2.add_argument("state", choices=("on", "off"))
     add_runtime_options(source_output_v2)
 
+    source_counter_configure_v2 = source_sub.add_parser(
+        "counter-configure-v2",
+        help="Configure exactly one declared Source V2 Counter field without enabling it",
+    )
+    source_counter_configure_v2.add_argument("--input-id", required=True)
+    source_counter_field = source_counter_configure_v2.add_mutually_exclusive_group(required=True)
+    source_counter_field.add_argument("--coupling", choices=("ac", "dc"))
+    source_counter_field.add_argument("--impedance-ohm", type=float)
+    source_counter_field.add_argument("--attenuation", type=int)
+    source_counter_field.add_argument("--trigger-level-v", type=float)
+    source_counter_field.add_argument("--statistics-enabled", choices=("on", "off"))
+    add_runtime_options(source_counter_configure_v2)
+
+    for command, enabled in (
+        ("counter-enable-v2", True),
+        ("counter-disable-v2", False),
+    ):
+        source_counter_output_v2 = source_sub.add_parser(
+            command,
+            help=("Enable" if enabled else "Disable")
+            + " one declared Source V2 Counter input",
+        )
+        source_counter_output_v2.add_argument("--input-id", required=True)
+        add_runtime_options(source_counter_output_v2)
+
+    source_counter_measure_v2 = source_sub.add_parser(
+        "counter-measure-v2",
+        help="Read one already-enabled declared Source V2 Counter input",
+    )
+    source_counter_measure_v2.add_argument("--input-id", required=True)
+    add_runtime_options(source_counter_measure_v2)
+
     source_harmonics_configure_v2 = source_sub.add_parser(
         "harmonics-configure-v2",
         help="Configure one OFF Source V2 channel with a declared Harmonic preset",
