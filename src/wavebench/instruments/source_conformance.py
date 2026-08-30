@@ -118,6 +118,10 @@ _CAPABILITY_SCOPE: Mapping[
         SourceFeature.ARBITRARY,
         frozenset({SourceFeatureDirection.CONFIGURE}),
     ),
+    "source.arbitrary_volatile_replace_v2": (
+        SourceFeature.ARBITRARY,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
     "source.combine_configure_v2": (
         SourceFeature.COMBINE,
         frozenset({SourceFeatureDirection.CONFIGURE}),

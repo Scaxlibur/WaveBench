@@ -47,6 +47,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.pulse_configure_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
+        "source.arbitrary_volatile_replace_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -122,7 +123,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         spec.operation
         for spec in list_operation_specs(instrument_kind="source")
         if "_v2" in spec.operation and spec.effect == "write"
-    } == expected_v2_operations
+    } == expected_v2_operations | {"source.arbitrary_volatile_replace_v2"}
 
     with TemporaryDirectory() as tmp:
         valid_steps = {

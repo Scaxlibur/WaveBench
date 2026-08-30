@@ -70,6 +70,9 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
             "mutate_source_arbitrary_storage_v2",
         ),
         "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
+        "source.arbitrary_volatile_replace_v2": (
+            "replace_source_arbitrary_volatile_v2",
+        ),
         "source.combine_configure_v2": ("configure_source_combine_v2",),
         "source.coupling_configure_v2": ("configure_source_coupling_v2",),
         "source.tracking_configure_v2": ("configure_source_tracking_v2",),
@@ -97,6 +100,7 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.output_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
+        "source.arbitrary_volatile_replace_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -691,6 +695,38 @@ def _validate_write_contract(
                 "source.arbitrary_select_v2 requires readable output state on every channel"
             )
 
+    if "source.arbitrary_volatile_replace_v2" in capabilities:
+        if "source.output_v2" not in capabilities:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires source.output_v2"
+            )
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.ARBITRARY,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires arbitrary feature CONFIGURE directions"
+            )
+        readable = _channels_with_arbitrary_volatile_replace_readback(extensions)
+        if not configurable <= readable:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires readable selected state and "
+                "volatile replace limits on every channel"
+            )
+        arbitrary_basic = _channels_with_arbitrary_basic_readback(extensions)
+        if not configurable <= arbitrary_basic:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires readable arbitrary basic waveform "
+                "state on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires readable output state on every "
+                "channel"
+            )
+
     _validate_cross_channel_write_capability(
         extensions,
         capabilities,
@@ -1146,6 +1182,27 @@ def _channels_with_arbitrary_selection_readback(
     )
 
 
+def _channels_with_arbitrary_volatile_replace_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.ARBITRARY
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceArbitraryCapabilityProfile)
+            and feature.profile.selection_readable
+            and feature.profile.volatile_replace_min_points is not None
+            and feature.profile.volatile_replace_max_points is not None
+            and feature.profile.volatile_replace_max_payload_bytes is not None
+        )
+        for channel in feature.channels
+    )
+
+
 def _channels_with_arbitrary_basic_readback(
     extensions: SourceDescriptorExtensions,
 ) -> frozenset[int]:
@@ -1208,6 +1265,7 @@ def _validate_declared_write_directions(
             {
                 "source.arbitrary_storage_v2",
                 "source.arbitrary_select_v2",
+                "source.arbitrary_volatile_replace_v2",
             }
         ),
         (SourceFeature.COMBINE, SourceFeatureDirection.CONFIGURE): frozenset(

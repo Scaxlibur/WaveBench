@@ -662,6 +662,9 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
                 "mutate_source_arbitrary_storage_v2",
             ),
             "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
+            "source.arbitrary_volatile_replace_v2": (
+                "replace_source_arbitrary_volatile_v2",
+            ),
             "source.combine_configure_v2": ("configure_source_combine_v2",),
             "source.coupling_configure_v2": ("configure_source_coupling_v2",),
             "source.tracking_configure_v2": ("configure_source_tracking_v2",),
@@ -1952,6 +1955,151 @@ def test_source_v2_arbitrary_write_capabilities_require_explicit_readback() -> N
                     "execute_source_query_plan_v2": lambda self, plan: None,
                     "read_source_arbitrary_storage_v2": lambda self, channel, slot_id: None,
                     "select_source_arbitrary_v2": lambda self, request: None,
+                },
+        )(),
+    )
+
+
+def test_source_v2_volatile_arb_replace_requires_limits_and_off_recovery() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    arbitrary = module.SourceFeatureCapability(
+        feature=module.SourceFeature.ARBITRARY,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourceArbitraryCapabilityProfile(
+            playback_modes=(module.SourceArbitraryPlaybackMode.DDS,),
+            selection_readable=True,
+            storage_metadata_readable=False,
+            sample_rate_readable=False,
+            volatile_replace_min_points=2,
+            volatile_replace_max_points=16_384,
+            volatile_replace_max_payload_bytes=32_768,
+        ),
+    )
+    arbitrary_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.ARBITRARY,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.ARBITRARY_SELECTION,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(
+            arbitrary,
+            replace(
+                basic,
+                profile=replace(
+                    basic.profile,
+                    waveform_kinds=(
+                        module.SourceWaveformKind.ARBITRARY,
+                        module.SourceWaveformKind.SINE,
+                    ),
+                ),
+            ),
+            replace(
+                output,
+                directions=(
+                    module.SourceFeatureDirection.DISABLE,
+                    module.SourceFeatureDirection.ENABLE,
+                    module.SourceFeatureDirection.READ,
+                ),
+            ),
+        ),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(arbitrary_query, *extensions.query_contract.facets),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.output_v2",
+            "source.arbitrary_volatile_replace_v2",
+        ),
+    )
+
+    class VolatileArbitraryWriteDriver(SourceV2FakeDriver):
+        def set_source_output_v2(self, request):
+            raise AssertionError(request)
+
+        def replace_source_arbitrary_volatile_v2(self, request, payload):
+            raise AssertionError((request, payload))
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, VolatileArbitraryWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="requires source.output_v2"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                capabilities=(
+                    "source.snapshot_v2",
+                    "source.arbitrary_volatile_replace_v2",
+                ),
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        arbitrary,
+                        configured_extensions.features[1],
+                        replace(
+                            configured_extensions.features[2],
+                            directions=(module.SourceFeatureDirection.READ,),
+                        ),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="volatile replace limits"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        replace(
+                            arbitrary,
+                            profile=replace(
+                                arbitrary.profile,
+                                volatile_replace_min_points=None,
+                                volatile_replace_max_points=None,
+                                volatile_replace_max_payload_bytes=None,
+                            ),
+                        ),
+                        configured_extensions.features[1],
+                        configured_extensions.features[2],
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="arbitrary basic waveform"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(arbitrary, basic, configured_extensions.features[2]),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="replace_source_arbitrary_volatile_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingVolatileArbitraryDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                    "set_source_output_v2": lambda self, request: None,
                 },
             )(),
         )

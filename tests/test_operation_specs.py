@@ -6,6 +6,7 @@ from wavebench.errors import ConfigError
 from wavebench.instruments.source_extensions import (
     SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT,
     SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
+    SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT,
@@ -229,6 +230,17 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
             ("source_v2", "output_must_be_off", "arbitrary_selection"),
         ),
         (
+            SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT,
+            "source-v2-arbitrary-volatile",
+            (
+                "source_v2",
+                "output_must_be_off",
+                "arbitrary_volatile_replace",
+                "payload_not_artifact",
+                "no_retry",
+            ),
+        ),
+        (
             SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
             "source-v2-output",
             ("source_v2", "dangerous_output"),
@@ -293,6 +305,9 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
         SourceEnergyEffect.NONE
     )
     assert SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
+    assert SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT.energy_effect is (
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
     assert SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT.energy_effect is SourceEnergyEffect.EMIT

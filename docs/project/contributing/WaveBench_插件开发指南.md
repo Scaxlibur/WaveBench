@@ -246,6 +246,16 @@ selection 与 storage digest、允许 playback mode；true-ARB 还要求 sample 
 selection 只允许目标输出 OFF，完成后仍为 OFF，不会隐式 ON。声明任一 ARB V2 capability 后，V1
 `upload_arbitrary_waveform` 会在本地文件读取和仪器 I/O 前被拒绝，不能把混合 upload／selection／ON 的旧 route 部分映射。
 
+单一、无命名的易失 ARB 工作区使用 `source.arbitrary_volatile_replace_v2`。driver 实现
+`replace_source_arbitrary_volatile_v2(request, payload)`；request 只记录精确 payload 的主机 SHA-256、字节数和点数，
+不包含 payload。ARB profile 必须同时声明 `volatile_replace_min_points`、`volatile_replace_max_points` 与
+`volatile_replace_max_payload_bytes`；descriptor 还必须声明 `source.output_v2`，以便二进制写入后发生异常时由 Core
+只尝试一次 OFF 收敛。上传后必须独立确认当前 basic waveform 为 `arbitrary`、已选择 driver 返回的工作区 ID，且目标输出仍为 OFF。
+
+该 capability 不表示具名 storage，不得填造设备侧 digest、内容读回或旧内容可恢复性。它也不等价于旧
+`upload_arbitrary_waveform`：旧 route 还包含播放频率、Vpp／offset、可选输出 ON 和旧 artifact 语义。不得将旧 route
+部分改写为 volatile replace；需要公开该组合时，应另行定义完整的复合 capability、artifact 与验收。
+
 跨通道 Combine、Coupling、Tracking 和相位关系分别使用 `source.combine_configure_v2`、
 `source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2`。每项都使用
 独立 driver method，request 只包含递增且唯一的 channel set 与 enabled state。descriptor 必须为该 relation 的
