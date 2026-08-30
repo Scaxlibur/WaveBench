@@ -406,6 +406,14 @@ class SourceService(SessionStateAliasMixin):
     def _declares_source_v2_capability(self, capability: str) -> bool:
         return capability in self._declared_source_capabilities()
 
+    def _declares_source_v2_basic_restore(self) -> bool:
+        capabilities = set(self._declared_source_capabilities())
+        return {
+            "source.snapshot_v2",
+            "source.basic_configure_v2",
+            "source.output_v2",
+        }.issubset(capabilities)
+
     def _reject_v1_route_for_source_v2(
         self,
         route: SourceV1WriteRouteId,
@@ -8129,9 +8137,49 @@ class SourceService(SessionStateAliasMixin):
         )
 
     def snapshot_restorable_state(self, channel: int | None = None) -> RestorableSourceState:
+        if self._declares_source_v2_basic_restore():
+            source_cfg = self._source_config()
+            target_channel = source_cfg.default_channel if channel is None else channel
+            status = self._source_status_from_v2_snapshot(
+                self.snapshot_v2(),
+                target_channel,
+            )
+            if self.state_guard is not None:
+                self.state_guard.observe(status)
+            return RestorableSourceState.from_status(status)
         return RestorableSourceState.from_status(self.status(channel=channel))
 
     def restore_restorable_state(self, state: RestorableSourceState) -> SourceStatus:
+        if self._declares_source_v2_basic_restore():
+            request = SourceBasicConfigureRequest(
+                channel=state.channel,
+                patch=SourceBasicPatch(
+                    waveform_kind=PatchValue(
+                        PatchAction.SET,
+                        self._source_v2_waveform_from_v1(state.function),
+                    ),
+                    frequency_hz=PatchValue(PatchAction.SET, state.frequency_hz),
+                    amplitude_vpp=PatchValue(PatchAction.SET, state.amplitude_vpp),
+                    square_duty_cycle_percent=(
+                        PatchValue(PatchAction.SET, state.square_duty_cycle_percent)
+                        if state.square_duty_cycle_percent is not None
+                        else PatchValue(PatchAction.KEEP)
+                    ),
+                ),
+            )
+            self._set_output_v2_transaction(
+                SourceOutputRequest(channel=state.channel, enabled=False),
+            )
+            basic = self._configure_basic_v2_transaction(request)
+            final_snapshot = basic.snapshot
+            if state.output == "ON":
+                output = self._set_output_v2_transaction(
+                    SourceOutputRequest(channel=state.channel, enabled=True),
+                )
+                final_snapshot = output.snapshot
+            status = self._source_status_from_v2_snapshot(final_snapshot, state.channel)
+            self._state_guard_after_write(status)
+            return status
         self._reject_v1_route_for_source_v2(
             SourceV1WriteRouteId.RESTORE,
             "source.basic_configure_v2",

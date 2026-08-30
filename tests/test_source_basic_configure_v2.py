@@ -37,6 +37,7 @@ from wavebench.instruments.source_extensions import (
     SourceRuntimeIdentity,
     SourceTypedObservation,
     SourceV1WriteRouteId,
+    SourceWaveformKind,
     PatchAction,
     PatchValue,
 )
@@ -173,7 +174,14 @@ class _BasicWriteDriver:
         self.transport.write("SOURCE:OUTPUT OFF")
         self.output_requests.append(request)
         self.output_enabled = request.enabled
-        return SourceOutputResult(channel=request.channel, enabled=request.enabled)
+        if not request.enabled:
+            return SourceOutputResult(channel=request.channel, enabled=False)
+        return SourceOutputResult(
+            channel=request.channel,
+            enabled=True,
+            final_amplitude=self.basic.amplitude.value,
+            final_offset_v=self.basic.offset_v.value,
+        )
 
     def set_output(self, *args, **kwargs):
         del args, kwargs
@@ -590,8 +598,97 @@ def test_v1_function_outside_the_v2_profile_keeps_its_legacy_route(
     assert driver.transport.counters.write_completed == 1
 
 
-def test_v1_restore_route_rejects_before_io_for_a_dual_contract_driver() -> None:
+def test_v1_restore_route_uses_v2_basic_and_output_transactions() -> None:
     service, driver = _service()
+
+    status = service.restore_restorable_state(
+        RestorableSourceState(
+            channel=1,
+            output="OFF",
+            function="SIN",
+            frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+            amplitude_unit="VPP",
+        )
+    )
+
+    assert status.output == "OFF"
+    assert driver.basic_requests == [
+        SourceBasicConfigureRequest(
+            channel=1,
+            patch=SourceBasicPatch(
+                waveform_kind=PatchValue(PatchAction.SET, SourceWaveformKind.SINE),
+                frequency_hz=PatchValue(PatchAction.SET, 1_000.0),
+                amplitude_vpp=PatchValue(PatchAction.SET, 1.0),
+            ),
+        )
+    ]
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_requests == 1
+
+
+def test_restorable_snapshot_uses_v2_when_the_full_restore_route_is_declared() -> None:
+    service, driver = _service()
+
+    state = service.snapshot_restorable_state(channel=1)
+
+    assert state == RestorableSourceState(
+        channel=1,
+        output="OFF",
+        function="SIN",
+        frequency_hz=1_000.0,
+        amplitude_vpp=1.0,
+        amplitude_unit="VPP",
+    )
+    assert driver.transport.counters.query_calls > 0
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_v2_restore_rejects_unmappable_waveform_before_turning_output_off() -> None:
+    service, driver = _service(output_enabled=True)
+
+    with pytest.raises(ConfigError, match="cannot map this waveform"):
+        service.restore_restorable_state(
+            RestorableSourceState(
+                channel=1,
+                output="ON",
+                function="USER",
+                frequency_hz=1_000.0,
+                amplitude_vpp=1.0,
+                amplitude_unit="VPP",
+            )
+        )
+
+    assert driver.basic_requests == []
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_requests == 0
+
+
+def test_v1_restore_route_restores_original_on_state_through_v2_output() -> None:
+    service, driver = _service(output_enabled=True)
+
+    status = service.restore_restorable_state(
+        RestorableSourceState(
+            channel=1,
+            output="ON",
+            function="SIN",
+            frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+            amplitude_unit="VPP",
+        )
+    )
+
+    assert status.output == "ON"
+    assert driver.output_requests == [
+        SourceOutputRequest(channel=1, enabled=False),
+        SourceOutputRequest(channel=1, enabled=True),
+    ]
+    assert len(driver.basic_requests) == 1
+    assert driver.transport.counters.write_requests == 3
+
+
+def test_v1_restore_route_rejects_partial_v2_restore_before_io() -> None:
+    service, driver = _service(include_output=False)
 
     with pytest.raises(ConfigError, match="restore_restorable_state cannot run"):
         service.restore_restorable_state(
@@ -645,6 +742,7 @@ def test_dual_contract_driver_classifies_every_v1_write_route() -> None:
         SourceV1WriteRouteId.SET_AMPLITUDE_VPP,
         SourceV1WriteRouteId.SET_SQUARE_DUTY_CYCLE,
         SourceV1WriteRouteId.SET_OUTPUT,
+        SourceV1WriteRouteId.RESTORE,
     }
     assert len(driver.basic_requests) == 4
 
@@ -743,6 +841,16 @@ def test_dual_contract_driver_classifies_every_v1_write_route() -> None:
         "configure_sweep",
     ]
 
+    service.restore_restorable_state(
+        RestorableSourceState(
+            channel=1,
+            output="OFF",
+            function="SIN",
+            frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+            amplitude_unit="VPP",
+        )
+    )
     writes_before_rejections = driver.transport.counters.write_requests
     with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
         service.trigger_burst(channel=1)
@@ -755,23 +863,10 @@ def test_dual_contract_driver_classifies_every_v1_write_route() -> None:
             playback_frequency_hz=1_000.0,
             amplitude_vpp=1.0,
         )
-    with pytest.raises(ConfigError, match="restore_restorable_state cannot run"):
-        service.restore_restorable_state(
-            RestorableSourceState(
-                channel=1,
-                output="OFF",
-                function="SIN",
-                frequency_hz=1_000.0,
-                amplitude_vpp=1.0,
-                amplitude_unit="VPP",
-            )
-        )
-
     rejected_routes = {
         SourceV1WriteRouteId.TRIGGER_BURST,
         SourceV1WriteRouteId.TRIGGER_SWEEP,
         SourceV1WriteRouteId.UPLOAD_ARBITRARY,
-        SourceV1WriteRouteId.RESTORE,
     }
     assert driver.transport.counters.write_requests == writes_before_rejections
     assert mapped_routes | disjoint_routes | rejected_routes == set(SourceV1WriteRouteId)

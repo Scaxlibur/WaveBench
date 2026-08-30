@@ -725,6 +725,38 @@ trailing_transition_s = 1e-8
             ):
                 service.check(plan)
 
+    def test_check_accepts_v2_restore_without_v1_source_write_capabilities(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=(
+                    "source.snapshot_v2",
+                    "source.basic_configure_v2",
+                    "source.output_v2",
+                ),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ):
+                service.check(plan)
+
     def test_check_requires_protection_capability_for_power_output_on(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(

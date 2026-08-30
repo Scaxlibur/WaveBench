@@ -426,6 +426,33 @@ class RunService:
             else:
                 add("source", "source.output")
 
+        def add_source_restore_capabilities() -> None:
+            source = self.config.source
+            if source is None or not source.resource:
+                add("source", "source.status")
+                return
+            descriptor = resolve_instrument_descriptor(
+                source.driver,
+                expected_kind="source",
+            )
+            v2_restore = {
+                "source.snapshot_v2",
+                "source.basic_configure_v2",
+                "source.output_v2",
+            }
+            if v2_restore.issubset(descriptor.capabilities):
+                add("source", *v2_restore)
+                return
+            add(
+                "source",
+                "source.status",
+                "source.set_function",
+                "source.set_amplitude_vpp",
+                "source.set_frequency",
+                "source.set_square_duty_cycle",
+                "source.output",
+            )
+
         for step in plan.steps:
             if step.kind == "scope.auto":
                 add("scope", "scope.autoscale")
@@ -567,15 +594,7 @@ class RunService:
                     add("power", "power.output")
 
         if plan.restore.source_state:
-            add(
-                "source",
-                "source.status",
-                "source.set_function",
-                "source.set_amplitude_vpp",
-                "source.set_frequency",
-                "source.set_square_duty_cycle",
-                "source.output",
-            )
+            add_source_restore_capabilities()
         if plan.safety.safety_gate:
             if plan.safety.off_source_channels or any(
                 item.kind.startswith("source.") or item.kind == "sweep.frequency_response"
