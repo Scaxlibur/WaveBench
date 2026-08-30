@@ -122,6 +122,18 @@ _CAPABILITY_SCOPE: Mapping[
         SourceFeature.ARBITRARY,
         frozenset({SourceFeatureDirection.CONFIGURE}),
     ),
+    "source.counter_configure_v2": (
+        SourceFeature.COUNTER,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.counter_enable_v2": (
+        SourceFeature.COUNTER,
+        frozenset({SourceFeatureDirection.ENABLE, SourceFeatureDirection.DISABLE}),
+    ),
+    "source.counter_measure_v2": (
+        SourceFeature.COUNTER,
+        frozenset({SourceFeatureDirection.READ}),
+    ),
     "source.combine_configure_v2": (
         SourceFeature.COMBINE,
         frozenset({SourceFeatureDirection.CONFIGURE}),

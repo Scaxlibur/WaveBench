@@ -7,6 +7,7 @@ from hashlib import sha256
 from math import isfinite
 import time
 from typing import cast
+from uuid import uuid4
 
 from wavebench.arbitrary import build_dg4000_dac14_binary_block, load_arbitrary_waveform
 from wavebench.config import SourceConfig, WaveBenchConfig
@@ -80,6 +81,9 @@ from wavebench.instruments.source_extensions import (
     SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT,
     SOURCE_COMBINE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_COUPLING_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_CONTRACT_VERSION,
@@ -131,6 +135,18 @@ from wavebench.instruments.source_extensions import (
     SourceCouplingConfigureRequest,
     SourceCouplingConfigureV2Driver,
     SourceCouplingState,
+    SourceCounterCapabilityProfile,
+    SourceCounterConfigurationField,
+    SourceCounterConfigureRequest,
+    SourceCounterConfigureResult,
+    SourceCounterConfigureV2Driver,
+    SourceCounterEnableRequest,
+    SourceCounterEnableResult,
+    SourceCounterEnableV2Driver,
+    SourceCounterInputState,
+    SourceCounterMeasureRequest,
+    SourceCounterMeasureResult,
+    SourceCounterMeasureV2Driver,
     SourceCrossChannelCapabilityProfile,
     SourceCrossChannelConfigureResult,
     SourceFacetScope,
@@ -186,6 +202,7 @@ from wavebench.instruments.source_extensions import (
     SourceSweepMarker,
     SourceSnapshotV2,
     SourceSnapshotV2Driver,
+    SourceSystemStateV2,
     SourceTriggerOutput,
     SourceTriggerSlope,
     SourceTriggerSource,
@@ -197,6 +214,7 @@ from wavebench.instruments.source_extensions import (
     SourceTrackingConfigureV2Driver,
     SourceV1WriteRouteId,
     SourceWaveformKind,
+    SourceQueryEffect,
     SupportState,
     source_v2_digest,
     source_v2_to_data,
@@ -210,7 +228,11 @@ from wavebench.services.resource_lease import ResourceLease
 from wavebench.services.session_alias import SessionStateAliasMixin
 from wavebench.services.state_guard import SourceStateGuard
 from wavebench.transport.base import InstrumentTransport
-from wavebench.transport.session import InstrumentSessionState
+from wavebench.transport.session import (
+    InstrumentSessionState,
+    SessionHealth,
+    SessionTransactionCoordinator,
+)
 from wavebench.services.source_snapshot_v2 import (
     SOURCE_SNAPSHOT_OPERATION_TIMEOUT_MS,
     SourceSnapshotContractError,
@@ -222,7 +244,6 @@ from wavebench.services.source_operation_context import (
     SourceOperationContextCoordinator,
     SourceOperationPhase,
 )
-from wavebench.transport.session import SessionHealth
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +389,15 @@ class _SourceArbitraryVolatileReplaceV2Transaction:
     """Core transaction result for one unnamed, volatile ARB workspace replacement."""
 
     result: SourceArbitraryVolatileReplaceResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceCounterV2Transaction:
+    """Core transaction result for one independently verified Counter mutation."""
+
+    result: SourceCounterConfigureResult | SourceCounterEnableResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
@@ -884,6 +914,57 @@ class SourceService(SessionStateAliasMixin):
             correlation_id=correlation_id,
         )
         return transaction.result, transaction.artifact
+
+    def configure_counter_v2(
+        self,
+        request: SourceCounterConfigureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceCounterConfigureResult, dict[str, object]]:
+        """Apply one independently readable Counter input setting."""
+
+        transaction = self._mutate_counter_v2_transaction(
+            request,
+            operation="source.counter_configure_v2",
+            operation_contract=SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT,
+            correlation_id=correlation_id,
+        )
+        assert isinstance(transaction.result, SourceCounterConfigureResult)
+        return transaction.result, transaction.artifact
+
+    def set_counter_enabled_v2(
+        self,
+        request: SourceCounterEnableRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceCounterEnableResult, dict[str, object]]:
+        """Enable or disable Counter without changing its input configuration."""
+
+        if not isinstance(request, SourceCounterEnableRequest):
+            raise ConfigError("source.counter_enable_v2 requires SourceCounterEnableRequest")
+        operation = "source.counter_enable_v2" if request.enabled else "source.counter_disable_v2"
+        transaction = self._mutate_counter_v2_transaction(
+            request,
+            operation=operation,
+            operation_contract=(
+                SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT
+                if request.enabled
+                else SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT
+            ),
+            correlation_id=correlation_id,
+        )
+        assert isinstance(transaction.result, SourceCounterEnableResult)
+        return transaction.result, transaction.artifact
+
+    def measure_counter_v2(
+        self,
+        request: SourceCounterMeasureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> SourceCounterMeasureResult:
+        """Read one already-enabled Counter input without changing any Counter setting."""
+
+        return self._measure_counter_v2(request, correlation_id=correlation_id)
 
     def configure_combine_v2(
         self,
@@ -4157,6 +4238,291 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _mutate_counter_v2_transaction(
+        self,
+        request: SourceCounterConfigureRequest | SourceCounterEnableRequest,
+        *,
+        operation: str,
+        operation_contract: SourceOperationContract,
+        correlation_id: str | None = None,
+    ) -> _SourceCounterV2Transaction:
+        """Run one Counter configuration or enable-state mutation with no rollback."""
+
+        if operation == "source.counter_configure_v2":
+            if not isinstance(request, SourceCounterConfigureRequest):
+                raise ConfigError(f"{operation} requires SourceCounterConfigureRequest")
+        elif operation in {"source.counter_enable_v2", "source.counter_disable_v2"}:
+            if not isinstance(request, SourceCounterEnableRequest):
+                raise ConfigError(f"{operation} requires SourceCounterEnableRequest")
+        else:  # pragma: no cover - private callers fix the operation set above.
+            raise ValueError("unsupported Counter V2 mutation operation")
+        self._require(operation, "source.snapshot_v2", operation_contract.capability)
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            fields = self._source_counter_v2_fields(request.input_id)
+            counter_field = next(
+                field for field in fields if field.field is SourceFieldId.COUNTER
+            )
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=operation_contract,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=(),
+                emergency_off_outputs=(),
+                restore_order=(),
+                non_restorable_fields=(counter_field,),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceCounterConfigureResult | SourceCounterEnableResult | None = None
+            wrote_main = False
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=fields,
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    counter, profile = self._source_v2_counter_target(
+                        preflight_snapshot,
+                        request.input_id,
+                        direction=operation_contract.direction,
+                        operation=operation,
+                    )
+                    if isinstance(request, SourceCounterConfigureRequest):
+                        wrote_main = self._validate_source_counter_configure_v2_preflight(
+                            request,
+                            preflight_snapshot,
+                            counter,
+                            profile,
+                        )
+                        if not wrote_main:
+                            result = SourceCounterConfigureResult(request.input_id, counter)
+                    else:
+                        wrote_main = self._validate_source_counter_enable_v2_preflight(
+                            request,
+                            preflight_snapshot,
+                            counter,
+                            profile,
+                            operation=operation,
+                        )
+                        if not wrote_main:
+                            result = SourceCounterEnableResult(request.input_id, request.enabled)
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest((request.input_id, counter))
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=fields,
+                    )
+
+                if wrote_main:
+                    main = context.make_phase_spec(
+                        SourceOperationPhase.MAIN,
+                        allowed_io={"write"},
+                        fields=(counter_field,),
+                        max_steps=operation_contract.main_max_steps,
+                    )
+                    try:
+                        with context.authorize_phase(main):
+                            main_entered = True
+                            if isinstance(request, SourceCounterConfigureRequest):
+                                result = cast(
+                                    SourceCounterConfigureV2Driver,
+                                    source,
+                                ).configure_source_counter_v2(request)
+                                self._validate_source_counter_configure_v2_result(request, result)
+                            else:
+                                result = cast(
+                                    SourceCounterEnableV2Driver,
+                                    source,
+                                ).set_source_counter_enabled_v2(request)
+                                self._validate_source_counter_enable_v2_result(
+                                    request,
+                                    result,
+                                    operation=operation,
+                                )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is None and wrote_main:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=(counter_field,),
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            counter, profile = self._source_v2_counter_target(
+                                postcondition_snapshot,
+                                request.input_id,
+                                direction=operation_contract.direction,
+                                operation=operation,
+                            )
+                            assert result is not None
+                            if isinstance(request, SourceCounterConfigureRequest):
+                                self._validate_source_counter_configure_v2_postcondition(
+                                    request,
+                                    result,
+                                    postcondition_snapshot,
+                                    counter,
+                                    profile,
+                                )
+                            else:
+                                self._validate_source_counter_enable_v2_postcondition(
+                                    request,
+                                    result,
+                                    postcondition_snapshot,
+                                    counter,
+                                    profile,
+                                    operation=operation,
+                                )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=(counter_field,),
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        context.mark_failure_required()
+                        recovery = {
+                            "status": "not_attempted",
+                            "reason": "counter_state_not_rollback_safe",
+                        }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_counter_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            wrote_main=wrote_main,
+                            recovery=recovery,
+                            capability=operation_contract.capability,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                return _SourceCounterV2Transaction(
+                    result=result,
+                    artifact=self._source_counter_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                        wrote_main=wrote_main,
+                        capability=operation_contract.capability,
+                    ),
+                    snapshot=(
+                        postcondition_snapshot
+                        if postcondition_snapshot is not None
+                        else preflight_snapshot
+                    ),
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
+    def _measure_counter_v2(
+        self,
+        request: SourceCounterMeasureRequest,
+        *,
+        correlation_id: str | None = None,
+    ) -> SourceCounterMeasureResult:
+        operation = "source.counter_measure_v2"
+        if not isinstance(request, SourceCounterMeasureRequest):
+            raise ConfigError(f"{operation} requires SourceCounterMeasureRequest")
+        self._require(operation, "source.snapshot_v2", "source.counter_measure_v2")
+        spec = require_operation_spec(operation)
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            timeout_ms = spec.operation_timeout_ms
+            if timeout_ms is None:  # pragma: no cover - registry invariant.
+                raise ConfigError(f"{operation} requires an operation timeout")
+            timeout_ms = min(timeout_ms, self.config.connection.timeout_ms)
+            with session_state.transaction_lock:
+                snapshot = self._snapshot_v2_with_open_source(
+                    source,
+                    correlation_id=correlation_id,
+                )
+                counter, profile = self._source_v2_counter_target(
+                    snapshot,
+                    request.input_id,
+                    direction=SourceFeatureDirection.READ,
+                    operation=operation,
+                )
+                self._validate_source_counter_measure_v2_preflight(
+                    snapshot,
+                    counter,
+                    profile,
+                    operation=operation,
+                )
+                coordinator = SessionTransactionCoordinator(session_state)
+                with coordinator.authorize_normal(
+                    operation_id=operation,
+                    allowed_io=("query",),
+                    fields=(SourceFieldId.COUNTER.value,),
+                    timeout_ms=timeout_ms,
+                    max_steps=1,
+                    context_id="source_counter_measure_v2",
+                    correlation_id=uuid4().hex,
+                    phase="main",
+                    absolute_deadline=time.monotonic() + (timeout_ms / 1000.0),
+                ):
+                    result = cast(
+                        SourceCounterMeasureV2Driver,
+                        source,
+                    ).measure_source_counter_v2(request)
+            self._validate_source_counter_measure_v2_result(
+                request,
+                result,
+                profile,
+                operation=operation,
+            )
+            return result
+
     def _configure_cross_channel_v2_transaction(
         self,
         request: object,
@@ -5189,6 +5555,29 @@ class SourceService(SessionStateAliasMixin):
             )
         )
 
+    @staticmethod
+    def _source_counter_v2_fields(input_id: str) -> tuple[SourceFieldRef, ...]:
+        target = SourceScopeRef(SourceFacetScope.INPUT, input_id=input_id)
+        fields = (
+            SourceFieldRef(SourceFieldId.COUNTER, target),
+            SourceFieldRef(
+                SourceFieldId.IDENTITY,
+                SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
     @classmethod
     def _source_output_v2_fields(
         cls,
@@ -5204,6 +5593,44 @@ class SourceService(SessionStateAliasMixin):
                 SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel),
             ),
         )
+
+    @staticmethod
+    def _source_v2_counter_target(
+        snapshot: SourceSnapshotV2,
+        input_id: str,
+        *,
+        direction: SourceFeatureDirection,
+        operation: str,
+    ) -> tuple[SourceCounterInputState, SourceCounterCapabilityProfile]:
+        features = tuple(
+            feature
+            for feature in snapshot.runtime_profile.features
+            if (
+                feature.feature is SourceFeature.COUNTER
+                and feature.scope is SourceFacetScope.INPUT
+                and feature.support is SupportState.SUPPORTED
+                and direction in feature.directions
+                and isinstance(feature.profile, SourceCounterCapabilityProfile)
+            )
+        )
+        if len(features) != 1:
+            raise ConfigError(f"{operation} requires a runtime Counter {direction.value} profile")
+        profile = features[0].profile
+        assert isinstance(profile, SourceCounterCapabilityProfile)
+        if input_id not in profile.input_ids:
+            raise ConfigError(f"{operation} input_id is unsupported by the runtime profile")
+        if (
+            snapshot.system.availability is not Availability.VALUE
+            or not isinstance(snapshot.system.value, SourceSystemStateV2)
+        ):
+            raise ConfigError(f"{operation} requires readable Counter system state")
+        counter = next(
+            (item for item in snapshot.system.value.counters if item.input_id == input_id),
+            None,
+        )
+        if counter is None:
+            raise ConfigError(f"{operation} input_id is absent from snapshot")
+        return counter, profile
 
     @staticmethod
     def _source_v2_target(
@@ -6990,6 +7417,214 @@ class SourceService(SessionStateAliasMixin):
             raise ConfigError(f"{operation} selected waveform readback does not match result")
 
     @staticmethod
+    def _source_counter_configuration_field(
+        request: SourceCounterConfigureRequest,
+    ) -> SourceCounterConfigurationField:
+        fields = tuple(
+            field
+            for field, patch_value in (
+                (SourceCounterConfigurationField.COUPLING, request.patch.coupling),
+                (SourceCounterConfigurationField.IMPEDANCE_OHM, request.patch.impedance_ohm),
+                (SourceCounterConfigurationField.ATTENUATION, request.patch.attenuation),
+                (SourceCounterConfigurationField.TRIGGER_LEVEL_V, request.patch.trigger_level_v),
+                (SourceCounterConfigurationField.STATISTICS_ENABLED, request.patch.statistics_enabled),
+            )
+            if patch_value.action is PatchAction.SET
+        )
+        if len(fields) != 1:  # pragma: no cover - request model already enforces this.
+            raise ConfigError("source.counter_configure_v2 requires exactly one Counter field")
+        return fields[0]
+
+    @staticmethod
+    def _source_counter_configuration_expected_value(
+        request: SourceCounterConfigureRequest,
+        field: SourceCounterConfigurationField,
+    ) -> object:
+        values = {
+            SourceCounterConfigurationField.COUPLING: request.patch.coupling.value,
+            SourceCounterConfigurationField.IMPEDANCE_OHM: request.patch.impedance_ohm.value,
+            SourceCounterConfigurationField.ATTENUATION: request.patch.attenuation.value,
+            SourceCounterConfigurationField.TRIGGER_LEVEL_V: request.patch.trigger_level_v.value,
+            SourceCounterConfigurationField.STATISTICS_ENABLED: request.patch.statistics_enabled.value,
+        }
+        value = values[field]
+        if value is None:  # pragma: no cover - request model already enforces SET values.
+            raise ConfigError("source.counter_configure_v2 Counter value is missing")
+        return value
+
+    @staticmethod
+    def _source_counter_configuration_observed_value(
+        state: SourceCounterInputState,
+        field: SourceCounterConfigurationField,
+        *,
+        operation: str,
+    ) -> object:
+        observed = {
+            SourceCounterConfigurationField.COUPLING: state.coupling,
+            SourceCounterConfigurationField.IMPEDANCE_OHM: state.impedance_ohm,
+            SourceCounterConfigurationField.ATTENUATION: state.attenuation,
+            SourceCounterConfigurationField.TRIGGER_LEVEL_V: state.trigger_level_v,
+            SourceCounterConfigurationField.STATISTICS_ENABLED: state.statistics_enabled,
+        }[field]
+        if observed.availability is not Availability.VALUE:
+            raise ConfigError(
+                f"{operation} requires readable {field.value} Counter configuration"
+            )
+        return observed.value
+
+    def _validate_source_counter_configure_v2_preflight(
+        self,
+        request: SourceCounterConfigureRequest,
+        snapshot: SourceSnapshotV2,
+        counter: SourceCounterInputState,
+        profile: SourceCounterCapabilityProfile,
+    ) -> bool:
+        operation = "source.counter_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if not profile.configuration_readable:
+            raise ConfigError(f"{operation} requires readable Counter configuration")
+        field = self._source_counter_configuration_field(request)
+        if field not in profile.configurable_fields:
+            raise ConfigError(f"{operation} field is not configurable in the runtime profile")
+        current = self._source_counter_configuration_observed_value(
+            counter,
+            field,
+            operation=operation,
+        )
+        return current != self._source_counter_configuration_expected_value(request, field)
+
+    def _validate_source_counter_configure_v2_result(
+        self,
+        request: SourceCounterConfigureRequest,
+        result: object,
+    ) -> None:
+        operation = "source.counter_configure_v2"
+        if not isinstance(result, SourceCounterConfigureResult):
+            raise ConfigError(
+                "configure_source_counter_v2() returned an invalid SourceCounterConfigureResult"
+            )
+        if result.input_id != request.input_id:
+            raise ConfigError(f"{operation} result input_id does not match request")
+        field = self._source_counter_configuration_field(request)
+        if self._source_counter_configuration_observed_value(
+            result.state,
+            field,
+            operation=operation,
+        ) != self._source_counter_configuration_expected_value(request, field):
+            raise ConfigError(f"{operation} result does not match the request")
+
+    def _validate_source_counter_configure_v2_postcondition(
+        self,
+        request: SourceCounterConfigureRequest,
+        result: SourceCounterConfigureResult,
+        snapshot: SourceSnapshotV2,
+        counter: SourceCounterInputState,
+        profile: SourceCounterCapabilityProfile,
+    ) -> None:
+        operation = "source.counter_configure_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if not profile.configuration_readable:
+            raise ConfigError(f"{operation} postcondition lacks readable Counter configuration")
+        self._validate_source_counter_configure_v2_result(request, result)
+        field = self._source_counter_configuration_field(request)
+        if self._source_counter_configuration_observed_value(
+            counter,
+            field,
+            operation=operation,
+        ) != self._source_counter_configuration_expected_value(request, field):
+            raise ConfigError(f"{operation} readback does not match the request")
+
+    @staticmethod
+    def _validate_source_counter_enable_v2_preflight(
+        request: SourceCounterEnableRequest,
+        snapshot: SourceSnapshotV2,
+        counter: SourceCounterInputState,
+        profile: SourceCounterCapabilityProfile,
+        *,
+        operation: str,
+    ) -> bool:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if not profile.enabled_configurable:
+            raise ConfigError(f"{operation} is not configurable in the runtime profile")
+        if counter.enabled.availability is not Availability.VALUE:
+            raise ConfigError(f"{operation} requires readable Counter enabled state")
+        return counter.enabled.value is not request.enabled
+
+    @staticmethod
+    def _validate_source_counter_enable_v2_result(
+        request: SourceCounterEnableRequest,
+        result: object,
+        *,
+        operation: str,
+    ) -> None:
+        if not isinstance(result, SourceCounterEnableResult):
+            raise ConfigError(
+                "set_source_counter_enabled_v2() returned an invalid SourceCounterEnableResult"
+            )
+        if result.input_id != request.input_id or result.enabled is not request.enabled:
+            raise ConfigError(f"{operation} result does not match the request")
+
+    def _validate_source_counter_enable_v2_postcondition(
+        self,
+        request: SourceCounterEnableRequest,
+        result: SourceCounterEnableResult,
+        snapshot: SourceSnapshotV2,
+        counter: SourceCounterInputState,
+        profile: SourceCounterCapabilityProfile,
+        *,
+        operation: str,
+    ) -> None:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if not profile.enabled_configurable:
+            raise ConfigError(f"{operation} postcondition lacks runtime enable support")
+        self._validate_source_counter_enable_v2_result(request, result, operation=operation)
+        if counter.enabled.availability is not Availability.VALUE or (
+            counter.enabled.value is not request.enabled
+        ):
+            raise ConfigError(f"{operation} enabled readback does not match the request")
+
+    @staticmethod
+    def _validate_source_counter_measure_v2_preflight(
+        snapshot: SourceSnapshotV2,
+        counter: SourceCounterInputState,
+        profile: SourceCounterCapabilityProfile,
+        *,
+        operation: str,
+    ) -> None:
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if counter.enabled.availability is not Availability.VALUE or counter.enabled.value is not True:
+            raise ConfigError(f"{operation} requires Counter enabled")
+        if profile.query_effect not in {
+            SourceQueryEffect.PURE_READ,
+            SourceQueryEffect.STATEFUL_CONSUMING_READ,
+        }:
+            raise ConfigError(f"{operation} requires a known read-only Counter query effect")
+
+    @staticmethod
+    def _validate_source_counter_measure_v2_result(
+        request: SourceCounterMeasureRequest,
+        result: object,
+        profile: SourceCounterCapabilityProfile,
+        *,
+        operation: str,
+    ) -> None:
+        if not isinstance(result, SourceCounterMeasureResult):
+            raise ConfigError(
+                "measure_source_counter_v2() returned an invalid SourceCounterMeasureResult"
+            )
+        if result.input_id != request.input_id:
+            raise ConfigError(f"{operation} result input_id does not match request")
+        if not {
+            measurement.kind for measurement in result.measurements
+        } <= set(profile.measurement_kinds):
+            raise ConfigError(f"{operation} result includes an unsupported measurement kind")
+
+    @staticmethod
     def _source_burst_runtime_profile(
         snapshot: SourceSnapshotV2,
         *,
@@ -8478,6 +9113,66 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_counter_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceCounterConfigureRequest | SourceCounterEnableRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceCounterConfigureResult | SourceCounterEnableResult | None,
+        wrote_main: bool,
+        capability: str,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": capability,
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "target_input_id": request.input_id,
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {
+                "status": "written" if wrote_main else "already_at_target",
+                "result": source_v2_to_data(result),
+            }
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "counter_input_id": request.input_id,
+            "automatic_rollback": "not_available",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_burst_v2_artifact(
         self,
         *,
@@ -8911,6 +9606,16 @@ class SourceService(SessionStateAliasMixin):
                 "source_operation_artifact",
                 self._source_arbitrary_volatile_replace_v2_artifact(**kwargs),
             )
+        except Exception:
+            pass
+
+    def _attach_source_counter_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(exc, "source_operation_artifact", self._source_counter_v2_artifact(**kwargs))
         except Exception:
             pass
 

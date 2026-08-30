@@ -665,6 +665,9 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
             "source.arbitrary_volatile_replace_v2": (
                 "replace_source_arbitrary_volatile_v2",
             ),
+            "source.counter_configure_v2": ("configure_source_counter_v2",),
+            "source.counter_enable_v2": ("set_source_counter_enabled_v2",),
+            "source.counter_measure_v2": ("measure_source_counter_v2",),
             "source.combine_configure_v2": ("configure_source_combine_v2",),
             "source.coupling_configure_v2": ("configure_source_coupling_v2",),
             "source.tracking_configure_v2": ("configure_source_tracking_v2",),

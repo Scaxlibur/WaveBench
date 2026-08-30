@@ -18,6 +18,7 @@ from .source_extensions import (
     SourceAmplitudeUnit,
     SourceArbitraryCapabilityProfile,
     SourceCouplingCapabilityProfile,
+    SourceCounterCapabilityProfile,
     SourceCrossChannelCapabilityProfile,
     SourceDescriptorExtensions,
     SourceAnchorField,
@@ -73,6 +74,9 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
         "source.arbitrary_volatile_replace_v2": (
             "replace_source_arbitrary_volatile_v2",
         ),
+        "source.counter_configure_v2": ("configure_source_counter_v2",),
+        "source.counter_enable_v2": ("set_source_counter_enabled_v2",),
+        "source.counter_measure_v2": ("measure_source_counter_v2",),
         "source.combine_configure_v2": ("configure_source_combine_v2",),
         "source.coupling_configure_v2": ("configure_source_coupling_v2",),
         "source.tracking_configure_v2": ("configure_source_tracking_v2",),
@@ -101,6 +105,8 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
         "source.arbitrary_volatile_replace_v2",
+        "source.counter_configure_v2",
+        "source.counter_enable_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -133,6 +139,7 @@ def validate_source_descriptor(descriptor: object, driver: object | None = None)
         )
     _validate_source_version_range(descriptor)
     _validate_read_contract(extensions)
+    _validate_counter_capabilities(extensions, frozenset(declared))
     _validate_write_contract(extensions, frozenset(declared) & _SOURCE_WRITE_CAPABILITIES)
     if driver is not None:
         for capability in declared:
@@ -332,6 +339,77 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
                     raise ConfigError(
                         "Source V2 activation predicates must reference declared anchor fields"
                     )
+
+
+def _validate_counter_capabilities(
+    extensions: SourceDescriptorExtensions,
+    capabilities: frozenset[str],
+) -> None:
+    counter_capabilities = {
+        "source.counter_configure_v2",
+        "source.counter_enable_v2",
+        "source.counter_measure_v2",
+    }
+    if not counter_capabilities & capabilities:
+        return
+    features = tuple(
+        feature
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.COUNTER
+            and feature.scope is SourceFacetScope.INPUT
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceCounterCapabilityProfile)
+        )
+    )
+    if len(features) != 1:
+        raise ConfigError(
+            "Counter V2 capabilities require one readable INPUT counter feature"
+        )
+    feature = features[0]
+    profile = feature.profile
+    assert isinstance(profile, SourceCounterCapabilityProfile)
+    if not any(
+        facet.feature is SourceFeature.COUNTER
+        and facet.scope is SourceFacetScope.INPUT
+        and facet.fields == (SourceFieldId.COUNTER,)
+        for facet in extensions.query_contract.facets
+    ):
+        raise ConfigError("Counter V2 capabilities require a readable counter query facet")
+    if "source.counter_configure_v2" in capabilities:
+        if SourceFeatureDirection.CONFIGURE not in feature.directions:
+            raise ConfigError(
+                "source.counter_configure_v2 requires counter CONFIGURE direction"
+            )
+        if not profile.configuration_readable or not profile.configurable_fields:
+            raise ConfigError(
+                "source.counter_configure_v2 requires readable configurable counter fields"
+            )
+    if "source.counter_enable_v2" in capabilities:
+        if not {
+            SourceFeatureDirection.ENABLE,
+            SourceFeatureDirection.DISABLE,
+        } <= set(feature.directions):
+            raise ConfigError(
+                "source.counter_enable_v2 requires counter ENABLE and DISABLE directions"
+            )
+        if not profile.enabled_configurable:
+            raise ConfigError(
+                "source.counter_enable_v2 requires an enabled_configurable counter profile"
+            )
+    if "source.counter_measure_v2" in capabilities:
+        if not profile.measurement_kinds:
+            raise ConfigError(
+                "source.counter_measure_v2 requires declared counter measurement kinds"
+            )
+        if profile.query_effect not in {
+            SourceQueryEffect.PURE_READ,
+            SourceQueryEffect.STATEFUL_CONSUMING_READ,
+        }:
+            raise ConfigError(
+                "source.counter_measure_v2 requires a known read-only counter query effect"
+            )
 
 
 def _validate_write_contract(
@@ -1267,6 +1345,15 @@ def _validate_declared_write_directions(
                 "source.arbitrary_select_v2",
                 "source.arbitrary_volatile_replace_v2",
             }
+        ),
+        (SourceFeature.COUNTER, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.counter_configure_v2"}
+        ),
+        (SourceFeature.COUNTER, SourceFeatureDirection.ENABLE): frozenset(
+            {"source.counter_enable_v2"}
+        ),
+        (SourceFeature.COUNTER, SourceFeatureDirection.DISABLE): frozenset(
+            {"source.counter_enable_v2"}
         ),
         (SourceFeature.COMBINE, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.combine_configure_v2"}

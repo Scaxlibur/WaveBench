@@ -10,6 +10,9 @@ from wavebench.instruments.source_extensions import (
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT,
     SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -44,6 +47,27 @@ def test_source_output_spec_describes_mutation_and_restore_boundary() -> None:
     assert spec.restore_coverage == "basic"
     assert "dangerous_output" in spec.risk_flags
     assert spec.as_dict()["required_capabilities"] == ["source.output"]
+
+
+def test_source_counter_v2_specs_keep_configuration_enable_and_measure_separate() -> None:
+    configure = require_operation_spec("source.counter_configure_v2")
+    enable = require_operation_spec("source.counter_enable_v2")
+    disable = require_operation_spec("source.counter_disable_v2")
+    measure = require_operation_spec("source.counter_measure_v2")
+
+    for spec, contract in (
+        (configure, SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT),
+        (enable, SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT),
+        (disable, SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT),
+    ):
+        assert spec.effect == "write"
+        assert spec.required_capabilities == (contract.capability,)
+        assert spec.changed_fields == ("source.input.counter",)
+        assert spec.restore_coverage == "source-v2-counter-no-rollback"
+        assert "no_automatic_rollback" in spec.risk_flags
+    assert measure.effect == "stateful_read"
+    assert measure.required_capabilities == ("source.counter_measure_v2",)
+    assert measure.restore_coverage == "none-read-only"
 
 
 def test_rf_source_m0_specs_are_read_only_and_exclusive() -> None:

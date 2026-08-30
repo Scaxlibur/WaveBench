@@ -256,6 +256,14 @@ selection 只允许目标输出 OFF，完成后仍为 OFF，不会隐式 ON。�
 `upload_arbitrary_waveform`：旧 route 还包含播放频率、Vpp／offset、可选输出 ON 和旧 artifact 语义。不得将旧 route
 部分改写为 volatile replace；需要公开该组合时，应另行定义完整的复合 capability、artifact 与验收。
 
+Counter 使用独立的 `source.counter_configure_v2`、`source.counter_enable_v2` 与
+`source.counter_measure_v2`。descriptor 必须声明 Counter `READ`，配置还需 `CONFIGURE` 与可读的
+`configurable_fields`，启停还需成对的 `ENABLE`／`DISABLE` 与 `enabled_configurable`。每次配置 request
+只能设置 coupling、input impedance、attenuation、trigger level 或 statistics enable 中的一项；Core 不会因配置或
+测量自动启用 Counter，也不会写 `AUTO`、gate、HF、sensitivity、display 或 statistics clear。配置和启停在写后必须独立
+回读；结果不明时不自动回滚或 disable，连接保守失效。测量只允许已启用的输入，并以单条受授权查询进入 driver。当前
+CLI 与 run schema 不提供这三项入口；production descriptor 必须另有对应的实机证据才能声明 capability。
+
 跨通道 Combine、Coupling、Tracking 和相位关系分别使用 `source.combine_configure_v2`、
 `source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2`。每项都使用
 独立 driver method，request 只包含递增且唯一的 channel set 与 enabled state。descriptor 必须为该 relation 的
