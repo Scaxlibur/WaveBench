@@ -60,6 +60,7 @@ EXECUTABLE_STEP_KINDS = {
     "source.pulse_configure_v2",
     "source.arbitrary_storage_v2",
     "source.arbitrary_volatile_replace_v2",
+    "source.arbitrary_workspace_volatile_replace_v2",
     "source.arbitrary_select_v2",
     "source.combine_configure_v2",
     "source.coupling_configure_v2",

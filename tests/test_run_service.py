@@ -2853,6 +2853,11 @@ kind = "source.arbitrary_volatile_replace_v2"
 channel = 1
 file = "volatile.bin"
 point_count = 2
+
+[[steps]]
+kind = "source.arbitrary_workspace_volatile_replace_v2"
+file = "volatile.bin"
+point_count = 2
 """,
                 )
             )
@@ -2870,11 +2875,20 @@ point_count = 2
                     "operation": "source.arbitrary_volatile_replace_v2",
                     "request": {"payload_sha256": "sha256:" + sha256(payload).hexdigest()},
                 },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_workspace_volatile_replace_v2",
+                    "request": {"payload_sha256": "sha256:" + sha256(payload).hexdigest()},
+                },
             ]
             source = Mock()
             source.configure_sweep_v2.return_value = (SimpleNamespace(), artifacts[0])
             source.fire_sweep_v2.return_value = (SimpleNamespace(), artifacts[1])
             source.replace_arbitrary_volatile_v2.return_value = (SimpleNamespace(), artifacts[2])
+            source.replace_arbitrary_workspace_volatile_v2.return_value = (
+                SimpleNamespace(),
+                artifacts[3],
+            )
 
             class OfflineV2RunService(RunService):
                 def check(self, plan):
@@ -2899,6 +2913,13 @@ point_count = 2
             self.assertEqual(volatile_request.payload_size_bytes, len(payload))
             self.assertEqual(
                 source.replace_arbitrary_volatile_v2.call_args.kwargs["payload"],
+                payload,
+            )
+            workspace_request = source.replace_arbitrary_workspace_volatile_v2.call_args.args[0]
+            self.assertEqual(workspace_request.point_count, 2)
+            self.assertEqual(workspace_request.payload_size_bytes, len(payload))
+            self.assertEqual(
+                source.replace_arbitrary_workspace_volatile_v2.call_args.kwargs["payload"],
                 payload,
             )
             self.assertEqual(run_data["source_operations"], artifacts)

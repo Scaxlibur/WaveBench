@@ -1064,6 +1064,21 @@ def build_parser() -> argparse.ArgumentParser:
     source_arbitrary_volatile_replace_v2.add_argument("--point-count", type=int, required=True)
     add_runtime_options(source_arbitrary_volatile_replace_v2)
 
+    source_arbitrary_workspace_volatile_replace_v2 = source_sub.add_parser(
+        "arbitrary-workspace-volatile-replace-v2",
+        help=(
+            "Replace an unscoped Source V2 volatile ARB workspace while every output is OFF; "
+            "the affected channel is not identified and the previous content is not recoverable"
+        ),
+    )
+    source_arbitrary_workspace_volatile_replace_v2.add_argument("--payload-file", required=True)
+    source_arbitrary_workspace_volatile_replace_v2.add_argument(
+        "--point-count",
+        type=int,
+        required=True,
+    )
+    add_runtime_options(source_arbitrary_workspace_volatile_replace_v2)
+
     source_arbitrary_select_v2 = source_sub.add_parser(
         "arbitrary-select-v2",
         help="Select one named Source V2 ARB waveform while the target output is OFF",

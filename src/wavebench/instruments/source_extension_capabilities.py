@@ -17,6 +17,7 @@ from .source_extensions import (
     SOURCE_SNAPSHOT_MIN_CORE_VERSION,
     SourceAmplitudeUnit,
     SourceArbitraryCapabilityProfile,
+    SourceArbitraryWorkspaceCapabilityProfile,
     SourceCouplingCapabilityProfile,
     SourceCounterCapabilityProfile,
     SourceCrossChannelCapabilityProfile,
@@ -74,6 +75,9 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
         "source.arbitrary_volatile_replace_v2": (
             "replace_source_arbitrary_volatile_v2",
         ),
+        "source.arbitrary_workspace_volatile_replace_v2": (
+            "replace_source_arbitrary_workspace_volatile_v2",
+        ),
         "source.counter_configure_v2": ("configure_source_counter_v2",),
         "source.counter_enable_v2": ("set_source_counter_enabled_v2",),
         "source.counter_measure_v2": ("measure_source_counter_v2",),
@@ -105,6 +109,7 @@ _SOURCE_WRITE_CAPABILITIES = frozenset(
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
         "source.arbitrary_volatile_replace_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
         "source.counter_configure_v2",
         "source.counter_enable_v2",
         "source.combine_configure_v2",
@@ -238,13 +243,20 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
         for feature in extensions.features
     }
     for feature in extensions.features:
+        unreadable_workspace = (
+            feature.feature is SourceFeature.ARBITRARY_WORKSPACE
+            and feature.scope is SourceFacetScope.INSTRUMENT
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.CONFIGURE in feature.directions
+            and SourceFeatureDirection.READ not in feature.directions
+        )
         if feature.support.value == "supported" and (
             SourceFeatureDirection.READ not in feature.directions
-        ):
+        ) and not unreadable_workspace:
             raise ConfigError(
                 f"supported Source V2 feature {feature.feature.value!r} must declare read"
             )
-        if feature.support.value == "supported" and not any(
+        if feature.support.value == "supported" and not unreadable_workspace and not any(
             facet.feature is feature.feature and facet.scope is feature.scope
             for facet in extensions.query_contract.facets
         ):
@@ -422,6 +434,11 @@ def _validate_write_contract(
 
     basic_readable = _channels_with_basic_final_vpp(extensions)
     output_readable = _channels_with_output_readback(extensions)
+    output_disabled = _channels_with_direction(
+        extensions,
+        SourceFeature.OUTPUT,
+        SourceFeatureDirection.DISABLE,
+    )
 
     if "source.basic_configure_v2" in capabilities:
         configurable = _channels_with_direction(
@@ -804,6 +821,43 @@ def _validate_write_contract(
             raise ConfigError(
                 "source.arbitrary_volatile_replace_v2 requires readable output state on every "
                 "channel"
+            )
+
+    if "source.arbitrary_workspace_volatile_replace_v2" in capabilities:
+        if "source.output_v2" not in capabilities:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires source.output_v2"
+            )
+        profiles = tuple(
+            feature.profile
+            for feature in extensions.features
+            if (
+                feature.feature is SourceFeature.ARBITRARY_WORKSPACE
+                and feature.scope is SourceFacetScope.INSTRUMENT
+                and feature.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in feature.directions
+                and isinstance(feature.profile, SourceArbitraryWorkspaceCapabilityProfile)
+            )
+        )
+        if len(profiles) != 1:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires one configured "
+                "instrument arbitrary workspace profile"
+            )
+        if len(extensions.topology.channels) > 8:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 supports at most eight "
+                "protected output channels"
+            )
+        if not set(extensions.topology.channels) <= output_readable:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires readable output "
+                "state on every topology channel"
+            )
+        if not set(extensions.topology.channels) <= output_disabled:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires output DISABLE "
+                "support on every topology channel"
             )
 
     _validate_cross_channel_write_capability(
@@ -1412,6 +1466,9 @@ def _validate_declared_write_directions(
                 "source.arbitrary_select_v2",
                 "source.arbitrary_volatile_replace_v2",
             }
+        ),
+        (SourceFeature.ARBITRARY_WORKSPACE, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.arbitrary_workspace_volatile_replace_v2"}
         ),
         (SourceFeature.COUNTER, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.counter_configure_v2"}

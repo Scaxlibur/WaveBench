@@ -48,6 +48,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
         "source.arbitrary_volatile_replace_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
         "source.counter_configure_v2",
         "source.counter_enable_v2",
         "source.counter_disable_v2",
@@ -95,6 +96,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.arbitrary_storage_v2",
             "source.arbitrary_select_v2",
             "source.arbitrary_volatile_replace_v2",
+            "source.arbitrary_workspace_volatile_replace_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -124,6 +126,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.pulse_configure_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
         "source.counter_configure_v2",
         "source.counter_enable_v2",
         "source.counter_disable_v2",
@@ -136,7 +139,10 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         spec.operation
         for spec in list_operation_specs(instrument_kind="source")
         if "_v2" in spec.operation and spec.effect == "write"
-    } == expected_v2_operations | {"source.arbitrary_volatile_replace_v2"}
+    } == expected_v2_operations | {
+        "source.arbitrary_volatile_replace_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
+    }
 
     with TemporaryDirectory() as tmp:
         valid_steps = {
@@ -159,6 +165,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
             "source.pulse_configure_v2": "channel = 1\nwidth_s = 1e-6\ndelay_s = 0\nleading_transition_s = 1e-8\ntrailing_transition_s = 1e-8\n",
             "source.arbitrary_storage_v2": "channel = 1\nslot_id = \"slot_a\"\nfile = \"payload.bin\"\nwrite_mode = \"create_only\"\n",
             "source.arbitrary_select_v2": "channel = 1\nslot_id = \"slot_a\"\nplayback_mode = \"dds\"\nplayback_frequency_hz = 1000\n",
+            "source.arbitrary_workspace_volatile_replace_v2": "file = \"payload.bin\"\npoint_count = 2\n",
             "source.combine_configure_v2": "channels = [1, 2]\nenabled = true\n",
             "source.coupling_configure_v2": "channels = [1, 2]\nenabled = true\n",
             "source.tracking_configure_v2": "channels = [1, 2]\nenabled = true\n",

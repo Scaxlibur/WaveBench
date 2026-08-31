@@ -173,7 +173,16 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[fire_start + len(fire_exports) :] == match.group(1).splitlines()
+    d1_4_exports = match.group(1).splitlines()
+    d1_4_start = fire_start + len(fire_exports)
+    assert module.__all__[d1_4_start : d1_4_start + len(d1_4_exports)] == d1_4_exports
+    match = re.search(
+        r"D1-5／无通道 VOLATILE workspace 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[d1_4_start + len(d1_4_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -350,6 +359,12 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "storage_slot_metadata_readable",
             "storage_write_modes",
             "storage_max_payload_bytes",
+            "volatile_replace_min_points",
+            "volatile_replace_max_points",
+            "volatile_replace_max_payload_bytes",
+        ),
+        "SourceArbitraryWorkspaceCapabilityProfile": (
+            "workspace_id",
             "volatile_replace_min_points",
             "volatile_replace_max_points",
             "volatile_replace_max_payload_bytes",
@@ -743,6 +758,9 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
             "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
             "source.arbitrary_volatile_replace_v2": (
                 "replace_source_arbitrary_volatile_v2",
+            ),
+            "source.arbitrary_workspace_volatile_replace_v2": (
+                "replace_source_arbitrary_workspace_volatile_v2",
             ),
             "source.counter_configure_v2": ("configure_source_counter_v2",),
             "source.counter_enable_v2": ("set_source_counter_enabled_v2",),

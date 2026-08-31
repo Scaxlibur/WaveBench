@@ -42,6 +42,7 @@ from wavebench.instruments.source_extensions import (
     SourceArbitrarySelectRequest,
     SourceArbitraryStorageRequest,
     SourceArbitraryVolatileReplaceRequest,
+    SourceArbitraryWorkspaceVolatileReplaceRequest,
     SourceBasicConfigureRequest,
     SourceBasicPatch,
     SourceBurstConfigureRequest,
@@ -593,6 +594,13 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.arbitrary_storage_v2")
             elif step.kind == "source.arbitrary_volatile_replace_v2":
                 add("source", "source.snapshot_v2", "source.arbitrary_volatile_replace_v2")
+            elif step.kind == "source.arbitrary_workspace_volatile_replace_v2":
+                add(
+                    "source",
+                    "source.snapshot_v2",
+                    "source.arbitrary_workspace_volatile_replace_v2",
+                    "source.output_v2",
+                )
             elif step.kind == "source.arbitrary_select_v2":
                 add("source", "source.snapshot_v2", "source.arbitrary_select_v2")
             elif step.kind == "source.combine_configure_v2":
@@ -1668,6 +1676,28 @@ class RunService:
             _, source_operation = self._source_service(services=services).replace_arbitrary_volatile_v2(
                 SourceArbitraryVolatileReplaceRequest(
                     channel=step.fields["channel"],
+                    payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                    payload_size_bytes=len(payload),
+                    point_count=step.fields["point_count"],
+                ),
+                payload=payload,
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.arbitrary_workspace_volatile_replace_v2":
+            payload_path = Path(step.fields["file"])
+            if not payload_path.is_absolute():
+                payload_path = plan.path.parent / payload_path
+            try:
+                payload = payload_path.read_bytes()
+            except OSError as exc:
+                raise ConfigError(
+                    "source.arbitrary_workspace_volatile_replace_v2 payload file is "
+                    f"unreadable: {payload_path}"
+                ) from exc
+            _, source_operation = self._source_service(
+                services=services
+            ).replace_arbitrary_workspace_volatile_v2(
+                SourceArbitraryWorkspaceVolatileReplaceRequest(
                     payload_sha256="sha256:" + sha256(payload).hexdigest(),
                     payload_size_bytes=len(payload),
                     point_count=step.fields["point_count"],

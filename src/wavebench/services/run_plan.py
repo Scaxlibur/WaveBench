@@ -60,6 +60,7 @@ ALLOWED_STEP_KINDS = {
     "source.pulse_configure_v2",
     "source.arbitrary_storage_v2",
     "source.arbitrary_volatile_replace_v2",
+    "source.arbitrary_workspace_volatile_replace_v2",
     "source.arbitrary_select_v2",
     "source.combine_configure_v2",
     "source.coupling_configure_v2",
@@ -160,6 +161,7 @@ _REQUIRED_FIELDS = {
     ),
     "source.arbitrary_storage_v2": ("channel", "slot_id", "file", "write_mode"),
     "source.arbitrary_volatile_replace_v2": ("channel", "file", "point_count"),
+    "source.arbitrary_workspace_volatile_replace_v2": ("file", "point_count"),
     "source.arbitrary_select_v2": ("channel", "slot_id", "playback_mode"),
     "source.combine_configure_v2": ("channels", "enabled"),
     "source.coupling_configure_v2": ("channels", "enabled"),
@@ -292,6 +294,7 @@ _OPTIONAL_FIELDS = {
     "source.pulse_configure_v2": {"on_failure"},
     "source.arbitrary_storage_v2": {"expected_previous_sha256", "on_failure"},
     "source.arbitrary_volatile_replace_v2": {"on_failure"},
+    "source.arbitrary_workspace_volatile_replace_v2": {"on_failure"},
     "source.arbitrary_select_v2": {
         "playback_frequency_hz",
         "sample_rate_hz",
@@ -357,6 +360,7 @@ _STEP_NOTES = {
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "source.arbitrary_storage_v2": "Write one named Source V2 ARB storage slot without selecting or enabling it. The payload file is recorded by digest only.",
     "source.arbitrary_volatile_replace_v2": "Replace one volatile Source V2 ARB workspace while output is OFF. The previous workspace content is not recoverable; the payload file is recorded by digest only.",
+    "source.arbitrary_workspace_volatile_replace_v2": "Replace one unscoped volatile Source V2 ARB workspace only while every topology output is OFF. It does not identify an affected channel; the previous workspace content is not recoverable and the payload file is recorded by digest only.",
     "source.arbitrary_select_v2": "Select one named Source V2 ARB waveform while the target output is OFF; it does not enable output.",
     "source.combine_configure_v2": "Enable or disable one declared Source V2 Combine relation while every affected output is OFF.",
     "source.coupling_configure_v2": "Enable or disable one declared Source V2 Coupling relation while every affected output is OFF.",
@@ -1101,6 +1105,12 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             )
         fields["write_mode"] = write_mode
     elif kind == "source.arbitrary_volatile_replace_v2":
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        fields["point_count"] = _positive_int(
+            fields["point_count"],
+            f"{prefix}.point_count",
+        )
+    elif kind == "source.arbitrary_workspace_volatile_replace_v2":
         fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
         fields["point_count"] = _positive_int(
             fields["point_count"],

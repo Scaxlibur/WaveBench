@@ -77,6 +77,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT,
     SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
     SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT,
+    SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -116,6 +117,10 @@ from wavebench.instruments.source_extensions import (
     SourceArbitraryVolatileReplaceRequest,
     SourceArbitraryVolatileReplaceResult,
     SourceArbitraryVolatileReplaceV2Driver,
+    SourceArbitraryWorkspaceCapabilityProfile,
+    SourceArbitraryWorkspaceVolatileReplaceRequest,
+    SourceArbitraryWorkspaceVolatileReplaceResult,
+    SourceArbitraryWorkspaceVolatileReplaceV2Driver,
     SourceBasicCapabilityProfile,
     SourceBasicConfigureRequest,
     SourceBasicConfigureResult,
@@ -389,6 +394,15 @@ class _SourceArbitraryVolatileReplaceV2Transaction:
     """Core transaction result for one unnamed, volatile ARB workspace replacement."""
 
     result: SourceArbitraryVolatileReplaceResult
+    artifact: dict[str, object]
+    snapshot: SourceSnapshotV2
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceArbitraryWorkspaceVolatileReplaceV2Transaction:
+    """Core transaction result for one unscoped volatile ARB workspace replacement."""
+
+    result: SourceArbitraryWorkspaceVolatileReplaceResult
     artifact: dict[str, object]
     snapshot: SourceSnapshotV2
 
@@ -926,6 +940,22 @@ class SourceService(SessionStateAliasMixin):
         """Replace one unnamed volatile ARB workspace while its target output is OFF."""
 
         transaction = self._replace_arbitrary_volatile_v2_transaction(
+            request,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
+        return transaction.result, transaction.artifact
+
+    def replace_arbitrary_workspace_volatile_v2(
+        self,
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        *,
+        payload: bytes,
+        correlation_id: str | None = None,
+    ) -> tuple[SourceArbitraryWorkspaceVolatileReplaceResult, dict[str, object]]:
+        """Replace an unscoped volatile workspace after every source output is OFF."""
+
+        transaction = self._replace_arbitrary_workspace_volatile_v2_transaction(
             request,
             payload=payload,
             correlation_id=correlation_id,
@@ -4263,6 +4293,226 @@ class SourceService(SessionStateAliasMixin):
                     context.complete()
                 raise
 
+    def _replace_arbitrary_workspace_volatile_v2_transaction(
+        self,
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        *,
+        payload: bytes,
+        correlation_id: str | None = None,
+    ) -> _SourceArbitraryWorkspaceVolatileReplaceV2Transaction:
+        """Replace an unscoped volatile workspace without claiming channel selection."""
+
+        operation = "source.arbitrary_workspace_volatile_replace_v2"
+        if not isinstance(request, SourceArbitraryWorkspaceVolatileReplaceRequest):
+            raise ConfigError(
+                f"{operation} requires SourceArbitraryWorkspaceVolatileReplaceRequest"
+            )
+        self._validate_source_arbitrary_workspace_volatile_replace_v2_payload(request, payload)
+        self._require(
+            operation,
+            "source.snapshot_v2",
+            "source.arbitrary_workspace_volatile_replace_v2",
+        )
+        with self._source_session() as source:
+            descriptor = self.descriptor
+            extensions = None if descriptor is None else descriptor.source_extensions
+            session_state = self.session_state
+            if not isinstance(extensions, SourceDescriptorExtensions):
+                raise ConfigError(f"{operation} requires validated source_extensions")
+            if session_state is None:
+                raise ConfigError(f"{operation} requires a connection-bound session state")
+            channels = extensions.topology.channels
+            fields = self._source_arbitrary_workspace_volatile_replace_v2_fields(channels)
+            workspace_field = next(
+                field for field in fields if field.field is SourceFieldId.ARBITRARY_WORKSPACE
+            )
+            identity_field = next(field for field in fields if field.field is SourceFieldId.IDENTITY)
+            output_fields = tuple(
+                field for field in fields if field.field is SourceFieldId.OUTPUT
+            )
+            output_scopes = tuple(
+                SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+                for channel in channels
+            )
+            context = SourceOperationContextCoordinator(
+                session_state=session_state,
+                operation_spec=require_operation_spec(operation),
+                operation_contract=SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT,
+                connection_timeout_ms=self.config.connection.timeout_ms,
+                baseline_snapshot_digest=None,
+                fields=fields,
+                required_off_outputs=output_scopes,
+                emergency_off_outputs=output_scopes,
+                restore_order=(),
+                non_restorable_fields=tuple(
+                    field
+                    for field in fields
+                    if field.field
+                    in {
+                        SourceFieldId.ARBITRARY_WORKSPACE,
+                        SourceFieldId.OUTPUT,
+                    }
+                ),
+                correlation_id=correlation_id,
+            )
+            preflight_snapshot: SourceSnapshotV2 | None = None
+            postcondition_snapshot: SourceSnapshotV2 | None = None
+            result: SourceArbitraryWorkspaceVolatileReplaceResult | None = None
+            main_entered = False
+            failure: BaseException | None = None
+            recovery: dict[str, object] | None = None
+
+            try:
+                preflight = context.make_phase_spec(
+                    SourceOperationPhase.PREFLIGHT,
+                    allowed_io={"query"},
+                    fields=(*output_fields, identity_field),
+                    max_steps=extensions.query_contract.max_queries,
+                )
+                with context.authorize_phase(preflight) as authorization:
+                    preflight_snapshot = self._snapshot_v2_with_open_source(
+                        source,
+                        correlation_id=context.correlation_id,
+                        deadline=authorization.deadline,
+                    )
+                    profile = self._source_arbitrary_workspace_runtime_profile(
+                        preflight_snapshot,
+                        operation=operation,
+                    )
+                    preflight_outputs = tuple(
+                        self._source_v2_output_target(
+                            preflight_snapshot,
+                            channel,
+                            operation=operation,
+                        )
+                        for channel in channels
+                    )
+                    self._validate_source_arbitrary_workspace_volatile_replace_v2_preflight(
+                        request,
+                        preflight_snapshot,
+                        profile,
+                        preflight_outputs,
+                    )
+                    context.bind_baseline_snapshot_digest(
+                        source_v2_digest(
+                            {
+                                "workspace": profile,
+                                "channels": channels,
+                                "outputs": preflight_outputs,
+                            }
+                        )
+                    )
+                    context.complete_phase_verification(
+                        authorization,
+                        io_kind="query",
+                        fields=(*output_fields, identity_field),
+                    )
+
+                main = context.make_phase_spec(
+                    SourceOperationPhase.MAIN,
+                    allowed_io={"write_bytes"},
+                    fields=(workspace_field,),
+                    max_steps=SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT.main_max_steps,
+                )
+                try:
+                    with context.authorize_phase(main):
+                        main_entered = True
+                        result = cast(
+                            SourceArbitraryWorkspaceVolatileReplaceV2Driver,
+                            source,
+                        ).replace_source_arbitrary_workspace_volatile_v2(request, payload)
+                        self._validate_source_arbitrary_workspace_volatile_replace_v2_result(
+                            request,
+                            profile,
+                            result,
+                        )
+                except BaseException as exc:
+                    failure = exc
+
+                if failure is None:
+                    try:
+                        postcondition = context.make_phase_spec(
+                            SourceOperationPhase.POSTCONDITION,
+                            allowed_io={"query"},
+                            fields=output_fields,
+                            max_steps=extensions.query_contract.max_queries,
+                        )
+                        with context.authorize_phase(postcondition) as authorization:
+                            postcondition_snapshot = self._snapshot_v2_with_open_source(
+                                source,
+                                correlation_id=context.correlation_id,
+                                deadline=authorization.deadline,
+                            )
+                            postcondition_outputs = tuple(
+                                self._source_v2_output_target(
+                                    postcondition_snapshot,
+                                    channel,
+                                    operation=operation,
+                                )
+                                for channel in channels
+                            )
+                            self._validate_source_arbitrary_workspace_volatile_replace_v2_postcondition(
+                                postcondition_snapshot,
+                                postcondition_outputs,
+                            )
+                            context.complete_phase_verification(
+                                authorization,
+                                io_kind="query",
+                                fields=output_fields,
+                            )
+                    except BaseException as exc:
+                        failure = exc
+
+                if failure is not None:
+                    if main_entered:
+                        try:
+                            context.mark_failure_required()
+                            recovery = self._recover_source_v2_outputs_off(
+                                context,
+                                source,
+                                channels,
+                                extensions,
+                                output_fields,
+                                operation=operation,
+                            )
+                        except BaseException:
+                            recovery = {
+                                "status": "recovery_setup_failed",
+                                "session_health": session_state.health.value,
+                            }
+                    context.complete()
+                    if main_entered:
+                        self._attach_source_arbitrary_workspace_volatile_replace_v2_diagnostics(
+                            failure,
+                            context=context,
+                            request=request,
+                            preflight_snapshot=preflight_snapshot,
+                            postcondition_snapshot=postcondition_snapshot,
+                            result=result,
+                            recovery=recovery,
+                        )
+                    raise failure
+
+                context.complete()
+                assert result is not None
+                assert preflight_snapshot is not None
+                assert postcondition_snapshot is not None
+                return _SourceArbitraryWorkspaceVolatileReplaceV2Transaction(
+                    result=result,
+                    artifact=self._source_arbitrary_workspace_volatile_replace_v2_artifact(
+                        context=context,
+                        request=request,
+                        preflight_snapshot=preflight_snapshot,
+                        postcondition_snapshot=postcondition_snapshot,
+                        result=result,
+                    ),
+                    snapshot=postcondition_snapshot,
+                )
+            except BaseException:
+                if not context.terminal:
+                    context.complete()
+                raise
+
     def _mutate_counter_v2_transaction(
         self,
         request: SourceCounterConfigureRequest | SourceCounterEnableRequest,
@@ -5605,6 +5855,35 @@ class SourceService(SessionStateAliasMixin):
             SourceFieldRef(
                 SourceFieldId.IDENTITY,
                 SourceScopeRef(SourceFacetScope.INSTRUMENT),
+            ),
+        )
+        return tuple(
+            sorted(
+                fields,
+                key=lambda field: (
+                    field.field.value,
+                    field.target.scope.value,
+                    -1 if field.target.channel is None else field.target.channel,
+                    field.target.channels,
+                    "" if field.target.input_id is None else field.target.input_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _source_arbitrary_workspace_volatile_replace_v2_fields(
+        channels: tuple[int, ...],
+    ) -> tuple[SourceFieldRef, ...]:
+        instrument = SourceScopeRef(SourceFacetScope.INSTRUMENT)
+        fields = (
+            SourceFieldRef(SourceFieldId.ARBITRARY_WORKSPACE, instrument),
+            SourceFieldRef(SourceFieldId.IDENTITY, instrument),
+            *(
+                SourceFieldRef(
+                    SourceFieldId.OUTPUT,
+                    SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel),
+                )
+                for channel in channels
             ),
         )
         return tuple(
@@ -7165,6 +7444,30 @@ class SourceService(SessionStateAliasMixin):
         # the declared request and safety scope.
 
     @staticmethod
+    def _source_arbitrary_workspace_runtime_profile(
+        snapshot: SourceSnapshotV2,
+        *,
+        operation: str,
+    ) -> SourceArbitraryWorkspaceCapabilityProfile:
+        feature = next(
+            (
+                candidate
+                for candidate in snapshot.runtime_profile.features
+                if candidate.feature is SourceFeature.ARBITRARY_WORKSPACE
+                and candidate.scope is SourceFacetScope.INSTRUMENT
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(
+            feature.profile,
+            SourceArbitraryWorkspaceCapabilityProfile,
+        ):
+            raise ConfigError(f"{operation} is not available for the runtime instrument")
+        return feature.profile
+
+    @staticmethod
     def _source_arbitrary_runtime_profile(
         snapshot: SourceSnapshotV2,
         *,
@@ -7556,6 +7859,83 @@ class SourceService(SessionStateAliasMixin):
             or arbitrary.selected_waveform_id.value != result.selected_waveform_id
         ):
             raise ConfigError(f"{operation} selected waveform readback does not match result")
+
+    @staticmethod
+    def _validate_source_arbitrary_workspace_volatile_replace_v2_payload(
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        payload: object,
+    ) -> None:
+        if not isinstance(payload, bytes):
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 payload must be bytes"
+            )
+        if len(payload) != request.payload_size_bytes:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 payload size does not match "
+                "the request"
+            )
+        digest = "sha256:" + sha256(payload).hexdigest()
+        if digest != request.payload_sha256:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 payload SHA-256 does not "
+                "match the request"
+            )
+
+    @staticmethod
+    def _validate_source_arbitrary_workspace_volatile_replace_v2_preflight(
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        snapshot: SourceSnapshotV2,
+        profile: SourceArbitraryWorkspaceCapabilityProfile,
+        outputs: tuple[OutputFacet, ...],
+    ) -> None:
+        operation = "source.arbitrary_workspace_volatile_replace_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} requires a fresh consistent snapshot")
+        if any(
+            output.enabled.availability is not Availability.VALUE or output.enabled.value is not False
+            for output in outputs
+        ):
+            raise ConfigError(f"{operation} requires every topology output OFF")
+        if request.point_count < profile.volatile_replace_min_points or request.point_count > profile.volatile_replace_max_points:
+            raise ConfigError(f"{operation} point count exceeds the runtime profile")
+        if request.payload_size_bytes > profile.volatile_replace_max_payload_bytes:
+            raise ConfigError(f"{operation} payload size exceeds the runtime profile")
+
+    @staticmethod
+    def _validate_source_arbitrary_workspace_volatile_replace_v2_result(
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        profile: SourceArbitraryWorkspaceCapabilityProfile,
+        result: object,
+    ) -> None:
+        operation = "source.arbitrary_workspace_volatile_replace_v2"
+        if not isinstance(result, SourceArbitraryWorkspaceVolatileReplaceResult):
+            raise ConfigError(
+                "replace_source_arbitrary_workspace_volatile_v2() returned an invalid "
+                "SourceArbitraryWorkspaceVolatileReplaceResult"
+            )
+        if (
+            result.workspace_id != profile.workspace_id
+            or result.payload_sha256 != request.payload_sha256
+            or result.payload_size_bytes != request.payload_size_bytes
+            or result.point_count != request.point_count
+        ):
+            raise ConfigError(f"{operation} result does not match the request")
+        if not result.write_completed:
+            raise ConfigError(f"{operation} result does not prove the write")
+
+    @staticmethod
+    def _validate_source_arbitrary_workspace_volatile_replace_v2_postcondition(
+        snapshot: SourceSnapshotV2,
+        outputs: tuple[OutputFacet, ...],
+    ) -> None:
+        operation = "source.arbitrary_workspace_volatile_replace_v2"
+        if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
+            raise ConfigError(f"{operation} postcondition snapshot is inconsistent")
+        if any(
+            output.enabled.availability is not Availability.VALUE or output.enabled.value is not False
+            for output in outputs
+        ):
+            raise ConfigError(f"{operation} postcondition reports an output ON")
 
     @staticmethod
     def _source_counter_configuration_field(
@@ -8558,6 +8938,9 @@ class SourceService(SessionStateAliasMixin):
             return {"status": "not_attempted", "reason": "output_method_unavailable"}
         if len(channels) != len(output_fields) or len(channels) > context.operation_contract.recovery_max_steps:
             return {"status": "not_attempted", "reason": "recovery_range_unavailable"}
+        attempted_channels: list[int] = []
+        failed_channels: list[int] = []
+        halted_reason: str | None = None
         try:
             safe_state = context.make_phase_spec(
                 SourceOperationPhase.FAILURE_SAFE_STATE,
@@ -8567,21 +8950,44 @@ class SourceService(SessionStateAliasMixin):
             )
             with context.authorize_phase(safe_state):
                 for channel in channels:
-                    result = cast(SourceOutputV2Driver, source).set_source_output_v2(
-                        SourceOutputRequest(channel=channel, enabled=False)
-                    )
-                    if (
-                        not isinstance(result, SourceOutputResult)
-                        or result.channel != channel
-                        or result.enabled
-                    ):
-                        raise ConfigError(f"{operation} recovery OFF is not proven")
+                    if session_state.health is SessionHealth.POISONED:
+                        halted_reason = "session_poisoned"
+                        break
+                    attempted_channels.append(channel)
+                    try:
+                        result = cast(SourceOutputV2Driver, source).set_source_output_v2(
+                            SourceOutputRequest(channel=channel, enabled=False)
+                        )
+                        if (
+                            not isinstance(result, SourceOutputResult)
+                            or result.channel != channel
+                            or result.enabled
+                        ):
+                            raise ConfigError(f"{operation} recovery OFF is not proven")
+                    except BaseException:
+                        failed_channels.append(channel)
+                        if session_state.health is SessionHealth.POISONED:
+                            halted_reason = "session_poisoned"
+                            break
         except BaseException:
             return {
                 "status": "off_failed",
                 "channels": list(channels),
+                "attempted_channels": attempted_channels,
+                "failed_channels": failed_channels,
                 "session_health": session_state.health.value,
             }
+        if failed_channels or len(attempted_channels) != len(channels):
+            recovery = {
+                "status": "off_failed",
+                "channels": list(channels),
+                "attempted_channels": attempted_channels,
+                "failed_channels": failed_channels,
+                "session_health": session_state.health.value,
+            }
+            if halted_reason is not None:
+                recovery["reason"] = halted_reason
+            return recovery
         if session_state.health is SessionHealth.POISONED:
             return {
                 "status": "off_sent_unverified",
@@ -9254,6 +9660,65 @@ class SourceService(SessionStateAliasMixin):
         )
         return artifact
 
+    def _source_arbitrary_workspace_volatile_replace_v2_artifact(
+        self,
+        *,
+        context: SourceOperationContextCoordinator,
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        preflight_snapshot: SourceSnapshotV2 | None,
+        postcondition_snapshot: SourceSnapshotV2 | None,
+        result: SourceArbitraryWorkspaceVolatileReplaceResult | None,
+        recovery: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        artifact = context.artifact()
+        descriptor_digest = (
+            None
+            if preflight_snapshot is None
+            else preflight_snapshot.runtime_profile.descriptor_digest
+        )
+        artifact["capability_decision"] = {
+            "capability": "source.arbitrary_workspace_volatile_replace_v2",
+            "contract_version": SOURCE_CONTRACT_VERSION,
+            "descriptor_digest": descriptor_digest,
+        }
+        artifact["request"] = source_v2_to_data(request)
+        if preflight_snapshot is not None:
+            artifact["preflight"] = {
+                "topology_channels": [item.channel for item in preflight_snapshot.channels],
+                "snapshot_digest": source_v2_digest(preflight_snapshot),
+                "consistency": preflight_snapshot.consistency.state.value,
+            }
+        if result is not None:
+            artifact["mutation"] = {"result": source_v2_to_data(result)}
+        if postcondition_snapshot is not None:
+            artifact["postcondition"] = {
+                "snapshot_digest": source_v2_digest(postcondition_snapshot),
+                "consistency": postcondition_snapshot.consistency.state.value,
+            }
+        if recovery is not None:
+            artifact["recovery"] = dict(recovery)
+        artifact["final_state"] = {
+            "session_health": context.session_state.health.value,
+            "topology_outputs_expected": "off",
+            "channel_selection": "unverified",
+            "content_readback_verified": (
+                None if result is None else result.content_readback_verified
+            ),
+            "previous_content": "unrecoverable",
+        }
+        artifact["evidence_refs"] = sorted(
+            {
+                evidence_ref
+                for feature in (
+                    ()
+                    if preflight_snapshot is None
+                    else preflight_snapshot.runtime_profile.features
+                )
+                for evidence_ref in feature.evidence_refs
+            }
+        )
+        return artifact
+
     def _source_counter_v2_artifact(
         self,
         *,
@@ -9746,6 +10211,20 @@ class SourceService(SessionStateAliasMixin):
                 exc,
                 "source_operation_artifact",
                 self._source_arbitrary_volatile_replace_v2_artifact(**kwargs),
+            )
+        except Exception:
+            pass
+
+    def _attach_source_arbitrary_workspace_volatile_replace_v2_diagnostics(
+        self,
+        exc: BaseException,
+        **kwargs: object,
+    ) -> None:
+        try:
+            setattr(
+                exc,
+                "source_operation_artifact",
+                self._source_arbitrary_workspace_volatile_replace_v2_artifact(**kwargs),
             )
         except Exception:
             pass

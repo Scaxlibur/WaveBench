@@ -7,7 +7,7 @@
 > 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic 配置／关闭、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 子项已进入核心
 > `0.8.24` 开发线；R7 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2` 和
-> `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.burst_fire_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.sweep_fire_v2`、`source.arbitrary_volatile_replace_v2` 及三项 Counter capability；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
+> `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.burst_fire_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.sweep_fire_v2`、`source.arbitrary_volatile_replace_v2`、`source.arbitrary_workspace_volatile_replace_v2` 及三项 Counter capability；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
 > M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 已完成；
 > 在该里程碑范围内，Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 与内部 Sweep 子项均具备公开 Service、CLI 与 run plan 入口。
 > 本分支另记录 R8 候选设计：修正 Coupling 写合同，并拆分 Noise Overlay 与 Sync 写事务。
@@ -660,6 +660,16 @@ SourceCounterMeasureResult
 SourceCounterMeasureV2Driver
 ```
 
+D1-5／无通道 VOLATILE workspace 在上述清单末尾追加以下精确条目：
+
+```text
+SourceArbitraryWorkspaceCapabilityProfile
+SourceArbitraryWorkspaceVolatileReplaceRequest
+SourceArbitraryWorkspaceVolatileReplaceResult
+SourceArbitraryWorkspaceVolatileReplaceV2Driver
+SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -703,6 +713,7 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | `source.arbitrary_storage_v2` | `mutate_source_arbitrary_storage_v2` | 创建或覆盖 ARB 存储槽位 |
 | `source.arbitrary_select_v2` | `select_source_arbitrary_v2` | 选择并配置已存在的 ARB |
 | `source.arbitrary_volatile_replace_v2` | `replace_source_arbitrary_volatile_v2` | 替换通道唯一的易失 ARB 工作区；上传会选择该工作区 |
+| `source.arbitrary_workspace_volatile_replace_v2` | `replace_source_arbitrary_workspace_volatile_v2` | 替换无通道归属的易失工作区；不声明任一通道已选择该内容 |
 | `source.counter_configure_v2` | `configure_source_counter_v2` | 单字段 Counter 输入配置 |
 | `source.counter_enable_v2` | `set_source_counter_enabled_v2` | 单独启用或关闭 Counter |
 | `source.counter_measure_v2` | `measure_source_counter_v2` | 对已启用 Counter 的只读测量 |
@@ -1027,6 +1038,7 @@ class SourceFeature(StrEnum):
     BURST = "burst"
     PULSE = "pulse"
     ARBITRARY = "arbitrary"
+    ARBITRARY_WORKSPACE = "arbitrary_workspace"
     COUNTER = "counter"
     REFERENCE_CLOCK = "reference_clock"
     SYNC = "sync"
@@ -1194,6 +1206,14 @@ class SourceArbitraryCapabilityProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceCapabilityProfile:
+    workspace_id: str
+    volatile_replace_min_points: int
+    volatile_replace_max_points: int
+    volatile_replace_max_payload_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCounterCapabilityProfile:
     input_ids: tuple[str, ...]
     measurement_kinds: tuple[SourceCounterMeasurementKind, ...]
@@ -1255,6 +1275,7 @@ SourceFeatureProfile: TypeAlias = (
     | SourceBurstCapabilityProfile
     | SourcePulseCapabilityProfile
     | SourceArbitraryCapabilityProfile
+    | SourceArbitraryWorkspaceCapabilityProfile
     | SourceCounterCapabilityProfile
     | SourceReferenceClockCapabilityProfile
     | SourceSyncCapabilityProfile
@@ -1336,6 +1357,7 @@ class SourceFieldId(StrEnum):
     PULSE = "source.channel.pulse"
     ARBITRARY_SELECTION = "source.channel.arbitrary_selection"
     ARBITRARY_STORAGE = "source.channel.arbitrary_storage"
+    ARBITRARY_WORKSPACE = "source.instrument.arbitrary_workspace"
     ARM_STATE = "source.channel.arm_state"
     TRIGGER_STATE = "source.channel.trigger_state"
     COMBINE = "source.cross_channel.combine"
@@ -3053,7 +3075,7 @@ R5 已加入以下纯离线兼容 fixture，作为上述要求的持续回归：
 
 ## Accepted 决议基线
 
-1. 11 个 `SourceFeatureProfile`、8 个 channel facet、2 个非通道状态、嵌套 helper、reason code 和
+1. 闭合的 `SourceFeatureProfile` union、8 个 channel facet、2 个非通道状态、嵌套 helper、reason code 和
    canonical serializer 按本文冻结，不保留 `object` 或自由 mapping。
 2. `source_extensions.__all__`、顶层 identity re-export 和 descriptor append-only 布局按本文冻结。
 3. `source.snapshot_v2` 的 `OperationSpec`、Service、CLI JSON、snapshot document 和只读 operation
@@ -3736,6 +3758,29 @@ execution intent 仅保存文件名、摘要与大小，Source operation artifac
 replace operation 不能作为无损桥接。`v1_route_migration_enabled = false` 只关闭 Basic／Output 的自动迁移，不能解除
 这一已声明高级 capability 与 V1 composite transaction 的重叠门；保留 legacy 路由或另立完整的复合合同是仅有的
 兼容选择。
+
+### D1-5 合同冻结：无通道 VOLATILE workspace
+
+有些设备把 `VOLATILE` binary 写定义为「当前通道」动作，却不提供可读或可写的 SCPI selector。此时不得把它塞入
+`source.arbitrary_volatile_replace_v2`：该操作的 `channel`、selection/basic 后置条件和单通道 recovery 都会成为虚假承诺。
+
+`source.arbitrary_workspace_volatile_replace_v2` 是独立 opt-in 合同。它使用 `ARBITRARY_WORKSPACE` 的
+`INSTRUMENT` scope 和独立 `SourceArbitraryWorkspaceCapabilityProfile`；request 不含 channel，只带 payload SHA-256、
+字节数和点数。结果只确认名为 `workspace_id` 的无通道工作区已尝试写入，且明确携带
+`content_readback_verified` 与 `previous_content_restorable`。它不会声称哪一路已选择 USER，也不会把 host digest
+伪装成设备内容读回。
+
+前置和后置条件均要求 topology 的全部输出 OFF。MAIN 只能发一次 binary write；二义写、driver 异常或后置条件失败后，
+Core 对每个仍可用的 topology 通道最多执行一次 OFF recovery；一旦 recovery I/O 使 session poisoned，后续物理 I/O
+必须停止。它不重传、不恢复旧内容，也不允许后续配置写。CLI 为：
+
+```text
+wavebench source arbitrary-workspace-volatile-replace-v2 --payload-file FILE --point-count N
+```
+
+run step 为 `source.arbitrary_workspace_volatile_replace_v2`，字段只有相对 plan 的 `file` 和 `point_count`。intent 与
+artifact 只记录 payload 身份信息，并显式标记 `channel_selection=unverified` 和旧内容不可恢复。该操作不等价、也不迁移
+legacy `source.arbitrary_upload`；它只有在独立 descriptor 显式声明且具备全拓扑 output read/disable 支撑时才可路由。
 
 Counter 按副作用拆开，而不是继续沿用 V1 的「完整 profile 一次设置」模型：
 

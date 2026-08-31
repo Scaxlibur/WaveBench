@@ -525,6 +525,32 @@ def _source_arbitrary_volatile_replace_v2_request(
         raise ConfigError(str(exc)) from exc
 
 
+def _source_arbitrary_workspace_volatile_replace_v2_request(
+    args: argparse.Namespace,
+) -> tuple[object, bytes]:
+    from .instruments.source_extensions import SourceArbitraryWorkspaceVolatileReplaceRequest
+
+    payload_path = Path(args.payload_file)
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(
+            "source.arbitrary_workspace_volatile_replace_v2 payload file is unreadable: "
+            f"{payload_path}"
+        ) from exc
+    try:
+        return (
+            SourceArbitraryWorkspaceVolatileReplaceRequest(
+                payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                payload_size_bytes=len(payload),
+                point_count=args.point_count,
+            ),
+            payload,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _source_arbitrary_select_v2_request(args: argparse.Namespace):
     from .instruments.source_extensions import (
         SourceArbitraryPlaybackMode,
@@ -1369,6 +1395,20 @@ def _main(argv: list[str] | None = None) -> int:
                 _, payload = service.replace_arbitrary_volatile_v2(
                     request,
                     payload=volatile_payload,
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "arbitrary-workspace-volatile-replace-v2":
+                request, workspace_payload = _source_arbitrary_workspace_volatile_replace_v2_request(
+                    args
+                )
+                service = _load_source_service(args)
+                _, payload = service.replace_arbitrary_workspace_volatile_v2(
+                    request,
+                    payload=workspace_payload,
                 )
                 if args.json:
                     _emit_json_result(payload)

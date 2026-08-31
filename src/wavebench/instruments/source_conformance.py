@@ -126,6 +126,10 @@ _CAPABILITY_SCOPE: Mapping[
         SourceFeature.ARBITRARY,
         frozenset({SourceFeatureDirection.CONFIGURE}),
     ),
+    "source.arbitrary_workspace_volatile_replace_v2": (
+        SourceFeature.ARBITRARY_WORKSPACE,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
     "source.counter_configure_v2": (
         SourceFeature.COUNTER,
         frozenset({SourceFeatureDirection.CONFIGURE}),

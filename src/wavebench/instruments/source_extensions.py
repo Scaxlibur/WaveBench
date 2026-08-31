@@ -172,6 +172,7 @@ class SourceFeature(StrEnum):
     BURST = "burst"
     PULSE = "pulse"
     ARBITRARY = "arbitrary"
+    ARBITRARY_WORKSPACE = "arbitrary_workspace"
     COUNTER = "counter"
     REFERENCE_CLOCK = "reference_clock"
     SYNC = "sync"
@@ -774,6 +775,43 @@ class SourceArbitraryCapabilityProfile:
                 )
 
 
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceCapabilityProfile:
+    """One unscoped volatile arbitrary-waveform workspace.
+
+    This profile deliberately describes storage only.  It does not assert that
+    a binary write selects a waveform on any particular output channel.
+    """
+
+    workspace_id: str
+    volatile_replace_min_points: int
+    volatile_replace_max_points: int
+    volatile_replace_max_payload_bytes: int
+
+    def __post_init__(self) -> None:
+        _require_token(self.workspace_id, "arbitrary workspace_id")
+        _require_int(
+            self.volatile_replace_min_points,
+            "arbitrary workspace volatile_replace_min_points",
+            minimum=1,
+        )
+        _require_int(
+            self.volatile_replace_max_points,
+            "arbitrary workspace volatile_replace_max_points",
+            minimum=1,
+        )
+        _require_int(
+            self.volatile_replace_max_payload_bytes,
+            "arbitrary workspace volatile_replace_max_payload_bytes",
+            minimum=1,
+        )
+        if self.volatile_replace_min_points > self.volatile_replace_max_points:
+            raise ValueError(
+                "arbitrary workspace volatile_replace_min_points must not exceed "
+                "volatile_replace_max_points"
+            )
+
+
 class SourceQueryEffect(StrEnum):
     PURE_READ = "pure_read"
     STATEFUL_CONSUMING_READ = "stateful_consuming_read"
@@ -961,6 +999,7 @@ SourceFeatureProfile: TypeAlias = (
     | SourceBurstCapabilityProfile
     | SourcePulseCapabilityProfile
     | SourceArbitraryCapabilityProfile
+    | SourceArbitraryWorkspaceCapabilityProfile
     | SourceCounterCapabilityProfile
     | SourceReferenceClockCapabilityProfile
     | SourceSyncCapabilityProfile
@@ -1026,6 +1065,7 @@ class SourceFieldId(StrEnum):
     PULSE = "source.channel.pulse"
     ARBITRARY_SELECTION = "source.channel.arbitrary_selection"
     ARBITRARY_STORAGE = "source.channel.arbitrary_storage"
+    ARBITRARY_WORKSPACE = "source.instrument.arbitrary_workspace"
     ARM_STATE = "source.channel.arm_state"
     TRIGGER_STATE = "source.channel.trigger_state"
     COMBINE = "source.cross_channel.combine"
@@ -1054,6 +1094,7 @@ _FIELD_SCOPES: dict[SourceFieldId, frozenset[SourceFacetScope]] = {
     SourceFieldId.PULSE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.ARBITRARY_SELECTION: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.ARBITRARY_STORAGE: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFieldId.ARBITRARY_WORKSPACE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.ARM_STATE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.TRIGGER_STATE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.COMBINE: frozenset({SourceFacetScope.CHANNEL_SET}),
@@ -1816,6 +1857,29 @@ SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT = SourceOperationContrac
 )
 
 
+SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.arbitrary_workspace_volatile_replace_v2",
+    capability="source.arbitrary_workspace_volatile_replace_v2",
+    feature=SourceFeature.ARBITRARY_WORKSPACE,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.REPLACE,
+    required_fields=(
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.ARBITRARY_WORKSPACE,),
+    postcondition_fields=(SourceFieldId.OUTPUT,),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=8,
+    verification_max_steps=2,
+)
+
+
 SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation="source.counter_configure_v2",
     capability="source.counter_configure_v2",
@@ -2243,6 +2307,7 @@ _FEATURE_PROFILE_TYPES: dict[SourceFeature, type[object]] = {
     SourceFeature.BURST: SourceBurstCapabilityProfile,
     SourceFeature.PULSE: SourcePulseCapabilityProfile,
     SourceFeature.ARBITRARY: SourceArbitraryCapabilityProfile,
+    SourceFeature.ARBITRARY_WORKSPACE: SourceArbitraryWorkspaceCapabilityProfile,
     SourceFeature.COUNTER: SourceCounterCapabilityProfile,
     SourceFeature.REFERENCE_CLOCK: SourceReferenceClockCapabilityProfile,
     SourceFeature.SYNC: SourceSyncCapabilityProfile,
@@ -2265,6 +2330,7 @@ _FEATURE_SCOPES: dict[SourceFeature, frozenset[SourceFacetScope]] = {
     SourceFeature.BURST: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.PULSE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.ARBITRARY: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFeature.ARBITRARY_WORKSPACE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFeature.COUNTER: frozenset({SourceFacetScope.INPUT}),
     SourceFeature.REFERENCE_CLOCK: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFeature.SYNC: frozenset({SourceFacetScope.CHANNEL}),
@@ -3166,6 +3232,36 @@ class SourceArbitraryVolatileReplaceRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceVolatileReplaceRequest:
+    """Replace an unscoped volatile arbitrary-waveform workspace.
+
+    The request deliberately carries no channel: devices using this contract do
+    not expose a verified selector for the workspace write.
+    """
+
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary workspace volatile replace payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary workspace volatile replace payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary workspace volatile replace point_count",
+            minimum=1,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceArbitraryStorageSlot:
     channel: int
     slot_id: str
@@ -3865,6 +3961,59 @@ class SourceArbitraryVolatileReplaceResult:
         if not self.write_completed:
             raise ValueError(
                 "source arbitrary volatile replace result requires write_completed=True"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceVolatileReplaceResult:
+    workspace_id: str
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+    write_completed: bool
+    content_readback_verified: bool
+    previous_content_restorable: bool
+
+    def __post_init__(self) -> None:
+        _require_token(
+            self.workspace_id,
+            "source arbitrary workspace volatile replace result workspace_id",
+        )
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary workspace volatile replace result payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary workspace volatile replace result payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary workspace volatile replace result point_count",
+            minimum=1,
+        )
+        _require_bool(
+            self.write_completed,
+            "source arbitrary workspace volatile replace result write_completed",
+        )
+        _require_bool(
+            self.content_readback_verified,
+            "source arbitrary workspace volatile replace result content_readback_verified",
+        )
+        _require_bool(
+            self.previous_content_restorable,
+            "source arbitrary workspace volatile replace result previous_content_restorable",
+        )
+        if not self.write_completed:
+            raise ValueError(
+                "source arbitrary workspace volatile replace result requires write_completed=True"
+            )
+        if self.previous_content_restorable:
+            raise ValueError(
+                "source arbitrary workspace volatile replace result cannot claim previous "
+                "content is restorable"
             )
 
 
@@ -5717,6 +5866,15 @@ class SourceArbitraryVolatileReplaceV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceArbitraryWorkspaceVolatileReplaceV2Driver(InstrumentDriver, Protocol):
+    def replace_source_arbitrary_workspace_volatile_v2(
+        self,
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        payload: bytes,
+    ) -> SourceArbitraryWorkspaceVolatileReplaceResult: ...
+
+
+@runtime_checkable
 class SourceArbitrarySelectV2Driver(InstrumentDriver, Protocol):
     def select_source_arbitrary_v2(
         self,
@@ -6161,4 +6319,9 @@ __all__ = [
     "SourceCounterMeasureRequest",
     "SourceCounterMeasureResult",
     "SourceCounterMeasureV2Driver",
+    "SourceArbitraryWorkspaceCapabilityProfile",
+    "SourceArbitraryWorkspaceVolatileReplaceRequest",
+    "SourceArbitraryWorkspaceVolatileReplaceResult",
+    "SourceArbitraryWorkspaceVolatileReplaceV2Driver",
+    "SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT",
 ]
