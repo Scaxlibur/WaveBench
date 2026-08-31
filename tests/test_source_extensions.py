@@ -2269,7 +2269,25 @@ def test_source_v2_write_capabilities_require_matching_directions_and_readback()
                 ),
             )
         )
-    with pytest.raises(ConfigError, match="matching output ENABLE and DISABLE"):
+    disable_only_descriptor = replace(
+        descriptor,
+        source_extensions=replace(
+            write_extensions,
+            features=(
+                write_extensions.features[0],
+                replace(
+                    write_extensions.features[1],
+                    directions=(
+                        SourceFeatureDirection.DISABLE,
+                        SourceFeatureDirection.READ,
+                    ),
+                ),
+            ),
+        ),
+    )
+    validate_source_descriptor(disable_only_descriptor)
+
+    with pytest.raises(ConfigError, match="requires output DISABLE directions"):
         validate_source_descriptor(
             replace(
                 descriptor,

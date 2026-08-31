@@ -896,11 +896,16 @@ def _validate_write_contract(
             SourceFeature.OUTPUT,
             SourceFeatureDirection.DISABLE,
         )
-        if not enabled or enabled != disabled:
+        if not disabled:
             raise ConfigError(
-                "source.output_v2 requires matching output ENABLE and DISABLE directions"
+                "source.output_v2 requires output DISABLE directions"
             )
-        if not enabled <= output_readable:
+        if not enabled <= disabled:
+            raise ConfigError(
+                "source.output_v2 requires every output ENABLE direction to have matching "
+                "DISABLE support"
+            )
+        if not disabled <= output_readable:
             raise ConfigError(
                 "source.output_v2 requires readable output state on every channel"
             )

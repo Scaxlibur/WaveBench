@@ -3262,9 +3262,10 @@ M5-A 只增加闭合的单通道 model，不提供自由 mapping 或通用 patch
 
 声明任一 M5-A 写 capability 的 descriptor 必须同时声明 `source.snapshot_v2`。基础配置要求同一
 channel 的 Basic 支持 `READ` 与 `CONFIGURE`，并能回读最终 Vpp、Offset 和输出状态；输出 capability
-要求同一 channel 的 Output 支持 `READ`、`ENABLE` 与 `DISABLE`，并能回读输出状态。启用动作在运行时
-另行要求同一 channel 可返回最终 Vpp 与 Offset；关闭动作不以它们为条件。方向、profile、channel 或
-required method 不匹配时，在 factory 及仪器 I/O 前失败。
+至少要求同一 channel 的 Output 支持 `READ` 与 `DISABLE`，并能回读输出状态。`ENABLE` 是可选方向；若声明，
+每个可开启 channel 必须也支持 `DISABLE`。这样可为仅需安全关闭的受限 capability 提供 output substrate，
+而任意 enable request 仍会在运行时方向校验后、写入前失败。启用动作另行要求同一 channel 可返回最终 Vpp 与
+Offset；关闭动作不以它们为条件。方向、profile、channel 或 required method 不匹配时，在 factory 或相应写入前失败。
 
 M5-A 不增加 `SourceService` 写方法、CLI 写命令或 run plan step；现有 V1 setter、CLI、run plan、TUI
 和 artifact 保持原样。capability 注册只让核心识别插件合同，不构成可调用写入口。

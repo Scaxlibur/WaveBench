@@ -191,7 +191,15 @@ def _config(*, limits: SafetyLimitsConfig = SafetyLimitsConfig()) -> WaveBenchCo
     )
 
 
-def _extensions(*, final_vpp_available: bool):
+def _extensions(
+    *,
+    final_vpp_available: bool,
+    output_directions: tuple[SourceFeatureDirection, ...] = (
+        SourceFeatureDirection.DISABLE,
+        SourceFeatureDirection.ENABLE,
+        SourceFeatureDirection.READ,
+    ),
+):
     base = source_extensions()
     basic, output = base.features
     if not final_vpp_available:
@@ -206,11 +214,7 @@ def _extensions(*, final_vpp_available: bool):
     second_basic = replace(basic, channels=(2,))
     output = replace(
         output,
-        directions=(
-            SourceFeatureDirection.DISABLE,
-            SourceFeatureDirection.ENABLE,
-            SourceFeatureDirection.READ,
-        ),
+        directions=output_directions,
     )
     second_output = replace(output, channels=(2,))
     return replace(
@@ -228,6 +232,11 @@ def _service(
     ignore_enable: bool = False,
     raise_after_output_write: bool = False,
     limits: SafetyLimitsConfig = SafetyLimitsConfig(),
+    output_directions: tuple[SourceFeatureDirection, ...] = (
+        SourceFeatureDirection.DISABLE,
+        SourceFeatureDirection.ENABLE,
+        SourceFeatureDirection.READ,
+    ),
 ) -> tuple[SourceService, _OutputDriver]:
     session_state = InstrumentSessionState(epoch_id="source-output-v2")
     driver = _OutputDriver(
@@ -238,7 +247,13 @@ def _service(
         raise_after_output_write=raise_after_output_write,
     )
     descriptor = replace(
-        source_descriptor(driver=driver, extensions=_extensions(final_vpp_available=final_vpp_available)),
+        source_descriptor(
+            driver=driver,
+            extensions=_extensions(
+                final_vpp_available=final_vpp_available,
+                output_directions=output_directions,
+            ),
+        ),
         capabilities=("source.snapshot_v2", "source.output_v2"),
     )
     validate_source_descriptor(descriptor)
@@ -319,6 +334,21 @@ def test_output_disable_v2_does_not_require_final_vpp_or_offset() -> None:
     assert transaction.result == SourceOutputResult(channel=1, enabled=False)
     assert driver.enabled[1] is False
     assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=False)]
+
+
+def test_output_enable_v2_rejects_a_disable_only_runtime_profile_before_write() -> None:
+    service, driver = _service(
+        output_directions=(
+            SourceFeatureDirection.DISABLE,
+            SourceFeatureDirection.READ,
+        )
+    )
+
+    with pytest.raises(ConfigError, match="not available for the runtime target channel"):
+        service._set_output_v2_transaction(SourceOutputRequest(channel=1, enabled=True))
+
+    assert driver.output_requests == []
+    assert driver.transport.counters.write_requests == 0
 
 
 def test_output_enable_v2_rejects_missing_final_vpp_or_offset_before_write() -> None:
