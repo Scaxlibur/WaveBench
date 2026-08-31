@@ -131,6 +131,7 @@ class _SweepWriteDriver:
         session_state: InstrumentSessionState,
         output_enabled: bool = False,
         postcondition_mismatch: bool = False,
+        result_marker_frequency_hz: float | None = None,
         post_fire_mismatch: bool = False,
         raise_after_fire: bool = False,
     ) -> None:
@@ -140,6 +141,7 @@ class _SweepWriteDriver:
         )
         self.output_enabled = output_enabled
         self.postcondition_mismatch = postcondition_mismatch
+        self.result_marker_frequency_hz = result_marker_frequency_hz
         self.post_fire_mismatch = post_fire_mismatch
         self.raise_after_fire = raise_after_fire
         self.basic = basic_facet()
@@ -212,10 +214,21 @@ class _SweepWriteDriver:
             sweep_time_s=request.sweep_time_s,
             trigger_source=request.trigger_source,
         )
+        result_sweep = self.sweep
+        if self.result_marker_frequency_hz is not None:
+            result_sweep = replace(
+                result_sweep,
+                marker=Observed.value_of(
+                    SourceSweepMarker(
+                        enabled=Observed.value_of(False),
+                        frequency_hz=Observed.value_of(self.result_marker_frequency_hz),
+                    )
+                ),
+            )
         return SourceSweepConfigureResult(
             channel=request.channel,
             basic=self.basic,
-            sweep=self.sweep,
+            sweep=result_sweep,
             output_enabled=False,
         )
 
@@ -375,6 +388,7 @@ def _service(
     *,
     output_enabled: bool = False,
     postcondition_mismatch: bool = False,
+    result_marker_frequency_hz: float | None = None,
     post_fire_mismatch: bool = False,
     raise_after_fire: bool = False,
     dual_contract: bool = False,
@@ -390,6 +404,7 @@ def _service(
         session_state=session_state,
         output_enabled=output_enabled,
         postcondition_mismatch=postcondition_mismatch,
+        result_marker_frequency_hz=result_marker_frequency_hz,
         post_fire_mismatch=post_fire_mismatch,
         raise_after_fire=raise_after_fire,
     )
@@ -538,6 +553,16 @@ def test_sweep_configure_v2_postcondition_mismatch_runs_one_off_recovery() -> No
         "status": "off_verified",
         "session_health": "uncertain",
     }
+
+
+def test_sweep_configure_v2_uses_independent_postcondition_for_query_only_fields() -> None:
+    service, driver = _service(result_marker_frequency_hz=550.0)
+
+    result, _ = service.configure_sweep_v2(_request())
+
+    assert result.sweep.marker.value.frequency_hz.value == 550.0
+    assert driver.sweep.marker.value.frequency_hz.availability is Availability.NOT_APPLICABLE
+    assert driver.output_requests == []
 
 
 def test_sweep_configure_v2_rejects_unsupported_spacing_before_write() -> None:

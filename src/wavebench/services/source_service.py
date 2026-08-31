@@ -2808,12 +2808,23 @@ class SourceService(SessionStateAliasMixin):
                 raise ConfigError(f"{operation} requires validated source_extensions")
             if session_state is None:
                 raise ConfigError(f"{operation} requires a connection-bound session state")
-            fields = self._source_sweep_v2_fields(request.channel)
+            interlock_features = self._source_sweep_v2_interlock_features(
+                extensions,
+                request.channel,
+                operation=operation,
+            )
+            fields = self._source_sweep_v2_fields(
+                request.channel,
+                interlock_features=interlock_features,
+            )
             basic_field = next(field for field in fields if field.field is SourceFieldId.BASIC)
             output_field = next(
                 field for field in fields if field.field is SourceFieldId.OUTPUT
             )
             sweep_field = next(field for field in fields if field.field is SourceFieldId.SWEEP)
+            postcondition_fields = tuple(
+                field for field in fields if field.field is not SourceFieldId.IDENTITY
+            )
             target_scope = SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel)
             context = SourceOperationContextCoordinator(
                 session_state=session_state,
@@ -2825,16 +2836,7 @@ class SourceService(SessionStateAliasMixin):
                 required_off_outputs=(target_scope,),
                 emergency_off_outputs=(target_scope,),
                 restore_order=(),
-                non_restorable_fields=tuple(
-                    field
-                    for field in fields
-                    if field.field
-                    in {
-                        SourceFieldId.BASIC,
-                        SourceFieldId.OUTPUT,
-                        SourceFieldId.SWEEP,
-                    }
-                ),
+                non_restorable_fields=postcondition_fields,
                 correlation_id=correlation_id,
             )
             preflight_snapshot: SourceSnapshotV2 | None = None
@@ -2871,6 +2873,12 @@ class SourceService(SessionStateAliasMixin):
                         preflight_sweep,
                         preflight_output,
                     )
+                    preflight_interlocks = self._source_sweep_v2_interlock_observations(
+                        preflight_snapshot,
+                        request.channel,
+                        interlock_features,
+                        operation=operation,
+                    )
                     context.bind_baseline_snapshot_digest(
                         source_v2_digest(
                             (
@@ -2878,6 +2886,7 @@ class SourceService(SessionStateAliasMixin):
                                 preflight_basic,
                                 preflight_sweep,
                                 preflight_output,
+                                preflight_interlocks,
                             )
                         )
                     )
@@ -2909,7 +2918,7 @@ class SourceService(SessionStateAliasMixin):
                         postcondition = context.make_phase_spec(
                             SourceOperationPhase.POSTCONDITION,
                             allowed_io={"query"},
-                            fields=(basic_field, output_field, sweep_field),
+                            fields=postcondition_fields,
                             max_steps=extensions.query_contract.max_queries,
                         )
                         with context.authorize_phase(postcondition) as authorization:
@@ -2939,7 +2948,7 @@ class SourceService(SessionStateAliasMixin):
                             context.complete_phase_verification(
                                 authorization,
                                 io_kind="query",
-                                fields=(basic_field, output_field, sweep_field),
+                                fields=postcondition_fields,
                             )
                     except BaseException as exc:
                         failure = exc
@@ -5470,12 +5479,52 @@ class SourceService(SessionStateAliasMixin):
         )
 
     @staticmethod
-    def _source_sweep_v2_fields(channel: int) -> tuple[SourceFieldRef, ...]:
+    def _source_sweep_v2_interlock_features(
+        extensions: SourceDescriptorExtensions,
+        channel: int,
+        *,
+        operation: str,
+    ) -> tuple[SourceFeature, ...]:
+        feature = next(
+            (
+                candidate
+                for candidate in extensions.features
+                if candidate.feature is SourceFeature.SWEEP
+                and candidate.scope is SourceFacetScope.CHANNEL
+                and channel in candidate.channels
+                and candidate.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in candidate.directions
+            ),
+            None,
+        )
+        if feature is None or not isinstance(feature.profile, SourceSweepCapabilityProfile):
+            raise ConfigError(f"{operation} requires declared sweep configuration support")
+        return feature.profile.implicit_disable_features
+
+    @staticmethod
+    def _source_sweep_v2_interlock_field(feature: SourceFeature) -> SourceFieldId:
+        if feature is SourceFeature.BURST:
+            return SourceFieldId.BURST
+        if feature is SourceFeature.MODULATION:
+            return SourceFieldId.MODULATION
+        raise ValueError("sweep interlock feature is unsupported")
+
+    @classmethod
+    def _source_sweep_v2_fields(
+        cls,
+        channel: int,
+        *,
+        interlock_features: tuple[SourceFeature, ...] = (),
+    ) -> tuple[SourceFieldRef, ...]:
         target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
         fields = (
             SourceFieldRef(SourceFieldId.BASIC, target),
             SourceFieldRef(SourceFieldId.OUTPUT, target),
             SourceFieldRef(SourceFieldId.SWEEP, target),
+            *(
+                SourceFieldRef(cls._source_sweep_v2_interlock_field(feature), target)
+                for feature in interlock_features
+            ),
             SourceFieldRef(
                 SourceFieldId.IDENTITY,
                 SourceScopeRef(SourceFacetScope.INSTRUMENT),
@@ -6902,6 +6951,61 @@ class SourceService(SessionStateAliasMixin):
             raise ConfigError(f"{operation} requires readable basic state at runtime")
         return feature.profile
 
+    @classmethod
+    def _source_sweep_v2_interlock_observations(
+        cls,
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        features: tuple[SourceFeature, ...],
+        *,
+        operation: str,
+    ) -> tuple[tuple[SourceFeature, Observed[object]], ...]:
+        target = next((item for item in snapshot.channels if item.channel == channel), None)
+        if target is None:
+            raise ConfigError(f"{operation} target channel is absent from snapshot")
+        observations = {
+            SourceFeature.BURST: target.burst,
+            SourceFeature.MODULATION: target.modulation,
+        }
+        return tuple(
+            (feature, observations[feature])
+            for feature in features
+            if feature in observations
+        )
+
+    @classmethod
+    def _validate_source_sweep_v2_interlocks(
+        cls,
+        snapshot: SourceSnapshotV2,
+        channel: int,
+        features: tuple[SourceFeature, ...],
+        *,
+        operation: str,
+    ) -> None:
+        expected_types = {
+            SourceFeature.BURST: BurstFacet,
+            SourceFeature.MODULATION: ModulationFacet,
+        }
+        for feature, observed in cls._source_sweep_v2_interlock_observations(
+            snapshot,
+            channel,
+            features,
+            operation=operation,
+        ):
+            expected_type = expected_types[feature]
+            if observed.availability is not Availability.VALUE or not isinstance(
+                observed.value,
+                expected_type,
+            ):
+                raise ConfigError(
+                    f"{operation} requires readable inactive {feature.value} state"
+                )
+            if (
+                observed.value.enabled.availability is not Availability.VALUE
+                or observed.value.enabled.value is not False
+            ):
+                raise ConfigError(f"{operation} requires inactive {feature.value} state")
+
     def _validate_source_sweep_v2_preflight(
         self,
         request: SourceSweepConfigureRequest,
@@ -6931,6 +7035,12 @@ class SourceService(SessionStateAliasMixin):
             raise ConfigError(f"{operation} requires sweep timing and marker readback")
         if not profile.configuration_readable:
             raise ConfigError(f"{operation} requires configured internal sweep readback")
+        self._validate_source_sweep_v2_interlocks(
+            snapshot,
+            request.channel,
+            profile.implicit_disable_features,
+            operation=operation,
+        )
         basic_profile = self._source_sweep_basic_runtime_profile(
             snapshot,
             channel=request.channel,
@@ -7036,8 +7146,24 @@ class SourceService(SessionStateAliasMixin):
         if output.enabled.availability is not Availability.VALUE or output.enabled.value is not False:
             raise ConfigError(f"{operation} postcondition reports output ON")
         self._validate_source_sweep_v2_readback(request, basic, sweep, operation=operation)
-        if result.basic != basic or result.sweep != sweep:
-            raise ConfigError(f"{operation} result readback does not match postcondition")
+        profile = self._source_sweep_runtime_profile(
+            snapshot,
+            channel=request.channel,
+            operation=operation,
+        )
+        self._validate_source_sweep_v2_interlocks(
+            snapshot,
+            request.channel,
+            profile.implicit_disable_features,
+            operation=operation,
+        )
+        # The driver MAIN phase is write-only.  Some instruments maintain
+        # query-only Sweep fields (for example center/span or a disabled
+        # marker's retained frequency) that a bounded configure request does
+        # not own.  The independently acquired postcondition snapshot above,
+        # not the driver MAIN result, is therefore authoritative for those
+        # fields.  Both result and snapshot are separately validated against
+        # the declared request and safety scope.
 
     @staticmethod
     def _source_arbitrary_runtime_profile(

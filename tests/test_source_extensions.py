@@ -256,6 +256,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "timing_readable",
             "marker_readable",
             "configuration_readable",
+            "implicit_disable_features",
         ),
         "SourceBurstCapabilityProfile": (
             "modes",
@@ -264,6 +265,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "gate_readable",
             "triggered_internal_configuration_readable",
             "triggered_manual_configuration_readable",
+            "inactive_readable",
         ),
         "SourcePulseCapabilityProfile": (
             "hold_modes",

@@ -699,6 +699,7 @@ def _validate_write_contract(
             raise ConfigError(
                 "source.sweep_configure_v2 requires readable output state on every channel"
             )
+        _validate_sweep_implicit_disable_features(extensions, configurable)
 
     if "source.sweep_fire_v2" in capabilities:
         required = {"source.sweep_configure_v2", "source.output_v2"}
@@ -1212,6 +1213,72 @@ def _channels_with_sweep_configuration_readback(
         for channel in feature.channels
     )
     return sweep_channels & basic_sweep_channels
+
+
+def _validate_sweep_implicit_disable_features(
+    extensions: SourceDescriptorExtensions,
+    configurable: frozenset[int],
+) -> None:
+    readable_channels = {
+        feature: _channels_with_inactive_feature_readback(extensions, feature)
+        for feature in (SourceFeature.BURST, SourceFeature.MODULATION)
+    }
+    for sweep in extensions.features:
+        if (
+            sweep.feature is not SourceFeature.SWEEP
+            or sweep.scope is not SourceFacetScope.CHANNEL
+            or sweep.support is not SupportState.SUPPORTED
+            or SourceFeatureDirection.CONFIGURE not in sweep.directions
+            or not isinstance(sweep.profile, SourceSweepCapabilityProfile)
+        ):
+            continue
+        for channel in set(sweep.channels) & configurable:
+            for feature in sweep.profile.implicit_disable_features:
+                if channel not in readable_channels[feature]:
+                    raise ConfigError(
+                        "source.sweep_configure_v2 requires readable inactive "
+                        f"{feature.value} state on every configured channel"
+                    )
+
+
+def _channels_with_inactive_feature_readback(
+    extensions: SourceDescriptorExtensions,
+    feature: SourceFeature,
+) -> frozenset[int]:
+    field = {
+        SourceFeature.BURST: SourceFieldId.BURST,
+        SourceFeature.MODULATION: SourceFieldId.MODULATION,
+    }.get(feature)
+    if field is None:
+        raise ValueError("sweep implicit disable feature is unsupported")
+    has_required_unconditional_query = any(
+        facet.feature is feature
+        and facet.scope is SourceFacetScope.CHANNEL
+        and facet.fields == (field,)
+        and not facet.activation_any
+        and facet.required
+        for facet in extensions.query_contract.facets
+    )
+    if not has_required_unconditional_query:
+        return frozenset()
+    return frozenset(
+        channel
+        for candidate in extensions.features
+        if (
+            candidate.feature is feature
+            and candidate.scope is SourceFacetScope.CHANNEL
+            and candidate.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in candidate.directions
+            and (
+                isinstance(candidate.profile, SourceBurstCapabilityProfile)
+                and candidate.profile.inactive_readable
+                if feature is SourceFeature.BURST
+                else isinstance(candidate.profile, SourceModulationCapabilityProfile)
+                and candidate.profile.inactive_readable
+            )
+        )
+        for channel in candidate.channels
+    )
 
 
 def _channels_with_arbitrary_storage_mutation_readback(

@@ -629,6 +629,7 @@ class SourceSweepCapabilityProfile:
     timing_readable: bool
     marker_readable: bool
     configuration_readable: bool = False
+    implicit_disable_features: tuple[SourceFeature, ...] = ()
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.spacing_modes, SourceSweepSpacing, "sweep spacing_modes")
@@ -636,6 +637,19 @@ class SourceSweepCapabilityProfile:
         _require_bool(self.timing_readable, "sweep timing_readable")
         _require_bool(self.marker_readable, "sweep marker_readable")
         _require_bool(self.configuration_readable, "sweep configuration_readable")
+        _require_enum_tuple(
+            self.implicit_disable_features,
+            SourceFeature,
+            "sweep implicit_disable_features",
+            allow_empty=True,
+        )
+        if not set(self.implicit_disable_features) <= {
+            SourceFeature.BURST,
+            SourceFeature.MODULATION,
+        }:
+            raise ValueError(
+                "sweep implicit_disable_features only supports burst and modulation"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -646,6 +660,7 @@ class SourceBurstCapabilityProfile:
     gate_readable: bool
     triggered_internal_configuration_readable: bool = False
     triggered_manual_configuration_readable: bool = False
+    inactive_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.modes, SourceBurstMode, "burst modes")
@@ -660,6 +675,7 @@ class SourceBurstCapabilityProfile:
             self.triggered_manual_configuration_readable,
             "burst triggered_manual_configuration_readable",
         )
+        _require_bool(self.inactive_readable, "burst inactive_readable")
 
 
 @dataclass(frozen=True, slots=True)
