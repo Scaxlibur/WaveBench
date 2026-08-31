@@ -2825,6 +2825,85 @@ playback_frequency_hz = 1000
             self.assertEqual(run_data["source_operations"], artifacts)
             self.assertNotIn(payload.decode("ascii"), json.dumps(run_data, ensure_ascii=False))
 
+    def test_runs_manual_sweep_fire_and_volatile_arb_without_payload_in_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            payload = b"wavebench-volatile-arb-sentinel-45a80a30"
+            payload_path = Path(tmp) / "volatile.bin"
+            payload_path.write_bytes(payload)
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 10
+sweep_time_s = 1
+trigger_source = "manual"
+
+[[steps]]
+kind = "source.sweep_fire_v2"
+channel = 1
+
+[[steps]]
+kind = "source.arbitrary_volatile_replace_v2"
+channel = 1
+file = "volatile.bin"
+point_count = 2
+""",
+                )
+            )
+            artifacts = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.sweep_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.sweep_fire_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_volatile_replace_v2",
+                    "request": {"payload_sha256": "sha256:" + sha256(payload).hexdigest()},
+                },
+            ]
+            source = Mock()
+            source.configure_sweep_v2.return_value = (SimpleNamespace(), artifacts[0])
+            source.fire_sweep_v2.return_value = (SimpleNamespace(), artifacts[1])
+            source.replace_arbitrary_volatile_v2.return_value = (SimpleNamespace(), artifacts[2])
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            sweep_request = source.configure_sweep_v2.call_args.args[0]
+            self.assertEqual(sweep_request.trigger_source.value, "manual")
+            self.assertEqual(source.fire_sweep_v2.call_args.args[0].channel, 1)
+            volatile_request = source.replace_arbitrary_volatile_v2.call_args.args[0]
+            self.assertEqual(volatile_request.point_count, 2)
+            self.assertEqual(volatile_request.payload_size_bytes, len(payload))
+            self.assertEqual(
+                source.replace_arbitrary_volatile_v2.call_args.kwargs["payload"],
+                payload,
+            )
+            self.assertEqual(run_data["source_operations"], artifacts)
+            self.assertNotIn(payload.decode("ascii"), json.dumps(run_data, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -936,6 +936,7 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             assert request.spacing.value == "linear"
             assert request.steps == 101
             assert request.sweep_time_s == 1.0
+            assert request.trigger_source.value == "manual"
             return object(), sweep_artifact
 
         def configure_burst_v2(self, request):
@@ -1091,6 +1092,8 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
                 "101",
                 "--sweep-time-s",
                 "1",
+                "--trigger-source",
+                "manual",
                 "--config",
                 "unused.toml",
             ]
@@ -1456,6 +1459,50 @@ def test_source_v2_arbitrary_cli_emits_payload_free_operation_artifacts(tmp_path
     assert selection_code == 0
     assert selection_payload["result"] == selection_artifact
     assert "abc" not in json.dumps(storage_payload, ensure_ascii=False)
+
+
+def test_source_v2_volatile_arbitrary_cli_emits_payload_free_operation_artifact(
+    tmp_path,
+    capsys,
+) -> None:
+    payload_file = tmp_path / "volatile.bin"
+    payload_file.write_bytes(b"\x00\x00\xff\x3f")
+    artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.arbitrary_volatile_replace_v2",
+        "request": {"payload_sha256": "sha256:" + "a" * 64},
+    }
+
+    class _Service:
+        def replace_arbitrary_volatile_v2(self, request, *, payload):
+            assert request.channel == 1
+            assert request.payload_size_bytes == 4
+            assert request.point_count == 2
+            assert payload == b"\x00\x00\xff\x3f"
+            return object(), artifact
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "arbitrary-volatile-replace-v2",
+                "--channel",
+                "1",
+                "--payload-file",
+                str(payload_file),
+                "--point-count",
+                "2",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    result = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert result["result"] == artifact
+    assert payload_file.name not in json.dumps(result, ensure_ascii=False)
+    assert payload_file.read_bytes().hex() not in json.dumps(result, ensure_ascii=False)
 
 
 def test_source_v2_arbitrary_cli_rejects_invalid_request_before_loading_service(tmp_path, capsys) -> None:

@@ -996,6 +996,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_sweep_configure_v2.add_argument("--steps", type=int, required=True)
     source_sweep_configure_v2.add_argument("--sweep-time-s", type=float, required=True)
+    source_sweep_configure_v2.add_argument(
+        "--trigger-source",
+        choices=("internal", "manual"),
+        default="internal",
+    )
     add_runtime_options(source_sweep_configure_v2)
 
     source_burst_configure_v2 = source_sub.add_parser(
@@ -1046,6 +1051,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_arbitrary_storage_v2.add_argument("--expected-previous-sha256")
     add_runtime_options(source_arbitrary_storage_v2)
+
+    source_arbitrary_volatile_replace_v2 = source_sub.add_parser(
+        "arbitrary-volatile-replace-v2",
+        help=(
+            "Replace the selected Source V2 volatile ARB workspace while output is OFF; "
+            "the previous workspace content is not recoverable"
+        ),
+    )
+    source_arbitrary_volatile_replace_v2.add_argument("--channel", type=int, required=True)
+    source_arbitrary_volatile_replace_v2.add_argument("--payload-file", required=True)
+    source_arbitrary_volatile_replace_v2.add_argument("--point-count", type=int, required=True)
+    add_runtime_options(source_arbitrary_volatile_replace_v2)
 
     source_arbitrary_select_v2 = source_sub.add_parser(
         "arbitrary-select-v2",

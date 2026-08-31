@@ -55,9 +55,11 @@ ALLOWED_STEP_KINDS = {
     "source.modulation_fm_configure_v2",
     "source.modulation_pwm_configure_v2",
     "source.sweep_configure_v2",
+    "source.sweep_fire_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
     "source.arbitrary_storage_v2",
+    "source.arbitrary_volatile_replace_v2",
     "source.arbitrary_select_v2",
     "source.combine_configure_v2",
     "source.coupling_configure_v2",
@@ -141,6 +143,7 @@ _REQUIRED_FIELDS = {
         "steps",
         "sweep_time_s",
     ),
+    "source.sweep_fire_v2": ("channel",),
     "source.burst_configure_v2": (
         "channel",
         "cycles",
@@ -156,6 +159,7 @@ _REQUIRED_FIELDS = {
         "trailing_transition_s",
     ),
     "source.arbitrary_storage_v2": ("channel", "slot_id", "file", "write_mode"),
+    "source.arbitrary_volatile_replace_v2": ("channel", "file", "point_count"),
     "source.arbitrary_select_v2": ("channel", "slot_id", "playback_mode"),
     "source.combine_configure_v2": ("channels", "enabled"),
     "source.coupling_configure_v2": ("channels", "enabled"),
@@ -282,10 +286,12 @@ _OPTIONAL_FIELDS = {
         "width_deviation_s",
         "on_failure",
     },
-    "source.sweep_configure_v2": {"on_failure"},
+    "source.sweep_configure_v2": {"trigger_source", "on_failure"},
+    "source.sweep_fire_v2": {"on_failure"},
     "source.burst_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
     "source.arbitrary_storage_v2": {"expected_previous_sha256", "on_failure"},
+    "source.arbitrary_volatile_replace_v2": {"on_failure"},
     "source.arbitrary_select_v2": {
         "playback_frequency_hz",
         "sample_rate_hz",
@@ -346,9 +352,11 @@ _STEP_NOTES = {
     "source.modulation_fm_configure_v2": "Configure one OFF Source V2 channel with internal sine FM; it does not enable output.",
     "source.modulation_pwm_configure_v2": "Configure one OFF Source V2 channel with internal sine PWM; it does not enable output.",
     "source.sweep_configure_v2": "Configure one OFF Source V2 channel with an internal sweep; it does not enable or fire output.",
+    "source.sweep_fire_v2": "Fire one already configured manual Source V2 sweep in the same run session; external measurement is still required.",
     "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "source.arbitrary_storage_v2": "Write one named Source V2 ARB storage slot without selecting or enabling it. The payload file is recorded by digest only.",
+    "source.arbitrary_volatile_replace_v2": "Replace one volatile Source V2 ARB workspace while output is OFF. The previous workspace content is not recoverable; the payload file is recorded by digest only.",
     "source.arbitrary_select_v2": "Select one named Source V2 ARB waveform while the target output is OFF; it does not enable output.",
     "source.combine_configure_v2": "Enable or disable one declared Source V2 Combine relation while every affected output is OFF.",
     "source.coupling_configure_v2": "Enable or disable one declared Source V2 Coupling relation while every affected output is OFF.",
@@ -1020,6 +1028,16 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         fields["stop_hz"] = stop_hz
         fields["spacing"] = spacing
         fields["sweep_time_s"] = sweep_time_s
+        if "trigger_source" in fields:
+            trigger_source = _non_empty_str(
+                fields["trigger_source"],
+                f"{prefix}.trigger_source",
+            ).lower()
+            if trigger_source not in {"internal", "manual"}:
+                raise ConfigError(
+                    f"{prefix}.trigger_source must be internal or manual"
+                )
+            fields["trigger_source"] = trigger_source
     elif kind == "source.burst_configure_v2":
         cycles = fields["cycles"]
         if isinstance(cycles, bool) or not isinstance(cycles, int):
@@ -1082,6 +1100,12 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
                 f"{prefix}.expected_previous_sha256 must be sha256:<64 lowercase hex>"
             )
         fields["write_mode"] = write_mode
+    elif kind == "source.arbitrary_volatile_replace_v2":
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        fields["point_count"] = _positive_int(
+            fields["point_count"],
+            f"{prefix}.point_count",
+        )
     elif kind == "source.arbitrary_select_v2":
         fields["slot_id"] = _non_empty_str(fields["slot_id"], f"{prefix}.slot_id")
         if _SOURCE_STORAGE_TOKEN.fullmatch(fields["slot_id"]) is None:

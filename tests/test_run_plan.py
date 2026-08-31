@@ -703,12 +703,55 @@ order = 8
         self.assertIn("source.modulation_fm_configure_v2", text)
         self.assertIn("source.modulation_pwm_configure_v2", text)
         self.assertIn("source.sweep_configure_v2", text)
+        self.assertIn("source.sweep_fire_v2", text)
         self.assertIn("source.burst_configure_v2", text)
         self.assertIn("source.pulse_configure_v2", text)
+        self.assertIn("source.arbitrary_volatile_replace_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)
         self.assertIn("frequency_estimate_hz", text)
+
+    def test_source_v2_manual_sweep_fire_and_volatile_arb_plan_fields(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 10
+sweep_time_s = 1
+trigger_source = "manual"
+
+[[steps]]
+kind = "source.sweep_fire_v2"
+channel = 1
+
+[[steps]]
+kind = "source.arbitrary_volatile_replace_v2"
+channel = 1
+file = "volatile.bin"
+point_count = 2
+"""))
+
+        self.assertEqual(plan.steps[0].fields["trigger_source"], "manual")
+        self.assertEqual(plan.steps[1].kind, "source.sweep_fire_v2")
+        self.assertEqual(plan.steps[2].fields["point_count"], 2)
+
+        invalid = self._write_plan("""
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 10
+sweep_time_s = 1
+trigger_source = "external"
+""")
+        with self.assertRaisesRegex(ConfigError, "trigger_source must be internal or manual"):
+            load_run_plan(invalid)
 
     def test_frequency_response_plan_normalizes_log_frequency_points_and_fit(self):
         plan = load_run_plan(self._write_plan("""

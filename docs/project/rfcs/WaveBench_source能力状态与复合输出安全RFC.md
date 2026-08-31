@@ -7,7 +7,7 @@
 > 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic 配置／关闭、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 子项已进入核心
 > `0.8.24` 开发线；R7 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2` 和
-> `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
+> `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.burst_fire_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.sweep_fire_v2`、`source.arbitrary_volatile_replace_v2` 及三项 Counter capability；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
 > M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 已完成；
 > 在该里程碑范围内，Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 与内部 Sweep 子项均具备公开 Service、CLI 与 run plan 入口。
 > 本分支另记录 R8 候选设计：修正 Coupling 写合同，并拆分 Noise Overlay 与 Sync 写事务。
@@ -3692,10 +3692,13 @@ fire preflight 必须证明 snapshot 一致、目标输出为 ON、Vpp／Offset 
 `external_measurement_required = true`。
 
 driver 异常、结果类型错误或后置条件失败时，Core 清除 receipt，只允许一次 V2 output OFF recovery 与独立回读，
-不会重新 fire 或恢复 ON。D1-3 不增加 CLI 命令或 run plan step；现有 V1 trigger 仅在对应 fire capability 已声明且
-同 session receipt 有效时映射到本 operation。现有 CLI 与 run step 仍构造默认 internal 请求；为保持已有
-operation artifact 字节形状，默认 `trigger_source=internal` 不写入 request payload，manual 请求则显式记录该字段。
-物理发出能力必须在具体插件的 A4 实机验收中由外部测量证明。
+不会重新 fire 或恢复 ON。D1-3 不增加独立 CLI fire 命令：独立命令无法保留 configure receipt 所属的 session。
+`source.sweep_configure_v2` CLI 与 run step 可显式传入 `trigger_source=manual`；Core 另提供只在 run plan 中使用的
+`source.sweep_fire_v2` step。该 step 必须在同一计划的 manual configure、`source.output_enable_v2` 之后执行，
+并以 `source.output_disable_v2` 结束。Burst 仍没有对应 run step。现有 V1 trigger 仅在对应 fire capability 已声明且
+同 session receipt 有效时映射到本 operation。为保持已有 operation artifact 字节形状，默认
+`trigger_source=internal` 不写入 request payload，manual 请求则显式记录该字段。物理发出能力必须在具体插件的
+A4 实机验收中由外部测量证明。
 
 ### D1-4 合同冻结：volatile ARB 与 Counter
 
@@ -3712,6 +3715,17 @@ selected waveform ID、内容是否能由设备读回验证、以及旧 volatile
 不能读取摘要或原始 bytes 的设备不得把 host digest 填为设备 readback，也不得声称
 可恢复旧内容。二进制写一旦尝试且后续失败，Core 只可尝试一次输出 OFF 收敛；旧内容
 保持 `unrecoverable`，不得重传或 rollback。
+
+Core 提供 additive CLI：
+
+```text
+wavebench source arbitrary-volatile-replace-v2 --channel N --payload-file FILE --point-count N
+```
+
+CLI 在创建 Source Service 前读取本地 payload、计算摘要并构造 typed request；文件不可读或 request 无效时不打开仪器。
+run plan 使用 `source.arbitrary_volatile_replace_v2`，字段为 `channel`、相对 plan 的 `file` 和 `point_count`。
+execution intent 仅保存文件名、摘要与大小，Source operation artifact 不保存 payload 或本地路径。该核心入口不构成任何
+真实插件的 capability 声明；声明后会与 legacy ARB upload 形成 V1 overlap gate，必须单独完成等价性审计与实机验收。
 
 Counter 按副作用拆开，而不是继续沿用 V1 的「完整 profile 一次设置」模型：
 

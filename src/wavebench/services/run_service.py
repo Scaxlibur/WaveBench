@@ -41,6 +41,7 @@ from wavebench.instruments.source_extensions import (
     SourceArbitraryPlaybackMode,
     SourceArbitrarySelectRequest,
     SourceArbitraryStorageRequest,
+    SourceArbitraryVolatileReplaceRequest,
     SourceBasicConfigureRequest,
     SourceBasicPatch,
     SourceBurstConfigureRequest,
@@ -51,6 +52,7 @@ from wavebench.instruments.source_extensions import (
     SourceCounterMeasureRequest,
     SourceCouplingConfigureRequest,
     SourceFmModulationConfigureRequest,
+    SourceFireRequest,
     SourceHarmonicConfigureRequest,
     SourceHarmonicDisableRequest,
     SourceHarmonicPreset,
@@ -63,6 +65,7 @@ from wavebench.instruments.source_extensions import (
     SourcePulseConfigureRequest,
     SourceSweepConfigureRequest,
     SourceSweepSpacing,
+    SourceTriggerSource,
     SourceTrackingConfigureRequest,
     SourceWaveformKind,
     SourceStorageWriteMode,
@@ -574,12 +577,22 @@ class RunService:
                 add("source", "source.snapshot_v2", "source.modulation_pwm_configure_v2")
             elif step.kind == "source.sweep_configure_v2":
                 add("source", "source.snapshot_v2", "source.sweep_configure_v2")
+            elif step.kind == "source.sweep_fire_v2":
+                add(
+                    "source",
+                    "source.snapshot_v2",
+                    "source.sweep_configure_v2",
+                    "source.sweep_fire_v2",
+                    "source.output_v2",
+                )
             elif step.kind == "source.burst_configure_v2":
                 add("source", "source.snapshot_v2", "source.burst_configure_v2")
             elif step.kind == "source.pulse_configure_v2":
                 add("source", "source.snapshot_v2", "source.pulse_configure_v2")
             elif step.kind == "source.arbitrary_storage_v2":
                 add("source", "source.snapshot_v2", "source.arbitrary_storage_v2")
+            elif step.kind == "source.arbitrary_volatile_replace_v2":
+                add("source", "source.snapshot_v2", "source.arbitrary_volatile_replace_v2")
             elif step.kind == "source.arbitrary_select_v2":
                 add("source", "source.snapshot_v2", "source.arbitrary_select_v2")
             elif step.kind == "source.combine_configure_v2":
@@ -1586,7 +1599,15 @@ class RunService:
                     spacing=SourceSweepSpacing(step.fields["spacing"]),
                     steps=step.fields["steps"],
                     sweep_time_s=step.fields["sweep_time_s"],
+                    trigger_source=SourceTriggerSource(
+                        step.fields.get("trigger_source", "internal")
+                    ),
                 )
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.sweep_fire_v2":
+            _, source_operation = self._source_service(services=services).fire_sweep_v2(
+                SourceFireRequest(channel=step.fields["channel"])
             )
             artifact = {"source_operation": source_operation}
         elif step.kind == "source.burst_configure_v2":
@@ -1629,6 +1650,27 @@ class RunService:
                     payload_sha256="sha256:" + sha256(payload).hexdigest(),
                     payload_size_bytes=len(payload),
                     expected_previous_sha256=step.fields.get("expected_previous_sha256"),
+                ),
+                payload=payload,
+            )
+            artifact = {"source_operation": source_operation}
+        elif step.kind == "source.arbitrary_volatile_replace_v2":
+            payload_path = Path(step.fields["file"])
+            if not payload_path.is_absolute():
+                payload_path = plan.path.parent / payload_path
+            try:
+                payload = payload_path.read_bytes()
+            except OSError as exc:
+                raise ConfigError(
+                    "source.arbitrary_volatile_replace_v2 payload file is unreadable: "
+                    f"{payload_path}"
+                ) from exc
+            _, source_operation = self._source_service(services=services).replace_arbitrary_volatile_v2(
+                SourceArbitraryVolatileReplaceRequest(
+                    channel=step.fields["channel"],
+                    payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                    payload_size_bytes=len(payload),
+                    point_count=step.fields["point_count"],
                 ),
                 payload=payload,
             )

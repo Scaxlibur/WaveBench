@@ -447,6 +447,7 @@ def _source_sweep_configure_v2_request(args: argparse.Namespace):
     from .instruments.source_extensions import (
         SourceSweepConfigureRequest,
         SourceSweepSpacing,
+        SourceTriggerSource,
     )
 
     try:
@@ -457,6 +458,7 @@ def _source_sweep_configure_v2_request(args: argparse.Namespace):
             spacing=SourceSweepSpacing(args.spacing),
             steps=args.steps,
             sweep_time_s=args.sweep_time_s,
+            trigger_source=SourceTriggerSource(args.trigger_source),
         )
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
@@ -490,6 +492,32 @@ def _source_arbitrary_storage_v2_request(
                 payload_sha256="sha256:" + sha256(payload).hexdigest(),
                 payload_size_bytes=len(payload),
                 expected_previous_sha256=args.expected_previous_sha256,
+            ),
+            payload,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_arbitrary_volatile_replace_v2_request(
+    args: argparse.Namespace,
+) -> tuple[object, bytes]:
+    from .instruments.source_extensions import SourceArbitraryVolatileReplaceRequest
+
+    payload_path = Path(args.payload_file)
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(
+            f"source.arbitrary_volatile_replace_v2 payload file is unreadable: {payload_path}"
+        ) from exc
+    try:
+        return (
+            SourceArbitraryVolatileReplaceRequest(
+                channel=args.channel,
+                payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                payload_size_bytes=len(payload),
+                point_count=args.point_count,
             ),
             payload,
         )
@@ -1329,6 +1357,18 @@ def _main(argv: list[str] | None = None) -> int:
                 _, payload = service.mutate_arbitrary_storage_v2(
                     request,
                     payload=storage_payload,
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "arbitrary-volatile-replace-v2":
+                request, volatile_payload = _source_arbitrary_volatile_replace_v2_request(args)
+                service = _load_source_service(args)
+                _, payload = service.replace_arbitrary_volatile_v2(
+                    request,
+                    payload=volatile_payload,
                 )
                 if args.json:
                     _emit_json_result(payload)
