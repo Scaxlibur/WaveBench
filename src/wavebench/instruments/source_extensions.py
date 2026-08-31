@@ -1792,7 +1792,6 @@ SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT = SourceOperationContrac
     energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
     storage_effect=SourceStorageEffect.REPLACE,
     required_fields=(
-        SourceFieldId.ARBITRARY_SELECTION,
         SourceFieldId.BASIC,
         SourceFieldId.OUTPUT,
         SourceFieldId.IDENTITY,

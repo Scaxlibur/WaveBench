@@ -4082,6 +4082,11 @@ class SourceService(SessionStateAliasMixin):
             output_field = next(
                 field for field in fields if field.field is SourceFieldId.OUTPUT
             )
+            identity_field = next(
+                field for field in fields if field.field is SourceFieldId.IDENTITY
+            )
+            preflight_fields = (basic_field, output_field, identity_field)
+            postcondition_fields = (selection_field, basic_field, output_field)
             target_scope = SourceScopeRef(SourceFacetScope.CHANNEL, channel=request.channel)
             context = SourceOperationContextCoordinator(
                 session_state=session_state,
@@ -4117,7 +4122,7 @@ class SourceService(SessionStateAliasMixin):
                 preflight = context.make_phase_spec(
                     SourceOperationPhase.PREFLIGHT,
                     allowed_io={"query"},
-                    fields=fields,
+                    fields=preflight_fields,
                     max_steps=extensions.query_contract.max_queries,
                 )
                 with context.authorize_phase(preflight) as authorization:
@@ -4126,11 +4131,7 @@ class SourceService(SessionStateAliasMixin):
                         correlation_id=context.correlation_id,
                         deadline=authorization.deadline,
                     )
-                    (
-                        preflight_basic,
-                        preflight_arbitrary,
-                        preflight_output,
-                    ) = self._source_v2_arbitrary_select_target(
+                    preflight_basic, preflight_output = self._source_v2_target(
                         preflight_snapshot,
                         request.channel,
                         operation=operation,
@@ -4139,7 +4140,6 @@ class SourceService(SessionStateAliasMixin):
                         request,
                         preflight_snapshot,
                         preflight_basic,
-                        preflight_arbitrary,
                         preflight_output,
                     )
                     context.bind_baseline_snapshot_digest(
@@ -4147,7 +4147,6 @@ class SourceService(SessionStateAliasMixin):
                             (
                                 request.channel,
                                 preflight_basic,
-                                preflight_arbitrary,
                                 preflight_output,
                             )
                         )
@@ -4155,7 +4154,7 @@ class SourceService(SessionStateAliasMixin):
                     context.complete_phase_verification(
                         authorization,
                         io_kind="query",
-                        fields=fields,
+                        fields=preflight_fields,
                     )
 
                 main = context.make_phase_spec(
@@ -4180,7 +4179,7 @@ class SourceService(SessionStateAliasMixin):
                         postcondition = context.make_phase_spec(
                             SourceOperationPhase.POSTCONDITION,
                             allowed_io={"query"},
-                            fields=fields,
+                            fields=postcondition_fields,
                             max_steps=extensions.query_contract.max_queries,
                         )
                         with context.authorize_phase(postcondition) as authorization:
@@ -4209,7 +4208,7 @@ class SourceService(SessionStateAliasMixin):
                             context.complete_phase_verification(
                                 authorization,
                                 io_kind="query",
-                                fields=fields,
+                                fields=postcondition_fields,
                             )
                     except BaseException as exc:
                         failure = exc
@@ -7481,10 +7480,9 @@ class SourceService(SessionStateAliasMixin):
         request: SourceArbitraryVolatileReplaceRequest,
         snapshot: SourceSnapshotV2,
         basic: BasicWaveFacet,
-        arbitrary: ArbitraryFacet,
         output: OutputFacet,
     ) -> None:
-        del basic, arbitrary
+        del basic
         operation = "source.arbitrary_volatile_replace_v2"
         if snapshot.consistency.state is not SnapshotConsistencyState.CONSISTENT:
             raise ConfigError(f"{operation} requires a fresh consistent snapshot")

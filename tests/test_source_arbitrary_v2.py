@@ -34,6 +34,9 @@ from wavebench.instruments.source_extensions import (
     SourceArbitraryStorageSlot,
     SourceArbitraryVolatileReplaceRequest,
     SourceArbitraryVolatileReplaceResult,
+    SourceActivationPredicate,
+    SourceActivationRule,
+    SourceAnchorField,
     SourceConstraintApplicability,
     SourceFacetQueryContract,
     SourceFacetScope,
@@ -149,15 +152,32 @@ class _ArbitraryWriteDriver:
         self.volatile_requests: list[tuple[SourceArbitraryVolatileReplaceRequest, bytes]] = []
         self.output_requests: list[SourceOutputRequest] = []
         self.v1_upload_calls = 0
+        self.query_plans = []
+        self.query_records = []
 
     def close(self) -> None:
         self.transport.close()
 
     def execute_source_query_plan_v2(self, plan) -> SourceQueryExecutionRecord:
+        self.query_plans.append(plan)
         records = []
         for index, item in enumerate(plan.items):
             if index == 0:
                 self.transport.query("SOURCE:STATE?")
+            if (
+                item.activation_any
+                and self.basic.waveform_kind.value is not SourceWaveformKind.ARBITRARY
+            ):
+                records.append(
+                    SourceProtocolQueryRecord(
+                        item_id=item.item_id,
+                        effect=item.effect,
+                        outcome=SourceQueryItemOutcome.SKIPPED,
+                        query_count=0,
+                        reason_code=SourceReasonCode.INACTIVE_BY_ANCHOR,
+                    )
+                )
+                continue
             observations = []
             for field in item.fields:
                 if field.field is SourceFieldId.IDENTITY:
@@ -184,7 +204,7 @@ class _ArbitraryWriteDriver:
                     observations=tuple(observations),
                 )
             )
-        return SourceQueryExecutionRecord(
+        record = SourceQueryExecutionRecord(
             contract_version=SOURCE_CONTRACT_VERSION,
             plan_id=plan.plan_id,
             items=tuple(records),
@@ -192,6 +212,8 @@ class _ArbitraryWriteDriver:
             device_revision_token_before="revision-1",
             device_revision_token_after="revision-1",
         )
+        self.query_records.append(record)
+        return record
 
     def read_source_arbitrary_storage_v2(
         self,
@@ -337,6 +359,7 @@ def _extensions(
         SourceArbitraryPlaybackMode.TRUE_ARB,
     ),
     v1_route_migration_enabled: bool = True,
+    arbitrary_active_only: bool = False,
 ):
     base = source_extensions()
     basic, output = base.features
@@ -367,10 +390,21 @@ def _extensions(
         feature=SourceFeature.ARBITRARY,
         scope=SourceFacetScope.CHANNEL,
         fields=(SourceFieldId.ARBITRARY_SELECTION,),
-        activation_any=(),
+        activation_any=(
+            SourceActivationRule(
+                predicates=(
+                    SourceActivationPredicate(
+                        field=SourceAnchorField.WAVEFORM_KIND,
+                        equals=SourceWaveformKind.ARBITRARY,
+                    ),
+                ),
+            ),
+        )
+        if arbitrary_active_only
+        else (),
         effect=SourceQueryEffect.PURE_READ,
         max_queries=1,
-        required=True,
+        required=not arbitrary_active_only,
     )
     return replace(
         base,
@@ -436,6 +470,7 @@ def _service(
         SourceArbitraryPlaybackMode.DDS,
         SourceArbitraryPlaybackMode.TRUE_ARB,
     ),
+    arbitrary_active_only: bool = False,
 ) -> tuple[SourceService, _ArbitraryWriteDriver]:
     session_state = InstrumentSessionState(epoch_id="source-arbitrary-v2")
     driver = _ArbitraryWriteDriver(
@@ -460,6 +495,7 @@ def _service(
             extensions=_extensions(
                 playback_modes=playback_modes,
                 v1_route_migration_enabled=v1_route_migration_enabled,
+                arbitrary_active_only=arbitrary_active_only,
             ),
         ),
         capabilities=tuple(capabilities),
@@ -689,6 +725,31 @@ def test_arbitrary_volatile_replace_v2_writes_once_and_keeps_output_off() -> Non
         "main",
         "postcondition",
     ]
+
+
+def test_arbitrary_volatile_replace_v2_accepts_an_inactive_preflight_selection() -> None:
+    service, driver = _service(volatile=True, arbitrary_active_only=True)
+    payload = b"\x00\x00\xff\x3f"
+
+    result, _ = service.replace_arbitrary_volatile_v2(
+        _volatile_request(payload),
+        payload=payload,
+    )
+
+    assert result.selected_waveform_id == "volatile"
+    assert driver.volatile_requests == [(_volatile_request(payload), payload)]
+    assert any(
+        record.outcome is SourceQueryItemOutcome.SKIPPED
+        for record in driver.query_records[0].items
+    )
+    assert any(
+        record.outcome is SourceQueryItemOutcome.OBSERVED
+        and any(
+            observation.field.field is SourceFieldId.ARBITRARY_SELECTION
+            for observation in record.observations
+        )
+        for record in driver.query_records[1].items
+    )
 
 
 def test_arbitrary_volatile_replace_v2_rejects_invalid_payload_and_preflight_before_write() -> None:
