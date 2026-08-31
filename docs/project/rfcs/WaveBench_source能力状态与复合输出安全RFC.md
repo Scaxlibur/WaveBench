@@ -3658,6 +3658,12 @@ descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、inte
 readback；同一 channel 的 Basic `READ` 必须声明 `sweep` frequency mode，Output `READ` 与 output state readback
 也为必需。核心在运行时按 request 检查所选 spacing，不要求每个设备支持全部三种 spacing。
 
+部分设备在启用 Sweep 时会隐式关闭已有 Burst 或 Modulation。`SourceSweepCapabilityProfile` 因而在既有字段末尾
+追加默认空的 `implicit_disable_features`；只允许声明 `burst` 与 `modulation`。声明该副作用的 driver 必须为相同
+channel 提供无条件、required 的纯读 facet 和明确的 inactive readback。Core 将这些字段加入本次动态 transaction
+closure，在 preflight 与 postcondition 都要求 `enabled = false`；它不自动关闭、恢复或重新启用它们。未声明该字段的
+设备继续使用原有 Basic／Output／Sweep 闭包，不增加查询或能力门。
+
 该 operation 使用 `POTENTIAL_WHILE_OFF`，复用 fresh consistent snapshot、目标 output OFF、单次 driver 写、独立
 postcondition 和主写入后的最多一次 V2 OFF recovery；没有额外 RMS、端接、热、共享功率或 trigger 接线门。本子项只
 授权配置，不构成任何 fire 或输出 ON 授权。
@@ -3726,6 +3732,10 @@ CLI 在创建 Source Service 前读取本地 payload、计算摘要并构造 typ
 run plan 使用 `source.arbitrary_volatile_replace_v2`，字段为 `channel`、相对 plan 的 `file` 和 `point_count`。
 execution intent 仅保存文件名、摘要与大小，Source operation artifact 不保存 payload 或本地路径。该核心入口不构成任何
 真实插件的 capability 声明；声明后会与 legacy ARB upload 形成 V1 overlap gate，必须单独完成等价性审计与实机验收。
+若 legacy upload 同时负责 binary 传输、频率／Vpp／offset、`output_on`、错误队列和 basic restore，当前窄的 volatile
+replace operation 不能作为无损桥接。`v1_route_migration_enabled = false` 只关闭 Basic／Output 的自动迁移，不能解除
+这一已声明高级 capability 与 V1 composite transaction 的重叠门；保留 legacy 路由或另立完整的复合合同是仅有的
+兼容选择。
 
 Counter 按副作用拆开，而不是继续沿用 V1 的「完整 profile 一次设置」模型：
 
