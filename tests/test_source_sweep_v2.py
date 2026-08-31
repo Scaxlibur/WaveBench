@@ -293,6 +293,7 @@ def _extensions(
         SourceSweepSpacing.STEP,
     ),
     include_fire: bool = False,
+    v1_route_migration_enabled: bool = True,
 ):
     base = source_extensions()
     basic, output = base.features
@@ -361,6 +362,7 @@ def _extensions(
             ),
             max_queries=7,
         ),
+        v1_route_migration_enabled=v1_route_migration_enabled,
     )
 
 
@@ -393,6 +395,7 @@ def _service(
     raise_after_fire: bool = False,
     dual_contract: bool = False,
     include_fire: bool = False,
+    v1_route_migration_enabled: bool = True,
     spacing_modes: tuple[SourceSweepSpacing, ...] = (
         SourceSweepSpacing.LINEAR,
         SourceSweepSpacing.LOGARITHMIC,
@@ -423,6 +426,7 @@ def _service(
             extensions=_extensions(
                 spacing_modes=spacing_modes,
                 include_fire=include_fire,
+                v1_route_migration_enabled=v1_route_migration_enabled,
             ),
         ),
         capabilities=tuple(capabilities),
@@ -577,6 +581,20 @@ def test_sweep_configure_v2_rejects_unsupported_spacing_before_write() -> None:
 
 def test_v1_sweep_routes_reject_before_io_for_a_dual_contract_driver() -> None:
     service, driver = _service(dual_contract=True)
+
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.configure_sweep(object())  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.trigger_sweep(channel=1)
+
+    assert driver.v1_sweep_configure_calls == 0
+    assert driver.v1_sweep_trigger_calls == 0
+    assert driver.transport.counters.write_requests == 0
+    assert driver.transport.counters.query_calls == 0
+
+
+def test_v1_sweep_overlap_stays_closed_when_migration_is_disabled() -> None:
+    service, driver = _service(dual_contract=True, v1_route_migration_enabled=False)
 
     with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
         service.configure_sweep(object())  # type: ignore[arg-type]
