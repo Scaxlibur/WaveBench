@@ -110,6 +110,10 @@ _CAPABILITY_SCOPE: Mapping[
         SourceFeature.SWEEP,
         frozenset({SourceFeatureDirection.CONFIGURE}),
     ),
+    "source.sweep_fire_v2": (
+        SourceFeature.SWEEP,
+        frozenset({SourceFeatureDirection.FIRE}),
+    ),
     "source.arbitrary_storage_v2": (
         SourceFeature.ARBITRARY,
         frozenset({SourceFeatureDirection.CONFIGURE}),
