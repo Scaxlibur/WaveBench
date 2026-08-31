@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, replace
+import json
 from math import nan
 from pathlib import Path
 import re
@@ -29,6 +30,7 @@ from wavebench.instruments.source_extensions import (
     SourceReasonCode,
     SupportState,
     source_v2_canonical_json,
+    source_v2_to_data,
 )
 
 from tests.source_v2_fixtures import (
@@ -192,6 +194,73 @@ def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None
     assert Observed.value_of(1.0, evidence_refs=(evidence,)).evidence_refs == (evidence,)
     with pytest.raises(ValueError, match="safe token"):
         Observed.value_of(1.0, evidence_refs=("/tmp/private.json",))
+
+
+def test_source_v2_canonical_json_omits_only_additive_legacy_defaults() -> None:
+    basic = module.SourceBasicCapabilityProfile(
+        waveform_kinds=(module.SourceWaveformKind.SINE,),
+        frequency_modes=(module.SourceFrequencyMode.FIXED,),
+        amplitude_units=(module.SourceAmplitudeUnit.VPP,),
+        offset_readable=True,
+        phase_readable=True,
+        square_duty_readable=False,
+    )
+    basic_data = source_v2_to_data(basic)
+    basic_canonical = json.loads(source_v2_canonical_json(basic))
+    assert basic_data["live_frequency_configurable"] is False
+    assert basic_data["live_amplitude_vpp_configurable"] is False
+    assert "live_frequency_configurable" not in basic_canonical
+    assert "live_amplitude_vpp_configurable" not in basic_canonical
+    assert "live_frequency_configurable" in json.loads(
+        source_v2_canonical_json(replace(basic, live_frequency_configurable=True))
+    )
+
+    extensions = source_extensions()
+    extensions_data = source_v2_to_data(extensions)
+    extensions_canonical = json.loads(source_v2_canonical_json(extensions))
+    assert extensions_data["v1_route_migration_enabled"] is True
+    assert "v1_route_migration_enabled" not in extensions_canonical
+    assert json.loads(
+        source_v2_canonical_json(replace(extensions, v1_route_migration_enabled=False))
+    )["v1_route_migration_enabled"] is False
+
+    sweep = module.SourceSweepCapabilityProfile(
+        spacing_modes=(module.SourceSweepSpacing.LINEAR,),
+        trigger_sources=(module.SourceTriggerSource.INTERNAL,),
+        timing_readable=True,
+        marker_readable=True,
+    )
+    assert source_v2_to_data(sweep)["implicit_disable_features"] == []
+    assert "implicit_disable_features" not in json.loads(source_v2_canonical_json(sweep))
+    assert json.loads(
+        source_v2_canonical_json(
+            replace(sweep, implicit_disable_features=(module.SourceFeature.BURST,))
+        )
+    )["implicit_disable_features"] == ["burst"]
+
+    burst = module.SourceBurstCapabilityProfile(
+        modes=(module.SourceBurstMode.TRIGGERED,),
+        trigger_sources=(module.SourceTriggerSource.INTERNAL,),
+        timing_readable=True,
+        gate_readable=True,
+    )
+    burst_data = source_v2_to_data(burst)
+    burst_canonical = json.loads(source_v2_canonical_json(burst))
+    assert burst_data["triggered_manual_configuration_readable"] is False
+    assert burst_data["inactive_readable"] is False
+    assert "triggered_manual_configuration_readable" not in burst_canonical
+    assert "inactive_readable" not in burst_canonical
+    interlocked_burst = json.loads(
+        source_v2_canonical_json(
+            replace(
+                burst,
+                triggered_manual_configuration_readable=True,
+                inactive_readable=True,
+            )
+        )
+    )
+    assert interlocked_burst["triggered_manual_configuration_readable"] is True
+    assert interlocked_burst["inactive_readable"] is True
 
 
 def test_resistance_bounds_require_two_finite_positive_limits() -> None:

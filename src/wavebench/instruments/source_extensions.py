@@ -5781,8 +5781,32 @@ class SourcePhaseRelationConfigureV2Driver(InstrumentDriver, Protocol):
     ) -> SourceCrossChannelConfigureResult: ...
 
 
-def source_v2_to_data(value: object) -> object:
-    """Convert Source V2 public values into strict JSON-compatible data."""
+def _source_v2_omits_additive_default(value: object, field_name: str) -> bool:
+    """Keep additive defaults out of canonical hashes for older plugin wheels."""
+
+    if isinstance(value, SourceBasicCapabilityProfile):
+        return (
+            field_name in {
+                "live_frequency_configurable",
+                "live_amplitude_vpp_configurable",
+            }
+            and getattr(value, field_name) is False
+        )
+    if isinstance(value, SourceSweepCapabilityProfile):
+        return field_name == "implicit_disable_features" and value.implicit_disable_features == ()
+    if isinstance(value, SourceBurstCapabilityProfile):
+        return (
+            field_name
+            in {"triggered_manual_configuration_readable", "inactive_readable"}
+            and getattr(value, field_name) is False
+        )
+    if isinstance(value, SourceDescriptorExtensions):
+        return field_name == "v1_route_migration_enabled" and value.v1_route_migration_enabled is True
+    return False
+
+
+def _source_v2_to_data(value: object, *, canonical: bool) -> object:
+    """Convert Source V2 values, optionally preserving historical hash semantics."""
 
     if isinstance(value, StrEnum):
         return value.value
@@ -5793,22 +5817,36 @@ def source_v2_to_data(value: object) -> object:
             raise ValueError("Source V2 JSON cannot contain non-finite floats")
         return value
     if isinstance(value, tuple):
-        return [source_v2_to_data(item) for item in value]
+        return [_source_v2_to_data(item, canonical=canonical) for item in value]
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             raise TypeError("Source V2 JSON object keys must be strings")
-        return {key: source_v2_to_data(value[key]) for key in sorted(value)}
+        return {
+            key: _source_v2_to_data(value[key], canonical=canonical)
+            for key in sorted(value)
+        }
     if is_dataclass(value) and not isinstance(value, type):
         payload: dict[str, object] = {"type": type(value).__name__}
         for item in fields(value):
-            payload[item.name] = source_v2_to_data(getattr(value, item.name))
+            if canonical and _source_v2_omits_additive_default(value, item.name):
+                continue
+            payload[item.name] = _source_v2_to_data(
+                getattr(value, item.name),
+                canonical=canonical,
+            )
         return payload
     raise TypeError(f"unsupported Source V2 JSON value: {type(value).__name__}")
 
 
+def source_v2_to_data(value: object) -> object:
+    """Convert Source V2 public values into strict JSON-compatible data."""
+
+    return _source_v2_to_data(value, canonical=False)
+
+
 def source_v2_canonical_json(value: object) -> str:
     return json.dumps(
-        source_v2_to_data(value),
+        _source_v2_to_data(value, canonical=True),
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
