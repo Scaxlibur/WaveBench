@@ -1344,8 +1344,12 @@ max_source_vpp = 2.0
 
     def test_executable_plugin_doctor_loads_descriptors(self):
         stdout = io.StringIO()
-        with redirect_stdout(stdout):
-            code = main(["plugin", "doctor", "--load"])
+        with patch(
+            "wavebench.instruments.registry.entry_points",
+            return_value=FakePluginEntryPoints(),
+        ):
+            with redirect_stdout(stdout):
+                code = main(["plugin", "doctor", "--load"])
 
         self.assertEqual(code, 0)
         self.assertIn("可执行描述符有效", stdout.getvalue())

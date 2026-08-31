@@ -336,6 +336,7 @@ def _extensions(
         SourceArbitraryPlaybackMode.DDS,
         SourceArbitraryPlaybackMode.TRUE_ARB,
     ),
+    v1_route_migration_enabled: bool = True,
 ):
     base = source_extensions()
     basic, output = base.features
@@ -373,6 +374,7 @@ def _extensions(
     )
     return replace(
         base,
+        v1_route_migration_enabled=v1_route_migration_enabled,
         features=(
             arbitrary,
             replace(
@@ -429,6 +431,7 @@ def _service(
     dual_contract: bool = False,
     volatile: bool = False,
     volatile_write_error: bool = False,
+    v1_route_migration_enabled: bool = True,
     playback_modes: tuple[SourceArbitraryPlaybackMode, ...] = (
         SourceArbitraryPlaybackMode.DDS,
         SourceArbitraryPlaybackMode.TRUE_ARB,
@@ -452,7 +455,13 @@ def _service(
     if volatile:
         capabilities.append("source.arbitrary_volatile_replace_v2")
     descriptor = replace(
-        source_descriptor(driver=driver, extensions=_extensions(playback_modes=playback_modes)),
+        source_descriptor(
+            driver=driver,
+            extensions=_extensions(
+                playback_modes=playback_modes,
+                v1_route_migration_enabled=v1_route_migration_enabled,
+            ),
+        ),
         capabilities=tuple(capabilities),
     )
     validate_source_descriptor(descriptor)
@@ -752,6 +761,27 @@ def test_arbitrary_volatile_replace_v2_failure_runs_one_off_recovery(
 
 def test_v1_arbitrary_upload_rejects_before_loading_file_or_io_for_dual_contract_driver() -> None:
     service, driver = _service(dual_contract=True)
+
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.upload_arbitrary_waveform(
+            channel=1,
+            file_path="does-not-exist.csv",
+            playback_frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+        )
+
+    assert driver.v1_upload_calls == 0
+    assert driver.transport.counters.binary_write_requests == 0
+    assert driver.transport.counters.write_requests == 0
+    assert driver.transport.counters.query_calls == 0
+
+
+def test_v1_arbitrary_upload_keeps_the_advanced_overlap_gate_when_migration_is_disabled() -> None:
+    service, driver = _service(
+        dual_contract=True,
+        volatile=True,
+        v1_route_migration_enabled=False,
+    )
 
     with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
         service.upload_arbitrary_waveform(

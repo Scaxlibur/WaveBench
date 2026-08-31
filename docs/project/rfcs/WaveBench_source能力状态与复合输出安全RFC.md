@@ -2763,7 +2763,7 @@ scheme、原始等级、按 `wavebench.source.a0-a5.v1` 重新评定的等级和
 | 旧核心 + 新插件 | 受管安装由 wheel `Requires-Dist` 在 entry point import 前拒绝；绕过 package inspection 的直接 `pip --no-deps` 或手工安装不承诺零导入，且不属于支持组合 |
 | 新核心 + 新插件 | 只对明确声明并通过验证的 Source V2 capability 使用新合同 |
 | 新核心 + 同时声明 V1/V2 的新插件 | 新 operation 只使用 V2；默认策略下，同义或副作用重叠的旧写入口映射／拒绝，不相交的旧 operation 保持 V1；单次事务不混用两套安全视图 |
-| 新核心 + `v1_route_migration_enabled=false` 的双合同插件 | 只有显式 V2 operation 使用 V2；既有 V1 route 保持原合同，不能用不完整的 V2 组合替换 legacy composite transaction |
+| 新核心 + `v1_route_migration_enabled=false` 的双合同插件 | 只有显式 V2 operation 使用 V2；Basic／Output 自动迁移与由它们引出的 gate 不接管旧 route。已单独声明的高级 V2 capability 仍保留其真实字段／发信号重叠 gate，不能用不完整的 V2 组合绕过 legacy composite transaction |
 
 R2 决定保持 `wavebench.instrument.v2`。`source_extensions` 是带默认值的末尾扩展，新 Protocol
 不改变现有 `SourceDriver`，新 capability 通过最低核心版本门显式 opt in。只有删除 Source V1、
@@ -3209,7 +3209,8 @@ Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使�
 - 新类型、descriptor 字段和 artifact 键必须 append-only；既有 `SourceDriver`、`SourceStatus`、
   V1 CLI、V1 run step、V1 JSON 和 V1 artifact 不改变语义。
 - V1-only 插件继续执行 V1 路径。双合同插件默认在 M5-D 将同义或副作用重叠的 V1 route 映射到 V2；
-  `v1_route_migration_enabled=false` 可使显式 V2 surface 与完整 legacy V1 transaction 并存。
+  `v1_route_migration_enabled=false` 可使显式 V2 Basic／Output surface 与其 legacy transaction 并存，
+  但不取消任何已单独声明高级 V2 capability 的真实重叠安全门。
   `set_function` 有一项兼容例外：目标波形未在当前 V2 Basic profile 声明，或 V2 preflight 无法为当前
   旧状态提供最终 Vpp／Offset 时，核心继续调用既有 V1 setter，不进入 V2 MAIN 写入；其余无法无损映射
   的重叠 route 在仪器 I/O 前拒绝。不相交的 V1 route 保持原行为。
@@ -3360,8 +3361,9 @@ operation artifact 同时保存到 step 的 `artifact.source_operation` 和非�
 | `source.output_v2` | `trigger_burst`、`trigger_sweep` | 属于可能发信号的重叠 route，在仪器 I/O 前拒绝。 |
 | 当前两个写 capability 均未覆盖 | `configure_coupling`、`configure_harmonics`、AM／FM／PM／PWM、`configure_pulse`、`configure_burst`、`configure_sweep` | 保持 V1 路径，等待对应 feature 的 V2 capability。 |
 
-设为 `false` 的双合同插件保留上述所有 V1 route；只有显式 V2 Service、CLI 或 run step 调用 V2
-transaction。该选择适用于 V1 composite transaction 无法由当前的窄 V2 operation 等价表示的设备。
+设为 `false` 的双合同插件保留上述由 Basic／Output 自动迁移或自动 gate 的 V1 route；只有显式 V2 Service、CLI
+或 run step 调用这些 V2 transaction。已单独声明的高级 capability 仍会在其相同字段或发信号的 V1 route 上
+失败关闭，不能借该开关绕过。该选择适用于 V1 composite transaction 无法由当前的窄 V2 operation 等价表示的设备。
 V1-only 插件继续使用原 V1 route。默认迁移的双合同 V1 setter 返回值仅为兼容显示而从 V2
 postcondition flatten 为 `SourceStatus`；该 adapter 不参与 V2 preflight、预算、恢复或 capability 决策。
 
