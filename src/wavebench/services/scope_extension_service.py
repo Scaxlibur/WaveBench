@@ -22,7 +22,19 @@ from wavebench.instruments.scope_extensions import (
     ScopeAcquisitionRunState,
     ScopeBaselineRestoreResult,
     ScopeBaselineVerification,
+    ScopeChannelDisplayBaseline,
+    ScopeChannelDisplayProfileV2,
+    ScopeChannelDisplayRequest,
+    ScopeChannelDisplayRestoreResult,
+    ScopeChannelDisplayResult,
+    ScopeChannelDisplayState,
     ScopeContinuousAcquisitionRequest,
+    ScopeFocusBaseline,
+    ScopeFocusProfileV2,
+    ScopeFocusRequest,
+    ScopeFocusRestoreResult,
+    ScopeFocusResult,
+    ScopeFocusState,
     ScopeScreenshot,
     ScopeScreenshotBaseline,
     ScopeScreenshotProfile,
@@ -355,6 +367,342 @@ class ExperimentalScopeExtensionService:
         except BaseException as exc:
             context.complete()
             self._attach_diagnostics(exc, context, None)
+            raise
+
+    def configure_channel_display_v2(
+        self,
+        request: ScopeChannelDisplayRequest,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        if not isinstance(request, ScopeChannelDisplayRequest):
+            raise DataError("channel display request has an invalid type")
+        spec = self._require("scope.channel_display_configure_v2")
+        profile = self._channel_display_profile_v2()
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(str(exc)) from exc
+        context = self._context(spec, deadline=deadline)
+        try:
+            error_executor = self._error_executor(spec, error_check, context)
+        except BaseException:
+            context.complete()
+            raise
+        handle: ScopeBaselineHandle | None = None
+        baseline: ScopeChannelDisplayBaseline | None = None
+        before: ScopeChannelDisplayState | None = None
+        after: ScopeChannelDisplayState | None = None
+        value: ScopeChannelDisplayResult | None = None
+        primary: BaseException | None = None
+        cleanup_error: BaseException | None = None
+        cleanup_diagnostics: dict[str, object] = {}
+        write_attempted = False
+        try:
+            fields = ("scope.channel_display",)
+            preflight = context.make_phase_spec(
+                OperationPhase.PREFLIGHT,
+                allowed_io={"query"},
+                fields={"scope.identity", *fields},
+                max_steps=1 + profile.snapshot_max_steps,
+            )
+            with context.authorize_phase(preflight) as authorization:
+                self._verify_identity()
+                before = self.driver.get_channel_display_state_v2(request.channel)
+                self._validate_channel_display_state(before, profile, request.channel)
+                if before.enabled is not request.enabled:
+                    handle = context.create_baseline(
+                        kind="channel_display",
+                        fields=fields,
+                        restore_order=fields,
+                    )
+                    baseline = ScopeChannelDisplayBaseline(
+                        context_id=handle.context_id,
+                        session_epoch=handle.session_epoch,
+                        baseline_nonce=handle.baseline_nonce,
+                        snapshot=before,
+                        restore_order=fields,
+                    )
+                    context.pass_baseline_to_main(handle)
+                context.complete_phase_verification(
+                    authorization,
+                    io_kind="query",
+                    fields={"scope.identity", *fields},
+                )
+
+            error_executor.run(context, phase="before")
+            main = context.make_phase_spec(
+                OperationPhase.MAIN,
+                allowed_io={"write", "query", "query_opc"},
+                fields=set(spec.changed_fields),
+                max_steps=profile.configure_max_steps,
+            )
+            try:
+                with context.authorize_phase(main):
+                    assert before is not None
+                    if baseline is not None:
+                        write_attempted = True
+                        error_executor.mark_main_sent()
+                        self.driver.configure_channel_display_v2(
+                            request,
+                            baseline=baseline,
+                        )
+                        after = self.driver.get_channel_display_state_v2(request.channel)
+                        self._validate_channel_display_state(after, profile, request.channel)
+                        if after.enabled is not request.enabled:
+                            raise DataError(
+                                "channel display postcondition does not match the request"
+                            )
+                    else:
+                        after = before
+                    value = ScopeChannelDisplayResult(
+                        request=request,
+                        before=before,
+                        after=after,
+                        write_performed=write_attempted,
+                    )
+                error_executor.run(context, phase="after")
+            except BaseException as exc:
+                primary = exc
+                if error_executor.wants("after") and not context.has_phase(
+                    OperationPhase.ERROR_AFTER
+                ):
+                    error_executor.omit_after(
+                        "session_unhealthy"
+                        if self.session_state.health is not SessionHealth.HEALTHY
+                        else "main_operation_failed"
+                    )
+            if primary is None and handle is not None:
+                context.consume_baseline_after_success(handle)
+            elif primary is not None and handle is not None and write_attempted:
+                context.mark_cleanup_required()
+                cleanup_error, cleanup_diagnostics = self._cleanup_channel_display(
+                    context,
+                    handle,
+                    baseline,
+                    profile,
+                )
+            context.complete()
+            operation_details = {
+                "request": _json_safe(request),
+                "before": _json_safe(before),
+                "after": _json_safe(after),
+            }
+            if primary is not None:
+                self._attach_diagnostics(
+                    primary,
+                    context,
+                    error_executor,
+                    cleanup_error=cleanup_error,
+                    extra={
+                        "channel_display": operation_details,
+                        "cleanup": cleanup_diagnostics,
+                    },
+                )
+                raise primary
+            assert value is not None and after is not None and before is not None
+            return self._result(
+                context,
+                value=value,
+                error_executor=error_executor,
+                observed_state={
+                    "before": asdict(before),
+                    "after": asdict(after),
+                },
+                extra={
+                    "postcondition": {
+                        "status": "verified",
+                        "fields": ["scope.channel_display"],
+                        "write_performed": value.write_performed,
+                    },
+                    "cleanup": cleanup_diagnostics,
+                },
+            )
+        except BaseException as exc:
+            if not context.terminal:
+                context.complete()
+            if not hasattr(exc, "scope_operation_diagnostics"):
+                self._attach_diagnostics(
+                    exc,
+                    context,
+                    error_executor,
+                    extra={
+                        "channel_display": {
+                            "request": _json_safe(request),
+                            "before": _json_safe(before),
+                            "after": _json_safe(after),
+                        }
+                    },
+                )
+            raise
+
+    def configure_focus_v2(
+        self,
+        request: ScopeFocusRequest,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        if not isinstance(request, ScopeFocusRequest):
+            raise DataError("focus request has an invalid type")
+        spec = self._require("scope.focus_configure_v2")
+        profile = self._focus_profile_v2()
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(str(exc)) from exc
+        context = self._context(spec, deadline=deadline)
+        try:
+            error_executor = self._error_executor(spec, error_check, context)
+        except BaseException:
+            context.complete()
+            raise
+        handle: ScopeBaselineHandle | None = None
+        baseline: ScopeFocusBaseline | None = None
+        before: ScopeFocusState | None = None
+        after: ScopeFocusState | None = None
+        value: ScopeFocusResult | None = None
+        primary: BaseException | None = None
+        cleanup_error: BaseException | None = None
+        cleanup_diagnostics: dict[str, object] = {}
+        write_attempted = False
+        all_fields = (
+            "scope.timebase",
+            "scope.channel_vertical",
+            "scope.channel_display",
+        )
+        try:
+            restore_order = profile.restore_order_for(request)
+            preflight = context.make_phase_spec(
+                OperationPhase.PREFLIGHT,
+                allowed_io={"query"},
+                fields={"scope.identity", *all_fields},
+                max_steps=1 + profile.snapshot_max_steps,
+            )
+            with context.authorize_phase(preflight) as authorization:
+                self._verify_identity()
+                before = self.driver.get_focus_state_v2()
+                self._validate_focus_state(before, profile)
+                if not profile.request_satisfied(before, request):
+                    handle = context.create_baseline(
+                        kind="focus",
+                        fields=restore_order,
+                        restore_order=restore_order,
+                    )
+                    baseline = ScopeFocusBaseline(
+                        context_id=handle.context_id,
+                        session_epoch=handle.session_epoch,
+                        baseline_nonce=handle.baseline_nonce,
+                        snapshot=before,
+                        restore_order=restore_order,
+                    )
+                    context.pass_baseline_to_main(handle)
+                context.complete_phase_verification(
+                    authorization,
+                    io_kind="query",
+                    fields={"scope.identity", *all_fields},
+                )
+
+            error_executor.run(context, phase="before")
+            main = context.make_phase_spec(
+                OperationPhase.MAIN,
+                allowed_io={"write", "query", "query_opc"},
+                fields=set(spec.changed_fields),
+                max_steps=profile.configure_max_steps,
+            )
+            try:
+                with context.authorize_phase(main):
+                    assert before is not None
+                    if baseline is not None:
+                        write_attempted = True
+                        error_executor.mark_main_sent()
+                        self.driver.configure_focus_v2(request, baseline=baseline)
+                        after = self.driver.get_focus_state_v2()
+                        self._validate_focus_state(after, profile)
+                        if not profile.transition_matches(before, after, request):
+                            raise DataError("focus postcondition does not match the request")
+                    else:
+                        after = before
+                    value = ScopeFocusResult(
+                        request=request,
+                        before=before,
+                        after=after,
+                        write_performed=write_attempted,
+                    )
+                error_executor.run(context, phase="after")
+            except BaseException as exc:
+                primary = exc
+                if error_executor.wants("after") and not context.has_phase(
+                    OperationPhase.ERROR_AFTER
+                ):
+                    error_executor.omit_after(
+                        "session_unhealthy"
+                        if self.session_state.health is not SessionHealth.HEALTHY
+                        else "main_operation_failed"
+                    )
+            if primary is None and handle is not None:
+                context.consume_baseline_after_success(handle)
+            elif primary is not None and handle is not None and write_attempted:
+                context.mark_cleanup_required()
+                cleanup_error, cleanup_diagnostics = self._cleanup_focus(
+                    context,
+                    handle,
+                    baseline,
+                    profile,
+                )
+            context.complete()
+            operation_details = {
+                "request": _json_safe(request),
+                "before": _json_safe(before),
+                "after": _json_safe(after),
+            }
+            if primary is not None:
+                self._attach_diagnostics(
+                    primary,
+                    context,
+                    error_executor,
+                    cleanup_error=cleanup_error,
+                    extra={
+                        "focus": operation_details,
+                        "cleanup": cleanup_diagnostics,
+                    },
+                )
+                raise primary
+            assert value is not None and after is not None and before is not None
+            return self._result(
+                context,
+                value=value,
+                error_executor=error_executor,
+                observed_state={
+                    "before": asdict(before),
+                    "after": asdict(after),
+                },
+                extra={
+                    "postcondition": {
+                        "status": "verified",
+                        "fields": list(all_fields),
+                        "write_performed": value.write_performed,
+                    },
+                    "cleanup": cleanup_diagnostics,
+                },
+            )
+        except BaseException as exc:
+            if not context.terminal:
+                context.complete()
+            if not hasattr(exc, "scope_operation_diagnostics"):
+                self._attach_diagnostics(
+                    exc,
+                    context,
+                    error_executor,
+                    extra={
+                        "focus": {
+                            "request": _json_safe(request),
+                            "before": _json_safe(before),
+                            "after": _json_safe(after),
+                        }
+                    },
+                )
             raise
 
     def start_acquisition(
@@ -1011,6 +1359,148 @@ class ExperimentalScopeExtensionService:
             "verification": _json_safe(verification),
         }
 
+    def _cleanup_channel_display(
+        self,
+        context: ScopeOperationContextCoordinator,
+        handle: ScopeBaselineHandle,
+        baseline: ScopeChannelDisplayBaseline | None,
+        profile: ScopeChannelDisplayProfileV2,
+    ) -> tuple[BaseException | None, dict[str, object]]:
+        assert baseline is not None
+        restore_result: ScopeChannelDisplayRestoreResult | None = None
+        verification: dict[str, object] | None = None
+        error: BaseException | None = None
+        try:
+            restore = context.make_phase_spec(
+                OperationPhase.FAILURE_CLEANUP,
+                allowed_io={"write"},
+                fields=handle.fields,
+                max_steps=profile.restore_max_steps,
+            )
+            with context.authorize_phase(restore):
+                context.begin_restore(handle)
+                try:
+                    restore_result = self.driver.restore_channel_display_v2(baseline)
+                    if not isinstance(restore_result, ScopeChannelDisplayRestoreResult):
+                        raise TypeError(
+                            "restore_channel_display_v2() returned an invalid result"
+                        )
+                    restore_result.validate_for(baseline)
+                    succeeded = restore_result.status == "completed"
+                except BaseException:
+                    context.finish_restore(handle, succeeded=False)
+                    raise
+                context.finish_restore(handle, succeeded=succeeded)
+                if not succeeded:
+                    raise InstrumentError("channel display restore did not complete")
+        except BaseException as exc:
+            error = exc
+
+        if self.session_state.health is not SessionHealth.POISONED:
+            try:
+                verify = context.make_phase_spec(
+                    OperationPhase.CLEANUP_VERIFICATION,
+                    allowed_io={"query"},
+                    fields=handle.fields,
+                    max_steps=profile.verify_max_steps,
+                )
+                with context.authorize_phase(verify) as authorization:
+                    context.begin_verification(handle)
+                    observed = self.driver.get_channel_display_state_v2(
+                        baseline.snapshot.channel
+                    )
+                    self._validate_channel_display_state(
+                        observed,
+                        profile,
+                        baseline.snapshot.channel,
+                    )
+                    matched = observed == baseline.snapshot
+                    verification = {
+                        "status": "verified" if matched else "mismatch",
+                        "expected": _json_safe(baseline.snapshot),
+                        "observed": _json_safe(observed),
+                    }
+                    context.finish_verification(
+                        handle,
+                        authorization,
+                        io_kind="query",
+                        verified_fields=handle.fields,
+                        matched=matched,
+                    )
+            except BaseException as exc:
+                error = error or exc
+        return error, {
+            "restore": _json_safe(restore_result),
+            "verification": verification,
+        }
+
+    def _cleanup_focus(
+        self,
+        context: ScopeOperationContextCoordinator,
+        handle: ScopeBaselineHandle,
+        baseline: ScopeFocusBaseline | None,
+        profile: ScopeFocusProfileV2,
+    ) -> tuple[BaseException | None, dict[str, object]]:
+        assert baseline is not None
+        restore_result: ScopeFocusRestoreResult | None = None
+        verification: dict[str, object] | None = None
+        error: BaseException | None = None
+        try:
+            restore = context.make_phase_spec(
+                OperationPhase.FAILURE_CLEANUP,
+                allowed_io={"write"},
+                fields=handle.fields,
+                max_steps=profile.restore_max_steps,
+            )
+            with context.authorize_phase(restore):
+                context.begin_restore(handle)
+                try:
+                    restore_result = self.driver.restore_focus_v2(baseline)
+                    if not isinstance(restore_result, ScopeFocusRestoreResult):
+                        raise TypeError("restore_focus_v2() returned an invalid result")
+                    restore_result.validate_for(baseline)
+                    succeeded = restore_result.status == "completed"
+                except BaseException:
+                    context.finish_restore(handle, succeeded=False)
+                    raise
+                context.finish_restore(handle, succeeded=succeeded)
+                if not succeeded:
+                    raise InstrumentError("focus restore did not complete")
+        except BaseException as exc:
+            error = exc
+
+        if self.session_state.health is not SessionHealth.POISONED:
+            try:
+                verify = context.make_phase_spec(
+                    OperationPhase.CLEANUP_VERIFICATION,
+                    allowed_io={"query"},
+                    fields=handle.fields,
+                    max_steps=profile.verify_max_steps,
+                )
+                with context.authorize_phase(verify) as authorization:
+                    context.begin_verification(handle)
+                    observed = self.driver.get_focus_state_v2()
+                    self._validate_focus_state(observed, profile)
+                    matched = profile.states_equivalent(baseline.snapshot, observed)
+                    verification = {
+                        "status": "verified" if matched else "mismatch",
+                        "expected": _json_safe(baseline.snapshot),
+                        "observed": _json_safe(observed),
+                    }
+                    context.finish_verification(
+                        handle,
+                        authorization,
+                        io_kind="query",
+                        verified_fields=handle.fields,
+                        matched=matched,
+                    )
+            except BaseException as exc:
+                error = error or exc
+        return error, {
+            "restore": _json_safe(restore_result),
+            "verification": verification,
+        }
+
     def _cleanup_stop(
         self,
         context: ScopeOperationContextCoordinator,
@@ -1131,6 +1621,20 @@ class ExperimentalScopeExtensionService:
             raise ConfigError("scope acquisition control requires a descriptor profile")
         return profile
 
+    def _channel_display_profile_v2(self) -> ScopeChannelDisplayProfileV2:
+        extensions = self.descriptor.scope_extensions
+        profile = extensions.channel_display_profile_v2 if extensions is not None else None
+        if profile is None:
+            raise ConfigError("scope channel display capability requires a descriptor profile")
+        return profile
+
+    def _focus_profile_v2(self) -> ScopeFocusProfileV2:
+        extensions = self.descriptor.scope_extensions
+        profile = extensions.focus_profile_v2 if extensions is not None else None
+        if profile is None:
+            raise ConfigError("scope focus capability requires a descriptor profile")
+        return profile
+
     def _trace_profile(self) -> ScopeTraceProfile:
         extensions = self.descriptor.scope_extensions
         profile = extensions.trace_profile if extensions is not None else None
@@ -1230,6 +1734,24 @@ class ExperimentalScopeExtensionService:
     def _validate_acquisition_snapshot(snapshot: object) -> None:
         if not isinstance(snapshot, ScopeAcquisitionControlSnapshot):
             raise DataError("acquisition control snapshot has an invalid type")
+
+    @staticmethod
+    def _validate_channel_display_state(
+        state: object,
+        profile: ScopeChannelDisplayProfileV2,
+        channel: int,
+    ) -> None:
+        try:
+            profile.validate_state(state, channel=channel)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise DataError(f"channel display driver returned an invalid state: {exc}") from exc
+
+    @staticmethod
+    def _validate_focus_state(state: object, profile: ScopeFocusProfileV2) -> None:
+        try:
+            profile.validate_state(state)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise DataError(f"focus driver returned an invalid state: {exc}") from exc
 
     @staticmethod
     def _validate_start_result(

@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · 中文
 
-WaveBench 是一个用 Python 编写的实验室自动测量台，提供 CLI、实验性 TUI、显式 run plan、采集包和离线报告。当前开发线为 `0.8.25`，最新稳定 tag 为 `v0.8.0`。版本变化见 [更新日志](../CHANGELOG.md)；旧版本原始文档可切换到对应 Git tag 查看。
+WaveBench 是一个用 Python 编写的实验室自动测量台，提供 CLI、实验性 TUI、显式 run plan、采集包和离线报告。当前开发线为 `0.8.26`，最新稳定 tag 为 `v0.8.0`。版本变化见 [更新日志](../CHANGELOG.md)；旧版本原始文档可切换到对应 Git tag 查看。
 
 > [!WARNING]
 > 部分命令会连接并控制真实仪器。示例会区分离线检查、连接读取和硬件写入；执行写入前，应确认接线和限制值。
@@ -25,6 +25,16 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 
 - [配置文件格式](project/reference/WaveBench_配置文件格式.md)：TOML 查找顺序、字段和安全限制。
 - 仪器型号命令和编程手册由 [仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins) 维护；本仓库只记录 WaveBench 的接入边界。
+
+### 配置示波器联合视图
+
+`wavebench scope focus` 接受重复的 `--channel`、可选的 `--time-range`、重复的
+`--vertical-scale CHANNEL=V_PER_DIV` 和 `--hide-others`。Core 只定义可移植事务：插件 profile
+声明模拟通道、数值范围、容差和 I/O 预算；Core 读取完整联合 baseline，成功后保留目标视图，失败时
+恢复并重新查询。未声明 `scope.focus_configure_v2` 的插件会在仪器 I/O 前拒绝操作。
+
+该命令会修改仪器状态，但不会启动采集、调用 autoscale、修改耦合或切换输入终端。执行前应核对
+接线、输入状态和插件 capability。
 
 ### 使用 RF 信号源
 
@@ -68,7 +78,7 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 | --- | --- | --- |
 | 离线 | `run schema`、`run template`、`run check`、`run report`、`capture inspect`、`tui --fake` | 不连接仪器；TUI 可能写本地日志 |
 | 连接读取 | `doctor`、`idn`、`status`、`run verify` | 是，仅读取或做预检 |
-| 修改状态 | `scope fetch/capture/autoscale`、source/power setter、output、`run plan` | 是，可能写入、触发或改变输出 |
+| 修改状态 | `scope focus/fetch/capture/autoscale`、source/power setter、output、`run plan` | 是，可能写入、触发或改变输出 |
 
 `run check` 不代表 plan 可以安全执行。它只检查 TOML 和字段；真正执行前，还要核对接线、scope coupling、输出状态、保护限值和 restore 条款。
 

@@ -15,6 +15,7 @@ from .api import InstrumentDescriptor
 SCOPE_EXTENSIONS_MIN_CORE_VERSION = "0.8.23"
 SCOPE_WAVEFORM_BINARY_MIN_CORE_VERSION = "0.8.24"
 SCOPE_PORTABILITY_V2_MIN_CORE_VERSION = "0.8.24"
+SCOPE_FOCUS_V2_MIN_CORE_VERSION = "0.8.26"
 SCOPE_STRICT_V2_CAPABILITIES = frozenset(
     {
         "scope.channel_input_state_v2",
@@ -25,6 +26,8 @@ SCOPE_STRICT_V2_CAPABILITIES = frozenset(
         "scope.fft_status_v2",
         "scope.cursor_readout_v2",
         "scope.capture_average_v2",
+        "scope.channel_display_configure_v2",
+        "scope.focus_configure_v2",
     }
 )
 
@@ -92,6 +95,16 @@ SCOPE_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "restore_average_capture_state",
             "verify_average_capture_state_restored",
         ),
+        "scope.channel_display_configure_v2": (
+            "get_channel_display_state_v2",
+            "configure_channel_display_v2",
+            "restore_channel_display_v2",
+        ),
+        "scope.focus_configure_v2": (
+            "get_focus_state_v2",
+            "configure_focus_v2",
+            "restore_focus_v2",
+        ),
     }
 )
 
@@ -138,8 +151,17 @@ def validate_scope_descriptor(
                 "scope portability V2 capabilities require wavebench_min_version "
                 f">= {SCOPE_PORTABILITY_V2_MIN_CORE_VERSION}"
             )
+        if "scope.focus_configure_v2" in declared and minimum < Version(
+            SCOPE_FOCUS_V2_MIN_CORE_VERSION
+        ):
+            raise ConfigError(
+                "scope focus V2 capability requires wavebench_min_version "
+                f">= {SCOPE_FOCUS_V2_MIN_CORE_VERSION}"
+            )
     dependencies = {
         "scope.acquisition_control": {"scope.acquisition_run_state"},
+        "scope.channel_display_configure_v2": {"scope.idn"},
+        "scope.focus_configure_v2": {"scope.idn"},
         "scope.capture_average_v2": {
             "scope.idn",
             "scope.acquisition_status_v2",
@@ -166,6 +188,8 @@ def validate_scope_descriptor(
         "scope.fft_status_v2": "fft_status_profile_v2",
         "scope.cursor_readout_v2": "cursor_readout_profile_v2",
         "scope.capture_average_v2": "average_capture_profile_v2",
+        "scope.channel_display_configure_v2": "channel_display_profile_v2",
+        "scope.focus_configure_v2": "focus_profile_v2",
     }
     for capability in sorted(declared):
         profile_name = profile_requirements.get(capability)

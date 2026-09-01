@@ -187,8 +187,10 @@ def test_scope_descriptor_extension_is_append_only_for_positional_compatibility(
         "measurement_statistics_profile_v2",
         "fft_status_profile_v2",
         "cursor_readout_profile_v2",
-        "average_capture_profile_v2",
-    ]
+            "average_capture_profile_v2",
+            "channel_display_profile_v2",
+            "focus_profile_v2",
+        ]
 
 
 def test_new_old_core_plugin_capability_matrix_is_fail_closed() -> None:

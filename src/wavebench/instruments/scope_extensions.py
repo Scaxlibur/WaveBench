@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from math import isfinite
+from math import isclose, isfinite
 import re
 from typing import Literal, Protocol, runtime_checkable
 import zlib
@@ -1274,6 +1274,556 @@ class ScopeCursorReadoutProfileV2:
                 continue
             if value is None or field_name in unavailable or field_name in not_applicable:
                 raise ValueError("cursor readout V2 readable fields must have a value")
+
+
+ScopeChannelDisplayField = Literal["scope.channel_display"]
+_CHANNEL_DISPLAY_FIELDS = {"scope.channel_display"}
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayRequest:
+    channel: int
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _strict_int(self.channel, label="channel display channel", minimum=1)
+        if not isinstance(self.enabled, bool):
+            raise TypeError("channel display enabled must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayState:
+    channel: int
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _strict_int(self.channel, label="channel display state channel", minimum=1)
+        if not isinstance(self.enabled, bool):
+            raise TypeError("channel display state enabled must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayResult:
+    request: ScopeChannelDisplayRequest
+    before: ScopeChannelDisplayState
+    after: ScopeChannelDisplayState
+    write_performed: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, ScopeChannelDisplayRequest):
+            raise TypeError("channel display result request has an invalid type")
+        if not isinstance(self.before, ScopeChannelDisplayState) or not isinstance(
+            self.after,
+            ScopeChannelDisplayState,
+        ):
+            raise TypeError("channel display result state has an invalid type")
+        if self.before.channel != self.request.channel or self.after.channel != self.request.channel:
+            raise ValueError("channel display result states must use the requested channel")
+        if self.after.enabled is not self.request.enabled:
+            raise ValueError("channel display result does not prove the requested state")
+        if not isinstance(self.write_performed, bool):
+            raise TypeError("channel display write_performed must be bool")
+        if self.write_performed != (self.before.enabled is not self.request.enabled):
+            raise ValueError("channel display write_performed disagrees with the observed change")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayProfileV2:
+    analog_channels: tuple[int, ...]
+    snapshot_max_steps: int
+    configure_max_steps: int
+    restore_max_steps: int
+    verify_max_steps: int
+
+    def __post_init__(self) -> None:
+        channels = _unique_tuple(self.analog_channels, label="analog_channels")
+        _strict_int(len(channels), label="analog channel count", minimum=1, maximum=64)
+        for channel in channels:
+            _strict_int(
+                channel,
+                label="analog channel",
+                minimum=1,
+                maximum=65_535,
+            )
+        if tuple(sorted(channels)) != channels:
+            raise ValueError("analog_channels must use ascending channel order")
+        for label, value, minimum in (
+            ("snapshot_max_steps", self.snapshot_max_steps, 1),
+            ("configure_max_steps", self.configure_max_steps, 2),
+            ("restore_max_steps", self.restore_max_steps, 1),
+            ("verify_max_steps", self.verify_max_steps, 1),
+        ):
+            _strict_int(value, label=label, minimum=minimum, maximum=64)
+
+    def validate_request(self, request: ScopeChannelDisplayRequest) -> None:
+        if not isinstance(request, ScopeChannelDisplayRequest):
+            raise TypeError("channel display request has an invalid type")
+        if request.channel not in self.analog_channels:
+            raise ValueError("channel display request is outside the descriptor analog channels")
+
+    def validate_state(self, state: ScopeChannelDisplayState, *, channel: int) -> None:
+        if not isinstance(state, ScopeChannelDisplayState):
+            raise TypeError("channel display driver returned an invalid state")
+        if channel not in self.analog_channels or state.channel != channel:
+            raise ValueError("channel display driver returned the wrong channel")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayBaseline:
+    context_id: str
+    session_epoch: str
+    baseline_nonce: str
+    snapshot: ScopeChannelDisplayState
+    restore_order: tuple[ScopeChannelDisplayField, ...]
+
+    def __post_init__(self) -> None:
+        _safe_token(self.context_id, label="channel display baseline context_id")
+        _safe_token(self.session_epoch, label="channel display baseline session_epoch")
+        _safe_token(self.baseline_nonce, label="channel display baseline nonce")
+        if not isinstance(self.snapshot, ScopeChannelDisplayState):
+            raise TypeError("channel display baseline snapshot has an invalid type")
+        if self.restore_order != ("scope.channel_display",):
+            raise ValueError("channel display restore order must contain its only state field")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayRestoreResult:
+    status: Literal["completed", "failed", "not_attempted"]
+    attempted_fields: tuple[ScopeChannelDisplayField, ...]
+    restored_fields: tuple[ScopeChannelDisplayField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        attempted = _unique_tuple(self.attempted_fields, label="attempted_fields")
+        restored = _unique_tuple(self.restored_fields, label="restored_fields")
+        if not set(attempted + restored) <= _CHANNEL_DISPLAY_FIELDS:
+            raise ValueError("channel display restore fields are invalid")
+        _optional_safe_token(self.error_code, label="error_code")
+
+    def validate_for(self, baseline: ScopeChannelDisplayBaseline) -> None:
+        if not isinstance(baseline, ScopeChannelDisplayBaseline):
+            raise TypeError("channel display baseline has an invalid type")
+        _validate_prefix_and_subsequence(
+            expected=baseline.restore_order,
+            attempted=self.attempted_fields,
+            completed=self.restored_fields,
+            status=self.status,
+        )
+
+
+ScopeFocusField = Literal[
+    "scope.timebase",
+    "scope.channel_vertical",
+    "scope.channel_display",
+]
+_SCOPE_FOCUS_FIELDS = {
+    "scope.timebase",
+    "scope.channel_vertical",
+    "scope.channel_display",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusVerticalScale:
+    channel: int
+    scale_v_per_div: float
+
+    def __post_init__(self) -> None:
+        _strict_int(self.channel, label="focus vertical scale channel", minimum=1)
+        scale = _finite(self.scale_v_per_div, label="focus vertical scale")
+        if scale <= 0:
+            raise ValueError("focus vertical scale must be > 0")
+        object.__setattr__(self, "scale_v_per_div", scale)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusRequest:
+    channels: tuple[int, ...]
+    time_range_s: float | None = None
+    vertical_scales: tuple[ScopeFocusVerticalScale, ...] = ()
+    hide_others: bool = False
+
+    def __post_init__(self) -> None:
+        channels = _unique_tuple(self.channels, label="focus channels")
+        _strict_int(len(channels), label="focus channel count", minimum=1, maximum=64)
+        for channel in channels:
+            _strict_int(channel, label="focus channel", minimum=1, maximum=65_535)
+        if tuple(sorted(channels)) != channels:
+            raise ValueError("focus channels must use ascending order")
+        if self.time_range_s is not None:
+            time_range_s = _finite(self.time_range_s, label="focus time range")
+            if time_range_s <= 0:
+                raise ValueError("focus time range must be > 0")
+            object.__setattr__(self, "time_range_s", time_range_s)
+        scales = _unique_tuple(self.vertical_scales, label="focus vertical scales")
+        if not all(isinstance(item, ScopeFocusVerticalScale) for item in scales):
+            raise TypeError("focus vertical scales contain an invalid item")
+        scale_channels = tuple(item.channel for item in scales)
+        if tuple(sorted(scale_channels)) != scale_channels:
+            raise ValueError("focus vertical scales must use ascending channel order")
+        if not set(scale_channels) <= set(channels):
+            raise ValueError("focus vertical scales must target selected channels")
+        if not isinstance(self.hide_others, bool):
+            raise TypeError("focus hide_others must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusChannelState:
+    channel: int
+    enabled: bool
+    range_v: float
+    scale_v_per_div: float
+    position: float
+    offset_v: float
+
+    def __post_init__(self) -> None:
+        _strict_int(self.channel, label="focus state channel", minimum=1)
+        if not isinstance(self.enabled, bool):
+            raise TypeError("focus state enabled must be bool")
+        range_v = _finite(self.range_v, label="focus state vertical range")
+        if range_v <= 0:
+            raise ValueError("focus state vertical range must be > 0")
+        object.__setattr__(self, "range_v", range_v)
+        scale = _finite(self.scale_v_per_div, label="focus state vertical scale")
+        if scale <= 0:
+            raise ValueError("focus state vertical scale must be > 0")
+        object.__setattr__(self, "scale_v_per_div", scale)
+        object.__setattr__(
+            self,
+            "position",
+            _finite(self.position, label="focus state vertical position"),
+        )
+        object.__setattr__(
+            self,
+            "offset_v",
+            _finite(self.offset_v, label="focus state vertical offset"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusState:
+    time_range_s: float
+    time_position_s: float
+    channels: tuple[ScopeFocusChannelState, ...]
+
+    def __post_init__(self) -> None:
+        time_range_s = _finite(self.time_range_s, label="focus state time range")
+        if time_range_s <= 0:
+            raise ValueError("focus state time range must be > 0")
+        object.__setattr__(self, "time_range_s", time_range_s)
+        object.__setattr__(
+            self,
+            "time_position_s",
+            _finite(self.time_position_s, label="focus state time position"),
+        )
+        channels = _unique_tuple(self.channels, label="focus state channels")
+        if not channels or not all(isinstance(item, ScopeFocusChannelState) for item in channels):
+            raise TypeError("focus state channels contain an invalid item")
+        channel_numbers = tuple(item.channel for item in channels)
+        if tuple(sorted(channel_numbers)) != channel_numbers:
+            raise ValueError("focus state channels must use ascending channel order")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusProfileV2:
+    analog_channels: tuple[int, ...]
+    time_range_min_s: float
+    time_range_max_s: float
+    time_range_abs_tolerance_s: float
+    vertical_scale_min_v_per_div: float
+    vertical_scale_max_v_per_div: float
+    vertical_scale_abs_tolerance_v_per_div: float
+    vertical_range_abs_tolerance_v: float
+    time_position_abs_tolerance_s: float
+    position_abs_tolerance: float
+    offset_abs_tolerance_v: float
+    snapshot_max_steps: int
+    configure_max_steps: int
+    restore_max_steps: int
+    verify_max_steps: int
+
+    def __post_init__(self) -> None:
+        channels = _unique_tuple(self.analog_channels, label="focus analog_channels")
+        _strict_int(len(channels), label="focus analog channel count", minimum=1, maximum=64)
+        for channel in channels:
+            _strict_int(channel, label="focus analog channel", minimum=1, maximum=65_535)
+        if tuple(sorted(channels)) != channels:
+            raise ValueError("focus analog_channels must use ascending channel order")
+        self._validate_bounds(
+            self.time_range_min_s,
+            self.time_range_max_s,
+            label="focus time range",
+        )
+        self._validate_bounds(
+            self.vertical_scale_min_v_per_div,
+            self.vertical_scale_max_v_per_div,
+            label="focus vertical scale",
+        )
+        for label, value in (
+            ("focus time range tolerance", self.time_range_abs_tolerance_s),
+            ("focus vertical scale tolerance", self.vertical_scale_abs_tolerance_v_per_div),
+            ("focus vertical range tolerance", self.vertical_range_abs_tolerance_v),
+            ("focus time position tolerance", self.time_position_abs_tolerance_s),
+            ("focus position tolerance", self.position_abs_tolerance),
+            ("focus offset tolerance", self.offset_abs_tolerance_v),
+        ):
+            if _finite(value, label=label) < 0:
+                raise ValueError(f"{label} must be >= 0")
+        for label, value, minimum in (
+            ("snapshot_max_steps", self.snapshot_max_steps, 1),
+            ("configure_max_steps", self.configure_max_steps, 2),
+            ("restore_max_steps", self.restore_max_steps, 1),
+            ("verify_max_steps", self.verify_max_steps, 1),
+        ):
+            _strict_int(value, label=f"focus {label}", minimum=minimum, maximum=512)
+
+    @staticmethod
+    def _validate_bounds(lower: object, upper: object, *, label: str) -> None:
+        lower_value = _finite(lower, label=f"{label} minimum")
+        upper_value = _finite(upper, label=f"{label} maximum")
+        if lower_value <= 0 or lower_value > upper_value:
+            raise ValueError(f"{label} bounds are invalid")
+
+    @staticmethod
+    def _close(left: float, right: float, tolerance: float) -> bool:
+        return isclose(left, right, rel_tol=0.0, abs_tol=tolerance)
+
+    @staticmethod
+    def _channel_map(state: ScopeFocusState) -> dict[int, ScopeFocusChannelState]:
+        return {item.channel: item for item in state.channels}
+
+    def validate_request(self, request: ScopeFocusRequest) -> None:
+        if not isinstance(request, ScopeFocusRequest):
+            raise TypeError("focus request has an invalid type")
+        if not set(request.channels) <= set(self.analog_channels):
+            raise ValueError("focus request is outside the descriptor analog channels")
+        if request.time_range_s is not None and not (
+            self.time_range_min_s <= request.time_range_s <= self.time_range_max_s
+        ):
+            raise ValueError("focus time range is outside the descriptor profile")
+        for item in request.vertical_scales:
+            if not (
+                self.vertical_scale_min_v_per_div
+                <= item.scale_v_per_div
+                <= self.vertical_scale_max_v_per_div
+            ):
+                raise ValueError("focus vertical scale is outside the descriptor profile")
+
+    def validate_state(self, state: ScopeFocusState) -> None:
+        if not isinstance(state, ScopeFocusState):
+            raise TypeError("focus driver returned an invalid state")
+        if tuple(item.channel for item in state.channels) != self.analog_channels:
+            raise ValueError("focus driver state does not cover the descriptor analog channels")
+        if not self.time_range_min_s <= state.time_range_s <= self.time_range_max_s:
+            raise ValueError("focus driver time range is outside the descriptor profile")
+        if any(
+            not self.vertical_scale_min_v_per_div
+            <= item.scale_v_per_div
+            <= self.vertical_scale_max_v_per_div
+            for item in state.channels
+        ):
+            raise ValueError("focus driver vertical scale is outside the descriptor profile")
+
+    def restore_order_for(self, request: ScopeFocusRequest) -> tuple[ScopeFocusField, ...]:
+        self.validate_request(request)
+        return (
+            "scope.timebase",
+            "scope.channel_vertical",
+            "scope.channel_display",
+        )
+
+    def request_satisfied(self, state: ScopeFocusState, request: ScopeFocusRequest) -> bool:
+        self.validate_request(request)
+        self.validate_state(state)
+        channel_map = self._channel_map(state)
+        targets = set(request.channels)
+        if any(not channel_map[channel].enabled for channel in targets):
+            return False
+        if request.hide_others and any(
+            item.enabled for item in state.channels if item.channel not in targets
+        ):
+            return False
+        if request.time_range_s is not None and not self._close(
+            state.time_range_s,
+            request.time_range_s,
+            self.time_range_abs_tolerance_s,
+        ):
+            return False
+        return all(
+            self._close(
+                channel_map[item.channel].scale_v_per_div,
+                item.scale_v_per_div,
+                self.vertical_scale_abs_tolerance_v_per_div,
+            )
+            for item in request.vertical_scales
+        )
+
+    def transition_matches(
+        self,
+        before: ScopeFocusState,
+        after: ScopeFocusState,
+        request: ScopeFocusRequest,
+    ) -> bool:
+        self.validate_request(request)
+        self.validate_state(before)
+        self.validate_state(after)
+        if not self.request_satisfied(after, request):
+            return False
+        if request.time_range_s is None and not self._close(
+            before.time_range_s,
+            after.time_range_s,
+            self.time_range_abs_tolerance_s,
+        ):
+            return False
+        if not self._close(
+            before.time_position_s,
+            after.time_position_s,
+            self.time_position_abs_tolerance_s,
+        ):
+            return False
+        before_map = self._channel_map(before)
+        after_map = self._channel_map(after)
+        targets = set(request.channels)
+        requested_scales = {item.channel: item.scale_v_per_div for item in request.vertical_scales}
+        for channel in self.analog_channels:
+            old = before_map[channel]
+            new = after_map[channel]
+            if channel not in targets and not request.hide_others and old.enabled is not new.enabled:
+                return False
+            requested_scale = requested_scales.get(channel)
+            if requested_scale is None and not self._close(
+                old.scale_v_per_div,
+                new.scale_v_per_div,
+                self.vertical_scale_abs_tolerance_v_per_div,
+            ):
+                return False
+            if requested_scale is None and not self._close(
+                old.range_v,
+                new.range_v,
+                self.vertical_range_abs_tolerance_v,
+            ):
+                return False
+            if not self._close(old.position, new.position, self.position_abs_tolerance):
+                return False
+            if not self._close(old.offset_v, new.offset_v, self.offset_abs_tolerance_v):
+                return False
+        return True
+
+    def states_equivalent(self, expected: ScopeFocusState, observed: ScopeFocusState) -> bool:
+        self.validate_state(expected)
+        self.validate_state(observed)
+        if not self._close(
+            expected.time_range_s,
+            observed.time_range_s,
+            self.time_range_abs_tolerance_s,
+        ):
+            return False
+        if not self._close(
+            expected.time_position_s,
+            observed.time_position_s,
+            self.time_position_abs_tolerance_s,
+        ):
+            return False
+        expected_map = self._channel_map(expected)
+        observed_map = self._channel_map(observed)
+        for channel in self.analog_channels:
+            left = expected_map[channel]
+            right = observed_map[channel]
+            if left.enabled is not right.enabled:
+                return False
+            if not self._close(
+                left.range_v,
+                right.range_v,
+                self.vertical_range_abs_tolerance_v,
+            ):
+                return False
+            if not self._close(
+                left.scale_v_per_div,
+                right.scale_v_per_div,
+                self.vertical_scale_abs_tolerance_v_per_div,
+            ):
+                return False
+            if not self._close(left.position, right.position, self.position_abs_tolerance):
+                return False
+            if not self._close(left.offset_v, right.offset_v, self.offset_abs_tolerance_v):
+                return False
+        return True
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusResult:
+    request: ScopeFocusRequest
+    before: ScopeFocusState
+    after: ScopeFocusState
+    write_performed: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, ScopeFocusRequest):
+            raise TypeError("focus result request has an invalid type")
+        if not isinstance(self.before, ScopeFocusState) or not isinstance(
+            self.after,
+            ScopeFocusState,
+        ):
+            raise TypeError("focus result state has an invalid type")
+        if tuple(item.channel for item in self.before.channels) != tuple(
+            item.channel for item in self.after.channels
+        ):
+            raise ValueError("focus result states use different channel sets")
+        if not isinstance(self.write_performed, bool):
+            raise TypeError("focus result write_performed must be bool")
+        if not self.write_performed and self.before != self.after:
+            raise ValueError("focus no-op result must preserve its exact state")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusBaseline:
+    context_id: str
+    session_epoch: str
+    baseline_nonce: str
+    snapshot: ScopeFocusState
+    restore_order: tuple[ScopeFocusField, ...]
+
+    def __post_init__(self) -> None:
+        _safe_token(self.context_id, label="focus baseline context_id")
+        _safe_token(self.session_epoch, label="focus baseline session_epoch")
+        _safe_token(self.baseline_nonce, label="focus baseline nonce")
+        if not isinstance(self.snapshot, ScopeFocusState):
+            raise TypeError("focus baseline snapshot has an invalid type")
+        order = _unique_tuple(self.restore_order, label="focus restore_order")
+        expected = (
+            "scope.timebase",
+            "scope.channel_vertical",
+            "scope.channel_display",
+        )
+        if order != expected:
+            raise ValueError("focus restore_order must cover all fields in the fixed safe order")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFocusRestoreResult:
+    status: Literal["completed", "failed", "not_attempted"]
+    attempted_fields: tuple[ScopeFocusField, ...]
+    restored_fields: tuple[ScopeFocusField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="focus restore status")
+        attempted = _unique_tuple(self.attempted_fields, label="attempted_fields")
+        restored = _unique_tuple(self.restored_fields, label="restored_fields")
+        if not set(attempted + restored) <= _SCOPE_FOCUS_FIELDS:
+            raise ValueError("focus restore fields are invalid")
+        _optional_safe_token(self.error_code, label="error_code")
+
+    def validate_for(self, baseline: ScopeFocusBaseline) -> None:
+        if not isinstance(baseline, ScopeFocusBaseline):
+            raise TypeError("focus baseline has an invalid type")
+        _validate_prefix_and_subsequence(
+            expected=baseline.restore_order,
+            attempted=self.attempted_fields,
+            completed=self.restored_fields,
+            status=self.status,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2880,6 +3430,8 @@ class ScopeDescriptorExtensions:
     fft_status_profile_v2: ScopeFftStatusProfileV2 | None = None
     cursor_readout_profile_v2: ScopeCursorReadoutProfileV2 | None = None
     average_capture_profile_v2: ScopeAverageCaptureProfileV2 | None = None
+    channel_display_profile_v2: ScopeChannelDisplayProfileV2 | None = None
+    focus_profile_v2: ScopeFocusProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -2924,6 +3476,16 @@ class ScopeDescriptorExtensions:
                 "average_capture_profile_v2",
                 self.average_capture_profile_v2,
                 ScopeAverageCaptureProfileV2,
+            ),
+            (
+                "channel_display_profile_v2",
+                self.channel_display_profile_v2,
+                ScopeChannelDisplayProfileV2,
+            ),
+            (
+                "focus_profile_v2",
+                self.focus_profile_v2,
+                ScopeFocusProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):
@@ -3072,6 +3634,43 @@ class ScopeAcquisitionControlDriver(
         baseline: ScopeAcquisitionControlBaseline,
         deadline: float,
     ) -> ScopeAcquisitionCompletion: ...
+
+
+@runtime_checkable
+class ScopeChannelDisplayDriverV2(InstrumentDriver, Protocol):
+    def get_channel_display_state_v2(
+        self,
+        channel: int,
+    ) -> ScopeChannelDisplayState: ...
+
+    def configure_channel_display_v2(
+        self,
+        request: ScopeChannelDisplayRequest,
+        *,
+        baseline: ScopeChannelDisplayBaseline,
+    ) -> None: ...
+
+    def restore_channel_display_v2(
+        self,
+        baseline: ScopeChannelDisplayBaseline,
+    ) -> ScopeChannelDisplayRestoreResult: ...
+
+
+@runtime_checkable
+class ScopeFocusDriverV2(InstrumentDriver, Protocol):
+    def get_focus_state_v2(self) -> ScopeFocusState: ...
+
+    def configure_focus_v2(
+        self,
+        request: ScopeFocusRequest,
+        *,
+        baseline: ScopeFocusBaseline,
+    ) -> None: ...
+
+    def restore_focus_v2(
+        self,
+        baseline: ScopeFocusBaseline,
+    ) -> ScopeFocusRestoreResult: ...
 
 
 @runtime_checkable
