@@ -67,6 +67,26 @@ flowchart LR
     dmm --> artifacts
 ```
 
+#### 示波器联合视图
+
+`scope focus` 用一个事务配置一个或多个目标模拟通道，并可同时设置完整横向时间范围、各目标通道的
+V/div，以及是否隐藏插件 profile 声明的其他模拟通道：
+
+```bash
+wavebench scope focus \
+  --channel 1 \
+  --channel 2 \
+  --time-range 0.01 \
+  --vertical-scale 1=0.2 \
+  --vertical-scale 2=0.5 \
+  --hide-others
+```
+
+Core 不定义仪器型号、通道数量或数值范围；这些 guard 由当前插件的 descriptor profile 声明。
+操作会先读取 profile 全部模拟通道及受保护的时基、位置和偏置字段。成功后保留目标视图；任一写入
+或回读失败时恢复完整 baseline 并重新查询，恢复不完整则停止该 session 的后续写入。该命令不启动
+采集、不调用 autoscale，也不修改耦合或输入终端。
+
 ## 先在没有仪器时跑通
 
 下面的命令只生成和检查 plan，不会连接仪器，也不会打开输出。

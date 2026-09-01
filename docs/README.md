@@ -26,6 +26,16 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 - [配置文件格式](project/reference/WaveBench_配置文件格式.md)：TOML 查找顺序、字段和安全限制。
 - 仪器型号命令和编程手册由 [仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins) 维护；本仓库只记录 WaveBench 的接入边界。
 
+### 配置示波器联合视图
+
+`wavebench scope focus` 接受重复的 `--channel`、可选的 `--time-range`、重复的
+`--vertical-scale CHANNEL=V_PER_DIV` 和 `--hide-others`。Core 只定义可移植事务：插件 profile
+声明模拟通道、数值范围、容差和 I/O 预算；Core 读取完整联合 baseline，成功后保留目标视图，失败时
+恢复并重新查询。未声明 `scope.focus_configure_v2` 的插件会在仪器 I/O 前拒绝操作。
+
+该命令会修改仪器状态，但不会启动采集、调用 autoscale、修改耦合或切换输入终端。执行前应核对
+接线、输入状态和插件 capability。
+
 ### 使用 RF 信号源
 
 `rf_source` 不复用普通 `source` 的 Vpp、offset 或数字 channel 模型。先从 [RF 信号源使用指南](project/guides/WaveBench_RF信号源使用指南.md) 确认当前 production capability 和端接声明；DSG830 已开放固定 profile 的调制输出，以及唯一受验证的后面板 `pulse_in_out` output 路径。后者不代表 Pulse input、`TRIGGER IN` 或同步能力。需要实现新型号或查看证据门时，再阅读 [领域设计](project/design/WaveBench_RF信号源设计.md) 与 [开发里程碑](project/design/WaveBench_RF信号源开发里程碑.md)。
@@ -68,7 +78,7 @@ wavebench run check --plan /tmp/wavebench-demo.toml
 | --- | --- | --- |
 | 离线 | `run schema`、`run template`、`run check`、`run report`、`capture inspect`、`tui --fake` | 不连接仪器；TUI 可能写本地日志 |
 | 连接读取 | `doctor`、`idn`、`status`、`run verify` | 是，仅读取或做预检 |
-| 修改状态 | `scope fetch/capture/autoscale`、source/power setter、output、`run plan` | 是，可能写入、触发或改变输出 |
+| 修改状态 | `scope focus/fetch/capture/autoscale`、source/power setter、output、`run plan` | 是，可能写入、触发或改变输出 |
 
 `run check` 不代表 plan 可以安全执行。它只检查 TOML 和字段；真正执行前，还要核对接线、scope coupling、输出状态、保护限值和 restore 条款。
 
