@@ -1211,6 +1211,40 @@ def build_parser() -> argparse.ArgumentParser:
     add_scope_error_options(display)
     add_runtime_options(display)
 
+    focus = scope_sub.add_parser(
+        "focus",
+        help="Configure one atomic multi-channel observation view",
+    )
+    focus.add_argument(
+        "--channel",
+        dest="channels",
+        type=int,
+        action="append",
+        required=True,
+        help="Target analog channel; repeat for a multi-channel focus view",
+    )
+    focus.add_argument(
+        "--time-range",
+        type=float,
+        default=None,
+        help="Optional full horizontal visible range in seconds",
+    )
+    focus.add_argument(
+        "--vertical-scale",
+        dest="vertical_scales",
+        action="append",
+        default=[],
+        metavar="CHANNEL=V_PER_DIV",
+        help="Optional target-channel V/div; repeat for different target channels",
+    )
+    focus.add_argument(
+        "--hide-others",
+        action="store_true",
+        help="Disable other analog channels declared by the driver profile",
+    )
+    add_scope_error_options(focus)
+    add_runtime_options(focus)
+
     status = scope_sub.add_parser(
         "status",
         help="Read a typed, non-mutating oscilloscope state snapshot",

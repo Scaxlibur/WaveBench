@@ -26,6 +26,13 @@ from wavebench.instruments.scope_extensions import (
     ScopeChannelDisplayState,
     ScopeContinuousAcquisitionRequest,
     ScopeDescriptorExtensions,
+    ScopeFocusChannelState,
+    ScopeFocusProfileV2,
+    ScopeFocusRequest,
+    ScopeFocusRestoreResult,
+    ScopeFocusResult,
+    ScopeFocusState,
+    ScopeFocusVerticalScale,
     ScopeScreenshot,
     ScopeScreenshotProfile,
     ScopeScreenshotRequest,
@@ -177,6 +184,10 @@ class _Driver:
         self.display_enabled = False
         self.display_write_calls = 0
         self.display_restore_calls = 0
+        self.focus_postcondition_mismatch = False
+        self.focus_restore_mismatch = False
+        self.focus_write_calls = 0
+        self.focus_restore_calls = 0
         self.terminal_stop_completion = terminal_stop_completion
         self.terminal_stop_mode = "single"
         self.restore_calls = 0
@@ -234,6 +245,38 @@ class _Driver:
             configure_max_steps=2,
             restore_max_steps=1,
             verify_max_steps=1,
+        )
+        self.focus_profile = ScopeFocusProfileV2(
+            analog_channels=(1, 2, 3, 4),
+            time_range_min_s=1e-9,
+            time_range_max_s=100.0,
+            time_range_abs_tolerance_s=1e-12,
+            vertical_scale_min_v_per_div=1e-3,
+            vertical_scale_max_v_per_div=10.0,
+            vertical_scale_abs_tolerance_v_per_div=1e-6,
+            vertical_range_abs_tolerance_v=1e-6,
+            time_position_abs_tolerance_s=1e-12,
+            position_abs_tolerance=1e-6,
+            offset_abs_tolerance_v=1e-6,
+            snapshot_max_steps=22,
+            configure_max_steps=64,
+            restore_max_steps=22,
+            verify_max_steps=22,
+        )
+        self.focus_state = ScopeFocusState(
+            time_range_s=0.01,
+            time_position_s=0.001,
+            channels=tuple(
+                ScopeFocusChannelState(
+                    channel,
+                    enabled=channel in {1, 3},
+                    range_v=float(channel * 10),
+                    scale_v_per_div=float(channel),
+                    position=channel / 10,
+                    offset_v=-channel / 20,
+                )
+                for channel in self.focus_profile.analog_channels
+            ),
         )
         self.screenshot_snapshot = ScopeScreenshotStateSnapshot(
             captured_fields=("scope.display_menu", "scope.display_color"),
@@ -338,6 +381,81 @@ class _Driver:
             else baseline.snapshot.enabled
         )
         return ScopeChannelDisplayRestoreResult(
+            "completed",
+            baseline.restore_order,
+            baseline.restore_order,
+        )
+
+    def get_focus_state_v2(self):
+        self.transport.query("FOCUS:TIMEBASE?")
+        self.transport.query("FOCUS:TIMEPOSITION?")
+        for channel in self.focus_profile.analog_channels:
+            self.transport.query(f"FOCUS:{channel}:DISPLAY?")
+            self.transport.query(f"FOCUS:{channel}:RANGE?")
+            self.transport.query(f"FOCUS:{channel}:SCALE?")
+            self.transport.query(f"FOCUS:{channel}:POSITION?")
+            self.transport.query(f"FOCUS:{channel}:OFFSET?")
+        return self.focus_state
+
+    def configure_focus_v2(self, request, *, baseline):
+        self.focus_write_calls += 1
+        if request.time_range_s is not None:
+            self.transport.write(f"FOCUS:TIMEBASE {request.time_range_s}")
+        scale_map = {item.channel: item.scale_v_per_div for item in request.vertical_scales}
+        target_channels = set(request.channels)
+        updated = []
+        for item in self.focus_state.channels:
+            scale = scale_map.get(item.channel, item.scale_v_per_div)
+            enabled = True if item.channel in target_channels else (
+                False if request.hide_others else item.enabled
+            )
+            if item.channel in scale_map:
+                self.transport.write(f"FOCUS:{item.channel}:SCALE {scale}")
+            if item.enabled is not enabled:
+                self.transport.write(
+                    f"FOCUS:{item.channel}:DISPLAY {'ON' if enabled else 'OFF'}"
+                )
+            updated.append(
+                ScopeFocusChannelState(
+                    item.channel,
+                    enabled,
+                    item.range_v if item.channel not in scale_map else scale * 10,
+                    scale,
+                    item.position,
+                    item.offset_v,
+                )
+            )
+        if not self.focus_postcondition_mismatch:
+            self.focus_state = ScopeFocusState(
+                request.time_range_s or self.focus_state.time_range_s,
+                self.focus_state.time_position_s,
+                tuple(updated),
+            )
+
+    def restore_focus_v2(self, baseline):
+        self.focus_restore_calls += 1
+        for field in baseline.restore_order:
+            self.transport.write(f"FOCUS:RESTORE:{field}")
+        self.focus_state = (
+            ScopeFocusState(
+                baseline.snapshot.time_range_s,
+                baseline.snapshot.time_position_s,
+                (
+                    ScopeFocusChannelState(
+                        1,
+                        not baseline.snapshot.channels[0].enabled,
+                        baseline.snapshot.channels[0].range_v,
+                        baseline.snapshot.channels[0].scale_v_per_div,
+                        baseline.snapshot.channels[0].position,
+                        baseline.snapshot.channels[0].offset_v,
+                    ),
+                    *baseline.snapshot.channels[1:],
+                ),
+            )
+            if self.focus_restore_mismatch
+            else baseline.snapshot
+        )
+        return ScopeFocusRestoreResult(
             "completed",
             baseline.restore_order,
             baseline.restore_order,
@@ -522,6 +640,7 @@ def _service(
         "scope.acquisition_run_state",
         "scope.acquisition_control",
         "scope.channel_display_configure_v2",
+        "scope.focus_configure_v2",
         "scope.trace_metadata",
         "scope.fetch_trace",
     ]
@@ -540,12 +659,13 @@ def _service(
         option_specs=(),
         permissions=("instrument.io",),
         factory=lambda context: driver,
-        wavebench_min_version="0.8.24",
+        wavebench_min_version="0.8.26",
         scope_extensions=ScopeDescriptorExtensions(
             screenshot_profile=driver.screenshot_profile,
             acquisition_control_profile=driver.acquisition_profile,
             trace_profile=driver.trace_profile,
             channel_display_profile_v2=driver.channel_display_profile,
+            focus_profile_v2=driver.focus_profile,
         ),
     )
     service = ExperimentalScopeExtensionService(
@@ -741,6 +861,150 @@ def test_channel_display_restore_mismatch_preserves_primary_and_poisons_session(
         )
 
     assert driver.display_restore_calls == 1
+    assert transport.session_state.health is SessionHealth.POISONED
+    diagnostics = raised.value.scope_operation_diagnostics
+    assert diagnostics["cleanup_error"] == "ValueError"
+    assert diagnostics["cleanup"]["verification"]["status"] == "mismatch"
+
+
+def test_focus_multi_channel_success_and_matching_state_are_zero_write() -> None:
+    service, driver, transport, backend = _service()
+    request = ScopeFocusRequest(
+        channels=(2, 4),
+        time_range_s=0.02,
+        vertical_scales=(
+            ScopeFocusVerticalScale(2, 0.5),
+            ScopeFocusVerticalScale(4, 1.5),
+        ),
+        hide_others=True,
+    )
+
+    changed = service.configure_focus_v2(request)
+
+    assert isinstance(changed.value, ScopeFocusResult)
+    assert changed.value.write_performed is True
+    assert changed.value.after.time_range_s == 0.02
+    assert {item.channel for item in changed.value.after.channels if item.enabled} == {2, 4}
+    assert tuple(item.position for item in changed.value.after.channels) == (
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+    )
+    assert tuple(item.offset_v for item in changed.value.after.channels) == (
+        -0.05,
+        -0.1,
+        -0.15,
+        -0.2,
+    )
+    assert driver.focus_write_calls == 1
+    assert driver.focus_restore_calls == 0
+    assert transport.session_state.health is SessionHealth.HEALTHY
+    assert backend.writes == [
+        "FOCUS:TIMEBASE 0.02",
+        "FOCUS:1:DISPLAY OFF",
+        "FOCUS:2:SCALE 0.5",
+        "FOCUS:2:DISPLAY ON",
+        "FOCUS:3:DISPLAY OFF",
+        "FOCUS:4:SCALE 1.5",
+        "FOCUS:4:DISPLAY ON",
+    ]
+
+    backend.writes.clear()
+    unchanged = service.configure_focus_v2(request)
+
+    assert unchanged.value.write_performed is False
+    assert unchanged.value.before == unchanged.value.after
+    assert driver.focus_write_calls == 1
+    assert backend.writes == []
+
+
+def test_scope_service_routes_focus_through_public_extension_service() -> None:
+    internal, driver, transport, _ = _service()
+    service = ScopeService(
+        config=SimpleNamespace(
+            scope=SimpleNamespace(
+                driver="example.scope",
+                access="read_write",
+                check_errors=False,
+            ),
+            connection=SimpleNamespace(timeout_ms=1_000),
+        ),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=internal.descriptor,
+        transport=transport,
+        session_state=transport.session_state,
+    )
+
+    result = service.configure_focus_v2(ScopeFocusRequest(channels=(1, 3)))
+
+    assert isinstance(result.value, ScopeFocusResult)
+    assert result.value.request.channels == (1, 3)
+    assert driver.focus_write_calls == 0
+
+
+def test_focus_postcondition_failure_restores_complete_baseline() -> None:
+    service, driver, transport, _ = _service()
+    original = driver.focus_state
+    driver.focus_postcondition_mismatch = True
+
+    with pytest.raises(DataError, match="postcondition") as raised:
+        service.configure_focus_v2(
+            ScopeFocusRequest(
+                channels=(2,),
+                time_range_s=0.02,
+                vertical_scales=(ScopeFocusVerticalScale(2, 0.5),),
+                hide_others=True,
+            )
+        )
+
+    assert driver.focus_write_calls == 1
+    assert driver.focus_restore_calls == 1
+    assert driver.focus_state == original
+    assert transport.session_state.health is SessionHealth.HEALTHY
+    diagnostics = raised.value.scope_operation_diagnostics
+    assert diagnostics["cleanup_error"] is None
+    assert diagnostics["cleanup"]["verification"]["status"] == "verified"
+
+
+def test_focus_protected_field_drift_restores_and_restore_mismatch_poisons() -> None:
+    service, driver, transport, _ = _service()
+    original_configure = driver.configure_focus_v2
+
+    def configure_with_drift(request, *, baseline):
+        original_configure(request, baseline=baseline)
+        first, *remaining = driver.focus_state.channels
+        driver.focus_state = ScopeFocusState(
+            driver.focus_state.time_range_s,
+            driver.focus_state.time_position_s,
+            (ScopeFocusChannelState(
+                first.channel,
+                first.enabled,
+                first.range_v,
+                first.scale_v_per_div,
+                first.position + 1,
+                first.offset_v,
+            ), *remaining),
+        )
+
+    driver.configure_focus_v2 = configure_with_drift
+
+    with pytest.raises(DataError, match="postcondition"):
+        service.configure_focus_v2(
+            ScopeFocusRequest(channels=(1,), time_range_s=0.02)
+        )
+    assert driver.focus_restore_calls == 1
+    assert transport.session_state.health is SessionHealth.HEALTHY
+
+    service, driver, transport, _ = _service()
+    driver.focus_postcondition_mismatch = True
+    driver.focus_restore_mismatch = True
+    with pytest.raises(DataError, match="postcondition") as raised:
+        service.configure_focus_v2(
+            ScopeFocusRequest(channels=(2,), hide_others=True)
+        )
+    assert driver.focus_restore_calls == 1
     assert transport.session_state.health is SessionHealth.POISONED
     diagnostics = raised.value.scope_operation_diagnostics
     assert diagnostics["cleanup_error"] == "ValueError"

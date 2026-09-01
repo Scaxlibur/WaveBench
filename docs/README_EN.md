@@ -2,7 +2,7 @@
 
 [中文文档](README.md) · English
 
-WaveBench is a Python measurement bench for laboratory debugging. It combines explicit instrument commands, run plans, capture packages, and offline reports. It requires Python 3.11 or newer. The current development line is `0.8.25`; the latest stable tag is `v0.8.0`.
+WaveBench is a Python measurement bench for laboratory debugging. It combines explicit instrument commands, run plans, capture packages, and offline reports. It requires Python 3.11 or newer. The current development line is `0.8.26`; the latest stable tag is `v0.8.0`.
 
 > [!WARNING]
 > Some commands connect to and change real instruments. Check wiring, input impedance, output state, and voltage/current limits before running a hardware action.

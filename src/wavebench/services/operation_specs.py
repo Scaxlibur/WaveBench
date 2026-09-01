@@ -1647,6 +1647,36 @@ _SCOPE_EXTENSION_SPECS = (
         error_check_minimum="disabled",
     ),
     _scope_operation(
+        "scope.focus_configure_v2",
+        required_capabilities=("scope.focus_configure_v2",),
+        effect="write",
+        timeout_ms=SCOPE_PROFILE_OPERATION_TIMEOUT_MS,
+        changed_fields=(
+            "scope.timebase",
+            "scope.channel_vertical",
+            "scope.channel_display",
+            "scope.error_queue",
+        ),
+        restore_coverage="failure-cleanup-only",
+        verification_fields=(
+            "scope.timebase",
+            "scope.channel_vertical",
+            "scope.channel_display",
+        ),
+        postcondition_fields=(
+            "scope.timebase",
+            "scope.channel_vertical",
+            "scope.channel_display",
+        ),
+        cleanup_verification_fields=(
+            "scope.timebase",
+            "scope.channel_vertical",
+            "scope.channel_display",
+        ),
+        risk_flags=("front_panel_state", "multi_channel_state", "recovery_required"),
+        error_check_minimum="disabled",
+    ),
+    _scope_operation(
         "scope.trace_metadata",
         required_capabilities=("scope.trace_metadata",),
         effect="stateful_read",

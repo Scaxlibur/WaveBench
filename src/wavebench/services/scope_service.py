@@ -72,6 +72,8 @@ from wavebench.instruments.scope_extensions import (
     ScopeAverageCaptureResultV2,
     ScopeChannelDisplayProfileV2,
     ScopeChannelDisplayRequest,
+    ScopeFocusProfileV2,
+    ScopeFocusRequest,
     ScopeCursorReadoutProfileV2,
     ScopeFftStatusProfileV2,
     ScopeMeasurementStatisticsProfileV2,
@@ -1039,6 +1041,30 @@ class ScopeService(SessionStateAliasMixin):
                 deadline=deadline,
             )
 
+    def configure_focus_v2(
+        self,
+        request: ScopeFocusRequest,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        if not isinstance(request, ScopeFocusRequest):
+            raise DataError("focus request has an invalid type")
+        self._require("scope.focus_configure_v2", "scope.focus_configure_v2")
+        profile = self._focus_v2_profile()
+        if profile is None:
+            raise ConfigError("scope focus capability requires a descriptor profile")
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(str(exc)) from exc
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).configure_focus_v2(
+                request,
+                error_check=error_check,
+                deadline=deadline,
+            )
+
     def start_acquisition(
         self,
         request: ScopeContinuousAcquisitionRequest,
@@ -1291,6 +1317,13 @@ class ScopeService(SessionStateAliasMixin):
             "channel_display_profile_v2",
             ScopeChannelDisplayProfileV2,
             "channel display",
+        )
+
+    def _focus_v2_profile(self) -> ScopeFocusProfileV2 | None:
+        return self._v2_profile(
+            "focus_profile_v2",
+            ScopeFocusProfileV2,
+            "focus",
         )
 
     def _acquisition_status_v2_profile(self) -> ScopeAcquisitionStatusProfileV2 | None:

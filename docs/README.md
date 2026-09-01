@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · 中文
 
-WaveBench 是一个用 Python 编写的实验室自动测量台，提供 CLI、实验性 TUI、显式 run plan、采集包和离线报告。当前开发线为 `0.8.25`，最新稳定 tag 为 `v0.8.0`。版本变化见 [更新日志](../CHANGELOG.md)；旧版本原始文档可切换到对应 Git tag 查看。
+WaveBench 是一个用 Python 编写的实验室自动测量台，提供 CLI、实验性 TUI、显式 run plan、采集包和离线报告。当前开发线为 `0.8.26`，最新稳定 tag 为 `v0.8.0`。版本变化见 [更新日志](../CHANGELOG.md)；旧版本原始文档可切换到对应 Git tag 查看。
 
 > [!WARNING]
 > 部分命令会连接并控制真实仪器。示例会区分离线检查、连接读取和硬件写入；执行写入前，应确认接线和限制值。
