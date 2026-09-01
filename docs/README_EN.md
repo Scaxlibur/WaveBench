@@ -2,7 +2,7 @@
 
 [中文文档](README.md) · English
 
-WaveBench is a Python measurement bench for laboratory debugging. It combines explicit instrument commands, run plans, capture packages, and offline reports. It requires Python 3.11 or newer. The current development line is `0.8.25`; the latest stable tag is `v0.8.0`.
+WaveBench is a Python measurement bench for laboratory debugging. It combines explicit instrument commands, run plans, capture packages, and offline reports. It requires Python 3.11 or newer. The current development line is `0.8.26`; the latest stable tag is `v0.8.0`.
 
 > [!WARNING]
 > Some commands connect to and change real instruments. Check wiring, input impedance, output state, and voltage/current limits before running a hardware action.
@@ -51,6 +51,19 @@ For the terminal UI, install `.[tui]` and run `wavebench tui --fake`. The fake m
 | TUI | Power, DMM, and source panels | Experimental manual control |
 | Plugins | `wavebench.instruments` drivers | Optional, explicitly selected extensions |
 
+## Configure a joint oscilloscope view
+
+`wavebench scope focus` accepts repeated `--channel` arguments, optional `--time-range`, repeated
+`--vertical-scale CHANNEL=V_PER_DIV`, and `--hide-others`. Core defines only the portable
+transaction. Each plugin descriptor profile owns its analog-channel set, numeric request guards,
+tolerances, and I/O budgets. Core reads the complete joint baseline, preserves the requested view
+after success, and restores then freshly verifies that baseline after failure. A plugin that does
+not declare `scope.focus_configure_v2` is rejected before instrument I/O.
+
+This command changes front-panel state. It does not start acquisition, invoke autoscale, change
+coupling, or switch input termination. Wiring, input state, and the selected plugin capability must
+be checked before execution.
+
 ## Find a guide
 
 - Setup and configuration: [configuration format](project/reference/WaveBench_配置文件格式.md)
@@ -69,7 +82,7 @@ Most detailed pages are currently maintained in Chinese. Commands, identifiers, 
 | --- | --- | --- |
 | Offline | `run schema`, `run template`, `run check`, `run report`, `capture inspect`, `tui --fake` | No instrument I/O; TUI may write a local log |
 | Connected read/preflight | `doctor`, `idn`, `status`, `run verify` | Yes, for queries and checks |
-| State-changing | `scope fetch/capture/autoscale`, source/power setters, output commands, `run plan` | Yes; may change setup, trigger acquisition, or switch output |
+| State-changing | `scope focus/fetch/capture/autoscale`, source/power setters, output commands, `run plan` | Yes; may change setup, trigger acquisition, or switch output |
 
 WaveBench does not implicitly reset instruments, enable outputs, or change oscilloscope input impedance. `power set` and `power output` are separate operations. When enabled, source restoration covers only the documented basic fields; it is not a full channel snapshot.
 

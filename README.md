@@ -7,7 +7,7 @@
 
 WaveBench 是一个用 Python 编写的实验室自动测量台，面向电子设计竞赛调试和日常实验。它把仪器控制、实验步骤和采集证据放在同一条命令链中，支持先离线检查 plan，再决定是否连接硬件。
 
-当前仓库开发线为 `0.8.25`，最新稳定 tag 为 `v0.8.0`。不同版本的命令和能力可能不同，以对应 tag 中的文档为准。
+当前仓库开发线为 `0.8.26`，最新稳定 tag 为 `v0.8.0`。不同版本的命令和能力可能不同，以对应 tag 中的文档为准。
 
 ## 🌟 特别鸣谢
 
@@ -66,6 +66,26 @@ flowchart LR
     scope --> artifacts[采集包 / 离线报告]
     dmm --> artifacts
 ```
+
+#### 示波器联合视图
+
+`scope focus` 用一个事务配置一个或多个目标模拟通道，并可同时设置完整横向时间范围、各目标通道的
+V/div，以及是否隐藏插件 profile 声明的其他模拟通道：
+
+```bash
+wavebench scope focus \
+  --channel 1 \
+  --channel 2 \
+  --time-range 0.01 \
+  --vertical-scale 1=0.2 \
+  --vertical-scale 2=0.5 \
+  --hide-others
+```
+
+Core 不定义仪器型号、通道数量或数值范围；这些 guard 由当前插件的 descriptor profile 声明。
+操作会先读取 profile 全部模拟通道及受保护的时基、位置和偏置字段。成功后保留目标视图；任一写入
+或回读失败时恢复完整 baseline 并重新查询，恢复不完整则停止该 session 的后续写入。该命令不启动
+采集、不调用 autoscale，也不修改耦合或输入终端。
 
 ## 先在没有仪器时跑通
 

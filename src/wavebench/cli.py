@@ -83,6 +83,8 @@ from .instruments.scope_extensions import (
     ErrorCheckSpec,
     ScopeChannelDisplayRequest,
     ScopeContinuousAcquisitionRequest,
+    ScopeFocusRequest,
+    ScopeFocusVerticalScale,
     ScopeScreenshot,
     ScopeScreenshotRequest,
     ScopeTraceData,
@@ -608,6 +610,41 @@ def _scope_channel_display_request(args: argparse.Namespace) -> ScopeChannelDisp
         return ScopeChannelDisplayRequest(
             channel=args.channel,
             enabled=args.state == "on",
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _scope_focus_request(args: argparse.Namespace) -> ScopeFocusRequest:
+    raw_channels = tuple(args.channels)
+    if len(set(raw_channels)) != len(raw_channels):
+        raise ConfigError("scope focus channels must not contain duplicates")
+    scales: list[ScopeFocusVerticalScale] = []
+    scale_channels: set[int] = set()
+    for raw in args.vertical_scales:
+        channel_text, separator, scale_text = raw.partition("=")
+        if not separator:
+            raise ConfigError("scope focus --vertical-scale must use CHANNEL=V_PER_DIV")
+        try:
+            channel = int(channel_text)
+            scale = float(scale_text)
+        except ValueError as exc:
+            raise ConfigError(
+                "scope focus --vertical-scale must use CHANNEL=V_PER_DIV"
+            ) from exc
+        if channel in scale_channels:
+            raise ConfigError("scope focus vertical-scale channels must not contain duplicates")
+        scale_channels.add(channel)
+        try:
+            scales.append(ScopeFocusVerticalScale(channel, scale))
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(str(exc)) from exc
+    try:
+        return ScopeFocusRequest(
+            channels=tuple(sorted(raw_channels)),
+            time_range_s=args.time_range,
+            vertical_scales=tuple(sorted(scales, key=lambda item: item.channel)),
+            hide_others=args.hide_others,
         )
     except (TypeError, ValueError) as exc:
         raise ConfigError(str(exc)) from exc
@@ -1896,6 +1933,13 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "display":
                 result = service.configure_channel_display_v2(
                     _scope_channel_display_request(args),
+                    error_check=_scope_error_check(args),
+                )
+                _emit_scope_extension_result(result.as_dict(), json_mode=args.json)
+                return 0
+            if args.command == "focus":
+                result = service.configure_focus_v2(
+                    _scope_focus_request(args),
                     error_check=_scope_error_check(args),
                 )
                 _emit_scope_extension_result(result.as_dict(), json_mode=args.json)
