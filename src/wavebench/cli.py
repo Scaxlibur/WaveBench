@@ -81,6 +81,7 @@ from .instruments.registry import build_instrument_registry
 from .instruments.registry import resolve_instrument_descriptor
 from .instruments.scope_extensions import (
     ErrorCheckSpec,
+    ScopeChannelDisplayRequest,
     ScopeContinuousAcquisitionRequest,
     ScopeScreenshot,
     ScopeScreenshotRequest,
@@ -597,6 +598,16 @@ def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
             policy=policy,
             timing=args.error_timing,
             max_records=args.error_max_records,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _scope_channel_display_request(args: argparse.Namespace) -> ScopeChannelDisplayRequest:
+    try:
+        return ScopeChannelDisplayRequest(
+            channel=args.channel,
+            enabled=args.state == "on",
         )
     except (TypeError, ValueError) as exc:
         raise ConfigError(str(exc)) from exc
@@ -1881,6 +1892,13 @@ def _main(argv: list[str] | None = None) -> int:
             if args.command == "errors":
                 for item in service.errors():
                     print(item)
+                return 0
+            if args.command == "display":
+                result = service.configure_channel_display_v2(
+                    _scope_channel_display_request(args),
+                    error_check=_scope_error_check(args),
+                )
+                _emit_scope_extension_result(result.as_dict(), json_mode=args.json)
                 return 0
             if args.command == "screenshot":
                 if args.screenshot_command == "profile":

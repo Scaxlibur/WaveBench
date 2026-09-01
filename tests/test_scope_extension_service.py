@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import zlib
@@ -17,6 +19,11 @@ from wavebench.instruments.scope_extensions import (
     ScopeAcquisitionRunState,
     ScopeAxisMetadata,
     ScopeBaselineRestoreResult,
+    ScopeChannelDisplayProfileV2,
+    ScopeChannelDisplayRequest,
+    ScopeChannelDisplayRestoreResult,
+    ScopeChannelDisplayResult,
+    ScopeChannelDisplayState,
     ScopeContinuousAcquisitionRequest,
     ScopeDescriptorExtensions,
     ScopeScreenshot,
@@ -40,6 +47,7 @@ from wavebench.services.scope_extension_service import (
     ExperimentalScopeExtensionService,
     ScopeExtensionService,
 )
+from wavebench.services.scope_service import ScopeService
 from wavebench.transport.contracts import (
     BinaryQueryResult,
     BinaryResponseFraming,
@@ -164,6 +172,11 @@ class _Driver:
         self.trace_verify_mismatch = False
         self.fail_single_completion = False
         self.fail_stop_once = False
+        self.display_postcondition_mismatch = False
+        self.display_restore_mismatch = False
+        self.display_enabled = False
+        self.display_write_calls = 0
+        self.display_restore_calls = 0
         self.terminal_stop_completion = terminal_stop_completion
         self.terminal_stop_mode = "single"
         self.restore_calls = 0
@@ -214,6 +227,13 @@ class _Driver:
             snapshot_max_steps=8,
             restore_max_steps=8,
             verify_max_steps=8,
+        )
+        self.channel_display_profile = ScopeChannelDisplayProfileV2(
+            analog_channels=(1, 2),
+            snapshot_max_steps=1,
+            configure_max_steps=2,
+            restore_max_steps=1,
+            verify_max_steps=1,
         )
         self.screenshot_snapshot = ScopeScreenshotStateSnapshot(
             captured_fields=("scope.display_menu", "scope.display_color"),
@@ -293,6 +313,35 @@ class _Driver:
     def get_acquisition_run_state(self):
         self.transport.query("RUN_STATE?")
         return self.run_state
+
+    def get_channel_display_state_v2(self, channel):
+        self.transport.query(f"DISPLAY:{channel}?")
+        return ScopeChannelDisplayState(channel=channel, enabled=self.display_enabled)
+
+    def configure_channel_display_v2(self, request, *, baseline):
+        self.display_write_calls += 1
+        self.transport.write(
+            f"DISPLAY:{request.channel} {'ON' if request.enabled else 'OFF'}"
+        )
+        if not self.display_postcondition_mismatch:
+            self.display_enabled = request.enabled
+
+    def restore_channel_display_v2(self, baseline):
+        self.display_restore_calls += 1
+        self.transport.write(
+            f"DISPLAY:{baseline.snapshot.channel} "
+            f"{'ON' if baseline.snapshot.enabled else 'OFF'}"
+        )
+        self.display_enabled = (
+            not baseline.snapshot.enabled
+            if self.display_restore_mismatch
+            else baseline.snapshot.enabled
+        )
+        return ScopeChannelDisplayRestoreResult(
+            "completed",
+            baseline.restore_order,
+            baseline.restore_order,
+        )
 
     def snapshot_acquisition_control(self):
         self.transport.query("RUN_STATE?")
@@ -472,6 +521,7 @@ def _service(
         "scope.screenshot_v2",
         "scope.acquisition_run_state",
         "scope.acquisition_control",
+        "scope.channel_display_configure_v2",
         "scope.trace_metadata",
         "scope.fetch_trace",
     ]
@@ -490,11 +540,12 @@ def _service(
         option_specs=(),
         permissions=("instrument.io",),
         factory=lambda context: driver,
-        wavebench_min_version="0.8.23",
+        wavebench_min_version="0.8.24",
         scope_extensions=ScopeDescriptorExtensions(
             screenshot_profile=driver.screenshot_profile,
             acquisition_control_profile=driver.acquisition_profile,
             trace_profile=driver.trace_profile,
+            channel_display_profile_v2=driver.channel_display_profile,
         ),
     )
     service = ExperimentalScopeExtensionService(
@@ -598,6 +649,102 @@ def test_acquisition_success_keeps_postcondition_and_failure_restores_baseline()
     assert driver.restore_calls == 1
     assert transport.session_state.health is SessionHealth.HEALTHY
     assert raised.value.scope_operation_diagnostics["cleanup"]["verification"]["status"] == "verified"
+
+
+def test_channel_display_success_keeps_target_and_matching_state_is_zero_write() -> None:
+    service, driver, transport, backend = _service()
+
+    changed = service.configure_channel_display_v2(
+        ScopeChannelDisplayRequest(channel=1, enabled=True)
+    )
+
+    assert isinstance(changed.value, ScopeChannelDisplayResult)
+    assert changed.value.write_performed is True
+    assert changed.value.before.enabled is False
+    assert changed.value.after.enabled is True
+    assert driver.display_write_calls == 1
+    assert driver.display_restore_calls == 0
+    assert transport.session_state.health is SessionHealth.HEALTHY
+    assert backend.writes == ["DISPLAY:1 ON"]
+    assert [phase["phase"] for phase in changed.diagnostics["phases"]] == [
+        "preflight",
+        "main",
+    ]
+
+    service, driver, transport, backend = _service()
+    unchanged = service.configure_channel_display_v2(
+        ScopeChannelDisplayRequest(channel=1, enabled=False)
+    )
+
+    assert unchanged.value.write_performed is False
+    assert unchanged.value.before == unchanged.value.after
+    assert driver.display_write_calls == 0
+    assert driver.display_restore_calls == 0
+    assert backend.writes == []
+    assert transport.session_state.health is SessionHealth.HEALTHY
+
+
+def test_scope_service_routes_channel_display_through_the_public_extension_service() -> None:
+    internal, driver, transport, _ = _service()
+    service = ScopeService(
+        config=SimpleNamespace(
+            scope=SimpleNamespace(
+                driver="example.scope",
+                access="read_write",
+                check_errors=False,
+            ),
+            connection=SimpleNamespace(timeout_ms=1_000),
+        ),
+        logger=SimpleNamespace(),
+        session=driver,
+        descriptor=internal.descriptor,
+        transport=transport,
+        session_state=transport.session_state,
+    )
+
+    result = service.configure_channel_display_v2(
+        ScopeChannelDisplayRequest(channel=2, enabled=True)
+    )
+
+    assert isinstance(result.value, ScopeChannelDisplayResult)
+    assert result.value.request.channel == 2
+    assert result.value.after.enabled is True
+    assert driver.display_write_calls == 1
+
+
+def test_channel_display_postcondition_failure_restores_and_verifies_baseline() -> None:
+    service, driver, transport, _ = _service()
+    driver.display_postcondition_mismatch = True
+
+    with pytest.raises(DataError, match="postcondition") as raised:
+        service.configure_channel_display_v2(
+            ScopeChannelDisplayRequest(channel=1, enabled=True)
+        )
+
+    assert driver.display_write_calls == 1
+    assert driver.display_restore_calls == 1
+    assert driver.display_enabled is False
+    assert transport.session_state.health is SessionHealth.HEALTHY
+    diagnostics = raised.value.scope_operation_diagnostics
+    assert diagnostics["cleanup_error"] is None
+    assert diagnostics["cleanup"]["verification"]["status"] == "verified"
+
+
+def test_channel_display_restore_mismatch_preserves_primary_and_poisons_session() -> None:
+    service, driver, transport, _ = _service()
+    driver.display_postcondition_mismatch = True
+    driver.display_restore_mismatch = True
+
+    with pytest.raises(DataError, match="postcondition") as raised:
+        service.configure_channel_display_v2(
+            ScopeChannelDisplayRequest(channel=1, enabled=True)
+        )
+
+    assert driver.display_restore_calls == 1
+    assert transport.session_state.health is SessionHealth.POISONED
+    diagnostics = raised.value.scope_operation_diagnostics
+    assert diagnostics["cleanup_error"] == "ValueError"
+    assert diagnostics["cleanup"]["verification"]["status"] == "mismatch"
 
 
 def test_acquisition_service_accepts_profile_gated_terminal_stop_proof() -> None:

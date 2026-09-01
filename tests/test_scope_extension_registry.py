@@ -188,6 +188,7 @@ def test_scope_descriptor_extension_is_append_only_for_positional_compatibility(
         "fft_status_profile_v2",
         "cursor_readout_profile_v2",
         "average_capture_profile_v2",
+        "channel_display_profile_v2",
     ]
 
 

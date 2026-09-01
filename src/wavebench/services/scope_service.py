@@ -70,6 +70,8 @@ from wavebench.instruments.scope_extensions import (
     ScopeAverageCaptureProfileV2,
     ScopeAverageCaptureRequestV2,
     ScopeAverageCaptureResultV2,
+    ScopeChannelDisplayProfileV2,
+    ScopeChannelDisplayRequest,
     ScopeCursorReadoutProfileV2,
     ScopeFftStatusProfileV2,
     ScopeMeasurementStatisticsProfileV2,
@@ -1010,6 +1012,33 @@ class ScopeService(SessionStateAliasMixin):
         with self._scope_session() as scope:
             return self._scope_extension_service(scope).acquisition_run_state(deadline=deadline)
 
+    def configure_channel_display_v2(
+        self,
+        request: ScopeChannelDisplayRequest,
+        *,
+        error_check: ErrorCheckSpec | None = None,
+        deadline: float | None = None,
+    ) -> ScopeExtensionOperationResult:
+        if not isinstance(request, ScopeChannelDisplayRequest):
+            raise DataError("channel display request has an invalid type")
+        self._require(
+            "scope.channel_display_configure_v2",
+            "scope.channel_display_configure_v2",
+        )
+        profile = self._channel_display_v2_profile()
+        if profile is None:
+            raise ConfigError("scope channel display capability requires a descriptor profile")
+        try:
+            profile.validate_request(request)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(str(exc)) from exc
+        with self._scope_session() as scope:
+            return self._scope_extension_service(scope).configure_channel_display_v2(
+                request,
+                error_check=error_check,
+                deadline=deadline,
+            )
+
     def start_acquisition(
         self,
         request: ScopeContinuousAcquisitionRequest,
@@ -1256,6 +1285,13 @@ class ScopeService(SessionStateAliasMixin):
 
     def _snapshot_v2_profile(self) -> ScopeSnapshotProfileV2 | None:
         return self._v2_profile("snapshot_profile_v2", ScopeSnapshotProfileV2, "snapshot")
+
+    def _channel_display_v2_profile(self) -> ScopeChannelDisplayProfileV2 | None:
+        return self._v2_profile(
+            "channel_display_profile_v2",
+            ScopeChannelDisplayProfileV2,
+            "channel display",
+        )
 
     def _acquisition_status_v2_profile(self) -> ScopeAcquisitionStatusProfileV2 | None:
         descriptor = self.descriptor or resolve_instrument_descriptor(

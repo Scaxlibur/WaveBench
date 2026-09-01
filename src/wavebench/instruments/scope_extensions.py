@@ -1276,6 +1276,142 @@ class ScopeCursorReadoutProfileV2:
                 raise ValueError("cursor readout V2 readable fields must have a value")
 
 
+ScopeChannelDisplayField = Literal["scope.channel_display"]
+_CHANNEL_DISPLAY_FIELDS = {"scope.channel_display"}
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayRequest:
+    channel: int
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _strict_int(self.channel, label="channel display channel", minimum=1)
+        if not isinstance(self.enabled, bool):
+            raise TypeError("channel display enabled must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayState:
+    channel: int
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _strict_int(self.channel, label="channel display state channel", minimum=1)
+        if not isinstance(self.enabled, bool):
+            raise TypeError("channel display state enabled must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayResult:
+    request: ScopeChannelDisplayRequest
+    before: ScopeChannelDisplayState
+    after: ScopeChannelDisplayState
+    write_performed: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, ScopeChannelDisplayRequest):
+            raise TypeError("channel display result request has an invalid type")
+        if not isinstance(self.before, ScopeChannelDisplayState) or not isinstance(
+            self.after,
+            ScopeChannelDisplayState,
+        ):
+            raise TypeError("channel display result state has an invalid type")
+        if self.before.channel != self.request.channel or self.after.channel != self.request.channel:
+            raise ValueError("channel display result states must use the requested channel")
+        if self.after.enabled is not self.request.enabled:
+            raise ValueError("channel display result does not prove the requested state")
+        if not isinstance(self.write_performed, bool):
+            raise TypeError("channel display write_performed must be bool")
+        if self.write_performed != (self.before.enabled is not self.request.enabled):
+            raise ValueError("channel display write_performed disagrees with the observed change")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayProfileV2:
+    analog_channels: tuple[int, ...]
+    snapshot_max_steps: int
+    configure_max_steps: int
+    restore_max_steps: int
+    verify_max_steps: int
+
+    def __post_init__(self) -> None:
+        channels = _unique_tuple(self.analog_channels, label="analog_channels")
+        _strict_int(len(channels), label="analog channel count", minimum=1, maximum=64)
+        for channel in channels:
+            _strict_int(
+                channel,
+                label="analog channel",
+                minimum=1,
+                maximum=65_535,
+            )
+        if tuple(sorted(channels)) != channels:
+            raise ValueError("analog_channels must use ascending channel order")
+        for label, value, minimum in (
+            ("snapshot_max_steps", self.snapshot_max_steps, 1),
+            ("configure_max_steps", self.configure_max_steps, 2),
+            ("restore_max_steps", self.restore_max_steps, 1),
+            ("verify_max_steps", self.verify_max_steps, 1),
+        ):
+            _strict_int(value, label=label, minimum=minimum, maximum=64)
+
+    def validate_request(self, request: ScopeChannelDisplayRequest) -> None:
+        if not isinstance(request, ScopeChannelDisplayRequest):
+            raise TypeError("channel display request has an invalid type")
+        if request.channel not in self.analog_channels:
+            raise ValueError("channel display request is outside the descriptor analog channels")
+
+    def validate_state(self, state: ScopeChannelDisplayState, *, channel: int) -> None:
+        if not isinstance(state, ScopeChannelDisplayState):
+            raise TypeError("channel display driver returned an invalid state")
+        if channel not in self.analog_channels or state.channel != channel:
+            raise ValueError("channel display driver returned the wrong channel")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayBaseline:
+    context_id: str
+    session_epoch: str
+    baseline_nonce: str
+    snapshot: ScopeChannelDisplayState
+    restore_order: tuple[ScopeChannelDisplayField, ...]
+
+    def __post_init__(self) -> None:
+        _safe_token(self.context_id, label="channel display baseline context_id")
+        _safe_token(self.session_epoch, label="channel display baseline session_epoch")
+        _safe_token(self.baseline_nonce, label="channel display baseline nonce")
+        if not isinstance(self.snapshot, ScopeChannelDisplayState):
+            raise TypeError("channel display baseline snapshot has an invalid type")
+        if self.restore_order != ("scope.channel_display",):
+            raise ValueError("channel display restore order must contain its only state field")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeChannelDisplayRestoreResult:
+    status: Literal["completed", "failed", "not_attempted"]
+    attempted_fields: tuple[ScopeChannelDisplayField, ...]
+    restored_fields: tuple[ScopeChannelDisplayField, ...]
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _literal(self.status, {"completed", "failed", "not_attempted"}, label="restore status")
+        attempted = _unique_tuple(self.attempted_fields, label="attempted_fields")
+        restored = _unique_tuple(self.restored_fields, label="restored_fields")
+        if not set(attempted + restored) <= _CHANNEL_DISPLAY_FIELDS:
+            raise ValueError("channel display restore fields are invalid")
+        _optional_safe_token(self.error_code, label="error_code")
+
+    def validate_for(self, baseline: ScopeChannelDisplayBaseline) -> None:
+        if not isinstance(baseline, ScopeChannelDisplayBaseline):
+            raise TypeError("channel display baseline has an invalid type")
+        _validate_prefix_and_subsequence(
+            expected=baseline.restore_order,
+            attempted=self.attempted_fields,
+            completed=self.restored_fields,
+            status=self.status,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeAcquisitionControlSnapshot:
     run_state: ScopeAcquisitionRunState
@@ -2880,6 +3016,7 @@ class ScopeDescriptorExtensions:
     fft_status_profile_v2: ScopeFftStatusProfileV2 | None = None
     cursor_readout_profile_v2: ScopeCursorReadoutProfileV2 | None = None
     average_capture_profile_v2: ScopeAverageCaptureProfileV2 | None = None
+    channel_display_profile_v2: ScopeChannelDisplayProfileV2 | None = None
 
     def __post_init__(self) -> None:
         for label, value, expected in (
@@ -2924,6 +3061,11 @@ class ScopeDescriptorExtensions:
                 "average_capture_profile_v2",
                 self.average_capture_profile_v2,
                 ScopeAverageCaptureProfileV2,
+            ),
+            (
+                "channel_display_profile_v2",
+                self.channel_display_profile_v2,
+                ScopeChannelDisplayProfileV2,
             ),
         ):
             if value is not None and not isinstance(value, expected):
@@ -3072,6 +3214,26 @@ class ScopeAcquisitionControlDriver(
         baseline: ScopeAcquisitionControlBaseline,
         deadline: float,
     ) -> ScopeAcquisitionCompletion: ...
+
+
+@runtime_checkable
+class ScopeChannelDisplayDriverV2(InstrumentDriver, Protocol):
+    def get_channel_display_state_v2(
+        self,
+        channel: int,
+    ) -> ScopeChannelDisplayState: ...
+
+    def configure_channel_display_v2(
+        self,
+        request: ScopeChannelDisplayRequest,
+        *,
+        baseline: ScopeChannelDisplayBaseline,
+    ) -> None: ...
+
+    def restore_channel_display_v2(
+        self,
+        baseline: ScopeChannelDisplayBaseline,
+    ) -> ScopeChannelDisplayRestoreResult: ...
 
 
 @runtime_checkable

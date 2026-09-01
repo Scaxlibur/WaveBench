@@ -54,6 +54,7 @@ _V2_SCOPE_CAPABILITIES = frozenset(
         "scope.measurement_statistics_v2",
         "scope.fft_status_v2",
         "scope.cursor_readout_v2",
+        "scope.channel_display_configure_v2",
     }
 )
 

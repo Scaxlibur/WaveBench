@@ -1202,6 +1202,15 @@ def build_parser() -> argparse.ArgumentParser:
     errors = scope_sub.add_parser("errors", help="Read SYST:ERR? until empty")
     add_runtime_options(errors)
 
+    display = scope_sub.add_parser(
+        "display",
+        help="Explicitly enable or disable one analog channel display",
+    )
+    display.add_argument("--channel", type=int, required=True)
+    display.add_argument("state", choices=("on", "off"))
+    add_scope_error_options(display)
+    add_runtime_options(display)
+
     status = scope_sub.add_parser(
         "status",
         help="Read a typed, non-mutating oscilloscope state snapshot",
