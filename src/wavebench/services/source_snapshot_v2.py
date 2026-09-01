@@ -15,6 +15,7 @@ from wavebench.instruments.source_extensions import (
     BurstFacet,
     HarmonicFacet,
     ModulationFacet,
+    NoiseOverlayFacet,
     Observed,
     OutputFacet,
     SnapshotConsistencyState,
@@ -23,6 +24,9 @@ from wavebench.instruments.source_extensions import (
     SourceAnchorField,
     SourceChannelStateV2,
     SourceCounterInputState,
+    SourceCouplingCapabilityProfile,
+    SourceCouplingDimensionState,
+    SourceCouplingState,
     SourceCrossChannelStateV2,
     SourceDescriptorExtensions,
     SourceFacetQueryContract,
@@ -31,6 +35,7 @@ from wavebench.instruments.source_extensions import (
     SourceFeatureCapability,
     SourceFieldId,
     SourceFieldRef,
+    SourceNoiseOverlayCapabilityProfile,
     SourceQueryExecutionRecord,
     SourceQueryEffect,
     SourceQueryItemOutcome,
@@ -44,6 +49,8 @@ from wavebench.instruments.source_extensions import (
     SourceSemanticQueryPlan,
     SourceSnapshotConsistency,
     SourceSnapshotV2,
+    SourceSyncCapabilityProfile,
+    SourceSyncState,
     SourceSystemStateV2,
     SourceTypedObservation,
     SweepFacet,
@@ -424,7 +431,7 @@ def _anchor_predicate_value(
         and isinstance(value, ArbitraryFacet)
     ):
         return _observed_value(value.playback_mode)
-    if isinstance(value, SourceRelationState):
+    if isinstance(value, (SourceRelationState, SourceCouplingState)):
         return _observed_value(value.enabled)
     return None
 
@@ -550,6 +557,77 @@ def _channel_state(
     features: tuple[SourceFeatureCapability, ...],
 ) -> SourceChannelStateV2:
     target = SourceScopeRef(SourceFacetScope.CHANNEL, channel=channel)
+    sync = _field_value(
+        values,
+        SourceFieldRef(SourceFieldId.SYNC, target),
+        features,
+        SourceFeature.SYNC,
+    )
+    if sync.availability is Availability.VALUE:
+        state = sync.value
+        assert isinstance(state, SourceSyncState)
+        profile = next(
+            (
+                feature.profile
+                for feature in features
+                if feature.feature is SourceFeature.SYNC
+                and feature.scope is SourceFacetScope.CHANNEL
+                and feature.channels == (channel,)
+                and isinstance(feature.profile, SourceSyncCapabilityProfile)
+            ),
+            None,
+        )
+        if profile is None:
+            raise SourceSnapshotContractError("source sync observation has no runtime profile")
+        if state.enabled.availability is Availability.VALUE and not profile.enabled_readable:
+            raise SourceSnapshotContractError(
+                "source sync observation reports unreadable enabled state"
+            )
+        if state.polarity.availability is Availability.VALUE and not profile.polarity_readable:
+            raise SourceSnapshotContractError(
+                "source sync observation reports unreadable polarity"
+            )
+        if state.source_channel.availability is Availability.VALUE and (
+            not profile.source_channel_readable
+            or state.source_channel.value not in profile.source_channels
+        ):
+            raise SourceSnapshotContractError(
+                "source sync observation references an undeclared source channel"
+            )
+    noise_overlay = _field_value(
+        values,
+        SourceFieldRef(SourceFieldId.NOISE_OVERLAY, target),
+        features,
+        SourceFeature.NOISE_OVERLAY,
+    )
+    if noise_overlay.availability is Availability.VALUE:
+        state = noise_overlay.value
+        assert isinstance(state, NoiseOverlayFacet)
+        profile = next(
+            (
+                feature.profile
+                for feature in features
+                if feature.feature is SourceFeature.NOISE_OVERLAY
+                and feature.scope is SourceFacetScope.CHANNEL
+                and feature.channels == (channel,)
+                and isinstance(feature.profile, SourceNoiseOverlayCapabilityProfile)
+            ),
+            None,
+        )
+        if profile is None:
+            raise SourceSnapshotContractError(
+                "source noise overlay observation has no runtime profile"
+            )
+        if state.enabled.availability is Availability.VALUE and not profile.enabled_readable:
+            raise SourceSnapshotContractError(
+                "source noise overlay observation reports unreadable enabled state"
+            )
+        if state.scales.availability is Availability.VALUE and tuple(
+            scale.kind for scale in state.scales.value
+        ) != profile.scale_kinds:
+            raise SourceSnapshotContractError(
+                "source noise overlay observation scale kinds do not match runtime profile"
+            )
     return SourceChannelStateV2(
         channel=channel,
         basic=_field_value(
@@ -600,6 +678,8 @@ def _channel_state(
             features,
             SourceFeature.ARBITRARY,
         ),
+        sync=sync,
+        noise_overlay=noise_overlay,
     )
 
 
@@ -630,12 +710,6 @@ def _system_state(
             features,
             SourceFeature.REFERENCE_CLOCK,
         ),
-        sync=_field_value(
-            values,
-            SourceFieldRef(SourceFieldId.SYNC, instrument),
-            features,
-            SourceFeature.SYNC,
-        ),
         cascade=_field_value(
             values,
             SourceFieldRef(SourceFieldId.CASCADE, instrument),
@@ -650,7 +724,7 @@ def _cross_channel_state(
     values: dict[SourceFieldRef, Observed[object]],
     features: tuple[SourceFeatureCapability, ...],
 ) -> SourceCrossChannelStateV2:
-    relations: list[SourceRelationState] = []
+    relations: list[SourceRelationState | SourceCouplingState] = []
     relation_fields = {
         SourceFeature.COMBINE: SourceFieldId.COMBINE,
         SourceFeature.TRACKING: SourceFieldId.TRACKING,
@@ -670,7 +744,68 @@ def _cross_channel_state(
             feature.feature,
         )
         if observed.availability is Availability.VALUE:
-            relations.append(observed.value)
+            if feature.feature is not SourceFeature.COUPLING:
+                relations.append(observed.value)
+                continue
+            profile = feature.profile
+            state = observed.value
+            if not isinstance(profile, SourceCouplingCapabilityProfile) or not isinstance(
+                state,
+                SourceCouplingState,
+            ):
+                raise SourceSnapshotContractError(
+                    "source coupling observation has an invalid runtime profile"
+                )
+            if state.channels != feature.channels:
+                raise SourceSnapshotContractError(
+                    "source coupling observation does not match its channel set"
+                )
+            if state.enabled.availability is Availability.VALUE and not profile.global_state_readable:
+                raise SourceSnapshotContractError(
+                    "source coupling observation reports unreadable global state"
+                )
+            if (
+                state.reference_channel.availability is Availability.VALUE
+                and not profile.reference_channel_readable
+            ):
+                raise SourceSnapshotContractError(
+                    "source coupling observation reports unreadable reference channel"
+                )
+            if tuple(item.dimension for item in state.dimensions) != profile.dimensions:
+                raise SourceSnapshotContractError(
+                    "source coupling observation dimensions do not match runtime profile"
+                )
+            if any(
+                item.parameter.availability is Availability.VALUE
+                and item.parameter.value.kind not in profile.parameter_kinds
+                for item in state.dimensions
+            ):
+                raise SourceSnapshotContractError(
+                    "source coupling observation uses an undeclared parameter kind"
+                )
+            relations.append(state)
+        elif feature.feature is SourceFeature.COUPLING:
+            profile = feature.profile
+            if not isinstance(profile, SourceCouplingCapabilityProfile):
+                raise SourceSnapshotContractError(
+                    "source coupling feature has an invalid runtime profile"
+                )
+            relations.append(
+                SourceCouplingState(
+                    feature=SourceFeature.COUPLING,
+                    channels=feature.channels,
+                    enabled=observed,
+                    reference_channel=observed,
+                    dimensions=tuple(
+                        SourceCouplingDimensionState(
+                            dimension=dimension,
+                            enabled=observed,
+                            parameter=observed,
+                        )
+                        for dimension in profile.dimensions
+                    ),
+                )
+            )
         else:
             relations.append(
                 SourceRelationState(

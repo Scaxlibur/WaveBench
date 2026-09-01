@@ -279,7 +279,11 @@ def _json_payload(value: object) -> object:
     return value
 
 
-def _source_basic_configure_v2_request(args: argparse.Namespace):
+def _source_basic_configure_v2_request(
+    args: argparse.Namespace,
+    *,
+    command: str = "basic-configure-v2",
+):
     from .instruments.source_extensions import (
         PatchAction,
         PatchValue,
@@ -289,18 +293,18 @@ def _source_basic_configure_v2_request(args: argparse.Namespace):
     )
 
     values = {
-        "waveform_kind": args.waveform,
-        "frequency_hz": args.frequency_hz,
-        "amplitude_vpp": args.amplitude_vpp,
-        "offset_v": args.offset_v,
-        "square_duty_cycle_percent": args.square_duty_cycle_percent,
+        "waveform_kind": getattr(args, "waveform", None),
+        "frequency_hz": getattr(args, "frequency_hz", None),
+        "amplitude_vpp": getattr(args, "amplitude_vpp", None),
+        "offset_v": getattr(args, "offset_v", None),
+        "square_duty_cycle_percent": getattr(args, "square_duty_cycle_percent", None),
     }
     if all(value is None for value in values.values()):
-        raise ConfigError("source basic-configure-v2 requires at least one basic field")
+        raise ConfigError(f"source {command} requires at least one basic field")
 
     waveform = (
-        PatchValue(PatchAction.SET, SourceWaveformKind(args.waveform))
-        if args.waveform is not None
+        PatchValue(PatchAction.SET, SourceWaveformKind(values["waveform_kind"]))
+        if values["waveform_kind"] is not None
         else PatchValue(PatchAction.KEEP)
     )
 
@@ -315,12 +319,50 @@ def _source_basic_configure_v2_request(args: argparse.Namespace):
         channel=args.channel,
         patch=SourceBasicPatch(
             waveform_kind=waveform,
-            frequency_hz=patch_value(args.frequency_hz),
-            amplitude_vpp=patch_value(args.amplitude_vpp),
-            offset_v=patch_value(args.offset_v),
-            square_duty_cycle_percent=patch_value(args.square_duty_cycle_percent),
+            frequency_hz=patch_value(values["frequency_hz"]),
+            amplitude_vpp=patch_value(values["amplitude_vpp"]),
+            offset_v=patch_value(values["offset_v"]),
+            square_duty_cycle_percent=patch_value(values["square_duty_cycle_percent"]),
         ),
     )
+
+
+def _source_counter_configure_v2_request(args: argparse.Namespace):
+    from .instruments.source_extensions import (
+        PatchAction,
+        PatchValue,
+        SourceCounterConfigurationPatch,
+        SourceCounterConfigureRequest,
+        SourceInputCoupling,
+    )
+
+    coupling = getattr(args, "coupling", None)
+    statistics_enabled = getattr(args, "statistics_enabled", None)
+
+    def patch_value(value: object):
+        return (
+            PatchValue(PatchAction.SET, value)
+            if value is not None
+            else PatchValue(PatchAction.KEEP)
+        )
+
+    try:
+        return SourceCounterConfigureRequest(
+            input_id=args.input_id,
+            patch=SourceCounterConfigurationPatch(
+                coupling=patch_value(
+                    SourceInputCoupling(coupling) if coupling is not None else None
+                ),
+                impedance_ohm=patch_value(getattr(args, "impedance_ohm", None)),
+                attenuation=patch_value(getattr(args, "attenuation", None)),
+                trigger_level_v=patch_value(getattr(args, "trigger_level_v", None)),
+                statistics_enabled=patch_value(
+                    statistics_enabled == "on" if statistics_enabled is not None else None
+                ),
+            ),
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _source_cross_channel_configure_v2_request(
@@ -405,6 +447,7 @@ def _source_sweep_configure_v2_request(args: argparse.Namespace):
     from .instruments.source_extensions import (
         SourceSweepConfigureRequest,
         SourceSweepSpacing,
+        SourceTriggerSource,
     )
 
     try:
@@ -415,6 +458,7 @@ def _source_sweep_configure_v2_request(args: argparse.Namespace):
             spacing=SourceSweepSpacing(args.spacing),
             steps=args.steps,
             sweep_time_s=args.sweep_time_s,
+            trigger_source=SourceTriggerSource(args.trigger_source),
         )
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
@@ -448,6 +492,58 @@ def _source_arbitrary_storage_v2_request(
                 payload_sha256="sha256:" + sha256(payload).hexdigest(),
                 payload_size_bytes=len(payload),
                 expected_previous_sha256=args.expected_previous_sha256,
+            ),
+            payload,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_arbitrary_volatile_replace_v2_request(
+    args: argparse.Namespace,
+) -> tuple[object, bytes]:
+    from .instruments.source_extensions import SourceArbitraryVolatileReplaceRequest
+
+    payload_path = Path(args.payload_file)
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(
+            f"source.arbitrary_volatile_replace_v2 payload file is unreadable: {payload_path}"
+        ) from exc
+    try:
+        return (
+            SourceArbitraryVolatileReplaceRequest(
+                channel=args.channel,
+                payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                payload_size_bytes=len(payload),
+                point_count=args.point_count,
+            ),
+            payload,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _source_arbitrary_workspace_volatile_replace_v2_request(
+    args: argparse.Namespace,
+) -> tuple[object, bytes]:
+    from .instruments.source_extensions import SourceArbitraryWorkspaceVolatileReplaceRequest
+
+    payload_path = Path(args.payload_file)
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(
+            "source.arbitrary_workspace_volatile_replace_v2 payload file is unreadable: "
+            f"{payload_path}"
+        ) from exc
+    try:
+        return (
+            SourceArbitraryWorkspaceVolatileReplaceRequest(
+                payload_sha256="sha256:" + sha256(payload).hexdigest(),
+                payload_size_bytes=len(payload),
+                point_count=args.point_count,
             ),
             payload,
         )
@@ -1293,6 +1389,32 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     print(json.dumps(payload, indent=2, ensure_ascii=False))
                 return 0
+            if args.command == "arbitrary-volatile-replace-v2":
+                request, volatile_payload = _source_arbitrary_volatile_replace_v2_request(args)
+                service = _load_source_service(args)
+                _, payload = service.replace_arbitrary_volatile_v2(
+                    request,
+                    payload=volatile_payload,
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "arbitrary-workspace-volatile-replace-v2":
+                request, workspace_payload = _source_arbitrary_workspace_volatile_replace_v2_request(
+                    args
+                )
+                service = _load_source_service(args)
+                _, payload = service.replace_arbitrary_workspace_volatile_v2(
+                    request,
+                    payload=workspace_payload,
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
             service = _load_source_service(args)
             if args.command == "idn":
                 print(service.idn())
@@ -1404,6 +1526,18 @@ def _main(argv: list[str] | None = None) -> int:
                 else:
                     print(json.dumps(payload, indent=2, ensure_ascii=False))
                 return 0
+            if args.command == "basic-live-configure-v2":
+                _, payload = service.configure_basic_live_v2(
+                    _source_basic_configure_v2_request(
+                        args,
+                        command="basic-live-configure-v2",
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
             if args.command == "output-v2":
                 from wavebench.instruments.source_extensions import SourceOutputRequest
 
@@ -1411,6 +1545,45 @@ def _main(argv: list[str] | None = None) -> int:
                     SourceOutputRequest(
                         channel=args.channel,
                         enabled=args.state == "on",
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "counter-configure-v2":
+                _, payload = service.configure_counter_v2(
+                    _source_counter_configure_v2_request(args)
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command in {"counter-enable-v2", "counter-disable-v2"}:
+                from wavebench.instruments.source_extensions import SourceCounterEnableRequest
+
+                _, payload = service.set_counter_enabled_v2(
+                    SourceCounterEnableRequest(
+                        input_id=args.input_id,
+                        enabled=args.command == "counter-enable-v2",
+                    )
+                )
+                if args.json:
+                    _emit_json_result(payload)
+                else:
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                return 0
+            if args.command == "counter-measure-v2":
+                from wavebench.instruments.source_extensions import (
+                    SourceCounterMeasureRequest,
+                    source_v2_to_data,
+                )
+
+                payload = source_v2_to_data(
+                    service.measure_counter_v2(
+                        SourceCounterMeasureRequest(input_id=args.input_id)
                     )
                 )
                 if args.json:

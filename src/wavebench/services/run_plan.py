@@ -41,8 +41,13 @@ ALLOWED_STEP_KINDS = {
     "source.set_duty",
     "source.output",
     "source.basic_configure_v2",
+    "source.basic_live_configure_v2",
     "source.output_enable_v2",
     "source.output_disable_v2",
+    "source.counter_configure_v2",
+    "source.counter_enable_v2",
+    "source.counter_disable_v2",
+    "source.counter_measure_v2",
     "source.harmonics_configure_v2",
     "source.harmonics_disable_v2",
     "source.modulation_configure_v2",
@@ -50,9 +55,12 @@ ALLOWED_STEP_KINDS = {
     "source.modulation_fm_configure_v2",
     "source.modulation_pwm_configure_v2",
     "source.sweep_configure_v2",
+    "source.sweep_fire_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
     "source.arbitrary_storage_v2",
+    "source.arbitrary_volatile_replace_v2",
+    "source.arbitrary_workspace_volatile_replace_v2",
     "source.arbitrary_select_v2",
     "source.combine_configure_v2",
     "source.coupling_configure_v2",
@@ -104,8 +112,13 @@ _REQUIRED_FIELDS = {
     "rf_source.output_enable": ("port_id",),
     "rf_source.output_disable": ("port_id",),
     "source.basic_configure_v2": ("channel",),
+    "source.basic_live_configure_v2": ("channel",),
     "source.output_enable_v2": ("channel",),
     "source.output_disable_v2": ("channel",),
+    "source.counter_configure_v2": ("input_id",),
+    "source.counter_enable_v2": ("input_id",),
+    "source.counter_disable_v2": ("input_id",),
+    "source.counter_measure_v2": ("input_id",),
     "source.harmonics_configure_v2": ("channel", "order", "preset"),
     "source.harmonics_disable_v2": ("channel",),
     "source.modulation_configure_v2": ("channel", "depth_percent", "internal_frequency_hz"),
@@ -131,6 +144,7 @@ _REQUIRED_FIELDS = {
         "steps",
         "sweep_time_s",
     ),
+    "source.sweep_fire_v2": ("channel",),
     "source.burst_configure_v2": (
         "channel",
         "cycles",
@@ -146,6 +160,8 @@ _REQUIRED_FIELDS = {
         "trailing_transition_s",
     ),
     "source.arbitrary_storage_v2": ("channel", "slot_id", "file", "write_mode"),
+    "source.arbitrary_volatile_replace_v2": ("channel", "file", "point_count"),
+    "source.arbitrary_workspace_volatile_replace_v2": ("file", "point_count"),
     "source.arbitrary_select_v2": ("channel", "slot_id", "playback_mode"),
     "source.combine_configure_v2": ("channels", "enabled"),
     "source.coupling_configure_v2": ("channels", "enabled"),
@@ -244,8 +260,24 @@ _OPTIONAL_FIELDS = {
         "square_duty_cycle_percent",
         "on_failure",
     },
+    "source.basic_live_configure_v2": {
+        "frequency_hz",
+        "amplitude_vpp",
+        "on_failure",
+    },
     "source.output_enable_v2": {"on_failure"},
     "source.output_disable_v2": {"on_failure"},
+    "source.counter_configure_v2": {
+        "coupling",
+        "impedance_ohm",
+        "attenuation",
+        "trigger_level_v",
+        "statistics_enabled",
+        "on_failure",
+    },
+    "source.counter_enable_v2": {"on_failure"},
+    "source.counter_disable_v2": {"on_failure"},
+    "source.counter_measure_v2": {"on_failure"},
     "source.harmonics_configure_v2": {"on_failure"},
     "source.harmonics_disable_v2": {"on_failure"},
     "source.modulation_configure_v2": {"on_failure"},
@@ -256,10 +288,13 @@ _OPTIONAL_FIELDS = {
         "width_deviation_s",
         "on_failure",
     },
-    "source.sweep_configure_v2": {"on_failure"},
+    "source.sweep_configure_v2": {"trigger_source", "on_failure"},
+    "source.sweep_fire_v2": {"on_failure"},
     "source.burst_configure_v2": {"on_failure"},
     "source.pulse_configure_v2": {"on_failure"},
     "source.arbitrary_storage_v2": {"expected_previous_sha256", "on_failure"},
+    "source.arbitrary_volatile_replace_v2": {"on_failure"},
+    "source.arbitrary_workspace_volatile_replace_v2": {"on_failure"},
     "source.arbitrary_select_v2": {
         "playback_frequency_hz",
         "sample_rate_hz",
@@ -306,8 +341,13 @@ _STEP_NOTES = {
     "source.set_duty": "Set square-wave duty cycle in percent; valid range is 0 < duty_percent < 100.",
     "source.output": "Turn source channel output on or off.",
     "source.basic_configure_v2": "Configure one Source V2 channel while its output is OFF. At least one basic field is required.",
+    "source.basic_live_configure_v2": "Change exactly one declared frequency or Vpp field while one Source V2 channel remains enabled.",
     "source.output_enable_v2": "Turn one Source V2 channel output on after a fresh V2 readback.",
     "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
+    "source.counter_configure_v2": "Configure exactly one declared Source V2 Counter field without enabling the Counter.",
+    "source.counter_enable_v2": "Enable one declared Source V2 Counter input after a fresh V2 readback.",
+    "source.counter_disable_v2": "Disable one declared Source V2 Counter input without changing its configuration.",
+    "source.counter_measure_v2": "Read one already-enabled Source V2 Counter input without changing its configuration.",
     "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
     "source.harmonics_disable_v2": "Disable Harmonic on one OFF Source V2 channel; it does not enable output.",
     "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
@@ -315,9 +355,12 @@ _STEP_NOTES = {
     "source.modulation_fm_configure_v2": "Configure one OFF Source V2 channel with internal sine FM; it does not enable output.",
     "source.modulation_pwm_configure_v2": "Configure one OFF Source V2 channel with internal sine PWM; it does not enable output.",
     "source.sweep_configure_v2": "Configure one OFF Source V2 channel with an internal sweep; it does not enable or fire output.",
+    "source.sweep_fire_v2": "Fire one already configured manual Source V2 sweep in the same run session; external measurement is still required.",
     "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
     "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
     "source.arbitrary_storage_v2": "Write one named Source V2 ARB storage slot without selecting or enabling it. The payload file is recorded by digest only.",
+    "source.arbitrary_volatile_replace_v2": "Replace one volatile Source V2 ARB workspace while output is OFF. The previous workspace content is not recoverable; the payload file is recorded by digest only.",
+    "source.arbitrary_workspace_volatile_replace_v2": "Replace one unscoped volatile Source V2 ARB workspace only while every topology output is OFF. It does not identify an affected channel; the previous workspace content is not recoverable and the payload file is recorded by digest only.",
     "source.arbitrary_select_v2": "Select one named Source V2 ARB waveform while the target output is OFF; it does not enable output.",
     "source.combine_configure_v2": "Enable or disable one declared Source V2 Combine relation while every affected output is OFF.",
     "source.coupling_configure_v2": "Enable or disable one declared Source V2 Coupling relation while every affected output is OFF.",
@@ -841,6 +884,52 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
             if not 0 <= duty <= 100:
                 raise ConfigError(f"{prefix}.square_duty_cycle_percent must be in [0, 100]")
             fields["square_duty_cycle_percent"] = duty
+    elif kind == "source.basic_live_configure_v2":
+        live_fields = {"frequency_hz", "amplitude_vpp"}
+        selected = live_fields & fields.keys()
+        if len(selected) != 1:
+            raise ConfigError(
+                f"{prefix} source.basic_live_configure_v2 requires exactly one frequency_hz or amplitude_vpp"
+            )
+        field = next(iter(selected))
+        value = _finite_float(fields[field], f"{prefix}.{field}")
+        if value < 0:
+            raise ConfigError(f"{prefix}.{field} must be >= 0")
+        fields[field] = value
+    elif kind == "source.counter_configure_v2":
+        fields["input_id"] = _non_empty_str(fields["input_id"], f"{prefix}.input_id")
+        configurable = {
+            "coupling",
+            "impedance_ohm",
+            "attenuation",
+            "trigger_level_v",
+            "statistics_enabled",
+        }
+        selected = configurable & fields.keys()
+        if len(selected) != 1:
+            raise ConfigError(
+                f"{prefix} source.counter_configure_v2 requires exactly one Counter field"
+            )
+        field = next(iter(selected))
+        if field == "coupling":
+            coupling = _non_empty_str(fields[field], f"{prefix}.{field}").lower()
+            if coupling not in {"ac", "dc"}:
+                raise ConfigError(f"{prefix}.{field} must be 'ac' or 'dc'")
+            fields[field] = coupling
+        elif field == "impedance_ohm":
+            fields[field] = _positive_float(fields[field], f"{prefix}.{field}")
+        elif field == "attenuation":
+            fields[field] = _positive_int(fields[field], f"{prefix}.{field}")
+        elif field == "trigger_level_v":
+            fields[field] = _finite_float(fields[field], f"{prefix}.{field}")
+        elif not isinstance(fields[field], bool):
+            raise ConfigError(f"{prefix}.{field} must be true or false")
+    elif kind in {
+        "source.counter_enable_v2",
+        "source.counter_disable_v2",
+        "source.counter_measure_v2",
+    }:
+        fields["input_id"] = _non_empty_str(fields["input_id"], f"{prefix}.input_id")
     elif kind == "source.harmonics_configure_v2":
         order = fields["order"]
         if isinstance(order, bool) or not isinstance(order, int):
@@ -943,6 +1032,16 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
         fields["stop_hz"] = stop_hz
         fields["spacing"] = spacing
         fields["sweep_time_s"] = sweep_time_s
+        if "trigger_source" in fields:
+            trigger_source = _non_empty_str(
+                fields["trigger_source"],
+                f"{prefix}.trigger_source",
+            ).lower()
+            if trigger_source not in {"internal", "manual"}:
+                raise ConfigError(
+                    f"{prefix}.trigger_source must be internal or manual"
+                )
+            fields["trigger_source"] = trigger_source
     elif kind == "source.burst_configure_v2":
         cycles = fields["cycles"]
         if isinstance(cycles, bool) or not isinstance(cycles, int):
@@ -1005,6 +1104,18 @@ def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> Non
                 f"{prefix}.expected_previous_sha256 must be sha256:<64 lowercase hex>"
             )
         fields["write_mode"] = write_mode
+    elif kind == "source.arbitrary_volatile_replace_v2":
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        fields["point_count"] = _positive_int(
+            fields["point_count"],
+            f"{prefix}.point_count",
+        )
+    elif kind == "source.arbitrary_workspace_volatile_replace_v2":
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        fields["point_count"] = _positive_int(
+            fields["point_count"],
+            f"{prefix}.point_count",
+        )
     elif kind == "source.arbitrary_select_v2":
         fields["slot_id"] = _non_empty_str(fields["slot_id"], f"{prefix}.slot_id")
         if _SOURCE_STORAGE_TOKEN.fullmatch(fields["slot_id"]) is None:

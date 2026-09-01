@@ -9,6 +9,7 @@ import pytest
 from tests.source_v2_fixtures import source_descriptor, source_extensions
 from wavebench.errors import ConfigError
 from wavebench.instruments.source_conformance import (
+    _CAPABILITY_SCOPE,
     SOURCE_CONFORMANCE_DIRECTORY,
     SOURCE_CONFORMANCE_SCHEMA,
     SOURCE_CONFORMANCE_SCHEME,
@@ -18,7 +19,12 @@ from wavebench.instruments.source_conformance import (
     source_conformance_wheel_binding_digest,
     validate_source_conformance_distribution,
 )
-from wavebench.instruments.source_extensions import SOURCE_CONTRACT_VERSION, source_v2_digest
+from wavebench.instruments.source_extensions import (
+    SOURCE_CONTRACT_VERSION,
+    SourceFeature,
+    SourceFeatureDirection,
+    source_v2_digest,
+)
 
 
 def _manifest_document(
@@ -69,6 +75,13 @@ def test_manifest_parser_verifies_required_identity_and_digest() -> None:
     document["results"] = {"queries": 4}
     with pytest.raises(ConfigError, match="evidence_digest"):
         parse_source_conformance_manifest(document)
+
+
+def test_sweep_fire_conformance_scope_matches_the_v2_contract() -> None:
+    assert _CAPABILITY_SCOPE["source.sweep_fire_v2"] == (
+        SourceFeature.SWEEP,
+        frozenset({SourceFeatureDirection.FIRE}),
+    )
 
 
 @pytest.mark.parametrize(

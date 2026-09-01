@@ -110,6 +110,10 @@ _CAPABILITY_SCOPE: Mapping[
         SourceFeature.SWEEP,
         frozenset({SourceFeatureDirection.CONFIGURE}),
     ),
+    "source.sweep_fire_v2": (
+        SourceFeature.SWEEP,
+        frozenset({SourceFeatureDirection.FIRE}),
+    ),
     "source.arbitrary_storage_v2": (
         SourceFeature.ARBITRARY,
         frozenset({SourceFeatureDirection.CONFIGURE}),
@@ -117,6 +121,26 @@ _CAPABILITY_SCOPE: Mapping[
     "source.arbitrary_select_v2": (
         SourceFeature.ARBITRARY,
         frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.arbitrary_volatile_replace_v2": (
+        SourceFeature.ARBITRARY,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.arbitrary_workspace_volatile_replace_v2": (
+        SourceFeature.ARBITRARY_WORKSPACE,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.counter_configure_v2": (
+        SourceFeature.COUNTER,
+        frozenset({SourceFeatureDirection.CONFIGURE}),
+    ),
+    "source.counter_enable_v2": (
+        SourceFeature.COUNTER,
+        frozenset({SourceFeatureDirection.ENABLE, SourceFeatureDirection.DISABLE}),
+    ),
+    "source.counter_measure_v2": (
+        SourceFeature.COUNTER,
+        frozenset({SourceFeatureDirection.READ}),
     ),
     "source.combine_configure_v2": (
         SourceFeature.COMBINE,

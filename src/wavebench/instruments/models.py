@@ -2642,7 +2642,7 @@ class SourceSweepProfile:
             raise ValueError("unsupported source sweep trigger slope")
         if self.trigger_out not in {"OFF", "POSITIVE", "NEGATIVE"}:
             raise ValueError("unsupported source sweep trigger output")
-        if not self.start_hz <= self.marker_frequency_hz <= self.stop_hz:
+        if self.marker_enabled and not self.start_hz <= self.marker_frequency_hz <= self.stop_hz:
             raise ValueError("source sweep marker frequency must be within start and stop")
         if self.marker_enabled and self.spacing == "STEP":
             raise ValueError("source sweep marker cannot be enabled with step spacing")

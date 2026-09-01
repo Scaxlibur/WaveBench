@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, replace
+import json
 from math import nan
 from pathlib import Path
 import re
@@ -29,6 +30,7 @@ from wavebench.instruments.source_extensions import (
     SourceReasonCode,
     SupportState,
     source_v2_canonical_json,
+    source_v2_to_data,
 )
 
 from tests.source_v2_fixtures import (
@@ -117,7 +119,70 @@ def test_source_public_exports_are_explicit_and_preserve_identity() -> None:
         re.S,
     )
     assert match is not None
-    assert module.__all__[arbitrary_start + len(arbitrary_exports) :] == match.group(1).splitlines()
+    relation_exports = match.group(1).splitlines()
+    relation_start = arbitrary_start + len(arbitrary_exports)
+    assert module.__all__[relation_start : relation_start + len(relation_exports)] == relation_exports
+    match = re.search(
+        r"首次稳定版 Coupling 只读模型修正在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    coupling_exports = match.group(1).splitlines()
+    coupling_start = relation_start + len(relation_exports)
+    assert module.__all__[coupling_start : coupling_start + len(coupling_exports)] == coupling_exports
+    match = re.search(
+        r"首次稳定版 Sync 只读模型修正在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    sync_exports = match.group(1).splitlines()
+    sync_start = coupling_start + len(coupling_exports)
+    assert module.__all__[sync_start : sync_start + len(sync_exports)] == sync_exports
+    match = re.search(
+        r"首次稳定版 Noise Overlay 只读模型在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    noise_exports = match.group(1).splitlines()
+    noise_start = sync_start + len(sync_exports)
+    assert module.__all__[noise_start : noise_start + len(noise_exports)] == noise_exports
+    match = re.search(
+        r"D1-2／输出开启时的受限 Basic 修改在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    live_exports = match.group(1).splitlines()
+    live_start = noise_start + len(noise_exports)
+    assert module.__all__[live_start : live_start + len(live_exports)] == live_exports
+    match = re.search(
+        r"D1-3／Burst 与 Sweep fire 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    fire_exports = match.group(1).splitlines()
+    fire_start = live_start + len(live_exports)
+    assert module.__all__[fire_start : fire_start + len(fire_exports)] == fire_exports
+    match = re.search(
+        r"D1-4／volatile ARB 与 Counter 收口在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    d1_4_exports = match.group(1).splitlines()
+    d1_4_start = fire_start + len(fire_exports)
+    assert module.__all__[d1_4_start : d1_4_start + len(d1_4_exports)] == d1_4_exports
+    match = re.search(
+        r"D1-5／无通道 VOLATILE workspace 在上述清单末尾追加以下精确条目：\n\n```text\n(.*?)\n```",
+        rfc,
+        re.S,
+    )
+    assert match is not None
+    assert module.__all__[d1_4_start + len(d1_4_exports) :] == match.group(1).splitlines()
 
 
 def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None:
@@ -140,6 +205,73 @@ def test_observed_preserves_missing_reason_and_rejects_nonfinite_value() -> None
         Observed.value_of(1.0, evidence_refs=("/tmp/private.json",))
 
 
+def test_source_v2_canonical_json_omits_only_additive_legacy_defaults() -> None:
+    basic = module.SourceBasicCapabilityProfile(
+        waveform_kinds=(module.SourceWaveformKind.SINE,),
+        frequency_modes=(module.SourceFrequencyMode.FIXED,),
+        amplitude_units=(module.SourceAmplitudeUnit.VPP,),
+        offset_readable=True,
+        phase_readable=True,
+        square_duty_readable=False,
+    )
+    basic_data = source_v2_to_data(basic)
+    basic_canonical = json.loads(source_v2_canonical_json(basic))
+    assert basic_data["live_frequency_configurable"] is False
+    assert basic_data["live_amplitude_vpp_configurable"] is False
+    assert "live_frequency_configurable" not in basic_canonical
+    assert "live_amplitude_vpp_configurable" not in basic_canonical
+    assert "live_frequency_configurable" in json.loads(
+        source_v2_canonical_json(replace(basic, live_frequency_configurable=True))
+    )
+
+    extensions = source_extensions()
+    extensions_data = source_v2_to_data(extensions)
+    extensions_canonical = json.loads(source_v2_canonical_json(extensions))
+    assert extensions_data["v1_route_migration_enabled"] is True
+    assert "v1_route_migration_enabled" not in extensions_canonical
+    assert json.loads(
+        source_v2_canonical_json(replace(extensions, v1_route_migration_enabled=False))
+    )["v1_route_migration_enabled"] is False
+
+    sweep = module.SourceSweepCapabilityProfile(
+        spacing_modes=(module.SourceSweepSpacing.LINEAR,),
+        trigger_sources=(module.SourceTriggerSource.INTERNAL,),
+        timing_readable=True,
+        marker_readable=True,
+    )
+    assert source_v2_to_data(sweep)["implicit_disable_features"] == []
+    assert "implicit_disable_features" not in json.loads(source_v2_canonical_json(sweep))
+    assert json.loads(
+        source_v2_canonical_json(
+            replace(sweep, implicit_disable_features=(module.SourceFeature.BURST,))
+        )
+    )["implicit_disable_features"] == ["burst"]
+
+    burst = module.SourceBurstCapabilityProfile(
+        modes=(module.SourceBurstMode.TRIGGERED,),
+        trigger_sources=(module.SourceTriggerSource.INTERNAL,),
+        timing_readable=True,
+        gate_readable=True,
+    )
+    burst_data = source_v2_to_data(burst)
+    burst_canonical = json.loads(source_v2_canonical_json(burst))
+    assert burst_data["triggered_manual_configuration_readable"] is False
+    assert burst_data["inactive_readable"] is False
+    assert "triggered_manual_configuration_readable" not in burst_canonical
+    assert "inactive_readable" not in burst_canonical
+    interlocked_burst = json.loads(
+        source_v2_canonical_json(
+            replace(
+                burst,
+                triggered_manual_configuration_readable=True,
+                inactive_readable=True,
+            )
+        )
+    )
+    assert interlocked_burst["triggered_manual_configuration_readable"] is True
+    assert interlocked_burst["inactive_readable"] is True
+
+
 def test_resistance_bounds_require_two_finite_positive_limits() -> None:
     assert module.ResistanceBounds(49.5, 50.5).maximum_ohm == 50.5
 
@@ -158,12 +290,28 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "offset_readable",
             "phase_readable",
             "square_duty_readable",
+            "live_frequency_configurable",
+            "live_amplitude_vpp_configurable",
         ),
         "SourceOutputCapabilityProfile": (
             "output_readable",
             "display_load_readable",
             "polarity_readable",
         ),
+        "SourceDescriptorExtensions": (
+            "contract_version",
+            "topology",
+            "features",
+            "query_contract",
+            "safety_profile",
+            "v1_route_migration_enabled",
+        ),
+        "SourceNoiseOverlayCapabilityProfile": (
+            "enabled_readable",
+            "scale_kinds",
+        ),
+        "SourceNoiseOverlayScale": ("kind", "value"),
+        "NoiseOverlayFacet": ("enabled", "scales"),
         "SourceHarmonicCapabilityProfile": (
             "minimum_order",
             "maximum_order",
@@ -186,6 +334,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "timing_readable",
             "marker_readable",
             "configuration_readable",
+            "implicit_disable_features",
         ),
         "SourceBurstCapabilityProfile": (
             "modes",
@@ -193,6 +342,8 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "timing_readable",
             "gate_readable",
             "triggered_internal_configuration_readable",
+            "triggered_manual_configuration_readable",
+            "inactive_readable",
         ),
         "SourcePulseCapabilityProfile": (
             "hold_modes",
@@ -208,17 +359,57 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "storage_slot_metadata_readable",
             "storage_write_modes",
             "storage_max_payload_bytes",
+            "volatile_replace_min_points",
+            "volatile_replace_max_points",
+            "volatile_replace_max_payload_bytes",
+        ),
+        "SourceArbitraryWorkspaceCapabilityProfile": (
+            "workspace_id",
+            "volatile_replace_min_points",
+            "volatile_replace_max_points",
+            "volatile_replace_max_payload_bytes",
         ),
         "SourceCounterCapabilityProfile": (
             "input_ids",
             "measurement_kinds",
             "configuration_readable",
             "query_effect",
+            "readable_configuration_fields",
+            "configurable_fields",
+            "enabled_configurable",
         ),
-        "SourceClockSyncCapabilityProfile": (
-            "reference_clock_modes",
-            "sync_readable",
-            "cascade_readable",
+        "SourceCouplingCapabilityProfile": (
+            "dimensions",
+            "parameter_kinds",
+            "supported_channel_sets",
+            "global_state_readable",
+            "reference_channel_readable",
+            "relation_graph_readable",
+            "configuration_readable",
+        ),
+        "SourceCouplingParameter": ("kind", "value"),
+        "SourceCouplingDimensionState": ("dimension", "enabled", "parameter"),
+        "SourceCouplingState": (
+            "feature",
+            "channels",
+            "enabled",
+            "reference_channel",
+            "dimensions",
+        ),
+        "SourceReferenceClockCapabilityProfile": (
+            "modes",
+            "frequency_readable",
+            "lock_state_readable",
+        ),
+        "SourceSyncCapabilityProfile": (
+            "enabled_readable",
+            "polarity_readable",
+            "source_channel_readable",
+            "source_channels",
+        ),
+        "SourceCascadeCapabilityProfile": (
+            "enabled_readable",
+            "role_readable",
         ),
         "SourceCrossChannelCapabilityProfile": (
             "relation_kinds",
@@ -293,6 +484,9 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
         ),
         "SourceBasicConfigureRequest": ("channel", "patch", "mode"),
         "SourceBasicConfigureResult": ("channel", "basic", "output_enabled"),
+        "SourceBasicLiveConfigureResult": ("channel", "basic", "output_enabled"),
+        "SourceFireRequest": ("channel",),
+        "SourceFireResult": ("channel",),
         "SourceOutputRequest": ("channel", "enabled"),
         "SourceOutputResult": (
             "channel",
@@ -322,6 +516,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "phase_deg",
             "internal_period_s",
             "delay_s",
+            "trigger_source",
         ),
         "SourceBurstConfigureResult": ("channel", "burst", "output_enabled"),
         "SourceFmModulationConfigureRequest": (
@@ -344,6 +539,7 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
             "spacing",
             "steps",
             "sweep_time_s",
+            "trigger_source",
         ),
         "SourceSweepConfigureResult": ("channel", "basic", "sweep", "output_enabled"),
         "SourcePulseConfigureRequest": (
@@ -476,8 +672,20 @@ def test_source_v2_profile_and_facet_field_shapes_are_frozen() -> None:
         "SourceSystemStateV2": (
             "counters",
             "reference_clock",
-            "sync",
             "cascade",
+        ),
+        "SourceChannelStateV2": (
+            "channel",
+            "basic",
+            "output",
+            "harmonics",
+            "modulation",
+            "sweep",
+            "burst",
+            "pulse",
+            "arbitrary",
+            "sync",
+            "noise_overlay",
         ),
         "SourceCrossChannelStateV2": (
             "relations",
@@ -530,21 +738,33 @@ def test_source_snapshot_capability_is_additive_and_validated() -> None:
     expected = {
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.basic_live_configure_v2": ("configure_source_basic_live_v2",),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
         "source.harmonics_disable_v2": ("disable_source_harmonics_v2",),
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
         "source.burst_configure_v2": ("configure_source_burst_v2",),
+        "source.burst_fire_v2": ("fire_source_burst_v2",),
         "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
             "source.sweep_configure_v2": ("configure_source_sweep_v2",),
+            "source.sweep_fire_v2": ("fire_source_sweep_v2",),
             "source.output_v2": ("set_source_output_v2",),
             "source.arbitrary_storage_v2": (
                 "read_source_arbitrary_storage_v2",
                 "mutate_source_arbitrary_storage_v2",
             ),
             "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
+            "source.arbitrary_volatile_replace_v2": (
+                "replace_source_arbitrary_volatile_v2",
+            ),
+            "source.arbitrary_workspace_volatile_replace_v2": (
+                "replace_source_arbitrary_workspace_volatile_v2",
+            ),
+            "source.counter_configure_v2": ("configure_source_counter_v2",),
+            "source.counter_enable_v2": ("set_source_counter_enabled_v2",),
+            "source.counter_measure_v2": ("measure_source_counter_v2",),
             "source.combine_configure_v2": ("configure_source_combine_v2",),
             "source.coupling_configure_v2": ("configure_source_coupling_v2",),
             "source.tracking_configure_v2": ("configure_source_tracking_v2",),
@@ -586,6 +806,12 @@ def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
     }
     assert keep.action is module.PatchAction.KEEP
     assert module.SourceBasicConfigureResult(1, basic_facet(), False).output_enabled is False
+    assert module.SourceBasicLiveConfigureResult(1, basic_facet(), True).output_enabled is True
+    assert module.source_v2_to_data(module.SourceFireRequest(1)) == {
+        "type": "SourceFireRequest",
+        "channel": 1,
+    }
+    assert module.SourceFireResult(1).channel == 1
     assert module.SourceOutputResult(1, False) == module.SourceOutputResult(1, False)
 
     with pytest.raises(ValueError, match="SET patch values"):
@@ -611,6 +837,8 @@ def test_source_v2_basic_write_models_are_closed_and_serializable() -> None:
         )
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceBasicConfigureResult(1, basic_facet(), True)
+    with pytest.raises(ValueError, match="output_enabled=True"):
+        module.SourceBasicLiveConfigureResult(1, basic_facet(), False)
     with pytest.raises(ValueError, match="final VPP amplitude"):
         module.SourceBasicConfigureResult(
             1,
@@ -869,15 +1097,25 @@ def test_source_v2_burst_write_models_are_closed_and_serializable() -> None:
         "phase_deg": 30.0,
         "internal_period_s": 0.25,
         "delay_s": 0.5,
+        "trigger_source": "internal",
     }
     assert result.burst.mode.value is module.SourceBurstMode.TRIGGERED
     with pytest.raises(ValueError, match="must be <= 500000"):
         module.SourceBurstConfigureRequest(1, 500_001, 30.0, 0.25, 0.5)
     with pytest.raises(ValueError, match="must be > 0"):
         module.SourceBurstConfigureRequest(1, 12, 30.0, 0.0, 0.5)
+    with pytest.raises(ValueError, match="internal or manual"):
+        module.SourceBurstConfigureRequest(
+            1,
+            12,
+            30.0,
+            0.25,
+            0.5,
+            module.SourceTriggerSource.EXTERNAL,
+        )
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceBurstConfigureResult(1, burst, True)
-    with pytest.raises(ValueError, match="internal trigger readback"):
+    with pytest.raises(ValueError, match="internal or manual trigger readback"):
         module.SourceBurstConfigureResult(
             1,
             replace(
@@ -1072,6 +1310,7 @@ def test_source_v2_sweep_write_models_are_closed_and_serializable() -> None:
         "spacing": "linear",
         "steps": 101,
         "sweep_time_s": 1.0,
+        "trigger_source": "internal",
     }
     assert result.sweep.spacing.value is module.SourceSweepSpacing.LINEAR
     with pytest.raises(ValueError, match="start_hz must be > 0"):
@@ -1100,6 +1339,16 @@ def test_source_v2_sweep_write_models_are_closed_and_serializable() -> None:
             module.SourceSweepSpacing.LINEAR,
             2_049,
             1.0,
+        )
+    with pytest.raises(ValueError, match="internal or manual"):
+        module.SourceSweepConfigureRequest(
+            1,
+            100.0,
+            1_000.0,
+            module.SourceSweepSpacing.LINEAR,
+            101,
+            1.0,
+            module.SourceTriggerSource.BUS,
         )
     with pytest.raises(ValueError, match="output_enabled=False"):
         module.SourceSweepConfigureResult(1, basic, sweep, True)
@@ -1279,6 +1528,151 @@ def test_source_v2_arbitrary_write_models_keep_payload_out_of_public_data() -> N
         module.SourceArbitrarySelectResult(1, basic, arbitrary, True)
 
 
+def test_source_v2_volatile_arb_and_counter_contract_models_are_explicit() -> None:
+    digest = "sha256:" + "c" * 64
+    request = module.SourceArbitraryVolatileReplaceRequest(
+        channel=1,
+        payload_sha256=digest,
+        payload_size_bytes=128,
+        point_count=64,
+    )
+    assert module.source_v2_to_data(request) == {
+        "type": "SourceArbitraryVolatileReplaceRequest",
+        "channel": 1,
+        "payload_sha256": digest,
+        "payload_size_bytes": 128,
+        "point_count": 64,
+    }
+    assert (
+        module.SourceArbitraryVolatileReplaceResult(
+            1,
+            digest,
+            128,
+            64,
+            "USER",
+            True,
+            False,
+            False,
+        ).previous_content_restorable
+        is False
+    )
+    with pytest.raises(ValueError, match="point_count"):
+        module.SourceArbitraryVolatileReplaceRequest(1, digest, 128, 0)
+    with pytest.raises(ValueError, match="write_completed=True"):
+        module.SourceArbitraryVolatileReplaceResult(
+            1,
+            digest,
+            128,
+            64,
+            "USER",
+            False,
+            False,
+            False,
+        )
+
+    profile = module.SourceArbitraryCapabilityProfile(
+        playback_modes=(module.SourceArbitraryPlaybackMode.DDS,),
+        selection_readable=True,
+        storage_metadata_readable=False,
+        sample_rate_readable=False,
+        volatile_replace_min_points=2,
+        volatile_replace_max_points=16_384,
+        volatile_replace_max_payload_bytes=32_768,
+    )
+    assert profile.volatile_replace_max_points == 16_384
+    with pytest.raises(ValueError, match="provided together"):
+        module.SourceArbitraryCapabilityProfile(
+            playback_modes=(module.SourceArbitraryPlaybackMode.DDS,),
+            selection_readable=True,
+            storage_metadata_readable=False,
+            sample_rate_readable=False,
+            volatile_replace_min_points=2,
+        )
+
+    counter_profile = module.SourceCounterCapabilityProfile(
+        input_ids=("counter",),
+        measurement_kinds=(module.SourceCounterMeasurementKind.FREQUENCY_HZ,),
+        configuration_readable=True,
+        query_effect=module.SourceQueryEffect.PURE_READ,
+        readable_configuration_fields=(
+            module.SourceCounterConfigurationField.ATTENUATION,
+            module.SourceCounterConfigurationField.COUPLING,
+            module.SourceCounterConfigurationField.IMPEDANCE_OHM,
+            module.SourceCounterConfigurationField.STATISTICS_ENABLED,
+            module.SourceCounterConfigurationField.TRIGGER_LEVEL_V,
+        ),
+        configurable_fields=(
+            module.SourceCounterConfigurationField.COUPLING,
+            module.SourceCounterConfigurationField.IMPEDANCE_OHM,
+        ),
+        enabled_configurable=True,
+    )
+    assert counter_profile.enabled_configurable is True
+    with pytest.raises(ValueError, match="matching readable"):
+        module.SourceCounterCapabilityProfile(
+            input_ids=("counter",),
+            measurement_kinds=(module.SourceCounterMeasurementKind.FREQUENCY_HZ,),
+            configuration_readable=True,
+            query_effect=module.SourceQueryEffect.PURE_READ,
+            configurable_fields=(module.SourceCounterConfigurationField.COUPLING,),
+        )
+
+    patch = module.SourceCounterConfigurationPatch(
+        coupling=module.PatchValue(
+            module.PatchAction.SET,
+            module.SourceInputCoupling.AC,
+        )
+    )
+    configured = module.SourceCounterConfigureRequest("counter", patch)
+    assert module.source_v2_to_data(configured)["patch"]["coupling"]["value"] == "ac"
+    with pytest.raises(ValueError, match="exactly one SET"):
+        module.SourceCounterConfigurationPatch()
+    with pytest.raises(ValueError, match="exactly one SET"):
+        module.SourceCounterConfigurationPatch(
+            coupling=module.PatchValue(
+                module.PatchAction.SET,
+                module.SourceInputCoupling.AC,
+            ),
+            impedance_ohm=module.PatchValue(module.PatchAction.SET, 1_000_000.0),
+        )
+    with pytest.raises(ValueError, match="AC or DC"):
+        module.SourceCounterConfigurationPatch(
+            coupling=module.PatchValue(
+                module.PatchAction.SET,
+                module.SourceInputCoupling.UNKNOWN,
+            )
+        )
+
+    state = module.SourceCounterInputState(
+        input_id="counter",
+        enabled=Observed.value_of(False),
+        measurements=Observed.value_of(()),
+        coupling=Observed.value_of(module.SourceInputCoupling.AC),
+        impedance_ohm=Observed.value_of(1_000_000.0),
+        attenuation=Observed.value_of(1),
+        gate_time_s=Observed.missing(
+            Availability.UNSUPPORTED,
+            module.SourceReasonCode.DESCRIPTOR_UNSUPPORTED,
+        ),
+        trigger_level_v=Observed.value_of(0.0),
+        statistics_enabled=Observed.value_of(False),
+    )
+    assert module.SourceCounterConfigureResult("counter", state).state is state
+    assert module.SourceCounterEnableRequest("counter", True).enabled is True
+    measured = module.SourceCounterMeasureResult(
+        "counter",
+        (
+            module.SourceCounterMeasurementV2(
+                module.SourceCounterMeasurementKind.FREQUENCY_HZ,
+                1_000.0,
+            ),
+        ),
+    )
+    assert measured.measurements[0].value == 1_000.0
+    with pytest.raises(ValueError, match="requires measurements"):
+        module.SourceCounterMeasureResult("counter", ())
+
+
 def test_source_v2_cross_channel_write_models_are_closed_and_serializable() -> None:
     relation = module.SourceRelationState(
         feature=module.SourceFeature.COMBINE,
@@ -1343,6 +1737,201 @@ def test_source_v2_cross_channel_write_models_are_closed_and_serializable() -> N
                 module.SourceRelationOutputState(channel=2, enabled=False),
                 module.SourceRelationOutputState(channel=1, enabled=False),
             ),
+        )
+
+
+def test_source_v2_coupling_read_model_separates_dimensions_and_parameters() -> None:
+    profile = module.SourceCouplingCapabilityProfile(
+        dimensions=(
+            module.SourceCouplingDimension.AMPLITUDE,
+            module.SourceCouplingDimension.FREQUENCY,
+            module.SourceCouplingDimension.PHASE,
+        ),
+        parameter_kinds=(
+            module.SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+            module.SourceCouplingParameterKind.AMPLITUDE_RATIO,
+            module.SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+            module.SourceCouplingParameterKind.FREQUENCY_RATIO,
+            module.SourceCouplingParameterKind.PHASE_DEVIATION_DEG,
+            module.SourceCouplingParameterKind.PHASE_RATIO,
+        ),
+        supported_channel_sets=((1, 2),),
+        global_state_readable=True,
+        reference_channel_readable=True,
+        relation_graph_readable=False,
+    )
+    missing = Observed.missing(
+        Availability.NOT_QUERIED,
+        SourceReasonCode.NOT_REQUESTED,
+    )
+    state = module.SourceCouplingState(
+        feature=module.SourceFeature.COUPLING,
+        channels=(1, 2),
+        enabled=missing,
+        reference_channel=Observed.value_of(1),
+        dimensions=(
+            module.SourceCouplingDimensionState(
+                module.SourceCouplingDimension.AMPLITUDE,
+                Observed.value_of(True),
+                Observed.value_of(
+                    module.SourceCouplingParameter(
+                        module.SourceCouplingParameterKind.AMPLITUDE_RATIO,
+                        0.5,
+                    )
+                ),
+            ),
+            module.SourceCouplingDimensionState(
+                module.SourceCouplingDimension.FREQUENCY,
+                Observed.value_of(True),
+                Observed.value_of(
+                    module.SourceCouplingParameter(
+                        module.SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+                        500.0,
+                    )
+                ),
+            ),
+            module.SourceCouplingDimensionState(
+                module.SourceCouplingDimension.PHASE,
+                Observed.value_of(False),
+                missing,
+            ),
+        ),
+    )
+
+    assert profile.configuration_readable is False
+    assert module.source_v2_to_data(state)["dimensions"][0]["parameter"]["value"] == {
+        "type": "SourceCouplingParameter",
+        "kind": "amplitude_ratio",
+        "value": 0.5,
+    }
+    base = source_extensions()
+    mismatched_feature = module.SourceFeatureCapability(
+        feature=module.SourceFeature.COUPLING,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.READ,),
+        scope=module.SourceFacetScope.CHANNEL_SET,
+        channels=(1, 2),
+        applicability=module.SourceConstraintApplicability(),
+        profile=replace(profile, supported_channel_sets=((1, 3),)),
+    )
+    with pytest.raises(ValueError, match="channel set is not declared"):
+        replace(
+            base,
+            topology=module.SourceTopologyContract((1, 2, 3)),
+            features=(base.features[0], mismatched_feature, base.features[1]),
+        )
+    with pytest.raises(ValueError, match="does not match its dimension"):
+        module.SourceCouplingDimensionState(
+            module.SourceCouplingDimension.PHASE,
+            Observed.value_of(True),
+            Observed.value_of(
+                module.SourceCouplingParameter(
+                    module.SourceCouplingParameterKind.FREQUENCY_RATIO,
+                    2.0,
+                )
+            ),
+        )
+    with pytest.raises(ValueError, match="must be a participant"):
+        replace(state, reference_channel=Observed.value_of(3))
+    with pytest.raises(ValueError, match="feature is not a relation"):
+        module.SourceRelationState(
+            feature=module.SourceFeature.COUPLING,
+            channels=(1, 2),
+            enabled=Observed.value_of(True),
+        )
+
+
+def test_source_v2_sync_is_channel_scoped_and_uses_a_dedicated_profile() -> None:
+    profile = module.SourceSyncCapabilityProfile(
+        enabled_readable=True,
+        polarity_readable=True,
+        source_channel_readable=True,
+        source_channels=(1, 2),
+    )
+    feature = module.SourceFeatureCapability(
+        feature=module.SourceFeature.SYNC,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.READ,),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=profile,
+    )
+
+    assert feature.profile is profile
+    assert not hasattr(module, "SourceClockSyncCapabilityProfile")
+    with pytest.raises(ValueError, match="cannot use scope"):
+        module.SourceFieldRef(
+            module.SourceFieldId.SYNC,
+            module.SourceScopeRef(module.SourceFacetScope.INSTRUMENT),
+        )
+    with pytest.raises(ValueError, match="cannot use scope"):
+        replace(feature, scope=module.SourceFacetScope.INSTRUMENT, channels=())
+    with pytest.raises(ValueError, match="must not be empty"):
+        module.SourceSyncCapabilityProfile(True, False, True)
+    with pytest.raises(ValueError, match="polarity value has an invalid type"):
+        module.SourceSyncState(
+            enabled=Observed.value_of(False),
+            polarity=Observed.value_of(module.SourceOutputPolarity.NORMAL),
+            source_channel=Observed.value_of(1),
+        )
+
+
+def test_source_v2_noise_overlay_is_distinct_from_the_noise_waveform() -> None:
+    profile = module.SourceNoiseOverlayCapabilityProfile(
+        enabled_readable=True,
+        scale_kinds=(
+            module.SourceNoiseOverlayScaleKind.PERCENT,
+            module.SourceNoiseOverlayScaleKind.RATIO,
+            module.SourceNoiseOverlayScaleKind.RATIO_DB,
+        ),
+    )
+    facet = module.NoiseOverlayFacet(
+        enabled=Observed.value_of(True),
+        scales=Observed.value_of(
+            (
+                module.SourceNoiseOverlayScale(
+                    module.SourceNoiseOverlayScaleKind.PERCENT,
+                    25.0,
+                ),
+                module.SourceNoiseOverlayScale(
+                    module.SourceNoiseOverlayScaleKind.RATIO,
+                    0.25,
+                ),
+                module.SourceNoiseOverlayScale(
+                    module.SourceNoiseOverlayScaleKind.RATIO_DB,
+                    -12.0412,
+                ),
+            )
+        ),
+    )
+
+    assert profile.scale_kinds[-1] is module.SourceNoiseOverlayScaleKind.RATIO_DB
+    assert module.source_v2_to_data(facet)["scales"]["value"][0] == {
+        "type": "SourceNoiseOverlayScale",
+        "kind": "percent",
+        "value": 25.0,
+    }
+    assert module.SourceFeature.NOISE_OVERLAY is not module.SourceFeature.BASIC
+    assert module.SourceFieldId.NOISE_OVERLAY.value == "source.channel.noise_overlay"
+    assert module.SourceNoiseOverlayScale(
+        module.SourceNoiseOverlayScaleKind.PERCENT,
+        100.0,
+    ).value == 100.0
+    with pytest.raises(ValueError, match="must be >= 0"):
+        module.SourceNoiseOverlayScale(
+            module.SourceNoiseOverlayScaleKind.RATIO,
+            -0.1,
+        )
+    with pytest.raises(ValueError, match="must be <= 100"):
+        module.SourceNoiseOverlayScale(
+            module.SourceNoiseOverlayScaleKind.PERCENT,
+            100.1,
+        )
+    with pytest.raises(ValueError, match="sorted and unique"):
+        replace(
+            facet,
+            scales=Observed.value_of(tuple(reversed(facet.scales.value))),
         )
 
 
@@ -1467,6 +2056,151 @@ def test_source_v2_arbitrary_write_capabilities_require_explicit_readback() -> N
                     "read_source_arbitrary_storage_v2": lambda self, channel, slot_id: None,
                     "select_source_arbitrary_v2": lambda self, request: None,
                 },
+        )(),
+    )
+
+
+def test_source_v2_volatile_arb_replace_requires_limits_and_off_recovery() -> None:
+    extensions = source_extensions()
+    basic, output = extensions.features
+    arbitrary = module.SourceFeatureCapability(
+        feature=module.SourceFeature.ARBITRARY,
+        support=module.SupportState.SUPPORTED,
+        directions=(module.SourceFeatureDirection.CONFIGURE, module.SourceFeatureDirection.READ),
+        scope=module.SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=module.SourceConstraintApplicability(),
+        profile=module.SourceArbitraryCapabilityProfile(
+            playback_modes=(module.SourceArbitraryPlaybackMode.DDS,),
+            selection_readable=True,
+            storage_metadata_readable=False,
+            sample_rate_readable=False,
+            volatile_replace_min_points=2,
+            volatile_replace_max_points=16_384,
+            volatile_replace_max_payload_bytes=32_768,
+        ),
+    )
+    arbitrary_query = module.SourceFacetQueryContract(
+        feature=module.SourceFeature.ARBITRARY,
+        scope=module.SourceFacetScope.CHANNEL,
+        fields=(module.SourceFieldId.ARBITRARY_SELECTION,),
+        activation_any=(),
+        effect=module.SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    configured_extensions = replace(
+        extensions,
+        features=(
+            arbitrary,
+            replace(
+                basic,
+                profile=replace(
+                    basic.profile,
+                    waveform_kinds=(
+                        module.SourceWaveformKind.ARBITRARY,
+                        module.SourceWaveformKind.SINE,
+                    ),
+                ),
+            ),
+            replace(
+                output,
+                directions=(
+                    module.SourceFeatureDirection.DISABLE,
+                    module.SourceFeatureDirection.ENABLE,
+                    module.SourceFeatureDirection.READ,
+                ),
+            ),
+        ),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(arbitrary_query, *extensions.query_contract.facets),
+            max_queries=7,
+        ),
+    )
+    descriptor = replace(
+        source_descriptor(extensions=configured_extensions),
+        capabilities=(
+            "source.snapshot_v2",
+            "source.output_v2",
+            "source.arbitrary_volatile_replace_v2",
+        ),
+    )
+
+    class VolatileArbitraryWriteDriver(SourceV2FakeDriver):
+        def set_source_output_v2(self, request):
+            raise AssertionError(request)
+
+        def replace_source_arbitrary_volatile_v2(self, request, payload):
+            raise AssertionError((request, payload))
+
+    validate_source_descriptor(descriptor)
+    validate_declared_capabilities(descriptor, VolatileArbitraryWriteDriver(combined=True))
+
+    with pytest.raises(ConfigError, match="requires source.output_v2"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                capabilities=(
+                    "source.snapshot_v2",
+                    "source.arbitrary_volatile_replace_v2",
+                ),
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        arbitrary,
+                        configured_extensions.features[1],
+                        replace(
+                            configured_extensions.features[2],
+                            directions=(module.SourceFeatureDirection.READ,),
+                        ),
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="volatile replace limits"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(
+                        replace(
+                            arbitrary,
+                            profile=replace(
+                                arbitrary.profile,
+                                volatile_replace_min_points=None,
+                                volatile_replace_max_points=None,
+                                volatile_replace_max_payload_bytes=None,
+                            ),
+                        ),
+                        configured_extensions.features[1],
+                        configured_extensions.features[2],
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ConfigError, match="arbitrary basic waveform"):
+        validate_source_descriptor(
+            replace(
+                descriptor,
+                source_extensions=replace(
+                    configured_extensions,
+                    features=(arbitrary, basic, configured_extensions.features[2]),
+                ),
+            )
+        )
+    with pytest.raises(TypeError, match="replace_source_arbitrary_volatile_v2"):
+        validate_declared_capabilities(
+            descriptor,
+            type(
+                "MissingVolatileArbitraryDriver",
+                (),
+                {
+                    "close": lambda self: None,
+                    "execute_source_query_plan_v2": lambda self, plan: None,
+                    "set_source_output_v2": lambda self, request: None,
+                },
             )(),
         )
 
@@ -1535,7 +2269,25 @@ def test_source_v2_write_capabilities_require_matching_directions_and_readback()
                 ),
             )
         )
-    with pytest.raises(ConfigError, match="matching output ENABLE and DISABLE"):
+    disable_only_descriptor = replace(
+        descriptor,
+        source_extensions=replace(
+            write_extensions,
+            features=(
+                write_extensions.features[0],
+                replace(
+                    write_extensions.features[1],
+                    directions=(
+                        SourceFeatureDirection.DISABLE,
+                        SourceFeatureDirection.READ,
+                    ),
+                ),
+            ),
+        ),
+    )
+    validate_source_descriptor(disable_only_descriptor)
+
+    with pytest.raises(ConfigError, match="requires output DISABLE directions"):
         validate_source_descriptor(
             replace(
                 descriptor,
@@ -2330,7 +3082,7 @@ def test_source_v2_pulse_write_requires_width_direction_and_readback() -> None:
         )
 
 
-def test_source_v2_burst_write_requires_triggered_internal_direction_and_readback() -> None:
+def test_source_v2_burst_write_requires_supported_trigger_direction_and_readback() -> None:
     extensions = source_extensions()
     basic, output = extensions.features
     burst = module.SourceFeatureCapability(
@@ -2397,7 +3149,7 @@ def test_source_v2_burst_write_requires_triggered_internal_direction_and_readbac
                 ),
             )
         )
-    with pytest.raises(ConfigError, match="readable internal triggered burst configuration"):
+    with pytest.raises(ConfigError, match="readable internal or manual triggered burst"):
         validate_source_descriptor(
             replace(
                 descriptor,
@@ -2445,7 +3197,7 @@ def test_source_v2_burst_write_requires_triggered_internal_direction_and_readbac
         )
 
 
-def test_source_v2_sweep_write_requires_internal_direction_and_readback() -> None:
+def test_source_v2_sweep_write_requires_supported_trigger_direction_and_readback() -> None:
     extensions = source_extensions()
     basic, output = extensions.features
     basic = replace(
@@ -2526,7 +3278,7 @@ def test_source_v2_sweep_write_requires_internal_direction_and_readback() -> Non
                 ),
             )
         )
-    with pytest.raises(ConfigError, match="readable internal sweep configuration"):
+    with pytest.raises(ConfigError, match="readable internal or manual sweep configuration"):
         validate_source_descriptor(
             replace(
                 descriptor,

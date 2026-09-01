@@ -388,6 +388,20 @@ def _print_dmm_dcv_impedance_configuration(
     print(f"changed={'true' if result.changed else 'false'}")
 
 
+def _scalar(value: object) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:.12g}"
+    return str(value)
+
+
+def _number(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.12g}"
+
+
 def _print_scope_snapshot(snapshot: ScopeSnapshot | ScopeStatusSummary) -> None:
     if isinstance(snapshot, ScopeStatusSummary):
         print(f"status={snapshot.status}")
@@ -401,15 +415,6 @@ def _print_scope_snapshot(snapshot: ScopeSnapshot | ScopeStatusSummary) -> None:
         if snapshot.snapshot is None:
             return
         snapshot = snapshot.snapshot
-
-    def scalar(value: object) -> str:
-        if value is None:
-            return "n/a"
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, float):
-            return f"{value:.12g}"
-        return str(value)
 
     sections = (
         ("identity", snapshot.identity),
@@ -425,7 +430,7 @@ def _print_scope_snapshot(snapshot: ScopeSnapshot | ScopeStatusSummary) -> None:
             if isinstance(value, tuple):
                 print(f"{section_name}.{name}=" + ",".join(str(item) for item in value))
             else:
-                print(f"{section_name}.{name}={scalar(value)}")
+                print(f"{section_name}.{name}={_scalar(value)}")
 
 
 def _print_scope_acquisition_status(status: ScopeAcquisitionStatus) -> None:
@@ -491,39 +496,30 @@ def _print_scope_digital_status(status: ScopeDigitalChannelStatus) -> None:
 
 
 def _print_scope_digital_status_v2(status: ScopeDigitalChannelStatusV2) -> None:
-    def scalar(value: object) -> str:
-        if value is None:
-            return "n/a"
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, float):
-            return f"{value:.12g}"
-        return str(value)
-
     print(f"digital_v2.channel={status.channel}")
-    print(f"digital_v2.displayed={scalar(status.displayed)}")
-    print(f"digital_v2.position_div={scalar(status.position_div)}")
-    print(f"digital_v2.label={scalar(status.label)}")
-    print(f"digital_v2.label_enabled={scalar(status.label_enabled)}")
-    print(f"digital_v2.activity={scalar(status.activity)}")
-    print(f"digital_v2.technology={scalar(status.technology)}")
-    print(f"digital_v2.hysteresis={scalar(status.hysteresis)}")
+    print(f"digital_v2.displayed={_scalar(status.displayed)}")
+    print(f"digital_v2.position_div={_scalar(status.position_div)}")
+    print(f"digital_v2.label={_scalar(status.label)}")
+    print(f"digital_v2.label_enabled={_scalar(status.label_enabled)}")
+    print(f"digital_v2.activity={_scalar(status.activity)}")
+    print(f"digital_v2.technology={_scalar(status.technology)}")
+    print(f"digital_v2.hysteresis={_scalar(status.hysteresis)}")
     if status.pod is None:
         print("digital_v2.pod=n/a")
     else:
         print(f"digital_v2.pod.start_channel={status.pod.start_channel}")
         print(f"digital_v2.pod.stop_channel={status.pod.stop_channel}")
-        print(f"digital_v2.pod.threshold_v={scalar(status.pod.threshold_v)}")
-        print(f"digital_v2.pod.threshold_scope={scalar(status.pod.threshold_scope)}")
+        print(f"digital_v2.pod.threshold_v={_scalar(status.pod.threshold_v)}")
+        print(f"digital_v2.pod.threshold_scope={_scalar(status.pod.threshold_scope)}")
     if status.shared is None:
         print("digital_v2.shared=n/a")
     else:
-        print(f"digital_v2.shared.module_present={scalar(status.shared.module_present)}")
+        print(f"digital_v2.shared.module_present={_scalar(status.shared.module_present)}")
         print(
             "digital_v2.shared.timing_calibration_s="
-            + scalar(status.shared.timing_calibration_s)
+            + _scalar(status.shared.timing_calibration_s)
         )
-        print(f"digital_v2.shared.size={scalar(status.shared.size)}")
+        print(f"digital_v2.shared.size={_scalar(status.shared.size)}")
     print(
         "digital_v2.unavailable_fields="
         + (",".join(status.unavailable_fields) or "none")
@@ -546,21 +542,18 @@ def _print_scope_digital_waveform(
 
 
 def _print_scope_measurement_statistics(stats: ScopeMeasurementStatistics) -> None:
-    def number(value: float | None) -> str:
-        return "n/a" if value is None else f"{value:.12g}"
-
     print(f"measurement.slot={stats.slot}")
     print(f"measurement.category={stats.category}")
-    print(f"measurement.actual={number(stats.actual)}")
-    print(f"measurement.average={number(stats.average)}")
-    print(f"measurement.standard_deviation={number(stats.standard_deviation)}")
-    print(f"measurement.minimum={number(stats.minimum)}")
-    print(f"measurement.maximum={number(stats.maximum)}")
+    print(f"measurement.actual={_number(stats.actual)}")
+    print(f"measurement.average={_number(stats.average)}")
+    print(f"measurement.standard_deviation={_number(stats.standard_deviation)}")
+    print(f"measurement.minimum={_number(stats.minimum)}")
+    print(f"measurement.maximum={_number(stats.maximum)}")
     print(f"measurement.waveform_count={stats.waveform_count}")
     if stats.buffered_values is None:
         print("measurement.buffer=n/a")
     else:
-        print("measurement.buffer=" + ",".join(number(value) for value in stats.buffered_values))
+        print("measurement.buffer=" + ",".join(_number(value) for value in stats.buffered_values))
 
 
 def _print_scope_derived_waveform_metadata(
@@ -591,19 +584,16 @@ def _print_scope_fft_status(status: ScopeFftStatus) -> None:
 
 
 def _print_scope_cursor_readout(readout: ScopeCursorReadout) -> None:
-    def number(value: float | None) -> str:
-        return "n/a" if value is None else f"{value:.12g}"
-
     print(f"cursor.index={readout.cursor_index}")
     print(f"cursor.source={readout.source}")
     print(f"cursor.function={readout.function}")
-    print(f"cursor.result={number(readout.result)}")
-    print(f"cursor.x_delta_s={number(readout.x_delta_s)}")
-    print(f"cursor.inverse_x_delta_hz={number(readout.inverse_x_delta_hz)}")
-    print(f"cursor.y_delta={number(readout.y_delta)}")
-    print(f"cursor.inverse_y_delta={number(readout.inverse_y_delta)}")
-    print(f"cursor.x_ratio={number(readout.x_ratio)}")
-    print(f"cursor.y_ratio={number(readout.y_ratio)}")
+    print(f"cursor.result={_number(readout.result)}")
+    print(f"cursor.x_delta_s={_number(readout.x_delta_s)}")
+    print(f"cursor.inverse_x_delta_hz={_number(readout.inverse_x_delta_hz)}")
+    print(f"cursor.y_delta={_number(readout.y_delta)}")
+    print(f"cursor.inverse_y_delta={_number(readout.inverse_y_delta)}")
+    print(f"cursor.x_ratio={_number(readout.x_ratio)}")
+    print(f"cursor.y_ratio={_number(readout.y_ratio)}")
 
 def _print_dmm_function_status(function: str) -> None:
     print(f"功能 / Function: {function}")

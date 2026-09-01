@@ -419,7 +419,7 @@ state = "on"
 
 ### Source V2 基础、高级配置与 ARB 写 step
 
-声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用十七个 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
+声明 `source.snapshot_v2` 与对应写 capability 的插件可以使用 Source V2 step。基础配置只在目标输出已关闭时执行；输出 ON 与 OFF 分别使用不同 step：
 
 ```toml
 [[steps]]
@@ -437,6 +437,23 @@ channel = 1
 [[steps]]
 kind = "source.output_disable_v2"
 channel = 1
+
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+coupling = "ac"
+
+[[steps]]
+kind = "source.counter_enable_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_measure_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_disable_v2"
+input_id = "counter"
 
 [[steps]]
 kind = "source.harmonics_configure_v2"
@@ -522,6 +539,12 @@ enabled = true
 要求 `channel`、整数 `order >= 2` 与 `all`、`even`、`odd` 之一的 `preset`；核心还会在执行前检查运行时
 profile 是否支持该 order 和预设。`source.modulation_configure_v2` 要求 `channel`、位于 `[0, 100]` 的
 `depth_percent` 与有限正值 `internal_frequency_hz`；它只配置内部正弦 AM。
+`source.counter_configure_v2` 要求安全 token 形式的 `input_id`，并在 coupling、
+`impedance_ohm`、`attenuation`、`trigger_level_v` 与 `statistics_enabled` 中恰好指定一个字段。
+它不启用 Counter。`source.counter_enable_v2` 与 `source.counter_disable_v2` 只接受 `input_id`，
+不隐式改写输入配置；`source.counter_measure_v2` 也只接受 `input_id`，要求 Counter 已启用。
+Counter 测量 artifact 位于该 step 的 `counter_measurement`，不进入 `source_operations`。实际信号、
+输入阻抗与最大 Vpp 仍必须由计划 safety 和接线确认；Counter step 不替代输出安全门。
 `source.modulation_pm_configure_v2` 要求 `channel`、位于 `[0, 360]` 的 `phase_deviation_deg` 与有限正值
 `internal_frequency_hz`；它只配置内部正弦 PM。
 `source.modulation_fm_configure_v2` 要求 `channel`、有限正值 `frequency_deviation_hz` 与有限正值

@@ -10,7 +10,7 @@ from wavebench.instruments.contracts import PowerDriver
 from wavebench.instruments.models import PowerMeasurement, PowerProtectionStatus, PowerStatus
 from wavebench.logging import CommandLogger
 from wavebench.services.power_service import PowerService
-from wavebench.tui.state import PowerPanelState, channel_state_from_status, config_status
+from wavebench.tui.state import PowerPanelState, _logger_lines, channel_state_from_status, config_status
 
 
 class PowerPanelAdapter(Protocol):
@@ -425,7 +425,3 @@ def build_power_panel_state(
         ),
         log_lines=tuple(log_lines),
     )
-
-
-def _logger_lines(logger: CommandLogger) -> list[str]:
-    return [f"{entry.timestamp} {entry.direction} {entry.text}" for entry in logger.entries[-80:]]

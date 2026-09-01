@@ -25,7 +25,7 @@ from wavebench.config import (
     WaveformConfig,
 )
 from wavebench.drivers.dp800 import PowerStatus
-from wavebench.errors import ConfigError, SessionHealthError, TransportIOError
+from wavebench.errors import ConfigError, DataError, SessionHealthError, TransportIOError
 from wavebench.logging import CommandLogger
 from wavebench.services.run_plan import load_run_plan
 from wavebench.services.run_service import RunInstrumentServices, RunService
@@ -415,6 +415,48 @@ on_failure = "continue"
             self.assertEqual(len(result.steps), 1)
             self.assertEqual(run_data["error"]["code"], "safety_gate_failed")
 
+    def test_expected_step_failure_runs_safety_gate_before_stopping(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+""",
+                )
+            )
+            plan.steps[0].fields["safety_gate"] = {
+                "enabled": True,
+                "source_channels": [1],
+            }
+
+            class OfflineRunService(RunService):
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices()
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+                def _run_step(self, plan, step, **kwargs):
+                    del plan, step, kwargs
+                    raise DataError("Counter measurement is not ready")
+
+                def _apply_safety_gate(self, step, gate, *, services=None):
+                    del step, gate, services
+                    return {"status": "ok", "actions": [{"state": "off"}]}
+
+            result = OfflineRunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(len(result.steps), 1)
+            self.assertEqual(result.steps[0].artifact["error"]["code"], "data_error")
+            self.assertEqual(result.steps[0].artifact["safety_gate"]["status"], "ok")
+            self.assertEqual(run_data["error"]["code"], "safety_gate_failed")
+
     def test_check_rejects_missing_capability_before_opening_session(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(
@@ -469,6 +511,89 @@ frequency_hz = 1000
                     service.run(plan)
 
             open_services.assert_not_called()
+
+    def test_check_requires_source_basic_live_v2_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_live_configure_v2"
+channel = 1
+frequency_hz = 1000
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=(
+                    "source.snapshot_v2",
+                    "source.basic_configure_v2",
+                    "source.output_v2",
+                ),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.basic_live_configure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_requires_source_counter_measure_v2_capability_before_opening_session(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.counter_measure_v2"
+input_id = "counter"
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2",),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ), patch.object(service, "_run_instrument_services") as open_services:
+                with self.assertRaisesRegex(ConfigError, "source.counter_measure_v2"):
+                    service.run(plan)
+
+            open_services.assert_not_called()
+
+    def test_check_uses_counter_enable_capability_for_counter_disable_v2(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.counter_disable_v2"
+input_id = "counter"
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=("source.snapshot_v2", "source.counter_enable_v2"),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ):
+                service.check(plan)
 
     def test_check_requires_source_v2_harmonic_capability_before_opening_session(self):
         with TemporaryDirectory() as tmp:
@@ -715,6 +840,38 @@ trailing_transition_s = 1e-8
                     "source.sweep_configure_v2",
                     "source.burst_configure_v2",
                     "source.pulse_configure_v2",
+                ),
+            )
+            service = RunService(config=make_config(tmp), logger=CommandLogger())
+
+            with patch(
+                "wavebench.services.run_service.resolve_instrument_descriptor",
+                return_value=descriptor,
+            ):
+                service.check(plan)
+
+    def test_check_accepts_v2_restore_without_v1_source_write_capabilities(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.001
+""",
+                )
+            )
+            descriptor = SimpleNamespace(
+                driver_id="minimal.source-v2",
+                capabilities=(
+                    "source.snapshot_v2",
+                    "source.basic_configure_v2",
+                    "source.output_v2",
                 ),
             )
             service = RunService(config=make_config(tmp), logger=CommandLogger())
@@ -1833,6 +1990,160 @@ frequency_hz = 1000
             run_data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(run_data["source_operations"], [artifact])
 
+    def test_runs_source_basic_live_v2_step_and_writes_operation_artifact(self):
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.basic_live_configure_v2"
+channel = 1
+frequency_hz = 2000
+""",
+                )
+            )
+            artifact = {
+                "schema": "wavebench.source.operation.v1",
+                "operation": "source.basic_live_configure_v2",
+            }
+            source = Mock()
+            source.configure_basic_live_v2.return_value = (SimpleNamespace(), artifact)
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            request = source.configure_basic_live_v2.call_args.args[0]
+            self.assertEqual(request.channel, 1)
+            self.assertEqual(request.patch.frequency_hz.value, 2000.0)
+            self.assertEqual(run_data["source_operations"], [artifact])
+            self.assertEqual(result.steps[0].artifact["source_operation"], artifact)
+
+    def test_runs_source_counter_v2_steps_and_keeps_measurement_out_of_source_operations(self):
+        from wavebench.instruments.source_extensions import (
+            SourceCounterMeasureResult,
+            SourceCounterMeasurementKind,
+            SourceCounterMeasurementV2,
+            SourceInputCoupling,
+        )
+
+        with TemporaryDirectory() as tmp:
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+coupling = "dc"
+
+[[steps]]
+kind = "source.counter_enable_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_measure_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_disable_v2"
+input_id = "counter"
+""",
+                )
+            )
+            configure_artifact = {
+                "schema": "wavebench.source.operation.v1",
+                "operation": "source.counter_configure_v2",
+            }
+            enable_artifact = {
+                "schema": "wavebench.source.operation.v1",
+                "operation": "source.counter_enable_v2",
+            }
+            disable_artifact = {
+                "schema": "wavebench.source.operation.v1",
+                "operation": "source.counter_disable_v2",
+            }
+            source = Mock()
+            source.configure_counter_v2.return_value = (SimpleNamespace(), configure_artifact)
+            source.set_counter_enabled_v2.side_effect = [
+                (SimpleNamespace(), enable_artifact),
+                (SimpleNamespace(), disable_artifact),
+            ]
+            source.measure_counter_v2.return_value = SourceCounterMeasureResult(
+                "counter",
+                (
+                    SourceCounterMeasurementV2(SourceCounterMeasurementKind.DUTY_PERCENT, 50.0),
+                    SourceCounterMeasurementV2(
+                        SourceCounterMeasurementKind.FREQUENCY_HZ,
+                        1_000.0,
+                    ),
+                ),
+            )
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            configure_request = source.configure_counter_v2.call_args.args[0]
+            self.assertEqual(configure_request.input_id, "counter")
+            self.assertEqual(
+                configure_request.patch.coupling.value,
+                SourceInputCoupling.DC,
+            )
+            self.assertEqual(
+                [call.args[0].enabled for call in source.set_counter_enabled_v2.call_args_list],
+                [True, False],
+            )
+            self.assertEqual(source.measure_counter_v2.call_args.args[0].input_id, "counter")
+            self.assertEqual(
+                run_data["source_operations"],
+                [configure_artifact, enable_artifact, disable_artifact],
+            )
+            self.assertEqual(
+                result.steps[2].artifact,
+                {
+                    "counter_measurement": {
+                        "type": "SourceCounterMeasureResult",
+                        "input_id": "counter",
+                        "measurements": [
+                            {
+                                "type": "SourceCounterMeasurementV2",
+                                "kind": "duty_percent",
+                                "value": 50.0,
+                            },
+                            {
+                                "type": "SourceCounterMeasurementV2",
+                                "kind": "frequency_hz",
+                                "value": 1_000.0,
+                            },
+                        ],
+                    }
+                },
+            )
+
     def test_restores_source_state_after_success_when_enabled(self):
         with TemporaryDirectory() as tmp:
             plan = load_run_plan(
@@ -2511,6 +2822,106 @@ playback_frequency_hz = 1000
             self.assertEqual(select_request.slot_id, "slot_a")
             self.assertEqual(select_request.playback_mode.value, "dds")
             self.assertEqual(select_request.playback_frequency_hz, 1_000.0)
+            self.assertEqual(run_data["source_operations"], artifacts)
+            self.assertNotIn(payload.decode("ascii"), json.dumps(run_data, ensure_ascii=False))
+
+    def test_runs_manual_sweep_fire_and_volatile_arb_without_payload_in_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            payload = b"wavebench-volatile-arb-sentinel-45a80a30"
+            payload_path = Path(tmp) / "volatile.bin"
+            payload_path.write_bytes(payload)
+            plan = load_run_plan(
+                write_plan(
+                    tmp,
+                    """
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 10
+sweep_time_s = 1
+trigger_source = "manual"
+
+[[steps]]
+kind = "source.sweep_fire_v2"
+channel = 1
+
+[[steps]]
+kind = "source.arbitrary_volatile_replace_v2"
+channel = 1
+file = "volatile.bin"
+point_count = 2
+
+[[steps]]
+kind = "source.arbitrary_workspace_volatile_replace_v2"
+file = "volatile.bin"
+point_count = 2
+""",
+                )
+            )
+            artifacts = [
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.sweep_configure_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.sweep_fire_v2",
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_volatile_replace_v2",
+                    "request": {"payload_sha256": "sha256:" + sha256(payload).hexdigest()},
+                },
+                {
+                    "schema": "wavebench.source.operation.v1",
+                    "operation": "source.arbitrary_workspace_volatile_replace_v2",
+                    "request": {"payload_sha256": "sha256:" + sha256(payload).hexdigest()},
+                },
+            ]
+            source = Mock()
+            source.configure_sweep_v2.return_value = (SimpleNamespace(), artifacts[0])
+            source.fire_sweep_v2.return_value = (SimpleNamespace(), artifacts[1])
+            source.replace_arbitrary_volatile_v2.return_value = (SimpleNamespace(), artifacts[2])
+            source.replace_arbitrary_workspace_volatile_v2.return_value = (
+                SimpleNamespace(),
+                artifacts[3],
+            )
+
+            class OfflineV2RunService(RunService):
+                def check(self, plan):
+                    del plan
+
+                @contextmanager
+                def _run_instrument_services(self, plan):
+                    del plan
+                    yield RunInstrumentServices(source=source)
+
+                def _run_safety_guards(self, plan, *, services=None):
+                    del plan, services
+
+            result = OfflineV2RunService(config=make_config(tmp), logger=CommandLogger()).run(plan)
+            run_data = json.loads(result.run_json_path.read_text(encoding="utf-8"))
+
+            sweep_request = source.configure_sweep_v2.call_args.args[0]
+            self.assertEqual(sweep_request.trigger_source.value, "manual")
+            self.assertEqual(source.fire_sweep_v2.call_args.args[0].channel, 1)
+            volatile_request = source.replace_arbitrary_volatile_v2.call_args.args[0]
+            self.assertEqual(volatile_request.point_count, 2)
+            self.assertEqual(volatile_request.payload_size_bytes, len(payload))
+            self.assertEqual(
+                source.replace_arbitrary_volatile_v2.call_args.kwargs["payload"],
+                payload,
+            )
+            workspace_request = source.replace_arbitrary_workspace_volatile_v2.call_args.args[0]
+            self.assertEqual(workspace_request.point_count, 2)
+            self.assertEqual(workspace_request.payload_size_bytes, len(payload))
+            self.assertEqual(
+                source.replace_arbitrary_workspace_volatile_v2.call_args.kwargs["payload"],
+                payload,
+            )
             self.assertEqual(run_data["source_operations"], artifacts)
             self.assertNotIn(payload.decode("ascii"), json.dumps(run_data, ensure_ascii=False))
 

@@ -429,7 +429,11 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 | `source.arbitrary_upload` | `upload_dg4000_dac14_block` |
 | `source.snapshot_v2` | `execute_source_query_plan_v2` |
 | `source.basic_configure_v2` | `configure_source_basic_v2` |
+| `source.basic_live_configure_v2` | `configure_source_basic_live_v2` |
 | `source.output_v2` | `set_source_output_v2` |
+| `source.counter_configure_v2` | `configure_source_counter_v2` |
+| `source.counter_enable_v2` | `set_source_counter_enabled_v2` |
+| `source.counter_measure_v2` | `measure_source_counter_v2` |
 | `source.harmonics_configure_v2` | `configure_source_harmonics_v2` |
 | `source.harmonics_disable_v2` | `disable_source_harmonics_v2` |
 | `source.modulation_configure_v2` | `configure_source_modulation_v2` |
@@ -448,7 +452,8 @@ I/O 前拒绝嵌入请求。需要 v2 截图时使用独立的 `scope screenshot
 
 ### Source V2 扩展
 
-`source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2`、
+`source.snapshot_v2`、`source.basic_configure_v2`、`source.basic_live_configure_v2`、`source.output_v2`、
+`source.counter_configure_v2`、`source.counter_enable_v2`、`source.counter_measure_v2`、
 `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 和 `source.phase_relation_configure_v2` 从核心 `0.8.24` 开始提供，仍使用
 `wavebench.instrument.v2`。采用任一 Source V2 capability 的
 wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更高的 `0.8.x` 版本。
@@ -456,7 +461,8 @@ wheel 依赖和 descriptor `wavebench_min_version` 都必须为 `0.8.24` 或更�
 修改 descriptor 或提高版本下限。
 
 插件从 `wavebench.instruments` 导入 `SourceDescriptorExtensions`、`SourceSnapshotV2Driver`、
-`SourceBasicConfigureV2Driver`、`SourceOutputV2Driver`、`SourceHarmonicConfigureV2Driver`、`SourceHarmonicDisableV2Driver`、
+`SourceBasicConfigureV2Driver`、`SourceBasicLiveConfigureV2Driver`、`SourceOutputV2Driver`、
+`SourceCounterConfigureV2Driver`、`SourceCounterEnableV2Driver`、`SourceCounterMeasureV2Driver`、`SourceHarmonicConfigureV2Driver`、`SourceHarmonicDisableV2Driver`、
 `SourceModulationConfigureV2Driver`、`SourcePmModulationConfigureV2Driver`、`SourceFmModulationConfigureV2Driver`、`SourcePwmModulationConfigureV2Driver`、`SourceSweepConfigureV2Driver`、`SourceBurstConfigureV2Driver`、`SourcePulseConfigureV2Driver`、`SourceArbitraryStorageV2Driver`、`SourceArbitrarySelectV2Driver`、`SourceCombineConfigureV2Driver`、`SourceCouplingConfigureV2Driver`、`SourceTrackingConfigureV2Driver`、`SourcePhaseRelationConfigureV2Driver`、query
 plan／execution record 和各类 typed profile。核心签发 semantic query plan；snapshot driver 只负责将
 item 转成合法的厂商协议查询并返回类型化执行记录。插件不得返回完整 `SourceSnapshotV2`，也不得自行判定 `UNSUPPORTED`、
@@ -477,7 +483,11 @@ wavebench source snapshot-v2
 
 ```text
 SourceService.configure_basic_v2(request, *, correlation_id=None)
+SourceService.configure_basic_live_v2(request, *, correlation_id=None)
 SourceService.set_output_v2(request, *, correlation_id=None)
+SourceService.configure_counter_v2(request, *, correlation_id=None)
+SourceService.set_counter_enabled_v2(request, *, correlation_id=None)
+SourceService.measure_counter_v2(request, *, correlation_id=None)
 SourceService.configure_harmonics_v2(request, *, correlation_id=None)
 SourceService.disable_harmonics_v2(request, *, correlation_id=None)
 SourceService.configure_modulation_v2(request, *, correlation_id=None)
@@ -490,7 +500,12 @@ SourceService.configure_pulse_v2(request, *, correlation_id=None)
 SourceService.mutate_arbitrary_storage_v2(request, *, payload, correlation_id=None)
 SourceService.select_arbitrary_v2(request, *, correlation_id=None)
 wavebench source basic-configure-v2 --channel N ...
+wavebench source basic-live-configure-v2 --channel N (--frequency-hz HZ | --amplitude-vpp VPP)
 wavebench source output-v2 --channel N on|off
+wavebench source counter-configure-v2 --input-id INPUT_ID <one configuration option>
+wavebench source counter-enable-v2 --input-id INPUT_ID
+wavebench source counter-disable-v2 --input-id INPUT_ID
+wavebench source counter-measure-v2 --input-id INPUT_ID
 wavebench source harmonics-configure-v2 --channel N --order N --preset all|even|odd
 wavebench source harmonics-disable-v2 --channel N
 wavebench source modulation-configure-v2 --channel N --depth-percent PERCENT --internal-frequency-hz HZ
@@ -504,7 +519,8 @@ wavebench source arbitrary-storage-v2 --channel N --slot-id SLOT --payload-file 
 wavebench source arbitrary-select-v2 --channel N --slot-id SLOT --playback-mode dds|true-arb (--playback-frequency-hz HZ | --sample-rate-hz HZ)
 ```
 
-十三个 Service 方法分别返回 `(typed_result, operation_artifact)`。`operation_artifact` 使用
+十六个 mutation Service 方法分别返回 `(typed_result, operation_artifact)`；
+`measure_counter_v2()` 是只读方法，直接返回 `SourceCounterMeasureResult`。`operation_artifact` 使用
 `wavebench.source.operation.v1`，不得包含 raw SCPI、完整响应、资源地址、序列号、授权 token 或 nonce。
 
 `source.harmonics_configure_v2` 只允许单通道的 `all`、`even`、`odd` 预设。descriptor 必须同时声明
@@ -566,9 +582,10 @@ selection request 使用 DDS 的 `playback_frequency_hz` 或 true-ARB 的 `sampl
 并回读 Basic `arbitrary` waveform、selected slot、mode、对应速率和 storage digest；它不会授权 output ON。若声明任一
 ARB V2 capability，V1 `upload_arbitrary_waveform` 会在读取本地 waveform 文件、构造块或发送仪器 I/O 前拒绝。
 
-run plan 接受 `source.basic_configure_v2`、`source.output_enable_v2`、`source.output_disable_v2`、
-`source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2` 十八个 Source V2 step；它们的 artifact 只在实际执行时写入
-`run.json.source_operations`。
+run plan 接受 `source.basic_configure_v2`、`source.basic_live_configure_v2`、`source.output_enable_v2`、`source.output_disable_v2`、
+`source.counter_configure_v2`、`source.counter_enable_v2`、`source.counter_disable_v2`、`source.counter_measure_v2`、
+`source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.modulation_pm_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.burst_configure_v2`、`source.pulse_configure_v2`、`source.arbitrary_storage_v2`、`source.arbitrary_select_v2`、`source.combine_configure_v2`、`source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2` 二十三个 Source V2 step；mutation artifact 只在实际执行时写入
+`run.json.source_operations`，而 `source.counter_measure_v2` 使用其 step 专有的 `counter_measurement` artifact。
 
 旧 `source.*` setter、output、trigger 和 ARB 路径继续保留。双合同插件上，四个 basic setter 与
 `set_output` 会进入相应 V2 transaction；restore、ARB upload 和 V2 output 重叠的 trigger 在仪器 I/O 前

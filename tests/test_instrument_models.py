@@ -437,6 +437,19 @@ def test_source_sweep_profile_serializes_complete_query_only_snapshot():
     }
 
 
+def test_source_sweep_profile_preserves_disabled_marker_frequency_outside_window():
+    profile = _source_sweep_profile(
+        start_hz=1000.0,
+        stop_hz=2000.0,
+        center_hz=1500.0,
+        span_hz=1000.0,
+        marker_frequency_hz=550.0,
+    )
+
+    assert profile.marker_enabled is False
+    assert profile.marker_frequency_hz == 550.0
+
+
 @pytest.mark.parametrize(
     "changes, message",
     [
@@ -456,7 +469,7 @@ def test_source_sweep_profile_serializes_complete_query_only_snapshot():
         ({"trigger_source": "BUS"}, "trigger source"),
         ({"trigger_slope": "BOTH"}, "trigger slope"),
         ({"trigger_out": "HIGH"}, "trigger output"),
-        ({"marker_frequency_hz": 1001.0}, "marker frequency"),
+        ({"marker_enabled": True, "marker_frequency_hz": 1001.0}, "marker frequency"),
         ({"spacing": "STEP", "marker_enabled": True}, "step spacing"),
     ],
 )
@@ -526,6 +539,17 @@ def test_source_sweep_configuration_accepts_center_span_without_duplicate_window
     assert configuration.effective_stop_hz == 1000.0
 
 
+def test_source_sweep_configuration_accepts_disabled_marker_frequency_outside_window():
+    configuration = _source_sweep_configuration(
+        start_hz=1000.0,
+        stop_hz=2000.0,
+        marker_frequency_hz=550.0,
+    )
+
+    assert configuration.marker_enabled is False
+    assert configuration.marker_frequency_hz == 550.0
+
+
 def test_source_sweep_configuration_accepts_a_restorable_zero_span_window():
     configuration = _source_sweep_configuration(
         start_hz=1000.0,
@@ -578,7 +602,7 @@ def test_source_sweep_configuration_can_restore_a_complete_profile():
         ({"steps": 1}, "steps"),
         ({"sweep_time_s": 0.0}, "sweep time"),
         ({"trigger_source": "BUS"}, "trigger source"),
-        ({"marker_frequency_hz": 1001.0}, "marker frequency"),
+        ({"marker_enabled": True, "marker_frequency_hz": 1001.0}, "marker frequency"),
     ],
 )
 def test_source_sweep_configuration_rejects_ambiguous_or_unsafe_targets(changes, message):

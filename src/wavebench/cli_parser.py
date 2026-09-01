@@ -842,6 +842,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_options(source_basic_configure_v2)
 
+    source_basic_live_configure_v2 = source_sub.add_parser(
+        "basic-live-configure-v2",
+        help="Change one enabled Source V2 channel frequency or Vpp without output cycling",
+    )
+    source_basic_live_configure_v2.add_argument("--channel", type=int, required=True)
+    source_basic_live_configure_v2.add_argument("--frequency-hz", type=float, default=None)
+    source_basic_live_configure_v2.add_argument("--amplitude-vpp", type=float, default=None)
+    add_runtime_options(source_basic_live_configure_v2)
+
     source_output_v2 = source_sub.add_parser(
         "output-v2",
         help="Turn one Source V2 channel output on or off",
@@ -849,6 +858,38 @@ def build_parser() -> argparse.ArgumentParser:
     source_output_v2.add_argument("--channel", type=int, required=True)
     source_output_v2.add_argument("state", choices=("on", "off"))
     add_runtime_options(source_output_v2)
+
+    source_counter_configure_v2 = source_sub.add_parser(
+        "counter-configure-v2",
+        help="Configure exactly one declared Source V2 Counter field without enabling it",
+    )
+    source_counter_configure_v2.add_argument("--input-id", required=True)
+    source_counter_field = source_counter_configure_v2.add_mutually_exclusive_group(required=True)
+    source_counter_field.add_argument("--coupling", choices=("ac", "dc"))
+    source_counter_field.add_argument("--impedance-ohm", type=float)
+    source_counter_field.add_argument("--attenuation", type=int)
+    source_counter_field.add_argument("--trigger-level-v", type=float)
+    source_counter_field.add_argument("--statistics-enabled", choices=("on", "off"))
+    add_runtime_options(source_counter_configure_v2)
+
+    for command, enabled in (
+        ("counter-enable-v2", True),
+        ("counter-disable-v2", False),
+    ):
+        source_counter_output_v2 = source_sub.add_parser(
+            command,
+            help=("Enable" if enabled else "Disable")
+            + " one declared Source V2 Counter input",
+        )
+        source_counter_output_v2.add_argument("--input-id", required=True)
+        add_runtime_options(source_counter_output_v2)
+
+    source_counter_measure_v2 = source_sub.add_parser(
+        "counter-measure-v2",
+        help="Read one already-enabled declared Source V2 Counter input",
+    )
+    source_counter_measure_v2.add_argument("--input-id", required=True)
+    add_runtime_options(source_counter_measure_v2)
 
     source_harmonics_configure_v2 = source_sub.add_parser(
         "harmonics-configure-v2",
@@ -955,6 +996,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_sweep_configure_v2.add_argument("--steps", type=int, required=True)
     source_sweep_configure_v2.add_argument("--sweep-time-s", type=float, required=True)
+    source_sweep_configure_v2.add_argument(
+        "--trigger-source",
+        choices=("internal", "manual"),
+        default="internal",
+    )
     add_runtime_options(source_sweep_configure_v2)
 
     source_burst_configure_v2 = source_sub.add_parser(
@@ -1005,6 +1051,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_arbitrary_storage_v2.add_argument("--expected-previous-sha256")
     add_runtime_options(source_arbitrary_storage_v2)
+
+    source_arbitrary_volatile_replace_v2 = source_sub.add_parser(
+        "arbitrary-volatile-replace-v2",
+        help=(
+            "Replace the selected Source V2 volatile ARB workspace while output is OFF; "
+            "the previous workspace content is not recoverable"
+        ),
+    )
+    source_arbitrary_volatile_replace_v2.add_argument("--channel", type=int, required=True)
+    source_arbitrary_volatile_replace_v2.add_argument("--payload-file", required=True)
+    source_arbitrary_volatile_replace_v2.add_argument("--point-count", type=int, required=True)
+    add_runtime_options(source_arbitrary_volatile_replace_v2)
+
+    source_arbitrary_workspace_volatile_replace_v2 = source_sub.add_parser(
+        "arbitrary-workspace-volatile-replace-v2",
+        help=(
+            "Replace an unscoped Source V2 volatile ARB workspace while every output is OFF; "
+            "the affected channel is not identified and the previous content is not recoverable"
+        ),
+    )
+    source_arbitrary_workspace_volatile_replace_v2.add_argument("--payload-file", required=True)
+    source_arbitrary_workspace_volatile_replace_v2.add_argument(
+        "--point-count",
+        type=int,
+        required=True,
+    )
+    add_runtime_options(source_arbitrary_workspace_volatile_replace_v2)
 
     source_arbitrary_select_v2 = source_sub.add_parser(
         "arbitrary-select-v2",

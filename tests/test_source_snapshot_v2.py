@@ -28,13 +28,31 @@ from wavebench.instruments import InstrumentDescriptor
 from wavebench.instruments.source_extensions import (
     SOURCE_OPERATION_ARTIFACT_SCHEMA,
     SOURCE_SNAPSHOT_SCHEMA,
+    NoiseOverlayFacet,
+    Observed,
     SnapshotConsistencyState,
     SourceQueryExecutionRecord,
     SourceCrossChannelCapabilityProfile,
+    SourceCouplingCapabilityProfile,
+    SourceCouplingDimension,
+    SourceCouplingDimensionState,
+    SourceCouplingParameter,
+    SourceCouplingParameterKind,
+    SourceCouplingState,
     SourceFacetScope,
+    SourceFacetQueryContract,
     SourceFeature,
     SourceFeatureCapability,
+    SourceFeatureDirection,
+    SourceFieldId,
     SourceHarmonicPreset,
+    SourceNoiseOverlayCapabilityProfile,
+    SourceNoiseOverlayScale,
+    SourceNoiseOverlayScaleKind,
+    SourceQueryEffect,
+    SourceSyncCapabilityProfile,
+    SourceSyncPolarity,
+    SourceSyncState,
     SourceTopologyContract,
     SupportState,
     source_snapshot_v2_operation_artifact,
@@ -53,6 +71,7 @@ from wavebench.transport.contracts import (
 from tests.source_v2_fixtures import (
     SourceV2FakeDriver,
     source_descriptor,
+    source_extensions,
     source_extensions_with_harmonics,
 )
 from wavebench.instruments.source_extensions import SourceConstraintApplicability
@@ -110,6 +129,348 @@ def test_snapshot_v2_accepts_combined_and_scalar_protocol_plans(
     assert snapshot.correlation_id == "test-correlation"
     assert len(driver.plans) == 1
     assert driver.plans[0].allowed_effects[0].value == "pure_read"
+
+
+def test_snapshot_v2_projects_channel_sync_and_validates_source_channel() -> None:
+    extensions = source_extensions_with_harmonics()
+    sync_profile = SourceSyncCapabilityProfile(
+        enabled_readable=True,
+        polarity_readable=True,
+        source_channel_readable=True,
+        source_channels=(1, 2),
+    )
+    sync_feature = SourceFeatureCapability(
+        feature=SourceFeature.SYNC,
+        support=SupportState.SUPPORTED,
+        directions=(SourceFeatureDirection.READ,),
+        scope=SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=SourceConstraintApplicability(),
+        profile=sync_profile,
+    )
+    sync_query = SourceFacetQueryContract(
+        feature=SourceFeature.SYNC,
+        scope=SourceFacetScope.CHANNEL,
+        fields=(SourceFieldId.SYNC,),
+        activation_any=(),
+        effect=SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    extensions = replace(
+        extensions,
+        topology=SourceTopologyContract((1, 2)),
+        features=(*extensions.features, sync_feature),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(*extensions.query_contract.facets, sync_query),
+            max_queries=extensions.query_contract.max_queries + 1,
+        ),
+    )
+    state = SourceSyncState(
+        enabled=Observed.value_of(False),
+        polarity=Observed.value_of(SourceSyncPolarity.NEGATIVE),
+        source_channel=Observed.value_of(2),
+    )
+    driver = SourceV2FakeDriver(combined=True, sync_state=state)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    snapshot = service.snapshot_v2()
+
+    assert snapshot.channels[0].sync.value == state
+    assert snapshot.channels[1].sync.availability.value == "unsupported"
+    sync_item = next(
+        item for item in driver.plans[0].items if item.feature is SourceFeature.SYNC
+    )
+    assert sync_item.target.scope is SourceFacetScope.CHANNEL
+    assert sync_item.target.channel == 1
+
+    invalid_sync = replace(
+        sync_feature,
+        profile=replace(sync_profile, source_channels=(1,)),
+    )
+    invalid_extensions = replace(
+        extensions,
+        features=(*extensions.features[:-1], invalid_sync),
+    )
+    invalid_driver = SourceV2FakeDriver(combined=True, sync_state=state)
+    invalid_service = make_service(invalid_driver)
+    invalid_service.descriptor = source_descriptor(
+        driver=invalid_driver,
+        extensions=invalid_extensions,
+    )
+    with pytest.raises(SourceSnapshotContractError, match="undeclared source channel"):
+        invalid_service.snapshot_v2()
+
+    invalid_profiles = (
+        (
+            replace(sync_profile, enabled_readable=False),
+            "unreadable enabled state",
+        ),
+        (
+            replace(sync_profile, polarity_readable=False),
+            "unreadable polarity",
+        ),
+    )
+    for profile, message in invalid_profiles:
+        invalid_extensions = replace(
+            extensions,
+            features=(*extensions.features[:-1], replace(sync_feature, profile=profile)),
+        )
+        invalid_driver = SourceV2FakeDriver(combined=True, sync_state=state)
+        invalid_service = make_service(invalid_driver)
+        invalid_service.descriptor = source_descriptor(
+            driver=invalid_driver,
+            extensions=invalid_extensions,
+        )
+        with pytest.raises(SourceSnapshotContractError, match=message):
+            invalid_service.snapshot_v2()
+
+
+def test_snapshot_v2_projects_noise_overlay_without_changing_basic_noise_kind() -> None:
+    extensions = source_extensions()
+    noise_feature = SourceFeatureCapability(
+        feature=SourceFeature.NOISE_OVERLAY,
+        support=SupportState.SUPPORTED,
+        directions=(SourceFeatureDirection.READ,),
+        scope=SourceFacetScope.CHANNEL,
+        channels=(1,),
+        applicability=SourceConstraintApplicability(),
+        profile=SourceNoiseOverlayCapabilityProfile(
+            enabled_readable=True,
+            scale_kinds=(SourceNoiseOverlayScaleKind.PERCENT,),
+        ),
+    )
+    noise_query = SourceFacetQueryContract(
+        feature=SourceFeature.NOISE_OVERLAY,
+        scope=SourceFacetScope.CHANNEL,
+        fields=(SourceFieldId.NOISE_OVERLAY,),
+        activation_any=(),
+        effect=SourceQueryEffect.PURE_READ,
+        max_queries=2,
+        required=True,
+    )
+    extensions = replace(
+        extensions,
+        features=(extensions.features[0], noise_feature, extensions.features[1]),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                noise_query,
+                extensions.query_contract.facets[2],
+            ),
+            max_queries=extensions.query_contract.max_queries + 2,
+        ),
+    )
+    noise = NoiseOverlayFacet(
+        enabled=Observed.value_of(False),
+        scales=Observed.value_of(
+            (
+                SourceNoiseOverlayScale(
+                    SourceNoiseOverlayScaleKind.PERCENT,
+                    10.0,
+                ),
+            )
+        ),
+    )
+    driver = SourceV2FakeDriver(combined=True, noise_overlay=noise)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    snapshot = service.snapshot_v2()
+
+    assert snapshot.channels[0].noise_overlay.value == noise
+    assert snapshot.channels[0].basic.value.waveform_kind.value.value == "sine"
+    noise_item = next(
+        item
+        for item in driver.plans[0].items
+        if item.feature is SourceFeature.NOISE_OVERLAY
+    )
+    assert noise_item.target.scope is SourceFacetScope.CHANNEL
+    assert noise_item.max_queries == 2
+
+    invalid_profiles = (
+        (
+            SourceNoiseOverlayCapabilityProfile(
+                enabled_readable=False,
+                scale_kinds=(SourceNoiseOverlayScaleKind.PERCENT,),
+            ),
+            "unreadable enabled state",
+        ),
+        (
+            SourceNoiseOverlayCapabilityProfile(
+                enabled_readable=True,
+                scale_kinds=(SourceNoiseOverlayScaleKind.RATIO,),
+            ),
+            "scale kinds do not match",
+        ),
+    )
+    for profile, message in invalid_profiles:
+        invalid_extensions = replace(
+            extensions,
+            features=(
+                extensions.features[0],
+                replace(noise_feature, profile=profile),
+                extensions.features[2],
+            ),
+        )
+        invalid_driver = SourceV2FakeDriver(combined=True, noise_overlay=noise)
+        invalid_service = make_service(invalid_driver)
+        invalid_service.descriptor = source_descriptor(
+            driver=invalid_driver,
+            extensions=invalid_extensions,
+        )
+        with pytest.raises(SourceSnapshotContractError, match=message):
+            invalid_service.snapshot_v2()
+
+
+def test_snapshot_v2_validates_coupling_readback_against_runtime_profile() -> None:
+    extensions = source_extensions()
+    profile = SourceCouplingCapabilityProfile(
+        dimensions=(
+            SourceCouplingDimension.AMPLITUDE,
+            SourceCouplingDimension.FREQUENCY,
+            SourceCouplingDimension.PHASE,
+        ),
+        parameter_kinds=(
+            SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+            SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+            SourceCouplingParameterKind.PHASE_DEVIATION_DEG,
+        ),
+        supported_channel_sets=((1, 2),),
+        global_state_readable=True,
+        reference_channel_readable=True,
+        relation_graph_readable=False,
+    )
+    coupling_feature = SourceFeatureCapability(
+        feature=SourceFeature.COUPLING,
+        support=SupportState.SUPPORTED,
+        directions=(SourceFeatureDirection.READ,),
+        scope=SourceFacetScope.CHANNEL_SET,
+        channels=(1, 2),
+        applicability=SourceConstraintApplicability(),
+        profile=profile,
+    )
+    coupling_query = SourceFacetQueryContract(
+        feature=SourceFeature.COUPLING,
+        scope=SourceFacetScope.CHANNEL_SET,
+        fields=(SourceFieldId.COUPLING,),
+        activation_any=(),
+        effect=SourceQueryEffect.PURE_READ,
+        max_queries=1,
+        required=True,
+    )
+    extensions = replace(
+        extensions,
+        topology=SourceTopologyContract((1, 2)),
+        features=(extensions.features[0], coupling_feature, extensions.features[1]),
+        query_contract=replace(
+            extensions.query_contract,
+            facets=(
+                extensions.query_contract.facets[0],
+                extensions.query_contract.facets[1],
+                coupling_query,
+                extensions.query_contract.facets[2],
+            ),
+            max_queries=extensions.query_contract.max_queries + 1,
+        ),
+    )
+
+    def dimension(
+        kind: SourceCouplingDimension,
+        parameter_kind: SourceCouplingParameterKind,
+    ) -> SourceCouplingDimensionState:
+        return SourceCouplingDimensionState(
+            dimension=kind,
+            enabled=Observed.value_of(kind is not SourceCouplingDimension.PHASE),
+            parameter=Observed.value_of(SourceCouplingParameter(parameter_kind, 1.0)),
+        )
+
+    state = SourceCouplingState(
+        feature=SourceFeature.COUPLING,
+        channels=(1, 2),
+        enabled=Observed.value_of(True),
+        reference_channel=Observed.value_of(1),
+        dimensions=(
+            dimension(
+                SourceCouplingDimension.AMPLITUDE,
+                SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+            ),
+            dimension(
+                SourceCouplingDimension.FREQUENCY,
+                SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ,
+            ),
+            dimension(
+                SourceCouplingDimension.PHASE,
+                SourceCouplingParameterKind.PHASE_DEVIATION_DEG,
+            ),
+        ),
+    )
+    driver = SourceV2FakeDriver(combined=True, coupling_state=state)
+    service = make_service(driver)
+    service.descriptor = source_descriptor(driver=driver, extensions=extensions)
+
+    assert service.snapshot_v2().cross_channel.value.relations == (state,)
+
+    invalid_cases = (
+        (
+            replace(profile, global_state_readable=False),
+            state,
+            "unreadable global state",
+        ),
+        (
+            replace(profile, reference_channel_readable=False),
+            state,
+            "unreadable reference channel",
+        ),
+        (
+            replace(
+                profile,
+                dimensions=(SourceCouplingDimension.AMPLITUDE,),
+                parameter_kinds=(
+                    SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,
+                ),
+            ),
+            state,
+            "dimensions do not match",
+        ),
+        (
+            replace(
+                profile,
+                parameter_kinds=(SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP,),
+            ),
+            state,
+            "undeclared parameter kind",
+        ),
+        (
+            profile,
+            replace(state, channels=(1, 3)),
+            "does not match its channel set",
+        ),
+    )
+    for invalid_profile, invalid_state, message in invalid_cases:
+        invalid_extensions = replace(
+            extensions,
+            features=(
+                extensions.features[0],
+                replace(coupling_feature, profile=invalid_profile),
+                extensions.features[2],
+            ),
+        )
+        invalid_driver = SourceV2FakeDriver(
+            combined=True,
+            coupling_state=invalid_state,
+        )
+        invalid_service = make_service(invalid_driver)
+        invalid_service.descriptor = source_descriptor(
+            driver=invalid_driver,
+            extensions=invalid_extensions,
+        )
+        with pytest.raises(SourceSnapshotContractError, match=message):
+            invalid_service.snapshot_v2()
 
 
 def test_snapshot_v2_runtime_identity_can_only_narrow_descriptor_features() -> None:
@@ -575,6 +936,7 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
             assert request.spacing.value == "linear"
             assert request.steps == 101
             assert request.sweep_time_s == 1.0
+            assert request.trigger_source.value == "manual"
             return object(), sweep_artifact
 
         def configure_burst_v2(self, request):
@@ -730,6 +1092,8 @@ def test_source_v2_write_cli_emits_existing_operation_artifacts(capsys) -> None:
                 "101",
                 "--sweep-time-s",
                 "1",
+                "--trigger-source",
+                "manual",
                 "--config",
                 "unused.toml",
             ]
@@ -1095,6 +1459,50 @@ def test_source_v2_arbitrary_cli_emits_payload_free_operation_artifacts(tmp_path
     assert selection_code == 0
     assert selection_payload["result"] == selection_artifact
     assert "abc" not in json.dumps(storage_payload, ensure_ascii=False)
+
+
+def test_source_v2_volatile_arbitrary_cli_emits_payload_free_operation_artifact(
+    tmp_path,
+    capsys,
+) -> None:
+    payload_file = tmp_path / "volatile.bin"
+    payload_file.write_bytes(b"\x00\x00\xff\x3f")
+    artifact = {
+        "schema": SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        "operation": "source.arbitrary_volatile_replace_v2",
+        "request": {"payload_sha256": "sha256:" + "a" * 64},
+    }
+
+    class _Service:
+        def replace_arbitrary_volatile_v2(self, request, *, payload):
+            assert request.channel == 1
+            assert request.payload_size_bytes == 4
+            assert request.point_count == 2
+            assert payload == b"\x00\x00\xff\x3f"
+            return object(), artifact
+
+    with patch("wavebench.cli._load_source_service", return_value=_Service()):
+        exit_code = cli.main(
+            [
+                "--json",
+                "source",
+                "arbitrary-volatile-replace-v2",
+                "--channel",
+                "1",
+                "--payload-file",
+                str(payload_file),
+                "--point-count",
+                "2",
+                "--config",
+                "unused.toml",
+            ]
+        )
+
+    result = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert result["result"] == artifact
+    assert payload_file.name not in json.dumps(result, ensure_ascii=False)
+    assert payload_file.read_bytes().hex() not in json.dumps(result, ensure_ascii=False)
 
 
 def test_source_v2_arbitrary_cli_rejects_invalid_request_before_loading_service(tmp_path, capsys) -> None:

@@ -246,6 +246,24 @@ selection 与 storage digest、允许 playback mode；true-ARB 还要求 sample 
 selection 只允许目标输出 OFF，完成后仍为 OFF，不会隐式 ON。声明任一 ARB V2 capability 后，V1
 `upload_arbitrary_waveform` 会在本地文件读取和仪器 I/O 前被拒绝，不能把混合 upload／selection／ON 的旧 route 部分映射。
 
+单一、无命名的易失 ARB 工作区使用 `source.arbitrary_volatile_replace_v2`。driver 实现
+`replace_source_arbitrary_volatile_v2(request, payload)`；request 只记录精确 payload 的主机 SHA-256、字节数和点数，
+不包含 payload。ARB profile 必须同时声明 `volatile_replace_min_points`、`volatile_replace_max_points` 与
+`volatile_replace_max_payload_bytes`；descriptor 还必须声明 `source.output_v2`，以便二进制写入后发生异常时由 Core
+只尝试一次 OFF 收敛。上传后必须独立确认当前 basic waveform 为 `arbitrary`、已选择 driver 返回的工作区 ID，且目标输出仍为 OFF。
+
+该 capability 不表示具名 storage，不得填造设备侧 digest、内容读回或旧内容可恢复性。它也不等价于旧
+`upload_arbitrary_waveform`：旧 route 还包含播放频率、Vpp／offset、可选输出 ON 和旧 artifact 语义。不得将旧 route
+部分改写为 volatile replace；需要公开该组合时，应另行定义完整的复合 capability、artifact 与验收。
+
+Counter 使用独立的 `source.counter_configure_v2`、`source.counter_enable_v2` 与
+`source.counter_measure_v2`。descriptor 必须声明 Counter `READ`，配置还需 `CONFIGURE` 与可读的
+`configurable_fields`，启停还需成对的 `ENABLE`／`DISABLE` 与 `enabled_configurable`。每次配置 request
+只能设置 coupling、input impedance、attenuation、trigger level 或 statistics enable 中的一项；Core 不会因配置或
+测量自动启用 Counter，也不会写 `AUTO`、gate、HF、sensitivity、display 或 statistics clear。配置和启停在写后必须独立
+回读；结果不明时不自动回滚或 disable，连接保守失效。测量只允许已启用的输入，并以单条受授权查询进入 driver。当前
+CLI 与 run schema 不提供这三项入口；production descriptor 必须另有对应的实机证据才能声明 capability。
+
 跨通道 Combine、Coupling、Tracking 和相位关系分别使用 `source.combine_configure_v2`、
 `source.coupling_configure_v2`、`source.tracking_configure_v2` 与 `source.phase_relation_configure_v2`。每项都使用
 独立 driver method，request 只包含递增且唯一的 channel set 与 enabled state。descriptor 必须为该 relation 的

@@ -408,11 +408,6 @@ def _validated_entry_points(items: Iterable[tuple[str, object]]) -> tuple[WheelE
         result.append(WheelEntryPoint(name, value.strip()))
     if not result:
         raise ConfigError("plugin wheel has no instrument entry points / 插件 wheel 没有仪器 entry point")
-    if len(result) != 1:
-        raise ConfigError(
-            "plugin wheel must provide exactly one instrument entry point / "
-            "插件 wheel 必须恰好提供一个仪器 entry point"
-        )
     return tuple(sorted(result, key=lambda item: item.driver_id))
 
 

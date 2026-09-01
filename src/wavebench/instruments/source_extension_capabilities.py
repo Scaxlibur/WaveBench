@@ -17,6 +17,9 @@ from .source_extensions import (
     SOURCE_SNAPSHOT_MIN_CORE_VERSION,
     SourceAmplitudeUnit,
     SourceArbitraryCapabilityProfile,
+    SourceArbitraryWorkspaceCapabilityProfile,
+    SourceCouplingCapabilityProfile,
+    SourceCounterCapabilityProfile,
     SourceCrossChannelCapabilityProfile,
     SourceDescriptorExtensions,
     SourceAnchorField,
@@ -49,21 +52,35 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
     {
         "source.snapshot_v2": ("execute_source_query_plan_v2",),
         "source.basic_configure_v2": ("configure_source_basic_v2",),
+        "source.basic_live_configure_v2": (
+            "configure_source_basic_live_v2",
+        ),
         "source.harmonics_configure_v2": ("configure_source_harmonics_v2",),
         "source.harmonics_disable_v2": ("disable_source_harmonics_v2",),
         "source.modulation_configure_v2": ("configure_source_modulation_v2",),
         "source.pulse_configure_v2": ("configure_source_pulse_v2",),
         "source.modulation_pm_configure_v2": ("configure_source_pm_modulation_v2",),
         "source.burst_configure_v2": ("configure_source_burst_v2",),
+        "source.burst_fire_v2": ("fire_source_burst_v2",),
         "source.modulation_fm_configure_v2": ("configure_source_fm_modulation_v2",),
         "source.modulation_pwm_configure_v2": ("configure_source_pwm_modulation_v2",),
         "source.sweep_configure_v2": ("configure_source_sweep_v2",),
+        "source.sweep_fire_v2": ("fire_source_sweep_v2",),
         "source.output_v2": ("set_source_output_v2",),
         "source.arbitrary_storage_v2": (
             "read_source_arbitrary_storage_v2",
             "mutate_source_arbitrary_storage_v2",
         ),
         "source.arbitrary_select_v2": ("select_source_arbitrary_v2",),
+        "source.arbitrary_volatile_replace_v2": (
+            "replace_source_arbitrary_volatile_v2",
+        ),
+        "source.arbitrary_workspace_volatile_replace_v2": (
+            "replace_source_arbitrary_workspace_volatile_v2",
+        ),
+        "source.counter_configure_v2": ("configure_source_counter_v2",),
+        "source.counter_enable_v2": ("set_source_counter_enabled_v2",),
+        "source.counter_measure_v2": ("measure_source_counter_v2",),
         "source.combine_configure_v2": ("configure_source_combine_v2",),
         "source.coupling_configure_v2": ("configure_source_coupling_v2",),
         "source.tracking_configure_v2": ("configure_source_tracking_v2",),
@@ -76,18 +93,25 @@ SOURCE_EXTENSION_CAPABILITY_METHODS: Mapping[str, tuple[str, ...]] = MappingProx
 _SOURCE_WRITE_CAPABILITIES = frozenset(
     {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.harmonics_configure_v2",
         "source.harmonics_disable_v2",
         "source.modulation_configure_v2",
         "source.pulse_configure_v2",
         "source.modulation_pm_configure_v2",
         "source.burst_configure_v2",
+        "source.burst_fire_v2",
         "source.modulation_fm_configure_v2",
         "source.modulation_pwm_configure_v2",
         "source.sweep_configure_v2",
+        "source.sweep_fire_v2",
         "source.output_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
+        "source.arbitrary_volatile_replace_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
+        "source.counter_configure_v2",
+        "source.counter_enable_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -120,6 +144,7 @@ def validate_source_descriptor(descriptor: object, driver: object | None = None)
         )
     _validate_source_version_range(descriptor)
     _validate_read_contract(extensions)
+    _validate_counter_capabilities(extensions, frozenset(declared))
     _validate_write_contract(extensions, frozenset(declared) & _SOURCE_WRITE_CAPABILITIES)
     if driver is not None:
         for capability in declared:
@@ -218,13 +243,20 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
         for feature in extensions.features
     }
     for feature in extensions.features:
+        unreadable_workspace = (
+            feature.feature is SourceFeature.ARBITRARY_WORKSPACE
+            and feature.scope is SourceFacetScope.INSTRUMENT
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.CONFIGURE in feature.directions
+            and SourceFeatureDirection.READ not in feature.directions
+        )
         if feature.support.value == "supported" and (
             SourceFeatureDirection.READ not in feature.directions
-        ):
+        ) and not unreadable_workspace:
             raise ConfigError(
                 f"supported Source V2 feature {feature.feature.value!r} must declare read"
             )
-        if feature.support.value == "supported" and not any(
+        if feature.support.value == "supported" and not unreadable_workspace and not any(
             facet.feature is feature.feature and facet.scope is feature.scope
             for facet in extensions.query_contract.facets
         ):
@@ -254,6 +286,7 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
     field_features = {
         SourceFieldId.BASIC: frozenset({SourceFeature.BASIC}),
         SourceFieldId.OUTPUT: frozenset({SourceFeature.OUTPUT}),
+        SourceFieldId.NOISE_OVERLAY: frozenset({SourceFeature.NOISE_OVERLAY}),
         SourceFieldId.DISPLAY_LOAD: frozenset({SourceFeature.OUTPUT}),
         SourceFieldId.HARMONICS: frozenset({SourceFeature.HARMONICS}),
         SourceFieldId.MODULATION: frozenset({SourceFeature.MODULATION}),
@@ -320,6 +353,77 @@ def _validate_read_contract(extensions: SourceDescriptorExtensions) -> None:
                     )
 
 
+def _validate_counter_capabilities(
+    extensions: SourceDescriptorExtensions,
+    capabilities: frozenset[str],
+) -> None:
+    counter_capabilities = {
+        "source.counter_configure_v2",
+        "source.counter_enable_v2",
+        "source.counter_measure_v2",
+    }
+    if not counter_capabilities & capabilities:
+        return
+    features = tuple(
+        feature
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.COUNTER
+            and feature.scope is SourceFacetScope.INPUT
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceCounterCapabilityProfile)
+        )
+    )
+    if len(features) != 1:
+        raise ConfigError(
+            "Counter V2 capabilities require one readable INPUT counter feature"
+        )
+    feature = features[0]
+    profile = feature.profile
+    assert isinstance(profile, SourceCounterCapabilityProfile)
+    if not any(
+        facet.feature is SourceFeature.COUNTER
+        and facet.scope is SourceFacetScope.INPUT
+        and facet.fields == (SourceFieldId.COUNTER,)
+        for facet in extensions.query_contract.facets
+    ):
+        raise ConfigError("Counter V2 capabilities require a readable counter query facet")
+    if "source.counter_configure_v2" in capabilities:
+        if SourceFeatureDirection.CONFIGURE not in feature.directions:
+            raise ConfigError(
+                "source.counter_configure_v2 requires counter CONFIGURE direction"
+            )
+        if not profile.configuration_readable or not profile.configurable_fields:
+            raise ConfigError(
+                "source.counter_configure_v2 requires readable configurable counter fields"
+            )
+    if "source.counter_enable_v2" in capabilities:
+        if not {
+            SourceFeatureDirection.ENABLE,
+            SourceFeatureDirection.DISABLE,
+        } <= set(feature.directions):
+            raise ConfigError(
+                "source.counter_enable_v2 requires counter ENABLE and DISABLE directions"
+            )
+        if not profile.enabled_configurable:
+            raise ConfigError(
+                "source.counter_enable_v2 requires an enabled_configurable counter profile"
+            )
+    if "source.counter_measure_v2" in capabilities:
+        if not profile.measurement_kinds:
+            raise ConfigError(
+                "source.counter_measure_v2 requires declared counter measurement kinds"
+            )
+        if profile.query_effect not in {
+            SourceQueryEffect.PURE_READ,
+            SourceQueryEffect.STATEFUL_CONSUMING_READ,
+        }:
+            raise ConfigError(
+                "source.counter_measure_v2 requires a known read-only counter query effect"
+            )
+
+
 def _validate_write_contract(
     extensions: SourceDescriptorExtensions,
     capabilities: frozenset[str],
@@ -330,6 +434,11 @@ def _validate_write_contract(
 
     basic_readable = _channels_with_basic_final_vpp(extensions)
     output_readable = _channels_with_output_readback(extensions)
+    output_disabled = _channels_with_direction(
+        extensions,
+        SourceFeature.OUTPUT,
+        SourceFeatureDirection.DISABLE,
+    )
 
     if "source.basic_configure_v2" in capabilities:
         configurable = _channels_with_direction(
@@ -348,6 +457,51 @@ def _validate_write_contract(
         if not configurable <= output_readable:
             raise ConfigError(
                 "source.basic_configure_v2 requires readable output state on every channel"
+            )
+
+    if "source.basic_live_configure_v2" in capabilities:
+        required = {"source.basic_configure_v2", "source.output_v2"}
+        missing = required - capabilities
+        if missing:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires source.basic_configure_v2 "
+                "and source.output_v2"
+            )
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.BASIC,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        live_configurable = frozenset(
+            channel
+            for feature in extensions.features
+            if (
+                feature.feature is SourceFeature.BASIC
+                and feature.scope is SourceFacetScope.CHANNEL
+                and feature.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in feature.directions
+                and isinstance(feature.profile, SourceBasicCapabilityProfile)
+                and SourceFrequencyMode.FIXED in feature.profile.frequency_modes
+                and (
+                    feature.profile.live_frequency_configurable
+                    or feature.profile.live_amplitude_vpp_configurable
+                )
+            )
+            for channel in feature.channels
+        )
+        if not configurable or not configurable <= live_configurable:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires per-channel fixed-mode live "
+                "frequency or Vpp declarations"
+            )
+        if not configurable <= basic_readable:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires readable final VPP and Offset "
+                "on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.basic_live_configure_v2 requires readable output state on every channel"
             )
 
     if "source.harmonics_configure_v2" in capabilities:
@@ -506,15 +660,40 @@ def _validate_write_contract(
             raise ConfigError(
                 "source.burst_configure_v2 requires burst feature CONFIGURE directions"
             )
-        readable = _channels_with_burst_triggered_internal_configuration_readback(extensions)
+        readable = _channels_with_burst_triggered_configuration_readback(extensions)
         if not configurable <= readable:
             raise ConfigError(
-                "source.burst_configure_v2 requires readable internal triggered burst "
+                "source.burst_configure_v2 requires readable internal or manual triggered burst "
                 "configuration on every channel"
             )
         if not configurable <= output_readable:
             raise ConfigError(
                 "source.burst_configure_v2 requires readable output state on every channel"
+            )
+
+    if "source.burst_fire_v2" in capabilities:
+        required = {"source.burst_configure_v2", "source.output_v2"}
+        if not required <= capabilities:
+            raise ConfigError(
+                "source.burst_fire_v2 requires source.burst_configure_v2 and source.output_v2"
+            )
+        fireable = _channels_with_direction(
+            extensions,
+            SourceFeature.BURST,
+            SourceFeatureDirection.FIRE,
+        )
+        readable = _channels_with_burst_triggered_configuration_readback(
+            extensions,
+            trigger_source=SourceTriggerSource.MANUAL,
+        )
+        if not fireable or not fireable <= readable:
+            raise ConfigError(
+                "source.burst_fire_v2 requires readable manual triggered burst "
+                "configuration on every FIRE channel"
+            )
+        if not fireable <= basic_readable or not fireable <= output_readable:
+            raise ConfigError(
+                "source.burst_fire_v2 requires readable final VPP, Offset and output state"
             )
 
     if "source.sweep_configure_v2" in capabilities:
@@ -530,12 +709,38 @@ def _validate_write_contract(
         readable = _channels_with_sweep_configuration_readback(extensions)
         if not configurable <= readable:
             raise ConfigError(
-                "source.sweep_configure_v2 requires readable internal sweep configuration "
+                "source.sweep_configure_v2 requires readable internal or manual sweep configuration "
                 "and sweep frequency mode on every channel"
             )
         if not configurable <= output_readable:
             raise ConfigError(
                 "source.sweep_configure_v2 requires readable output state on every channel"
+            )
+        _validate_sweep_implicit_disable_features(extensions, configurable)
+
+    if "source.sweep_fire_v2" in capabilities:
+        required = {"source.sweep_configure_v2", "source.output_v2"}
+        if not required <= capabilities:
+            raise ConfigError(
+                "source.sweep_fire_v2 requires source.sweep_configure_v2 and source.output_v2"
+            )
+        fireable = _channels_with_direction(
+            extensions,
+            SourceFeature.SWEEP,
+            SourceFeatureDirection.FIRE,
+        )
+        readable = _channels_with_sweep_configuration_readback(
+            extensions,
+            trigger_source=SourceTriggerSource.MANUAL,
+        )
+        if not fireable or not fireable <= readable:
+            raise ConfigError(
+                "source.sweep_fire_v2 requires readable manual sweep configuration "
+                "on every FIRE channel"
+            )
+        if not fireable <= basic_readable or not fireable <= output_readable:
+            raise ConfigError(
+                "source.sweep_fire_v2 requires readable final VPP, Offset and output state"
             )
 
     if "source.arbitrary_storage_v2" in capabilities:
@@ -586,6 +791,75 @@ def _validate_write_contract(
                 "source.arbitrary_select_v2 requires readable output state on every channel"
             )
 
+    if "source.arbitrary_volatile_replace_v2" in capabilities:
+        if "source.output_v2" not in capabilities:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires source.output_v2"
+            )
+        configurable = _channels_with_direction(
+            extensions,
+            SourceFeature.ARBITRARY,
+            SourceFeatureDirection.CONFIGURE,
+        )
+        if not configurable:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires arbitrary feature CONFIGURE directions"
+            )
+        readable = _channels_with_arbitrary_volatile_replace_readback(extensions)
+        if not configurable <= readable:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires readable selected state and "
+                "volatile replace limits on every channel"
+            )
+        arbitrary_basic = _channels_with_arbitrary_basic_readback(extensions)
+        if not configurable <= arbitrary_basic:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires readable arbitrary basic waveform "
+                "state on every channel"
+            )
+        if not configurable <= output_readable:
+            raise ConfigError(
+                "source.arbitrary_volatile_replace_v2 requires readable output state on every "
+                "channel"
+            )
+
+    if "source.arbitrary_workspace_volatile_replace_v2" in capabilities:
+        if "source.output_v2" not in capabilities:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires source.output_v2"
+            )
+        profiles = tuple(
+            feature.profile
+            for feature in extensions.features
+            if (
+                feature.feature is SourceFeature.ARBITRARY_WORKSPACE
+                and feature.scope is SourceFacetScope.INSTRUMENT
+                and feature.support is SupportState.SUPPORTED
+                and SourceFeatureDirection.CONFIGURE in feature.directions
+                and isinstance(feature.profile, SourceArbitraryWorkspaceCapabilityProfile)
+            )
+        )
+        if len(profiles) != 1:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires one configured "
+                "instrument arbitrary workspace profile"
+            )
+        if len(extensions.topology.channels) > 8:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 supports at most eight "
+                "protected output channels"
+            )
+        if not set(extensions.topology.channels) <= output_readable:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires readable output "
+                "state on every topology channel"
+            )
+        if not set(extensions.topology.channels) <= output_disabled:
+            raise ConfigError(
+                "source.arbitrary_workspace_volatile_replace_v2 requires output DISABLE "
+                "support on every topology channel"
+            )
+
     _validate_cross_channel_write_capability(
         extensions,
         capabilities,
@@ -622,11 +896,16 @@ def _validate_write_contract(
             SourceFeature.OUTPUT,
             SourceFeatureDirection.DISABLE,
         )
-        if not enabled or enabled != disabled:
+        if not disabled:
             raise ConfigError(
-                "source.output_v2 requires matching output ENABLE and DISABLE directions"
+                "source.output_v2 requires output DISABLE directions"
             )
-        if not enabled <= output_readable:
+        if not enabled <= disabled:
+            raise ConfigError(
+                "source.output_v2 requires every output ENABLE direction to have matching "
+                "DISABLE support"
+            )
+        if not disabled <= output_readable:
             raise ConfigError(
                 "source.output_v2 requires readable output state on every channel"
             )
@@ -641,6 +920,11 @@ def _validate_cross_channel_write_capability(
 ) -> None:
     if capability not in capabilities:
         return
+    profile_type = (
+        SourceCouplingCapabilityProfile
+        if feature_kind is SourceFeature.COUPLING
+        else SourceCrossChannelCapabilityProfile
+    )
     configurable = tuple(
         feature
         for feature in extensions.features
@@ -650,7 +934,7 @@ def _validate_cross_channel_write_capability(
             and feature.support is SupportState.SUPPORTED
             and SourceFeatureDirection.CONFIGURE in feature.directions
             and SourceFeatureDirection.READ in feature.directions
-            and isinstance(feature.profile, SourceCrossChannelCapabilityProfile)
+            and isinstance(feature.profile, profile_type)
         )
     )
     if not configurable:
@@ -659,11 +943,19 @@ def _validate_cross_channel_write_capability(
         )
     for feature in configurable:
         profile = feature.profile
-        if (
-            feature_kind not in profile.relation_kinds
-            or feature.channels not in profile.supported_channel_sets
-            or not profile.configuration_readable
-        ):
+        if isinstance(profile, SourceCouplingCapabilityProfile):
+            readable = (
+                feature.channels in profile.supported_channel_sets
+                and profile.global_state_readable
+                and profile.configuration_readable
+            )
+        else:
+            readable = (
+                feature_kind in profile.relation_kinds
+                and feature.channels in profile.supported_channel_sets
+                and profile.configuration_readable
+            )
+        if not readable:
             raise ConfigError(
                 f"{capability} requires readable declared {feature_kind.value} relation state"
             )
@@ -675,7 +967,7 @@ def _validate_cross_channel_write_capability(
             and feature.scope is SourceFacetScope.INSTRUMENT
             and feature.support is SupportState.SUPPORTED
             and SourceFeatureDirection.READ in feature.directions
-            and isinstance(feature.profile, SourceCrossChannelCapabilityProfile)
+            and isinstance(feature.profile, profile_type)
             and feature.profile.relation_graph_readable
         )
     )
@@ -898,9 +1190,16 @@ def _channels_with_pulse_width_configuration_readback(
     )
 
 
-def _channels_with_burst_triggered_internal_configuration_readback(
+def _channels_with_burst_triggered_configuration_readback(
     extensions: SourceDescriptorExtensions,
+    *,
+    trigger_source: SourceTriggerSource | None = None,
 ) -> frozenset[int]:
+    allowed_sources = (
+        {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
+        if trigger_source is None
+        else {trigger_source}
+    )
     return frozenset(
         channel
         for feature in extensions.features
@@ -911,9 +1210,19 @@ def _channels_with_burst_triggered_internal_configuration_readback(
             and SourceFeatureDirection.READ in feature.directions
             and isinstance(feature.profile, SourceBurstCapabilityProfile)
             and SourceBurstMode.TRIGGERED in feature.profile.modes
-            and SourceTriggerSource.INTERNAL in feature.profile.trigger_sources
             and feature.profile.timing_readable
-            and feature.profile.triggered_internal_configuration_readable
+            and (
+                (
+                    SourceTriggerSource.INTERNAL in allowed_sources
+                    and SourceTriggerSource.INTERNAL in feature.profile.trigger_sources
+                    and feature.profile.triggered_internal_configuration_readable
+                )
+                or (
+                    SourceTriggerSource.MANUAL in allowed_sources
+                    and SourceTriggerSource.MANUAL in feature.profile.trigger_sources
+                    and feature.profile.triggered_manual_configuration_readable
+                )
+            )
         )
         for channel in feature.channels
     )
@@ -921,7 +1230,14 @@ def _channels_with_burst_triggered_internal_configuration_readback(
 
 def _channels_with_sweep_configuration_readback(
     extensions: SourceDescriptorExtensions,
+    *,
+    trigger_source: SourceTriggerSource | None = None,
 ) -> frozenset[int]:
+    allowed_sources = (
+        {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
+        if trigger_source is None
+        else {trigger_source}
+    )
     sweep_channels = frozenset(
         channel
         for feature in extensions.features
@@ -932,7 +1248,10 @@ def _channels_with_sweep_configuration_readback(
             and SourceFeatureDirection.READ in feature.directions
             and isinstance(feature.profile, SourceSweepCapabilityProfile)
             and bool(feature.profile.spacing_modes)
-            and SourceTriggerSource.INTERNAL in feature.profile.trigger_sources
+            and any(
+                source in feature.profile.trigger_sources
+                for source in allowed_sources
+            )
             and feature.profile.timing_readable
             and feature.profile.marker_readable
             and feature.profile.configuration_readable
@@ -953,6 +1272,72 @@ def _channels_with_sweep_configuration_readback(
         for channel in feature.channels
     )
     return sweep_channels & basic_sweep_channels
+
+
+def _validate_sweep_implicit_disable_features(
+    extensions: SourceDescriptorExtensions,
+    configurable: frozenset[int],
+) -> None:
+    readable_channels = {
+        feature: _channels_with_inactive_feature_readback(extensions, feature)
+        for feature in (SourceFeature.BURST, SourceFeature.MODULATION)
+    }
+    for sweep in extensions.features:
+        if (
+            sweep.feature is not SourceFeature.SWEEP
+            or sweep.scope is not SourceFacetScope.CHANNEL
+            or sweep.support is not SupportState.SUPPORTED
+            or SourceFeatureDirection.CONFIGURE not in sweep.directions
+            or not isinstance(sweep.profile, SourceSweepCapabilityProfile)
+        ):
+            continue
+        for channel in set(sweep.channels) & configurable:
+            for feature in sweep.profile.implicit_disable_features:
+                if channel not in readable_channels[feature]:
+                    raise ConfigError(
+                        "source.sweep_configure_v2 requires readable inactive "
+                        f"{feature.value} state on every configured channel"
+                    )
+
+
+def _channels_with_inactive_feature_readback(
+    extensions: SourceDescriptorExtensions,
+    feature: SourceFeature,
+) -> frozenset[int]:
+    field = {
+        SourceFeature.BURST: SourceFieldId.BURST,
+        SourceFeature.MODULATION: SourceFieldId.MODULATION,
+    }.get(feature)
+    if field is None:
+        raise ValueError("sweep implicit disable feature is unsupported")
+    has_required_unconditional_query = any(
+        facet.feature is feature
+        and facet.scope is SourceFacetScope.CHANNEL
+        and facet.fields == (field,)
+        and not facet.activation_any
+        and facet.required
+        for facet in extensions.query_contract.facets
+    )
+    if not has_required_unconditional_query:
+        return frozenset()
+    return frozenset(
+        channel
+        for candidate in extensions.features
+        if (
+            candidate.feature is feature
+            and candidate.scope is SourceFacetScope.CHANNEL
+            and candidate.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in candidate.directions
+            and (
+                isinstance(candidate.profile, SourceBurstCapabilityProfile)
+                and candidate.profile.inactive_readable
+                if feature is SourceFeature.BURST
+                else isinstance(candidate.profile, SourceModulationCapabilityProfile)
+                and candidate.profile.inactive_readable
+            )
+        )
+        for channel in candidate.channels
+    )
 
 
 def _channels_with_arbitrary_storage_mutation_readback(
@@ -1001,6 +1386,27 @@ def _channels_with_arbitrary_selection_readback(
     )
 
 
+def _channels_with_arbitrary_volatile_replace_readback(
+    extensions: SourceDescriptorExtensions,
+) -> frozenset[int]:
+    return frozenset(
+        channel
+        for feature in extensions.features
+        if (
+            feature.feature is SourceFeature.ARBITRARY
+            and feature.scope is SourceFacetScope.CHANNEL
+            and feature.support is SupportState.SUPPORTED
+            and SourceFeatureDirection.READ in feature.directions
+            and isinstance(feature.profile, SourceArbitraryCapabilityProfile)
+            and feature.profile.selection_readable
+            and feature.profile.volatile_replace_min_points is not None
+            and feature.profile.volatile_replace_max_points is not None
+            and feature.profile.volatile_replace_max_payload_bytes is not None
+        )
+        for channel in feature.channels
+    )
+
+
 def _channels_with_arbitrary_basic_readback(
     extensions: SourceDescriptorExtensions,
 ) -> frozenset[int]:
@@ -1025,7 +1431,10 @@ def _validate_declared_write_directions(
 ) -> None:
     capabilities_by_direction = {
         (SourceFeature.BASIC, SourceFeatureDirection.CONFIGURE): frozenset(
-            {"source.basic_configure_v2"}
+            {
+                "source.basic_configure_v2",
+                "source.basic_live_configure_v2",
+            }
         ),
         (SourceFeature.HARMONICS, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.harmonics_configure_v2"}
@@ -1047,14 +1456,33 @@ def _validate_declared_write_directions(
         (SourceFeature.BURST, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.burst_configure_v2"}
         ),
+        (SourceFeature.BURST, SourceFeatureDirection.FIRE): frozenset(
+            {"source.burst_fire_v2"}
+        ),
         (SourceFeature.SWEEP, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.sweep_configure_v2"}
+        ),
+        (SourceFeature.SWEEP, SourceFeatureDirection.FIRE): frozenset(
+            {"source.sweep_fire_v2"}
         ),
         (SourceFeature.ARBITRARY, SourceFeatureDirection.CONFIGURE): frozenset(
             {
                 "source.arbitrary_storage_v2",
                 "source.arbitrary_select_v2",
+                "source.arbitrary_volatile_replace_v2",
             }
+        ),
+        (SourceFeature.ARBITRARY_WORKSPACE, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.arbitrary_workspace_volatile_replace_v2"}
+        ),
+        (SourceFeature.COUNTER, SourceFeatureDirection.CONFIGURE): frozenset(
+            {"source.counter_configure_v2"}
+        ),
+        (SourceFeature.COUNTER, SourceFeatureDirection.ENABLE): frozenset(
+            {"source.counter_enable_v2"}
+        ),
+        (SourceFeature.COUNTER, SourceFeatureDirection.DISABLE): frozenset(
+            {"source.counter_enable_v2"}
         ),
         (SourceFeature.COMBINE, SourceFeatureDirection.CONFIGURE): frozenset(
             {"source.combine_configure_v2"}

@@ -26,6 +26,7 @@ from wavebench.instruments.source_extensions import (
     SourceEnergyEffect,
     SourceFieldId,
     SourceFieldRef,
+    SourceFeatureDirection,
     SourceOperationContract,
     SourceScopeRef,
     SourceStorageEffect,
@@ -853,11 +854,19 @@ class SourceOperationContextCoordinator:
             raise ValueError("source restore order and non-restorable fields overlap")
         if any(item.field in _NON_REENERGIZING_RESTORE_FIELDS for item in restore_order):
             raise ValueError("source failure restore cannot re-enable output, arm, or trigger fields")
-        if self.operation_contract.energy_effect in {
-            SourceEnergyEffect.MAY_INCREASE,
-            SourceEnergyEffect.EMIT,
-        } and not required_off_outputs:
+        if (
+            self.operation_contract.energy_effect is SourceEnergyEffect.MAY_INCREASE
+            or (
+                self.operation_contract.energy_effect is SourceEnergyEffect.EMIT
+                and self.operation_contract.direction is not SourceFeatureDirection.FIRE
+            )
+        ) and not required_off_outputs:
             raise ValueError("energy-increasing Source operations require explicit OFF outputs")
+        if (
+            self.operation_contract.direction is SourceFeatureDirection.FIRE
+            and not emergency_off_outputs
+        ):
+            raise ValueError("Source fire operations require explicit emergency OFF outputs")
 
     def _build_closure(
         self,

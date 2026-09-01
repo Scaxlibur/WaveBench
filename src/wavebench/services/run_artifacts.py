@@ -40,61 +40,34 @@ def write_step_record(steps_dir: Path, record: RunStepRecord) -> None:
     )
 
 
-def _validated_source_operations(
-    source_operations: list[dict[str, Any]] | None,
+def _validated_operations(
+    operations: list[dict[str, Any]] | None,
+    *,
+    field: str,
+    label: str,
+    schema: str,
+    prefix: str,
 ) -> list[dict[str, Any]] | None:
-    """Accept only real, schema-labelled Source V2 operation artifacts.
-
-    The namespace stays absent for all V1 runs.  Feature-specific V2 operation
-    code owns the rest of each artifact's shape, but it cannot accidentally
-    insert an arbitrary unlabelled dictionary at the run root.
-    """
-
-    if source_operations is None:
+    """Accept only schema-labelled operation artifacts."""
+    if operations is None:
         return None
-    if not isinstance(source_operations, list) or any(
-        not isinstance(item, dict) for item in source_operations
-    ):
-        raise TypeError("source_operations must be a list of operation artifact objects")
-    if not source_operations:
+    if not isinstance(operations, list) or any(not isinstance(item, dict) for item in operations):
+        raise TypeError(f"{field} must be a list of operation artifact objects")
+    if not operations:
         return None
-    for artifact in source_operations:
-        if artifact.get("schema") != SOURCE_OPERATION_ARTIFACT_SCHEMA:
-            raise ValueError("source operation artifact has an unsupported schema")
+    for artifact in operations:
+        if artifact.get("schema") != schema:
+            raise ValueError(f"{label} operation artifact has an unsupported schema")
         operation = artifact.get("operation")
         if (
             not isinstance(operation, str)
-            or not operation.startswith("source.")
+            or not operation.startswith(prefix)
             or operation.strip() != operation
         ):
-            raise ValueError("source operation artifact must have a trimmed source.* operation")
-    return source_operations
-
-
-def _validated_rf_source_operations(
-    rf_source_operations: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]] | None:
-    """Accept only schema-labelled RF-source operation artifacts."""
-
-    if rf_source_operations is None:
-        return None
-    if not isinstance(rf_source_operations, list) or any(
-        not isinstance(item, dict) for item in rf_source_operations
-    ):
-        raise TypeError("rf_source_operations must be a list of operation artifact objects")
-    if not rf_source_operations:
-        return None
-    for artifact in rf_source_operations:
-        if artifact.get("schema") != RF_SOURCE_OPERATION_ARTIFACT_SCHEMA:
-            raise ValueError("RF source operation artifact has an unsupported schema")
-        operation = artifact.get("operation")
-        if (
-            not isinstance(operation, str)
-            or not operation.startswith("rf_source.")
-            or operation.strip() != operation
-        ):
-            raise ValueError("RF source operation artifact must have a trimmed rf_source.* operation")
-    return rf_source_operations
+            raise ValueError(
+                f"{label} operation artifact must have a trimmed {prefix}* operation"
+            )
+    return operations
 
 
 def write_run_files(
@@ -152,10 +125,22 @@ def write_run_files(
     # Keep the V2 namespace absent until an actual Source V2 operation has a
     # typed artifact to place in it.  In particular, this must not alter the
     # byte representation of existing V1 run artifacts.
-    validated_source_operations = _validated_source_operations(source_operations)
+    validated_source_operations = _validated_operations(
+        source_operations,
+        field="source_operations",
+        label="source",
+        schema=SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        prefix="source.",
+    )
     if validated_source_operations is not None:
         run_data["source_operations"] = validated_source_operations
-    validated_rf_source_operations = _validated_rf_source_operations(rf_source_operations)
+    validated_rf_source_operations = _validated_operations(
+        rf_source_operations,
+        field="rf_source_operations",
+        label="RF source",
+        schema=RF_SOURCE_OPERATION_ARTIFACT_SCHEMA,
+        prefix="rf_source.",
+    )
     if validated_rf_source_operations is not None:
         run_data["rf_source_operations"] = validated_rf_source_operations
     run_json_path.write_text(

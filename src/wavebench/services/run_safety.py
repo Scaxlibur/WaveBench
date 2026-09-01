@@ -41,8 +41,13 @@ EXECUTABLE_STEP_KINDS = {
     "source.set_duty",
     "source.output",
     "source.basic_configure_v2",
+    "source.basic_live_configure_v2",
     "source.output_enable_v2",
     "source.output_disable_v2",
+    "source.counter_configure_v2",
+    "source.counter_enable_v2",
+    "source.counter_disable_v2",
+    "source.counter_measure_v2",
     "source.harmonics_configure_v2",
     "source.harmonics_disable_v2",
     "source.modulation_configure_v2",
@@ -50,9 +55,12 @@ EXECUTABLE_STEP_KINDS = {
     "source.modulation_fm_configure_v2",
     "source.modulation_pwm_configure_v2",
     "source.sweep_configure_v2",
+    "source.sweep_fire_v2",
     "source.burst_configure_v2",
     "source.pulse_configure_v2",
     "source.arbitrary_storage_v2",
+    "source.arbitrary_volatile_replace_v2",
+    "source.arbitrary_workspace_volatile_replace_v2",
     "source.arbitrary_select_v2",
     "source.combine_configure_v2",
     "source.coupling_configure_v2",
@@ -73,7 +81,10 @@ def check_run_plan_safety_limits(plan: RunPlan, limits: SafetyLimitsConfig) -> N
                 config_key="max_source_vpp",
                 unit="Vpp",
             )
-        elif step.kind == "source.basic_configure_v2" and "amplitude_vpp" in step.fields:
+        elif step.kind in {
+            "source.basic_configure_v2",
+            "source.basic_live_configure_v2",
+        } and "amplitude_vpp" in step.fields:
             _check_limit(
                 step.fields["amplitude_vpp"],
                 limits.max_source_vpp,

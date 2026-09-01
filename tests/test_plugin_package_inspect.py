@@ -339,7 +339,7 @@ def test_inspect_wheel_rejects_excessive_uncompressed_size(tmp_path, monkeypatch
         inspect_plugin_wheel(path)
 
 
-def test_inspect_wheel_rejects_multi_driver_distribution(tmp_path):
+def test_inspect_wheel_accepts_distinct_entry_points_from_one_distribution(tmp_path):
     path = _wheel(
         tmp_path,
         entry_points=(
@@ -349,8 +349,7 @@ def test_inspect_wheel_rejects_multi_driver_distribution(tmp_path):
         ),
     )
 
-    with pytest.raises(ConfigError, match="exactly one instrument entry point"):
-        inspect_plugin_wheel(path)
+    assert inspect_plugin_wheel(path).driver_ids == ("example.dmm", "example.scope")
 
 
 def test_inspect_source_directory_builds_one_offline_wheel(tmp_path):

@@ -584,6 +584,91 @@ trailing_transition_s = 1e-8
         with self.assertRaisesRegex(ConfigError, "leading_transition_s must be <="):
             load_run_plan(oversized_transition)
 
+    def test_source_basic_live_v2_step_requires_one_live_field(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.basic_live_configure_v2"
+channel = 2
+frequency_hz = 2000
+"""))
+
+        self.assertEqual(
+            plan.steps[0].fields,
+            {"channel": 2, "frequency_hz": 2000.0},
+        )
+
+        no_field = self._write_plan("""
+[[steps]]
+kind = "source.basic_live_configure_v2"
+channel = 2
+""")
+        with self.assertRaisesRegex(ConfigError, "requires exactly one"):
+            load_run_plan(no_field)
+
+        two_fields = self._write_plan("""
+[[steps]]
+kind = "source.basic_live_configure_v2"
+channel = 2
+frequency_hz = 2000
+amplitude_vpp = 1.5
+""")
+        with self.assertRaisesRegex(ConfigError, "requires exactly one"):
+            load_run_plan(two_fields)
+
+    def test_source_counter_v2_steps_require_one_config_field(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+coupling = "DC"
+
+[[steps]]
+kind = "source.counter_enable_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_measure_v2"
+input_id = "counter"
+
+[[steps]]
+kind = "source.counter_disable_v2"
+input_id = "counter"
+"""))
+
+        self.assertEqual(
+            plan.steps[0].fields,
+            {"input_id": "counter", "coupling": "dc"},
+        )
+        self.assertEqual(plan.steps[1].fields, {"input_id": "counter"})
+        self.assertEqual(plan.steps[2].fields, {"input_id": "counter"})
+        self.assertEqual(plan.steps[3].fields, {"input_id": "counter"})
+
+        no_field = self._write_plan("""
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+""")
+        with self.assertRaisesRegex(ConfigError, "requires exactly one Counter field"):
+            load_run_plan(no_field)
+
+        two_fields = self._write_plan("""
+[[steps]]
+kind = "source.counter_configure_v2"
+input_id = "counter"
+coupling = "ac"
+attenuation = 10
+""")
+        with self.assertRaisesRegex(ConfigError, "requires exactly one Counter field"):
+            load_run_plan(two_fields)
+
+        invalid_input = self._write_plan("""
+[[steps]]
+kind = "source.counter_measure_v2"
+input_id = ""
+""")
+        with self.assertRaisesRegex(ConfigError, "input_id"):
+            load_run_plan(invalid_input)
+
     def test_source_v2_harmonic_disable_step_accepts_only_channel(self):
         plan = load_run_plan(self._write_plan("""
 [[steps]]
@@ -607,7 +692,10 @@ order = 8
         self.assertIn("power.output", text)
         self.assertIn("source.arb_load", text)
         self.assertIn("source.basic_configure_v2", text)
+        self.assertIn("source.basic_live_configure_v2", text)
         self.assertIn("source.output_enable_v2", text)
+        self.assertIn("source.counter_configure_v2", text)
+        self.assertIn("source.counter_measure_v2", text)
         self.assertIn("source.harmonics_configure_v2", text)
         self.assertIn("source.harmonics_disable_v2", text)
         self.assertIn("source.modulation_configure_v2", text)
@@ -615,12 +703,55 @@ order = 8
         self.assertIn("source.modulation_fm_configure_v2", text)
         self.assertIn("source.modulation_pwm_configure_v2", text)
         self.assertIn("source.sweep_configure_v2", text)
+        self.assertIn("source.sweep_fire_v2", text)
         self.assertIn("source.burst_configure_v2", text)
         self.assertIn("source.pulse_configure_v2", text)
+        self.assertIn("source.arbitrary_volatile_replace_v2", text)
         self.assertIn("sweep.frequency_response", text)
         self.assertIn("[steps.expect]", text)
         self.assertIn("[steps.expect_fft]", text)
         self.assertIn("frequency_estimate_hz", text)
+
+    def test_source_v2_manual_sweep_fire_and_volatile_arb_plan_fields(self):
+        plan = load_run_plan(self._write_plan("""
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 10
+sweep_time_s = 1
+trigger_source = "manual"
+
+[[steps]]
+kind = "source.sweep_fire_v2"
+channel = 1
+
+[[steps]]
+kind = "source.arbitrary_volatile_replace_v2"
+channel = 1
+file = "volatile.bin"
+point_count = 2
+"""))
+
+        self.assertEqual(plan.steps[0].fields["trigger_source"], "manual")
+        self.assertEqual(plan.steps[1].kind, "source.sweep_fire_v2")
+        self.assertEqual(plan.steps[2].fields["point_count"], 2)
+
+        invalid = self._write_plan("""
+[[steps]]
+kind = "source.sweep_configure_v2"
+channel = 1
+start_hz = 100
+stop_hz = 1000
+spacing = "linear"
+steps = 10
+sweep_time_s = 1
+trigger_source = "external"
+""")
+        with self.assertRaisesRegex(ConfigError, "trigger_source must be internal or manual"):
+            load_run_plan(invalid)
 
     def test_frequency_response_plan_normalizes_log_frequency_points_and_fit(self):
         plan = load_run_plan(self._write_plan("""

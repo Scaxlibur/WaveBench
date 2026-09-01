@@ -7,12 +7,14 @@ from wavebench.instruments.source_extensions import (
     SOURCE_CONTRACT_VERSION,
     Availability,
     BasicWaveFacet,
+    NoiseOverlayFacet,
     Observed,
     OutputFacet,
     SourceAmplitude,
     SourceAmplitudeUnit,
     SourceBasicCapabilityProfile,
     SourceConstraintApplicability,
+    SourceCouplingState,
     SourceDescriptorExtensions,
     SourceFacetQueryContract,
     SourceFacetScope,
@@ -38,6 +40,7 @@ from wavebench.instruments.source_extensions import (
     SourceRuntimeIdentity,
     SourceSafetyProfile,
     SourceTopologyContract,
+    SourceSyncState,
     SourceTypedObservation,
     SourceWaveformKind,
     SupportState,
@@ -239,11 +242,17 @@ class SourceV2FakeDriver:
         drift: bool = False,
         harmonic_unavailable: bool = False,
         anchor_unknown: bool = False,
+        sync_state: SourceSyncState | None = None,
+        noise_overlay: NoiseOverlayFacet | None = None,
+        coupling_state: SourceCouplingState | None = None,
     ) -> None:
         self.combined = combined
         self.drift = drift
         self.harmonic_unavailable = harmonic_unavailable
         self.anchor_unknown = anchor_unknown
+        self.sync_state = sync_state
+        self.noise_overlay = noise_overlay
+        self.coupling_state = coupling_state
         self.plans = []
         self.closed = False
 
@@ -287,6 +296,18 @@ class SourceV2FakeDriver:
                     value = output_facet(
                         enabled=(self.drift and item.phase.value == "anchor_after")
                     )
+                elif field.field is SourceFieldId.SYNC:
+                    if self.sync_state is None:
+                        raise AssertionError("sync state was not configured")
+                    value = self.sync_state
+                elif field.field is SourceFieldId.NOISE_OVERLAY:
+                    if self.noise_overlay is None:
+                        raise AssertionError("noise overlay was not configured")
+                    value = self.noise_overlay
+                elif field.field is SourceFieldId.COUPLING:
+                    if self.coupling_state is None:
+                        raise AssertionError("coupling state was not configured")
+                    value = self.coupling_state
                 else:
                     raise AssertionError(field)
                 observations.append(SourceTypedObservation(field, value))

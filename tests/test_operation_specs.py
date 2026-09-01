@@ -6,8 +6,13 @@ from wavebench.errors import ConfigError
 from wavebench.instruments.source_extensions import (
     SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT,
     SOURCE_ARBITRARY_STORAGE_V2_OPERATION_CONTRACT,
+    SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT,
     SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT,
+    SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT,
     SOURCE_FM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_DISABLE_V2_OPERATION_CONTRACT,
     SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT,
@@ -18,6 +23,7 @@ from wavebench.instruments.source_extensions import (
     SOURCE_PULSE_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_PWM_MODULATION_CONFIGURE_V2_OPERATION_CONTRACT,
     SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT,
+    SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT,
     SourceEnergyEffect,
 )
 from wavebench.services.operation_specs import (
@@ -41,6 +47,27 @@ def test_source_output_spec_describes_mutation_and_restore_boundary() -> None:
     assert spec.restore_coverage == "basic"
     assert "dangerous_output" in spec.risk_flags
     assert spec.as_dict()["required_capabilities"] == ["source.output"]
+
+
+def test_source_counter_v2_specs_keep_configuration_enable_and_measure_separate() -> None:
+    configure = require_operation_spec("source.counter_configure_v2")
+    enable = require_operation_spec("source.counter_enable_v2")
+    disable = require_operation_spec("source.counter_disable_v2")
+    measure = require_operation_spec("source.counter_measure_v2")
+
+    for spec, contract in (
+        (configure, SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT),
+        (enable, SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT),
+        (disable, SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT),
+    ):
+        assert spec.effect == "write"
+        assert spec.required_capabilities == (contract.capability,)
+        assert spec.changed_fields == ("source.input.counter",)
+        assert spec.restore_coverage == "source-v2-counter-no-rollback"
+        assert "no_automatic_rollback" in spec.risk_flags
+    assert measure.effect == "stateful_read"
+    assert measure.required_capabilities == ("source.counter_measure_v2",)
+    assert measure.restore_coverage == "none-read-only"
 
 
 def test_rf_source_m0_specs_are_read_only_and_exclusive() -> None:
@@ -227,6 +254,17 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
             ("source_v2", "output_must_be_off", "arbitrary_selection"),
         ),
         (
+            SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT,
+            "source-v2-arbitrary-volatile",
+            (
+                "source_v2",
+                "output_must_be_off",
+                "arbitrary_volatile_replace",
+                "payload_not_artifact",
+                "no_retry",
+            ),
+        ),
+        (
             SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT,
             "source-v2-output",
             ("source_v2", "dangerous_output"),
@@ -293,10 +331,30 @@ def test_source_v2_write_specs_match_their_static_operation_contracts() -> None:
     assert SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT.energy_effect is (
         SourceEnergyEffect.POTENTIAL_WHILE_OFF
     )
+    assert SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT.energy_effect is (
+        SourceEnergyEffect.POTENTIAL_WHILE_OFF
+    )
     assert SOURCE_OUTPUT_ENABLE_V2_OPERATION_CONTRACT.energy_effect is SourceEnergyEffect.EMIT
     assert SOURCE_OUTPUT_DISABLE_V2_OPERATION_CONTRACT.energy_effect is (
         SourceEnergyEffect.DECREASE_ONLY
     )
+
+    for contract, configure_capability in (
+        (SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT, "source.burst_configure_v2"),
+        (SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT, "source.sweep_configure_v2"),
+    ):
+        spec = require_operation_spec(contract.operation)
+        assert contract.energy_effect is SourceEnergyEffect.EMIT
+        assert spec.required_capabilities == (
+            contract.capability,
+            configure_capability,
+            "source.output_v2",
+        )
+        assert spec.postcondition_fields == tuple(
+            field.value for field in contract.postcondition_fields
+        )
+        assert "persistent_session_required" in spec.risk_flags
+        assert "no_retry" in spec.risk_flags
 
 
 def test_registry_is_read_only_and_filters_by_instrument_kind() -> None:

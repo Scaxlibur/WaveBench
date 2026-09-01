@@ -228,12 +228,8 @@ def _artifact(entry: dict[str, Any], key: str) -> str | None:
 def _html_link(path_text: str | None, output_dir: Path, label: str) -> str:
     if not path_text:
         return f'<span class="muted">{html.escape(label)}: missing</span>'
-    rel = _relative_path(Path(path_text), output_dir)
+    rel = artifact_url(Path(path_text), output_dir)
     return f'<a href="{html.escape(rel)}">{html.escape(label)}</a>'
-
-
-def _relative_path(path: Path, output_dir: Path) -> str:
-    return artifact_url(path, output_dir)
 
 
 def _nested(obj: dict[str, Any], *keys: str) -> Any:

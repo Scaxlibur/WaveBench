@@ -9,7 +9,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from uuid import uuid4
 
 import numpy as np
@@ -100,6 +100,8 @@ from wavebench.transport.session import (
 
 HIGH_IMPEDANCE_COUPLINGS = {"DCL", "DCLIMIT", "ACL", "ACLIMIT"}
 LOW_IMPEDANCE_COUPLINGS = {"DC", "AC"}
+
+_ProfileT = TypeVar("_ProfileT")
 
 
 @dataclass(frozen=True)
@@ -1236,16 +1238,24 @@ class ScopeService(SessionStateAliasMixin):
         extensions = getattr(descriptor, "scope_extensions", None)
         return getattr(extensions, "waveform_binary_profile", None)
 
-    def _snapshot_v2_profile(self) -> ScopeSnapshotProfileV2 | None:
+    def _v2_profile(
+        self,
+        field: str,
+        profile_type: type[_ProfileT],
+        label: str,
+    ) -> _ProfileT | None:
         descriptor = self.descriptor or resolve_instrument_descriptor(
             self.config.scope.driver,
             expected_kind="scope",
         )
         extensions = getattr(descriptor, "scope_extensions", None)
-        profile = getattr(extensions, "snapshot_profile_v2", None)
-        if profile is not None and not isinstance(profile, ScopeSnapshotProfileV2):
-            raise ConfigError("scope snapshot V2 descriptor profile has an invalid type")
+        profile = getattr(extensions, field, None)
+        if profile is not None and not isinstance(profile, profile_type):
+            raise ConfigError(f"scope {label} V2 descriptor profile has an invalid type")
         return profile
+
+    def _snapshot_v2_profile(self) -> ScopeSnapshotProfileV2 | None:
+        return self._v2_profile("snapshot_profile_v2", ScopeSnapshotProfileV2, "snapshot")
 
     def _acquisition_status_v2_profile(self) -> ScopeAcquisitionStatusProfileV2 | None:
         descriptor = self.descriptor or resolve_instrument_descriptor(
@@ -1268,50 +1278,27 @@ class ScopeService(SessionStateAliasMixin):
         return profile
 
     def _average_capture_v2_profile(self) -> ScopeAverageCaptureProfileV2 | None:
-        descriptor = self.descriptor or resolve_instrument_descriptor(
-            self.config.scope.driver,
-            expected_kind="scope",
+        return self._v2_profile(
+            "average_capture_profile_v2", ScopeAverageCaptureProfileV2,
+            "average capture",
         )
-        extensions = getattr(descriptor, "scope_extensions", None)
-        profile = getattr(extensions, "average_capture_profile_v2", None)
-        if profile is not None and not isinstance(profile, ScopeAverageCaptureProfileV2):
-            raise ConfigError("scope average capture V2 descriptor profile has an invalid type")
-        return profile
 
     def _measurement_statistics_v2_profile(
         self,
     ) -> ScopeMeasurementStatisticsProfileV2 | None:
-        descriptor = self.descriptor or resolve_instrument_descriptor(
-            self.config.scope.driver,
-            expected_kind="scope",
+        return self._v2_profile(
+            "measurement_statistics_profile_v2", ScopeMeasurementStatisticsProfileV2,
+            "measurement statistics",
         )
-        extensions = getattr(descriptor, "scope_extensions", None)
-        profile = getattr(extensions, "measurement_statistics_profile_v2", None)
-        if profile is not None and not isinstance(profile, ScopeMeasurementStatisticsProfileV2):
-            raise ConfigError("scope measurement statistics V2 descriptor profile has an invalid type")
-        return profile
 
     def _fft_status_v2_profile(self) -> ScopeFftStatusProfileV2 | None:
-        descriptor = self.descriptor or resolve_instrument_descriptor(
-            self.config.scope.driver,
-            expected_kind="scope",
-        )
-        extensions = getattr(descriptor, "scope_extensions", None)
-        profile = getattr(extensions, "fft_status_profile_v2", None)
-        if profile is not None and not isinstance(profile, ScopeFftStatusProfileV2):
-            raise ConfigError("scope FFT status V2 descriptor profile has an invalid type")
-        return profile
+        return self._v2_profile("fft_status_profile_v2", ScopeFftStatusProfileV2, "FFT status")
 
     def _cursor_readout_v2_profile(self) -> ScopeCursorReadoutProfileV2 | None:
-        descriptor = self.descriptor or resolve_instrument_descriptor(
-            self.config.scope.driver,
-            expected_kind="scope",
+        return self._v2_profile(
+            "cursor_readout_profile_v2", ScopeCursorReadoutProfileV2,
+            "cursor readout",
         )
-        extensions = getattr(descriptor, "scope_extensions", None)
-        profile = getattr(extensions, "cursor_readout_profile_v2", None)
-        if profile is not None and not isinstance(profile, ScopeCursorReadoutProfileV2):
-            raise ConfigError("scope cursor readout V2 descriptor profile has an invalid type")
-        return profile
 
     def _bounded_waveform_executor(self, scope: object) -> BoundedWaveformExecutor:
         if self.descriptor is None or self.session_state is None:

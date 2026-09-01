@@ -7,9 +7,12 @@
 > 实施状态：P0、M1–M4、M4.5、C1、M5-A、M5-B、M5-C、M5-D、C2 与 M6-A 的 Harmonic 配置／关闭、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM、内部 Sweep 子项已进入核心
 > `0.8.24` 开发线；R7 已接受。
 > 当前注册 `source.snapshot_v2`、`source.basic_configure_v2`、`source.output_v2` 和
-> `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
+> `source.harmonics_configure_v2`、`source.harmonics_disable_v2`、`source.modulation_configure_v2`、`source.pulse_configure_v2`、`source.modulation_pm_configure_v2`、`source.burst_configure_v2`、`source.burst_fire_v2`、`source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2`、`source.sweep_fire_v2`、`source.arbitrary_volatile_replace_v2`、`source.arbitrary_workspace_volatile_replace_v2` 及三项 Counter capability；M5-A 只冻结公共合同与 descriptor 校验，M5-B／M5-C 提供事务底座，
 > M5-D 已开放受限的 Source V2 写入口，C2 已补齐候选发布的核心兼容与离线发布物门。M6-A 已完成；
 > 在该里程碑范围内，Harmonic、内部 AM、WIDTH Pulse、内部 PM、内部 Triggered Burst、内部 FM、内部 PWM 与内部 Sweep 子项均具备公开 Service、CLI 与 run plan 入口。
+> 本分支另记录 R8 候选设计：修正 Coupling 写合同，并拆分 Noise Overlay 与 Sync 写事务。
+> 该候选设计尚未接受或实现；它不新增 Noise／Sync capability，也不改变已注册的 M6-C
+> 布尔 Coupling capability，不影响 R7 的公开行为。
 
 > [!IMPORTANT]
 > `Accepted R5` 在 R4 的 operation context、受影响字段闭包、phase、nonce、cleanup reserve
@@ -53,6 +56,7 @@ Harmonic、Modulation、Sweep、Burst、Pulse、Noise、DC、ARB、Counter、Com
 | R5 | Accepted | 冻结 M4.5 的 V1 写路由清单和 additive artifact 边界，并实现 C1 的受管 wheel/descriptor PEP 440 交叉门与 V1/V2 兼容 fixture；不注册任何 V2 写 capability |
 | R6 | Accepted | 冻结基本写入安全、核心接口归属和兼容边界；授权按 M5-A → M5-B → M5-C → M5-D → C2 → M6-A → M6-B → M6-C → M7 → C3 实施 |
 | R7 | Accepted | 为已关闭输出的 Harmonic 状态增加独立关闭 capability；不改变 basic 写入、V1 签名或输出 ON 准入 |
+| R8 候选 | Proposed | 为参数化 Coupling、Noise Overlay 和独立 Sync 物理端口设计写 capability 与恢复事务；不改变当前 capability 注册表 |
 
 ## Accepted R5 范围
 
@@ -212,8 +216,9 @@ mutation 或恢复写入的规则仍作为对应写 capability 的后续准入�
 15. artifact 不记录授权 token、baseline nonce、完整仪器响应、真实资源串、序列号或凭据。
 16. 插件未声明 Source V2 时，核心不会从型号、方法存在或 V1 profile 自动推导 V2 写能力。
 17. Source V2 能量增加操作必须显式配置 Vpp 与端口绝对电压上下限；缺失不表示无限制。
-18. Source V2 首个可写修订只允许相关输出 OFF 时配置；该限制不追溯改变 V1 行为，也不表示
-    仪器硬件不支持 live mutation。
+18. `source.basic_configure_v2` 与高级配置仍只允许相关输出 OFF 时执行。只有独立声明
+    `source.basic_live_configure_v2` 的设备，才允许在输出已证明为 ON 时执行受限单字段修改；该能力
+    不追溯改变未声明能力的 V1 行为。
 19. storage mutation、波形选择/配置和输出 ON 是三个独立 operation，不共享一次准入决定。
 
 ## R2 公共集成合同
@@ -245,6 +250,7 @@ class SourceDescriptorExtensions:
     features: tuple[SourceFeatureCapability, ...]
     query_contract: SourceQueryContract
     safety_profile: SourceSafetyProfile = SourceSafetyProfile()
+    v1_route_migration_enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +278,12 @@ class SourceFeatureCapability:
 - 多声明的方法不生成隐式 capability；
 - profile 只能收紧核心数值上限、deadline 和恢复步骤，不能放宽；
 - 使用 Source V2 的插件必须提高 wheel 与 descriptor 的最低核心版本。
+
+`v1_route_migration_enabled` 是 append-only 的 descriptor 迁移策略，默认值为 `true`。默认策略下，
+核心按已注册 V2 capability 接管可无损映射的 V1 route，或在无法无损映射时于 I/O 前拒绝。
+设为 `false` 时，显式 V2 Service、CLI 与 run step 仍可用，但 Basic／Output 的既有 V1 setter、
+restore、ARB upload 与 trigger 不因这几个 V2 capability 自动换路。该开关不取消其它已单独声明
+V2 capability 的重叠 route 安全门。
 
 R2 不改变现有 eager factory 合同：factory 可以调用 `DriverContext.open_transport()`。因此
 Protocol 方法缺失能够保证「零 Source operation 命令」，不能保证「零连接建立」。离线 A0 与插件
@@ -347,7 +359,6 @@ SourceBurstCapabilityProfile
 SourceBurstMode
 SourceCascadeState
 SourceChannelStateV2
-SourceClockSyncCapabilityProfile
 SourceComponentAmplitude
 SourceConstraintApplicability
 SourceCounterCapabilityProfile
@@ -578,6 +589,87 @@ SourcePhaseRelationConfigureV2Driver
 SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT
 ```
 
+首次稳定版 Coupling 只读模型修正在上述清单末尾追加以下精确条目：
+
+```text
+SourceCouplingCapabilityProfile
+SourceCouplingDimension
+SourceCouplingDimensionState
+SourceCouplingParameter
+SourceCouplingParameterKind
+SourceCouplingState
+```
+
+首次稳定版 Sync 只读模型修正在上述清单末尾追加以下精确条目：
+
+```text
+SourceReferenceClockCapabilityProfile
+SourceSyncCapabilityProfile
+SourceSyncPolarity
+SourceCascadeCapabilityProfile
+```
+
+首次稳定版 Noise Overlay 只读模型在上述清单末尾追加以下精确条目：
+
+```text
+NoiseOverlayFacet
+SourceNoiseOverlayCapabilityProfile
+SourceNoiseOverlayScale
+SourceNoiseOverlayScaleKind
+```
+
+D1-2／输出开启时的受限 Basic 修改在上述清单末尾追加以下精确条目：
+
+```text
+SourceBasicLiveConfigureResult
+SourceBasicLiveConfigureV2Driver
+SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT
+```
+
+D1-3／Burst 与 Sweep fire 在上述清单末尾追加以下精确条目：
+
+```text
+SourceFireRequest
+SourceFireResult
+SourceBurstFireV2Driver
+SourceSweepFireV2Driver
+SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT
+SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT
+```
+
+D1-4／volatile ARB 与 Counter 收口在上述清单末尾追加以下精确条目：
+
+```text
+SourceArbitraryVolatileReplaceRequest
+SourceArbitraryVolatileReplaceResult
+SourceArbitraryVolatileReplaceV2Driver
+SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT
+SourceCounterConfigurationField
+SourceCounterConfigurationPatch
+SourceCounterConfigureRequest
+SourceCounterConfigureResult
+SourceCounterConfigureV2Driver
+SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT
+SourceCounterEnableRequest
+SourceCounterEnableResult
+SourceCounterEnableV2Driver
+SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT
+SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT
+SourceCounterMeasureRequest
+SourceCounterMeasureResult
+SourceCounterMeasureV2Driver
+```
+
+D1-5／无通道 VOLATILE workspace 在上述清单末尾追加以下精确条目：
+
+```text
+SourceArbitraryWorkspaceCapabilityProfile
+SourceArbitraryWorkspaceVolatileReplaceRequest
+SourceArbitraryWorkspaceVolatileReplaceResult
+SourceArbitraryWorkspaceVolatileReplaceV2Driver
+SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT
+```
+
 ### capability 与 Protocol
 
 capability 仍是粗粒度路由，精确功能和方向由 `SourceDescriptorExtensions` 收紧。
@@ -607,6 +699,7 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | capability | required method | 范围 |
 | --- | --- | --- |
 | `source.basic_configure_v2` | `configure_source_basic_v2` | 基础函数、频率、Vpp、偏置和方波参数 |
+| `source.basic_live_configure_v2` | `configure_source_basic_live_v2` | 输出 ON 时单独修改频率或 Vpp |
 | `source.output_v2` | `set_source_output_v2` | 单独的 ON/OFF 转换 |
 | `source.harmonics_configure_v2` | `configure_source_harmonics_v2` | 谐波配置 |
 | `source.harmonics_disable_v2` | `disable_source_harmonics_v2` | 关闭 Harmonic 状态 |
@@ -619,6 +712,11 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 | `source.burst_configure_v2` | `configure_source_burst_v2` | Burst 配置 |
 | `source.arbitrary_storage_v2` | `mutate_source_arbitrary_storage_v2` | 创建或覆盖 ARB 存储槽位 |
 | `source.arbitrary_select_v2` | `select_source_arbitrary_v2` | 选择并配置已存在的 ARB |
+| `source.arbitrary_volatile_replace_v2` | `replace_source_arbitrary_volatile_v2` | 替换通道唯一的易失 ARB 工作区；上传会选择该工作区 |
+| `source.arbitrary_workspace_volatile_replace_v2` | `replace_source_arbitrary_workspace_volatile_v2` | 替换无通道归属的易失工作区；不声明任一通道已选择该内容 |
+| `source.counter_configure_v2` | `configure_source_counter_v2` | 单字段 Counter 输入配置 |
+| `source.counter_enable_v2` | `set_source_counter_enabled_v2` | 单独启用或关闭 Counter |
+| `source.counter_measure_v2` | `measure_source_counter_v2` | 对已启用 Counter 的只读测量 |
 | `source.combine_configure_v2` | `configure_source_combine_v2` | Combine 关系 |
 | `source.coupling_configure_v2` | `configure_source_coupling_v2` | Coupling 关系 |
 | `source.tracking_configure_v2` | `configure_source_tracking_v2` | Tracking 关系 |
@@ -634,8 +732,8 @@ R2 否决统一的 `source.patch_v2`、`source.arm_v2` 和 `source.fire_v2`。�
 R6／M6-A 将 `source.modulation_pm_configure_v2`、`source.burst_configure_v2` 与
 `source.modulation_fm_configure_v2`、`source.modulation_pwm_configure_v2`、`source.sweep_configure_v2` 明确加入已授权的窄 capability。
 现有 `source.modulation_configure_v2` 保持内部 AM 的首版语义，不因 PM 子项扩张；分离 capability 使 PM-only
-插件不会改变 V1 AM route，也使 AM-only 插件无需提供 PM 入口。Burst capability 也不授权 arm、fire 或任何
-输出开启路径。
+插件不会改变 V1 AM route，也使 AM-only 插件无需提供 PM 入口。配置 capability 不授权 arm、fire 或任何
+输出开启路径。D1-3 另行注册 `source.burst_fire_v2` 与 `source.sweep_fire_v2`；两者仍不授权 arm。
 
 Source V2 驱动不接收 `SessionAuthorization`、`InstrumentSessionState` 或 raw transport handle。
 核心在授权 phase 中调用已冻结的 driver 方法，driver 只返回公共类型化 model。
@@ -836,6 +934,8 @@ epoch 和 baseline。R4 已把这些两个 model、固定 phase 和 core-only co
 
 `UNKNOWN` energy/storage effect 在 I/O 前拒绝。`POTENTIAL_WHILE_OFF` 要求全部
 `required_off_outputs` 已通过 fresh readback 证明 OFF，并且 operation 本身不能打开输出。
+`LIVE_MUTATION` 要求目标输出已通过 fresh readback 证明 ON，并且只能执行 capability 明确声明的
+单字段修改；失败恢复只能关闭输出。
 `MAY_INCREASE` 与 `EMIT` 必须通过统一预算门。`DECREASE_ONLY` 不需要预算，但仍需 access、
 session、operation context 和 postcondition。
 
@@ -844,21 +944,22 @@ session、operation context 和 postcondition。
 | 路径 | 统一要求 |
 | --- | --- |
 | V2 输出 ON | fresh 一致 snapshot + 预算 + 写后回读 |
-| V1 同义写入口调用双合同驱动 | 在 Service 边界映射到对应 V2 operation，无法无损映射时在 I/O 前拒绝 |
+| V1 同义写入口调用双合同驱动 | 当 descriptor 未关闭 V1 route migration 时，在 Service 边界映射到对应 V2 operation；无法无损映射时在 I/O 前拒绝 |
 | `source.arb_load output_on=true` | 先在输出 OFF 的配置 phase 完成上传或选择，再用 fresh snapshot 签发只授权下一次 ON 的新决定 |
-| 输出 ON 时的 Source V2 setter/patch | 首版在 I/O 前拒绝；未来若允许 live mutation，必须对完整目标状态使用专项预算合同 |
+| 输出 ON 时的 Source V2 setter/patch | 仅 `source.basic_live_configure_v2` 可单独修改频率或 Vpp；其它 patch 在 I/O 前拒绝 |
 | arm/fire/trigger | 在可能发出信号前完成预算与接线证据检查 |
 | 恢复为 ON | 作为独立、显式授权的 ON 操作重新计算预算 |
 
 V1 驱动未 opt in 时继续使用现有 V1 路径，不伪装成已获得 Source V2 复合安全保证。
-Source V2 的首版 live-mutation 禁令不追溯改变 V1 驱动的既有行为，也不表示硬件本身不支持
-ON 状态写入。
+未声明 `source.basic_live_configure_v2` 的 V2 驱动继续拒绝 ON 状态配置。V1-only 驱动保持既有
+行为，但不因此获得 Source V2 的 live mutation 安全保证。
 
 每个 V2 写 capability 必须在 `SourceOperationContract` 中登记其 V1 等价入口、重叠字段和可能发出
-信号的间接入口。双合同驱动声明该 capability 后，只有落入这些集合的 V1 路径必须映射到 V2
-operation 或在 I/O 前拒绝；字段闭包完全不相交的 V1 operation 可以继续走 V1。核心仍需审计完整
-V1 写表面，防止遗漏隐式副作用。OFF 不需要复合预算，但不能绕过 access、session health、
-operation context 和必要回读。插件不能通过保留旧方法名重新引入同字段或同发信号路径的旁路。
+信号的间接入口。双合同驱动默认对落入这些集合的 V1 路径映射到 V2 operation 或在 I/O 前拒绝；
+若 descriptor 明确关闭 V1 route migration，则保留完整 V1 合同，只有显式 V2 入口调用新 operation。
+字段闭包完全不相交的 V1 operation 可以继续走 V1。核心仍需审计完整 V1 写表面，防止遗漏隐式副作用。
+OFF 不需要复合预算，但不能绕过 access、session health、operation context 和必要回读。插件不能通过
+保留旧方法名重新引入同字段或同发信号路径的旁路。
 
 `source.output_v2` 的等价集合至少包括 V1 `set_output(ON)`、ARB 的 `output_on=True`、会发出信号的
 trigger/fire 和恢复 ON；`source.arbitrary_storage_v2` 至少接管 V1 上传入口，但不因此接管无关的
@@ -937,6 +1038,7 @@ class SourceFeature(StrEnum):
     BURST = "burst"
     PULSE = "pulse"
     ARBITRARY = "arbitrary"
+    ARBITRARY_WORKSPACE = "arbitrary_workspace"
     COUNTER = "counter"
     REFERENCE_CLOCK = "reference_clock"
     SYNC = "sync"
@@ -991,6 +1093,8 @@ facet 辅助 enum 也使用封闭 value 集：
 
 - `SourceAmplitudeUnit`：`vpp`、`vrms`、`dbm`、`v`、`unknown`；
 - `SourceOutputPolarity`：`normal`、`inverted`、`unknown`；
+- `SourceSyncPolarity`：`positive`、`negative`、`unknown`；
+- `SourceNoiseOverlayScaleKind`：`percent`、`ratio`、`ratio_db`；
 - `SourceLoadKind`：`high_impedance`、`resistive`、`unknown`；
 - `SourceModulationKind`：`am`、`dsb_am`、`fm`、`pm`、`pwm`、`ask`、`fsk`、`psk`、`other`；
 - `SourceModulationSource`：`internal`、`external`、`channel`、`unknown`；
@@ -1014,8 +1118,8 @@ facet 辅助 enum 也使用封闭 value 集：
 
 机器可读 feature ID 按作用域分为：
 
-- channel：`basic`、`output`、`harmonics`、`modulation`、`sweep`、`burst`、`pulse`、`arbitrary`；
-- system：`counter`、`reference_clock`、`sync`、`cascade`；
+- channel：`basic`、`output`、`noise_overlay`、`harmonics`、`modulation`、`sweep`、`burst`、`pulse`、`arbitrary`、`sync`；
+- system：`counter`、`reference_clock`、`cascade`；
 - cross-channel：`combine`、`tracking`、`coupling`、`copy`、`phase_relation`、`shared_power`。
 
 正文中的 Harmonic、Sync、Combine 等首字母大写名称只是展示术语；注册表、artifact 和
@@ -1024,7 +1128,7 @@ descriptor 一律使用上述小写 ID，不允许通过大小写或单复数增
 feature 集合是核心注册表，不接受插件自定义任意字符串作为新安全语义。厂商专用功能可继续
 使用独立 capability，但未经核心注册时不进入通用 Source V2 预算或恢复。
 
-R2 冻结以下 11 个只读 capability profile。布尔字段只声明该值能否读取，不提供写授权；tuple
+R2 冻结以下只读 capability profile。布尔字段只声明该值能否读取，不提供写授权；tuple
 使用 enum value 或 ID 的升序并且不重复。
 
 ```python
@@ -1043,6 +1147,12 @@ class SourceOutputCapabilityProfile:
     output_readable: bool
     display_load_readable: bool
     polarity_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayCapabilityProfile:
+    enabled_readable: bool
+    scale_kinds: tuple[SourceNoiseOverlayScaleKind, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1096,6 +1206,14 @@ class SourceArbitraryCapabilityProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceCapabilityProfile:
+    workspace_id: str
+    volatile_replace_min_points: int
+    volatile_replace_max_points: int
+    volatile_replace_max_payload_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCounterCapabilityProfile:
     input_ids: tuple[str, ...]
     measurement_kinds: tuple[SourceCounterMeasurementKind, ...]
@@ -1104,10 +1222,35 @@ class SourceCounterCapabilityProfile:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceClockSyncCapabilityProfile:
-    reference_clock_modes: tuple[SourceReferenceClockMode, ...]
-    sync_readable: bool
-    cascade_readable: bool
+class SourceReferenceClockCapabilityProfile:
+    modes: tuple[SourceReferenceClockMode, ...]
+    frequency_readable: bool
+    lock_state_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSyncCapabilityProfile:
+    enabled_readable: bool
+    polarity_readable: bool
+    source_channel_readable: bool
+    source_channels: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCascadeCapabilityProfile:
+    enabled_readable: bool
+    role_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingCapabilityProfile:
+    dimensions: tuple[SourceCouplingDimension, ...]
+    parameter_kinds: tuple[SourceCouplingParameterKind, ...]
+    supported_channel_sets: tuple[tuple[int, ...], ...]
+    global_state_readable: bool
+    reference_channel_readable: bool
+    relation_graph_readable: bool
+    configuration_readable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1125,20 +1268,37 @@ class SourceCrossChannelCapabilityProfile:
 SourceFeatureProfile: TypeAlias = (
     SourceBasicCapabilityProfile
     | SourceOutputCapabilityProfile
+    | SourceNoiseOverlayCapabilityProfile
     | SourceHarmonicCapabilityProfile
     | SourceModulationCapabilityProfile
     | SourceSweepCapabilityProfile
     | SourceBurstCapabilityProfile
     | SourcePulseCapabilityProfile
     | SourceArbitraryCapabilityProfile
+    | SourceArbitraryWorkspaceCapabilityProfile
     | SourceCounterCapabilityProfile
-    | SourceClockSyncCapabilityProfile
+    | SourceReferenceClockCapabilityProfile
+    | SourceSyncCapabilityProfile
+    | SourceCascadeCapabilityProfile
+    | SourceCouplingCapabilityProfile
     | SourceCrossChannelCapabilityProfile
 )
 ```
 
 feature 与 profile 类型使用固定映射；例如 `HARMONICS` 只能使用
 `SourceHarmonicCapabilityProfile`。union 新增成员属于公共合同扩展，必须由核心注册并补版本门。
+
+Noise Overlay 的 `enabled_readable=False` 时，snapshot 不得返回 `enabled=VALUE`。
+`scales=VALUE` 携带的 scale kind 必须与 `scale_kinds` 完全一致；查询失败仍使用
+对应的非 `VALUE` availability，不得删除已声明的 kind 或补造默认值。
+
+Sync 的 `enabled_readable`、`polarity_readable` 和 `source_channel_readable` 也使用同样的
+单向诚实声明：未声明可读的字段不得返回 `VALUE`，运行时暂时无法取得时可以返回
+合适的非 `VALUE` availability。Coupling 的 `CHANNEL_SET` 必须存在于
+`supported_channel_sets`；snapshot 中的 dimensions 必须与 profile 完全一致，已返回的
+parameter kind 必须属于 `parameter_kinds`。`global_state_readable=False` 或
+`reference_channel_readable=False` 时，对应字段不得返回 `VALUE`。全局开关与各
+dimension 开关可以表示主开关和保留配置，核心不强制两者必须相等。
 
 ### facet 作用域
 
@@ -1169,10 +1329,10 @@ class SourceTopologyContract:
 格式的 `input_id`；`INSTRUMENT` 不携带这些字段。所有通道必须属于 topology。
 `SourceTopologyContract.channels` 必须递增、唯一且非空；`input_ids` 必须排序稳定且不重复。
 
-- `basic`、`output`、`harmonics`、`modulation`、`pulse`、`sweep`、`burst` 和 `arbitrary`
+- `basic`、`output`、`noise_overlay`、`harmonics`、`modulation`、`pulse`、`sweep`、`burst`、`arbitrary` 和 `sync`
   通常属于 `CHANNEL`；
 - `combine`、`coupling` 和 `tracking` 属于 `CHANNEL_SET`，并明确列出关系参与者；
-- `reference_clock`、`sync` 和 `cascade` 属于 `INSTRUMENT` 或 `CHANNEL_SET`；
+- `reference_clock` 和 `cascade` 属于 `INSTRUMENT`；
 - `counter` 通常属于独立 `INPUT`，只有存在已声明路由关系时才参与输出预算。
 
 descriptor 中的 topology 是静态上界。实际 capability 必须根据已验证的型号、固件、选件和
@@ -1188,6 +1348,7 @@ class SourceFieldId(StrEnum):
     IDENTITY = "source.identity"
     BASIC = "source.channel.basic"
     OUTPUT = "source.channel.output"
+    NOISE_OVERLAY = "source.channel.noise_overlay"
     DISPLAY_LOAD = "source.channel.display_load"
     HARMONICS = "source.channel.harmonics"
     MODULATION = "source.channel.modulation"
@@ -1196,6 +1357,7 @@ class SourceFieldId(StrEnum):
     PULSE = "source.channel.pulse"
     ARBITRARY_SELECTION = "source.channel.arbitrary_selection"
     ARBITRARY_STORAGE = "source.channel.arbitrary_storage"
+    ARBITRARY_WORKSPACE = "source.instrument.arbitrary_workspace"
     ARM_STATE = "source.channel.arm_state"
     TRIGGER_STATE = "source.channel.trigger_state"
     COMBINE = "source.cross_channel.combine"
@@ -1205,7 +1367,7 @@ class SourceFieldId(StrEnum):
     PHASE_RELATION = "source.cross_channel.phase_relation"
     RELATION_GRAPH = "source.cross_channel.relation_graph"
     REFERENCE_CLOCK = "source.instrument.reference_clock"
-    SYNC = "source.instrument.sync"
+    SYNC = "source.channel.sync"
     CASCADE = "source.instrument.cascade"
     SHARED_POWER = "source.instrument.shared_power"
     COUNTER = "source.input.counter"
@@ -1520,16 +1682,21 @@ class ArbitraryFacet:
 
 
 @dataclass(frozen=True, slots=True)
+class NoiseOverlayFacet:
+    enabled: Observed[bool]
+    scales: Observed[tuple[SourceNoiseOverlayScale, ...]]
+
+
+@dataclass(frozen=True, slots=True)
 class SourceSystemStateV2:
     counters: tuple[SourceCounterInputState, ...]
     reference_clock: Observed[SourceReferenceClockState]
-    sync: Observed[SourceSyncState]
     cascade: Observed[SourceCascadeState]
 
 
 @dataclass(frozen=True, slots=True)
 class SourceCrossChannelStateV2:
-    relations: tuple[SourceRelationState, ...]
+    relations: tuple[SourceRelationState | SourceCouplingState, ...]
     relation_graph: Observed[SourceRelationGraph]
     shared_power: Observed[SourceSharedPowerState]
 
@@ -1545,6 +1712,8 @@ class SourceChannelStateV2:
     burst: Observed[BurstFacet]
     pulse: Observed[PulseFacet]
     arbitrary: Observed[ArbitraryFacet]
+    sync: Observed[SourceSyncState]
+    noise_overlay: Observed[NoiseOverlayFacet]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1573,7 +1742,9 @@ class SourceSnapshotV2:
 gate_time_s, trigger_level_v, statistics_enabled)`、
 `SourceReferenceClockState(mode, frequency_hz, locked)`、
 `SourceSyncState(enabled, polarity, source_channel)`、`SourceCascadeState(enabled, role)`、
-`SourceRelationState(feature, channels, enabled)` 和
+`SourceNoiseOverlayScale(kind, value)`、
+`SourceRelationState(feature, channels, enabled)`、
+`SourceCouplingState(feature, channels, enabled, reference_channel, dimensions)` 和
 `SourceSharedPowerState(participants, active_power_upper_w, hard_limit_w)`。
 
 每个数值必须有限；频率、时间、阻抗、点数、阶次和功率等非负量不得为负；百分比范围为
@@ -2086,6 +2257,7 @@ class SourceBudgetBlockerCode(StrEnum):
     MODULATION_CONSTRAINT_MISSING = "modulation_constraint_missing"
     ARBITRARY_OVERSHOOT_MISSING = "arbitrary_overshoot_missing"
     NOISE_PEAK_MISSING = "noise_peak_missing"
+    NOISE_OVERLAY_BOUND_MISSING = "noise_overlay_bound_missing"
     SWEEP_DERATING_MISSING = "sweep_derating_missing"
     ACTIVE_CHANNEL_UNKNOWN = "active_channel_unknown"
     COMBINE_STATE_UNAVAILABLE = "combine_state_unavailable"
@@ -2254,6 +2426,10 @@ vpp_upper_v = maximum_v_upper - minimum_v_lower
 - ARB 必须计入样本归一化、输出滤波或插值可能产生的 overshoot 边界；无法给出边界时为 `UNKNOWN`；
 - Sweep 在完整频率范围内取最大边界并应用频率降额；
 - Noise 只有在型号和固件范围内存在已审计的硬峰值上界时，才能进入 `HARD_CONSERVATIVE`；
+- Noise Overlay 与基本 Noise 波形是两个独立 contributor。当前只读模型没有冻结叠加噪声的硬电压
+  边界；只有 runtime 明确为 `UNSUPPORTED`／`NOT_APPLICABLE`，或 `enabled=VALUE(False)` 时，
+  才能沿用基本波形预算。已启用或启用状态不是 `VALUE` 时返回
+  `NOISE_OVERLAY_BOUND_MISSING`；`SourceNoisePeakConstraint` 不得替代该边界；
 - RMS 无法保守计算时可以为 `None`，但若配置了 RMS 上限，该缺失会成为 blocker；
 - 多通道共享功率限制必须由 typed constraint 表示或返回可审查的计算结果，不允许使用自由文本声明。
 
@@ -2302,8 +2478,9 @@ class SafetyLimitsConfig:
 V1 CLI 或未 opt in 的 V1 driver。
 
 缺少显式安全轴仍允许 `source.snapshot_v2`、正常 OFF、disable，以及已经证明不会发出信号的
-输出 OFF 配置或独立 storage mutation。ON、fire、恢复 ON、可能发出信号的 trigger、live mutation，
-以及能量影响为 unknown 的 operation 必须零仪器 I/O 拒绝。
+输出 OFF 配置或独立 storage mutation。ON、fire、恢复 ON、可能发出信号的 trigger、严格预算型
+live mutation，以及能量影响为 unknown 的 operation 必须零仪器 I/O 拒绝。D1-2 的受限 Basic
+live mutation 使用 R6 数值门，不要求 R3 的完整复合预算模型。
 
 示例配置中的「缺失表示不限」只能继续描述 V1。Source V2 文案必须明确：缺失表示没有能量转换
 授权，而不是无限制。
@@ -2417,9 +2594,9 @@ topology 或 profile 只要声明共享功率关系，就必须提供完整 type
 context 结束都会使它失效；获准的 ON/fire/trigger action 会一次性消费它。首版禁止用一个决定
 同时授权 ARB 上传和 ON，也禁止输出 ON 时执行多字段 live patch。
 
-R2 规定未来 Source V2 首个可写修订中，高级配置只允许在所有相关输出 OFF 时执行，不自动执行
-「关闭 → 配置 → 重新开启」。未来若允许 live mutation，必须通过本 RFC 修订并复用同一
-写后预算门。该规则不追溯改变未 opt in 的 V1 驱动行为。
+高级配置只允许在所有相关输出 OFF 时执行，不自动执行「关闭 → 配置 → 重新开启」。D1-2 仅为
+Basic 的频率与 Vpp 增加独立单字段 live operation，不授权波形、Offset、占空比、高级功能、ARB
+或跨通道关系的 ON 状态修改。该规则不追溯改变未 opt in 的 V1 驱动行为。
 
 OFF 不需要复合预算，但仍需要正常 OFF 权限或核心签发的 recovery 授权。`poisoned` 连接不得
 为了 OFF 再发送协议 I/O。
@@ -2607,7 +2784,8 @@ scheme、原始等级、按 `wavebench.source.a0-a5.v1` 重新评定的等级和
 | 新核心 + 旧插件 | `source_extensions=None`，保持 V1 路径，不推导 V2 写能力 |
 | 旧核心 + 新插件 | 受管安装由 wheel `Requires-Dist` 在 entry point import 前拒绝；绕过 package inspection 的直接 `pip --no-deps` 或手工安装不承诺零导入，且不属于支持组合 |
 | 新核心 + 新插件 | 只对明确声明并通过验证的 Source V2 capability 使用新合同 |
-| 新核心 + 同时声明 V1/V2 的新插件 | 新 operation 只使用 V2；同义或副作用重叠的旧写入口映射／拒绝，不相交的旧 operation 保持 V1；单次事务不混用两套安全视图 |
+| 新核心 + 同时声明 V1/V2 的新插件 | 新 operation 只使用 V2；默认策略下，同义或副作用重叠的旧写入口映射／拒绝，不相交的旧 operation 保持 V1；单次事务不混用两套安全视图 |
+| 新核心 + `v1_route_migration_enabled=false` 的双合同插件 | 只有显式 V2 operation 使用 V2；Basic／Output 自动迁移与由它们引出的 gate 不接管旧 route。已单独声明的高级 V2 capability 仍保留其真实字段／发信号重叠 gate，不能用不完整的 V2 组合绕过 legacy composite transaction |
 
 R2 决定保持 `wavebench.instrument.v2`。`source_extensions` 是带默认值的末尾扩展，新 Protocol
 不改变现有 `SourceDriver`，新 capability 通过最低核心版本门显式 opt in。只有删除 Source V1、
@@ -2733,7 +2911,7 @@ status、output 和基础 setter，也包括已经发布的 profile、configure�
 双合同驱动声明某项 V2 写 capability 后，同义或副作用闭包重叠的 V1 写入口必须在 Service 边界
 映射到对应 V2 operation，无法无损映射时在 I/O 前拒绝；经审计确认字段闭包和发信号路径均不相交
 的 V1 operation 可以继续保持原行为。未声明 V2 写 capability 的 V1-only 驱动保持原行为；
-Source V2 首版禁止 live mutation 不追溯改变该路径。
+未声明 `source.basic_live_configure_v2` 的 V2 驱动仍不得经 V1 setter 绕过 ON 状态门。
 
 ### 独立 P0 缺陷修复
 
@@ -2897,7 +3075,7 @@ R5 已加入以下纯离线兼容 fixture，作为上述要求的持续回归：
 
 ## Accepted 决议基线
 
-1. 11 个 `SourceFeatureProfile`、8 个 channel facet、2 个非通道状态、嵌套 helper、reason code 和
+1. 闭合的 `SourceFeatureProfile` union、8 个 channel facet、2 个非通道状态、嵌套 helper、reason code 和
    canonical serializer 按本文冻结，不保留 `object` 或自由 mapping。
 2. `source_extensions.__all__`、顶层 identity re-export 和 descriptor append-only 布局按本文冻结。
 3. `source.snapshot_v2` 的 `OperationSpec`、Service、CLI JSON、snapshot document 和只读 operation
@@ -2970,7 +3148,8 @@ R2 的本段只约束 R2–R5 的 snapshot-only 阶段。R6 已为后续基础�
 - 复合预算由核心统一消费；插件提供厂商状态、typed constraint 和协议回读。
 - `max_source_vpp` 与端口绝对电压上下限必须显式配置，不能互相推导；缺失时 V2 能量操作失败关闭。
 - 只有 `HARD_CONSERVATIVE` 可以支持输出 ON 准入。
-- Source V2 首个可写修订禁止 live mutation；未 opt in 的 V1 行为不变。
+- Basic live mutation 是独立 capability，只允许输出 ON 时单独修改频率或 Vpp；未 opt in 的 V1
+  行为不变。
 - ARB storage、selection/configuration 和 ON 使用三个独立 operation。
 - Source 事务复用核心 session health 和授权底座，不新增平行 `state_uncertain` 布尔值。
 - 失败恢复默认以 OFF 结束；重新 ON 是新的授权操作。
@@ -3003,8 +3182,8 @@ Vpp、Offset 和输出状态的设备正常使用信号发生器功能，而不�
    基础 Source V2 功能。
 3. 若同时配置了 `min_source_port_voltage_v` 和 `max_source_port_voltage_v`，核心以
    `offset ± Vpp / 2` 检查该端口区间；两个配置均缺失时，不增加额外端口电压限制。
-4. 基础配置要求目标通道在写前为 OFF；不支持 V2 live mutation。独立端口可以同时保持 ON，核心
-   不为缺少共享功率或热模型而全局拒绝。
+4. `source.basic_configure_v2` 要求目标通道在写前为 OFF。独立端口可以同时保持 ON，核心不为
+   缺少共享功率或热模型而全局拒绝。
 5. 每个目标字段最多写入一次；写后必须独立回读。结果不明时不得重试；在 session 仍允许 recovery
    I/O 时请求受影响端口 OFF，`poisoned` session 仍遵守 transport RFC 的 close-only 规则。
 6. `source.output_v2` 的 OFF 不因 Vpp、Offset、端接或预算信息缺失而拒绝；ON 使用 fresh snapshot
@@ -3013,6 +3192,23 @@ Vpp、Offset 和输出状态的设备正常使用信号发生器功能，而不�
 基础写入不要求 `SourceTerminationEvidence`、`CompositeOutputBudget`、RMS、Noise crest factor、ARB
 插值上界、复杂负载或共享热功率模型。R3 的严格预算模型继续保留给明确选择它的后续 capability，
 不能反向限制 R6 的 basic/output 正常路径。
+
+### D1-2 受限 Basic live mutation
+
+`source.basic_live_configure_v2` 是独立 capability，不改变 `source.basic_configure_v2` 的 OFF-only
+语义。descriptor 必须同时声明 `source.snapshot_v2`、`source.basic_configure_v2`、
+`source.output_v2`，并在每个 Basic profile 中逐字段声明是否允许在线修改频率和 Vpp。
+
+每次请求只允许 `frequency_hz` 或 `amplitude_vpp` 中一个字段为 `SET`；waveform、Offset、占空比和
+多字段 patch 在 MAIN 前拒绝。preflight 必须证明 snapshot 一致、目标输出为 ON、频率模式为 FIXED，
+并取得最终 Vpp 与 Offset。目标和回读值继续使用 R6 的 `max_source_vpp` 与端口绝对电压检查。
+
+MAIN 只调用一次 `configure_source_basic_live_v2()`。结果与 fresh postcondition 必须逐项证明请求值、
+最终 Vpp、Offset 和输出仍为 ON。结果未知、driver 异常或后置条件失败时不重试，也不恢复 ON；Core
+只允许一次 `source.output_v2` OFF recovery 与独立回读。V1 `set_frequency()` 和
+`set_amplitude_vpp()` 只在 descriptor 保持默认 migration 策略时，才按已证明的输出状态选择
+OFF-only 或 live operation。显式 P1 入口为 `basic-live-configure-v2` CLI 与
+`source.basic_live_configure_v2` run step；频响、离散扫频与 TUI 继续复用既有 setter。
 
 Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使用 `offset ± Vpp / 2`；不要求独立
 `SourceNoisePeakConstraint`。若设备只能提供标称值、RMS 或载波幅度，插件不得为该模式声明
@@ -3034,10 +3230,12 @@ Noise 若插件回读的幅度是最终输出 `VPP`，按普通基础波形使�
   artifact 和错误路径，不能用一个方向不明确的 contract 混合表示。
 - 新类型、descriptor 字段和 artifact 键必须 append-only；既有 `SourceDriver`、`SourceStatus`、
   V1 CLI、V1 run step、V1 JSON 和 V1 artifact 不改变语义。
-- V1-only 插件继续执行 V1 路径。双合同插件声明某项 V2 capability 后，核心在 M5-D 将同义或副作用
-  重叠的 V1 route 映射到 V2。`set_function` 有一项兼容例外：目标波形未在当前 V2 Basic profile 声明，
-  或 V2 preflight 无法为当前旧状态提供最终 Vpp／Offset 时，核心继续调用既有 V1 setter，不进入 V2 MAIN
-  写入；其余无法无损映射的重叠 route 在仪器 I/O 前拒绝。不相交的 V1 route 保持原行为。
+- V1-only 插件继续执行 V1 路径。双合同插件默认在 M5-D 将同义或副作用重叠的 V1 route 映射到 V2；
+  `v1_route_migration_enabled=false` 可使显式 V2 Basic／Output surface 与其 legacy transaction 并存，
+  但不取消任何已单独声明高级 V2 capability 的真实重叠安全门。
+  `set_function` 有一项兼容例外：目标波形未在当前 V2 Basic profile 声明，或 V2 preflight 无法为当前
+  旧状态提供最终 Vpp／Offset 时，核心继续调用既有 V1 setter，不进入 V2 MAIN 写入；其余无法无损映射
+  的重叠 route 在仪器 I/O 前拒绝。不相交的 V1 route 保持原行为。
 - M5-D 在同一开发线内先完成 Service／CLI，再增加 V2 run plan step、intent 和 artifact；中间不发布
   稳定写接口。
 
@@ -3064,9 +3262,10 @@ M5-A 只增加闭合的单通道 model，不提供自由 mapping 或通用 patch
 
 声明任一 M5-A 写 capability 的 descriptor 必须同时声明 `source.snapshot_v2`。基础配置要求同一
 channel 的 Basic 支持 `READ` 与 `CONFIGURE`，并能回读最终 Vpp、Offset 和输出状态；输出 capability
-要求同一 channel 的 Output 支持 `READ`、`ENABLE` 与 `DISABLE`，并能回读输出状态。启用动作在运行时
-另行要求同一 channel 可返回最终 Vpp 与 Offset；关闭动作不以它们为条件。方向、profile、channel 或
-required method 不匹配时，在 factory 及仪器 I/O 前失败。
+至少要求同一 channel 的 Output 支持 `READ` 与 `DISABLE`，并能回读输出状态。`ENABLE` 是可选方向；若声明，
+每个可开启 channel 必须也支持 `DISABLE`。这样可为仅需安全关闭的受限 capability 提供 output substrate，
+而任意 enable request 仍会在运行时方向校验后、写入前失败。启用动作另行要求同一 channel 可返回最终 Vpp 与
+Offset；关闭动作不以它们为条件。方向、profile、channel 或 required method 不匹配时，在 factory 或相应写入前失败。
 
 M5-A 不增加 `SourceService` 写方法、CLI 写命令或 run plan step；现有 V1 setter、CLI、run plan、TUI
 和 artifact 保持原样。capability 注册只让核心识别插件合同，不构成可调用写入口。
@@ -3133,33 +3332,38 @@ M5-D 将 M5-B／M5-C 的唯一核心事务开放为以下 Service 方法：
 
 ```python
 SourceService.configure_basic_v2(request, *, correlation_id=None)
+SourceService.configure_basic_live_v2(request, *, correlation_id=None)
 SourceService.set_output_v2(request, *, correlation_id=None)
 ```
 
-两者分别返回 `(typed_result, operation_artifact)`。`typed_result` 是已冻结的
+三者分别返回 `(typed_result, operation_artifact)`。`typed_result` 是已冻结的
 `SourceBasicConfigureResult` 或 `SourceOutputResult`；`operation_artifact` 使用
 `wavebench.source.operation.v1`。Service 不重新实现 preflight、写入、回读、recovery 或 session health
-逻辑，所有入口继续复用 M5-B／M5-C 事务。
+逻辑，所有入口继续复用 M5-B／M5-C 与 D1-2 事务。
 
-CLI 是 additive 的两个新子命令：
+CLI 是 additive 的三个新子命令：
 
 ```text
 wavebench source basic-configure-v2 --channel N \
   [--waveform sine|square|ramp|pulse|noise|dc] \
   [--frequency-hz HZ] [--amplitude-vpp VPP] [--offset-v V] \
   [--square-duty-cycle-percent PERCENT]
+wavebench source basic-live-configure-v2 --channel N \
+  [--frequency-hz HZ | --amplitude-vpp VPP]
 wavebench source output-v2 --channel N on|off
 ```
 
-`basic-configure-v2` 至少需要一个 basic 字段。普通模式直接输出 operation artifact；`--json` 将它置于
-`wavebench.cli.result.v1.result`。写后失败时，CLI 的 `wavebench.error.v1` 会附加脱敏的
-`source_operation_artifact`。两个新命令不改变既有 V1 CLI 参数或成功 JSON。
+`basic-configure-v2` 至少需要一个 basic 字段。`basic-live-configure-v2` 只接受一个 frequency 或
+Vpp 字段，且由 Service 证明输出为 ON、模式为 FIX。普通模式直接输出 operation artifact；`--json` 将它
+置于 `wavebench.cli.result.v1.result`。写后失败时，CLI 的 `wavebench.error.v1` 会附加脱敏的
+`source_operation_artifact`。三个新命令不改变既有 V1 CLI 参数或成功 JSON。
 
-run plan 使用三个有方向 step，避免在 intent 中把 ON／OFF 混为同一 operation：
+run plan 使用四个有方向 step，避免在 intent 中把 ON／OFF 混为同一 operation：
 
 | step kind | 必填字段 | 允许的额外字段 | 对应 operation |
 | --- | --- | --- | --- |
 | `source.basic_configure_v2` | `channel` | `waveform_kind`、`frequency_hz`、`amplitude_vpp`、`offset_v`、`square_duty_cycle_percent`；至少一个 | `source.basic_configure_v2` |
+| `source.basic_live_configure_v2` | `channel` | `frequency_hz` 或 `amplitude_vpp`；恰好一个 | `source.basic_live_configure_v2` |
 | `source.output_enable_v2` | `channel` | 无 | `source.output_enable_v2` |
 | `source.output_disable_v2` | `channel` | 无 | `source.output_disable_v2` |
 
@@ -3169,7 +3373,8 @@ run plan 使用三个有方向 step，避免在 intent 中把 ON／OFF 混为同
 operation artifact 同时保存到 step 的 `artifact.source_operation` 和非空根键
 `run.json.source_operations`；写后失败带来的 artifact 也会保存。没有 V2 step 的 V1 run 保持没有该根键。
 
-双合同插件按当前已注册 V2 contract 路由，不混用 V1 状态视图来做 V2 安全决策：
+`v1_route_migration_enabled=true` 的双合同插件按当前已注册 V2 contract 路由，不混用 V1 状态视图
+来做 V2 安全决策：
 
 | 已声明 V2 capability | V1 route | M5-D 行为 |
 | --- | --- | --- |
@@ -3179,8 +3384,11 @@ operation artifact 同时保存到 step 的 `artifact.source_operation` 和非�
 | `source.output_v2` | `trigger_burst`、`trigger_sweep` | 属于可能发信号的重叠 route，在仪器 I/O 前拒绝。 |
 | 当前两个写 capability 均未覆盖 | `configure_coupling`、`configure_harmonics`、AM／FM／PM／PWM、`configure_pulse`、`configure_burst`、`configure_sweep` | 保持 V1 路径，等待对应 feature 的 V2 capability。 |
 
-V1-only 插件继续使用原 V1 route。双合同 V1 setter 的返回值仅为兼容显示而从 V2 postcondition
-flatten 为 `SourceStatus`；该 adapter 不参与 V2 preflight、预算、恢复或 capability 决策。
+设为 `false` 的双合同插件保留上述由 Basic／Output 自动迁移或自动 gate 的 V1 route；只有显式 V2 Service、CLI
+或 run step 调用这些 V2 transaction。已单独声明的高级 capability 仍会在其相同字段或发信号的 V1 route 上
+失败关闭，不能借该开关绕过。该选择适用于 V1 composite transaction 无法由当前的窄 V2 operation 等价表示的设备。
+V1-only 插件继续使用原 V1 route。默认迁移的双合同 V1 setter 返回值仅为兼容显示而从 V2
+postcondition flatten 为 `SourceStatus`；该 adapter 不参与 V2 preflight、预算、恢复或 capability 决策。
 
 ### C2 核心兼容与候选发布门
 
@@ -3345,27 +3553,29 @@ descriptor 必须同时声明 Modulation `READ`／`CONFIGURE`、`pm`、`internal
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写
 capability 声明或实机验收。
 
-### M6-A 已实现子能力：内部 Triggered Burst
+### M6-A 已实现子能力：受控 Triggered Burst
 
 M6-A 的后续单通道能力按以下顺序开发：内部 FM、内部 PWM、Sweep。每个子项各自
 拥有 capability、typed request/result、descriptor readback 条件、OFF-only 事务、V1 路由审计、CLI 与 run plan
 step；不得借已完成子项扩大其它高级功能的范围。该顺序只决定核心开发节奏，不要求插件同时声明全部能力。
 
-`source.burst_configure_v2` 覆盖单通道、输出 OFF 时的内部 Triggered Burst。
-typed request 固定为 `channel`、`cycles`、`phase_deg`、`internal_period_s` 与 `delay_s`。配置完成后 Burst 必为
-enabled、mode 必为 `triggered`、trigger source 必为 `internal`、trigger slope 必为 `positive`、trigger output
+`source.burst_configure_v2` 覆盖单通道、输出 OFF 时的受控 Triggered Burst。
+typed request 包含 `channel`、`cycles`、`phase_deg`、`internal_period_s`、`delay_s` 与末尾默认值为
+`internal` 的 `trigger_source`；触发源只允许 `internal` 或 `manual`。配置完成后 Burst 必为
+enabled、mode 必为 `triggered`、trigger source 必须与请求一致、trigger slope 必为 `positive`、trigger output
 必为 `off`。`cycles` 为 `[1, 500000]` 的整数，`phase_deg` 为 `[0, 360]` 的有限值，
-`internal_period_s` 为有限正值，`delay_s` 为 `[0, 85]` 的有限值。这些是内部 Triggered 配置的类型边界，
+`internal_period_s` 为有限正值，`delay_s` 为 `[0, 85]` 的有限值。这些是受控 Triggered 配置的类型边界，
 不是额外的负载、RMS、热或共享功率安全门。
 
-首版不包含 Gated、Infinity、外部／手动 trigger、Gate polarity、trigger slope／output 自定义、disable、
+配置 capability 不包含 Gated、Infinity、外部 trigger、Gate polarity、trigger slope／output 自定义、disable、
 partial patch、arm、fire、同步、自动波形切换、输出 ON 或输出恢复。配置不会发出 Burst，也不会为后续输出 ON
 提供额外授权；`source.output_v2` 仍按 R6 的基础 Vpp／Offset 规则独立决策。
 
 `SourceBurstCapabilityProfile` 在现有字段末尾追加
-`triggered_internal_configuration_readable: bool = False`。该字段为真时，表示 enabled、mode、cycles、phase、
-internal period、delay 和完整 trigger state 都能以纯读 snapshot 独立回读。声明本 capability 的 descriptor
-还必须在同一 channel 声明 Burst `READ`／`CONFIGURE`、`triggered` mode、`internal` trigger source、
+`triggered_internal_configuration_readable: bool = False` 和
+`triggered_manual_configuration_readable: bool = False`。两个字段分别表示对应触发源下的 enabled、mode、cycles、
+phase、internal period、delay 和完整 trigger state 都能以纯读 snapshot 独立回读。声明本 capability 的 descriptor
+还必须在同一 channel 声明 Burst `READ`／`CONFIGURE`、`triggered` mode、至少一个受支持的 trigger source、
 `timing_readable = true`，以及 Output `READ` 与 output state readback。
 
 该 operation 使用 `POTENTIAL_WHILE_OFF`，静态字段闭包为同一 channel 的 Burst／Output 和仪器 Identity。
@@ -3373,9 +3583,10 @@ internal period、delay 和完整 trigger state 都能以纯读 snapshot 独立�
 V2 OFF recovery；postcondition 必须逐项确认 request 值、固定 Triggered 语义及 output 仍为 OFF。它不恢复先前
 Burst state。
 
-双合同插件声明 `source.burst_configure_v2` 后，V1 `configure_burst`、`trigger_burst` 与 restore 路径必须在
-仪器 I/O 前拒绝：V1 route 可表示 Gated、Infinity、手动／外部 trigger 和实际 fire，不能无损映射到这个
-仅配置的 V2 子集。V1-only 插件及未声明该 capability 的双合同插件继续走 V1 路径。
+双合同插件只声明 `source.burst_configure_v2` 时，V1 `configure_burst`、`trigger_burst` 与 restore 路径必须在
+仪器 I/O 前拒绝：V1 route 可表示 Gated、Infinity、外部 trigger 和实际 fire，不能无损映射到这个仅配置的
+V2 子集。插件另行声明 `source.burst_fire_v2` 后，V1 `trigger_burst` 可映射到独立 fire operation；V1-only
+插件及未声明相关 capability 的双合同插件继续走 V1 路径。
 
 当前核心开发线已提供 `SourceService.configure_burst_v2()`、
 `wavebench source burst-configure-v2 --channel N --cycles N --phase-deg DEG --internal-period-s S --delay-s S` 和
@@ -3452,35 +3663,168 @@ capability 独立决定。
 
 Sweep 的窄 capability、typed model 与 descriptor readback 条件已冻结，并由下列公开事务完成接口收口。
 
-### M6-A 已实现子能力：内部 Sweep
+### M6-A 已实现子能力：受控 Sweep
 
-`source.sweep_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内建 Sweep 配置。typed request 固定为
-`channel`、`start_hz`、`stop_hz`、`spacing`、`steps` 和 `sweep_time_s`：频率必须为有限正值且
+`source.sweep_configure_v2` 的首个范围只覆盖单通道、输出 OFF 时的内建 Sweep 配置。typed request 包含
+`channel`、`start_hz`、`stop_hz`、`spacing`、`steps`、`sweep_time_s` 与末尾默认值为 `internal` 的
+`trigger_source`；触发源只允许 `internal` 或 `manual`。频率必须为有限正值且
 `start_hz <= stop_hz`；`spacing` 只能是 `linear`、`logarithmic` 或 `step`；steps 位于 `[2, 2048]`，
 sweep time 位于 `[0.001, 300]` 秒。这些值域沿用既有 Source V1 的配置合同，不作为新的电气安全预算。
 
-配置完成后 Sweep 必为 enabled，三个 hold／return 时间均为零；trigger 固定为 internal、positive、trigger output OFF，
+配置完成后 Sweep 必为 enabled，三个 hold／return 时间均为零；trigger source 必须与请求一致，slope 固定为
+positive，trigger output 固定为 OFF，
 marker 固定为 disabled。Basic 的 `frequency_mode` 必须独立回读为 `sweep`，因此该 operation 的字段闭包包含同一
-channel 的 Basic／Sweep／Output 和仪器 Identity。它不提供 center/span、partial patch、hold／return 自定义、marker、
-外部／手动／BUS trigger、arm、fire、trigger output、隐式输出 ON 或从 Sweep 回到固定频率。
+channel 的 Basic／Sweep／Output 和仪器 Identity。配置 capability 不提供 center/span、partial patch、
+hold／return 自定义、marker、外部／BUS trigger、arm、fire、trigger output、隐式输出 ON 或从 Sweep 回到固定频率。
 
-descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、internal trigger、timing／marker 与完整配置
+descriptor 必须声明 Sweep `READ`／`CONFIGURE`、至少一个 spacing、internal 或 manual trigger、timing／marker 与完整配置
 readback；同一 channel 的 Basic `READ` 必须声明 `sweep` frequency mode，Output `READ` 与 output state readback
 也为必需。核心在运行时按 request 检查所选 spacing，不要求每个设备支持全部三种 spacing。
+
+部分设备在启用 Sweep 时会隐式关闭已有 Burst 或 Modulation。`SourceSweepCapabilityProfile` 因而在既有字段末尾
+追加默认空的 `implicit_disable_features`；只允许声明 `burst` 与 `modulation`。声明该副作用的 driver 必须为相同
+channel 提供无条件、required 的纯读 facet 和明确的 inactive readback。Core 将这些字段加入本次动态 transaction
+closure，在 preflight 与 postcondition 都要求 `enabled = false`；它不自动关闭、恢复或重新启用它们。未声明该字段的
+设备继续使用原有 Basic／Output／Sweep 闭包，不增加查询或能力门。
 
 该 operation 使用 `POTENTIAL_WHILE_OFF`，复用 fresh consistent snapshot、目标 output OFF、单次 driver 写、独立
 postcondition 和主写入后的最多一次 V2 OFF recovery；没有额外 RMS、端接、热、共享功率或 trigger 接线门。本子项只
 授权配置，不构成任何 fire 或输出 ON 授权。
 
-双合同插件声明 `source.sweep_configure_v2` 后，V1 `configure_sweep`、`trigger_sweep` 与 restore 必须在仪器
-I/O 前拒绝，不能把 V1 的 center/span、外部／手动 trigger、marker 或 fire 语义部分映射进本范围。V1-only 插件和
-未声明该 capability 的双合同插件继续使用既有 V1 Sweep 路径。
+双合同插件只声明 `source.sweep_configure_v2` 时，V1 `configure_sweep`、`trigger_sweep` 与 restore 必须在仪器
+I/O 前拒绝，不能把 V1 的 center/span、外部 trigger、marker 或 fire 语义部分映射进本范围。插件另行声明
+`source.sweep_fire_v2` 后，V1 `trigger_sweep` 可映射到独立 fire operation；V1-only 插件和未声明相关
+capability 的双合同插件继续使用既有 V1 Sweep 路径。
 
 当前核心开发线已提供 `SourceService.configure_sweep_v2()`、
 `wavebench source sweep-configure-v2 --channel N --start-hz F --stop-hz F --spacing linear|logarithmic|step --steps N --sweep-time-s S` 和
 `source.sweep_configure_v2` run plan step。三者只接受同一类型化 request，复用 fresh snapshot、目标 output OFF、单写、
 独立回读、写后失败的一次 V2 OFF recovery 与 `wavebench.source.operation.v1` artifact；run step 的 artifact 同时写入
 `steps[].artifact.source_operation` 与非空的 `run.json.source_operations`。这些入口不构成任何真实插件的写 capability 声明或实机验收。
+
+### D1-3 已实现子能力：Burst 与 Sweep fire
+
+`source.burst_fire_v2` 与 `source.sweep_fire_v2` 使用共享的 `SourceFireRequest(channel)` 和
+`SourceFireResult(channel)`，但保留独立 capability、driver Protocol、operation contract 和 artifact。fire
+capability 分别依赖对应 configure capability 与 `source.output_v2`；descriptor 必须在同一 channel 声明
+`FIRE` direction、manual trigger、manual 模式下的完整配置回读、最终 Vpp／Offset 和输出状态回读。
+
+Core 只接受由同一个 `SourceService` 和 session epoch 成功完成的对应 V2 配置。配置成功后形成绑定已验证
+Burst／Sweep facet 摘要的内存 receipt；重新配置开始前清除旧 receipt，连接代次改变或 fire 主写入失败后也
+不再接受旧 receipt。receipt 不写入插件，也不替代 fire 前的 fresh snapshot。
+
+fire preflight 必须证明 snapshot 一致、目标输出为 ON、Vpp／Offset 满足 R6 数值门，并且当前 Burst 或 Sweep
+配置仍使用 manual trigger，且与同 session receipt 的 facet 摘要一致。MAIN 只调用一次
+`fire_source_burst_v2()` 或
+`fire_source_sweep_v2()`；结果未知不得重试。postcondition 只证明输出仍为 ON、配置未改变和 session 健康，
+不能证明物理端口已经产生 Burst 或 Sweep。artifact 固定记录 `emission_verified = false` 与
+`external_measurement_required = true`。
+
+driver 异常、结果类型错误或后置条件失败时，Core 清除 receipt，只允许一次 V2 output OFF recovery 与独立回读，
+不会重新 fire 或恢复 ON。D1-3 不增加独立 CLI fire 命令：独立命令无法保留 configure receipt 所属的 session。
+`source.sweep_configure_v2` CLI 与 run step 可显式传入 `trigger_source=manual`；Core 另提供只在 run plan 中使用的
+`source.sweep_fire_v2` step。该 step 必须在同一计划的 manual configure、`source.output_enable_v2` 之后执行，
+并以 `source.output_disable_v2` 结束。Burst 仍没有对应 run step。现有 V1 trigger 仅在对应 fire capability 已声明且
+同 session receipt 有效时映射到本 operation。为保持已有 operation artifact 字节形状，默认
+`trigger_source=internal` 不写入 request payload，manual 请求则显式记录该字段。物理发出能力必须在具体插件的
+A4 实机验收中由外部测量证明。
+
+### D1-4 合同冻结：volatile ARB 与 Counter
+
+`source.arbitrary_storage_v2` 继续只表示可命名、可读回摘要和大小、可在写前执行
+CAS 的存储槽位。它的写入后置条件要求选中状态和输出状态保持不变。单一的易失
+ARB 工作区不满足这些前提，必须使用独立的
+`source.arbitrary_volatile_replace_v2`。其 request 只含 channel、传入精确 bytes 的
+SHA-256、字节数和点数；实际 bytes 不进入 request、artifact 或 run JSON。
+
+volatile replace 明确承认上传会选择该工作区，并可能改变与波形长度相关的设备状态。
+前置条件为目标输出 OFF；主写只能调用一次；后置条件独立确认 ARB waveform 已选中、
+basic waveform 为 arbitrary、输出仍 OFF。结果必须分别记录 host bytes 的身份、当前
+selected waveform ID、内容是否能由设备读回验证、以及旧 volatile 内容是否可恢复。
+不能读取摘要或原始 bytes 的设备不得把 host digest 填为设备 readback，也不得声称
+可恢复旧内容。二进制写一旦尝试且后续失败，Core 只可尝试一次输出 OFF 收敛；旧内容
+保持 `unrecoverable`，不得重传或 rollback。
+
+Core 提供 additive CLI：
+
+```text
+wavebench source arbitrary-volatile-replace-v2 --channel N --payload-file FILE --point-count N
+```
+
+CLI 在创建 Source Service 前读取本地 payload、计算摘要并构造 typed request；文件不可读或 request 无效时不打开仪器。
+run plan 使用 `source.arbitrary_volatile_replace_v2`，字段为 `channel`、相对 plan 的 `file` 和 `point_count`。
+execution intent 仅保存文件名、摘要与大小，Source operation artifact 不保存 payload 或本地路径。该核心入口不构成任何
+真实插件的 capability 声明；声明后会与 legacy ARB upload 形成 V1 overlap gate，必须单独完成等价性审计与实机验收。
+若 legacy upload 同时负责 binary 传输、频率／Vpp／offset、`output_on`、错误队列和 basic restore，当前窄的 volatile
+replace operation 不能作为无损桥接。`v1_route_migration_enabled = false` 只关闭 Basic／Output 的自动迁移，不能解除
+这一已声明高级 capability 与 V1 composite transaction 的重叠门；保留 legacy 路由或另立完整的复合合同是仅有的
+兼容选择。
+
+### D1-5 合同冻结：无通道 VOLATILE workspace
+
+有些设备把 `VOLATILE` binary 写定义为「当前通道」动作，却不提供可读或可写的 SCPI selector。此时不得把它塞入
+`source.arbitrary_volatile_replace_v2`：该操作的 `channel`、selection/basic 后置条件和单通道 recovery 都会成为虚假承诺。
+
+`source.arbitrary_workspace_volatile_replace_v2` 是独立 opt-in 合同。它使用 `ARBITRARY_WORKSPACE` 的
+`INSTRUMENT` scope 和独立 `SourceArbitraryWorkspaceCapabilityProfile`；request 不含 channel，只带 payload SHA-256、
+字节数和点数。结果只确认名为 `workspace_id` 的无通道工作区已尝试写入，且明确携带
+`content_readback_verified` 与 `previous_content_restorable`。它不会声称哪一路已选择 USER，也不会把 host digest
+伪装成设备内容读回。
+
+前置和后置条件均要求 topology 的全部输出 OFF。MAIN 只能发一次 binary write；二义写、driver 异常或后置条件失败后，
+Core 对每个仍可用的 topology 通道最多执行一次 OFF recovery；一旦 recovery I/O 使 session poisoned，后续物理 I/O
+必须停止。它不重传、不恢复旧内容，也不允许后续配置写。CLI 为：
+
+```text
+wavebench source arbitrary-workspace-volatile-replace-v2 --payload-file FILE --point-count N
+```
+
+run step 为 `source.arbitrary_workspace_volatile_replace_v2`，字段只有相对 plan 的 `file` 和 `point_count`。intent 与
+artifact 只记录 payload 身份信息，并显式标记 `channel_selection=unverified` 和旧内容不可恢复。该操作不等价、也不迁移
+legacy `source.arbitrary_upload`；它只有在独立 descriptor 显式声明且具备全拓扑 output read/disable 支撑时才可路由。
+
+Counter 按副作用拆开，而不是继续沿用 V1 的「完整 profile 一次设置」模型：
+
+- `source.counter_configure_v2` 只允许一个显式字段：AC/DC coupling、输入阻抗、衰减、
+  trigger level 或 statistics enable。每个字段均需独立回读；不会暗中写 50 Ω、默认
+  gate time 或其它默认值。
+- `source.counter_enable_v2` 只改变 counter ON/OFF；它不会配置输入、清零统计或取得测量。
+- `source.counter_measure_v2` 仅对已启用的 counter 做读取；它不会 enable、调用 AUTO、
+  写 gate time 或统计 clear。
+
+`AUTO` gate-time、无法精确表达的厂商 preset、HF rejection、sensitivity、statistics display
+和 statistics clear 不进入这组首版合同。前四项需要各自可读的通用状态模型；clear 是
+破坏性动作，必须以后续单独 capability 明确授权。D1-4 冻结 model、Protocol 和操作
+元数据；D6 在不改变 V1 路由的前提下，逐项注册以下 capability：
+
+```text
+source.counter_configure_v2
+source.counter_enable_v2
+source.counter_measure_v2
+```
+
+### D6 已实现：Counter V2 入口与安全语义
+
+Core 提供四个显式 CLI 入口：
+
+```text
+wavebench source counter-configure-v2 --input-id INPUT_ID <one configuration option>
+wavebench source counter-enable-v2 --input-id INPUT_ID
+wavebench source counter-disable-v2 --input-id INPUT_ID
+wavebench source counter-measure-v2 --input-id INPUT_ID
+```
+
+run plan 对应 `source.counter_configure_v2`、`source.counter_enable_v2`、
+`source.counter_disable_v2` 与 `source.counter_measure_v2`。配置 step 必须恰好指定一个
+字段；measure 只写入该 step 的 `counter_measurement` typed artifact，不伪造 mutation
+artifact，也不写入 `run.json.source_operations`。
+
+Counter 在刚启用或无输入时可能返回暂未形成的零测量。V2 snapshot 将这种已收到但不合法的
+测量标为 `UNAVAILABLE`／`response_invalid_value`，仍保留已读到的 enabled 与配置字段，
+以便安全 disable 事务继续执行。legacy `source.counter_profile` 与
+`source.counter_measure_v2` 保持严格：前者仍拒绝不完整 profile，后者仍只接受有效五元组。
+当 run step 抛出预期的 WaveBench 错误且计划配置了 safety gate 时，Core 先执行已授权的
+输出 OFF，再把失败写入 run artifact。
 
 ### M6-B 已实现：ARB storage 与 selection
 
@@ -3589,6 +3933,169 @@ relation graph 摘要、阶段和可选 recovery；不记录 raw SCPI、授权 t
 双合同插件声明 `source.coupling_configure_v2` 后，遗留 V1 `configure_coupling` 在任何仪器 I/O 前拒绝；
 声明任一 M6-C capability 后，V1 restore 也在 I/O 前拒绝。没有声明对应 capability 的 V1-only 或双合同插件继续走
 既有 V1 route。当前只有核心 A0 离线 fixture，未声明真实插件 capability，也没有执行实机验收。
+
+## R8 候选：Coupling、Noise Overlay 与 Sync 写事务
+
+本节是首次稳定版前的候选设计，不是 R7 的实施授权。当前 Core 已有 M6-C 的布尔
+`source.coupling_configure_v2` Service／CLI／run plan 骨架，但没有生产插件声明该 capability；
+Noise Overlay 与 Sync 仍只有类型化读取。R8 不改变这些当前事实，任何插件都不得依据本节自行
+声明参数化 Coupling、Noise Overlay 或 Sync 写能力。
+
+### 跨设备交集
+
+当前普通信号发生器证据来自 DG4000 与 SDG2000X，两者不能共用厂商命令模型：
+
+- DG4000 的 Coupling 使用 CH1／CH2 基准通道，以及 amplitude、frequency、phase 三个独立
+  deviation；SDG2000X 还存在 ratio／deviation 选择、方向和只在活动状态返回的字段。
+- DG4000 的 Noise Overlay 提供每通道 enabled 与 percent scale；SDG2000X 的 Noise Add
+  只证明 enabled 状态，不能假设存在相同比例语义。
+- DG4000 的 Sync 提供每通道 enabled 与 polarity；SDG2000X 提供 enabled 与 routing type，
+  但没有同构的 polarity。
+
+因此 Core 只保留已类型化的交集：Coupling 使用带 dimension 与 parameter kind 的目标；Noise
+Overlay 使用可为空的 typed scale tuple；Sync 的共同字段只有 enabled。DG 的基准通道、SDG 的
+ratio／direction 与 routing type 只有在公共类型能够无损表达时才进入 Core，不使用自由 mapping
+或厂商字符串补齐。
+
+### Coupling 合同修正
+
+现有、尚未稳定发布的 `source.coupling_configure_v2` 只接收 `channels + enabled`，与已经稳定的
+参数化 `SourceCouplingState` 不等价。首次稳定版前直接修正该 capability，不新增第二个
+`source.coupling_parameters_configure_v2`。当前没有生产插件声明该写 capability，因此无需保留两套
+重叠 API。
+
+候选公共类型为完整目标，不使用 partial patch：
+
+```python
+@dataclass(frozen=True, slots=True)
+class SourceCouplingDimensionTarget:
+    dimension: SourceCouplingDimension
+    enabled: bool
+    parameter: SourceCouplingParameter
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingConfigureRequest:
+    channels: tuple[int, ...]
+    enabled: bool
+    reference_channel: int
+    dimensions: tuple[SourceCouplingDimensionTarget, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingConfigureResult:
+    coupling: SourceCouplingState
+    outputs: tuple[SourceRelationOutputState, ...]
+```
+
+request 的 channel set 必须由 profile 声明；dimensions 必须与 profile 完全一致；parameter kind
+必须属于对应 dimension 和 profile。`configuration_readable`、`global_state_readable`、
+`reference_channel_readable` 与 `relation_graph_readable` 必须全部为真。无法完整读取配置、关系图或
+受影响端口时，Core 在 MAIN 前拒绝，不退回旧布尔关系写入。
+
+事务继续使用 `source.coupling_configure_v2`，direction 为 `CONFIGURE`，energy effect 为
+`POTENTIAL_WHILE_OFF`。Core 先冻结 relation graph closure，要求 closure 内全部主输出为 OFF，
+再调用一次 driver 方法。driver 可按设备协议执行多字段写入，但每个目标字段在 MAIN 中最多写一次；
+写后必须返回完整 Coupling state，Core 再用 fresh snapshot 独立验证 target、graph 和全部 OFF 状态。
+
+### Noise Overlay 合同
+
+新增候选 capability `source.noise_overlay_configure_v2`，required method 为
+`configure_source_noise_overlay_v2`。它只在目标主输出已经 OFF 时配置，不打开输出：
+
+```python
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayConfigureRequest:
+    channel: int
+    enabled: bool
+    scales: tuple[SourceNoiseOverlayScale, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayConfigureResult:
+    channel: int
+    noise_overlay: NoiseOverlayFacet
+    output_enabled: bool
+```
+
+request 的 scale kind tuple 必须与 runtime profile 完全一致；只支持 enabled 的设备使用空 tuple，
+不能伪造 percent 或默认 scale。descriptor 必须声明 Noise Overlay `READ`／`CONFIGURE`、
+`enabled_readable = true` 和完整配置回读；同一通道的 Output 必须支持 READ。
+
+该 operation 的 direction 为 `CONFIGURE`，energy effect 为 `POTENTIAL_WHILE_OFF`，字段闭包至少包含
+Identity、目标 Output 与 Noise Overlay。MAIN 只调用一次 driver 方法；postcondition 必须逐项确认
+enabled、scales 和 Output OFF。
+
+配置成功不构成后续输出 ON 授权。Noise Overlay 启用后，只有设备在当前 scale、型号、固件和基础
+波形范围内提供确定性硬边界时，严格复合预算才可能放行主输出。当前 `SourceNoisePeakConstraint`
+只描述基本 Noise 波形，不能替代 Noise Overlay 的独立边界；缺少该边界时继续返回
+`noise_overlay_bound_missing`。DG4000 手册只给出 `0–50 %` 的比例，没有确定性峰值保证，因此
+DG4202 即使未来声明配置 capability，也不能据此声明带 Noise Overlay 的输出 ON 已获准入。
+
+### Sync 配置与物理端口输出
+
+Sync 必须拆成配置和物理端口开关，不能把 polarity 写入与开始发出同步信号混为一个 operation：
+
+```text
+source.sync_configure_v2  capability -> configure_source_sync_v2
+source.sync_output_v2     capability -> set_source_sync_output_v2
+```
+
+两个 capability 都要求 Core 先建立 Sync 物理端口 topology：稳定 port ID、逻辑通道到物理端口的
+绑定，以及共享端口的 closure 规则。没有该绑定时，`SourceSyncState.enabled = false` 只能说明逻辑
+状态，不能证明目标物理端口已经 OFF，也不能确定 recovery OFF 的完整范围，因此 configure、enable
+和 disable 均不得注册。
+
+端口 topology 完成后，`source.sync_configure_v2` 只允许在对应 Sync 物理端口已证明为 OFF 时设置
+Core 已建模且 profile 声明可写的 polarity 或 source channel。它使用 feature-specific
+`PatchValue`，至少一个字段为 SET；driver result 和 fresh postcondition 必须返回完整、仍为 disabled
+的 `SourceSyncState`。SDG2000X 的 routing type 在当前 Core 模型中不可表达，因此不能通过该
+capability 写入。
+
+`source.sync_output_v2` 是一个 capability，并要求同一个 driver method。descriptor 的 `ENABLE`／
+`DISABLE` direction 分别映射到两个独立的 `SourceOperationContract` 与 `OperationSpec`：
+
+| operation | direction | energy effect | 最小门槛 |
+| --- | --- | --- | --- |
+| `source.sync_output_enable_v2` | `ENABLE` | `EMIT` | 明确物理端口、端接／电气上界、A5 接线证据和 fresh Sync state |
+| `source.sync_output_disable_v2` | `DISABLE` | `DECREASE_ONLY` | Sync enabled 可读、session 允许正常或 recovery I/O |
+
+当前 `SourceSyncState` 只描述逻辑通道，不足以证明物理端口。物理 topology 还必须为 enable 增加
+该端口的电压边界和端接要求。共享一个物理 Sync／Aux 端口的多个逻辑通道必须进入同一 closure。
+不得从主 Output 的 Vpp、显示负载或
+`max_source_vpp` 推断数字 Sync 端口安全，也不得将「主输出 OFF」解释为「Sync 端口 OFF」。
+
+在物理 port ID／binding／closure 进入 Core 前，任何通用 Sync 写 capability 都不得注册。该模型完成
+并通过 A0 后，可以先评审 configure 与 disable；enable 还必须等待电气 profile 和 A5 证据。
+
+### 恢复顺序与失败状态
+
+三个功能都使用 core-owned 完整 baseline；任何 baseline 字段不是 `VALUE`、snapshot 不一致或
+relation／port closure 不完整时，MAIN 前零写拒绝。恢复不会重新开启主输出，也不会自动重新开启
+Sync 物理端口。
+
+| 功能 | FAILURE_SAFE_STATE | FAILURE_RESTORE | CLEANUP_VERIFICATION |
+| --- | --- | --- | --- |
+| Coupling | 对冻结 closure 内每个主输出至多发送一次 V2 OFF | 仅在 session 仍允许 recovery 且 baseline 完整时，按一次完整 target 恢复 Coupling；设备适配器应先解除 Coupling，再恢复基准、参数和各维状态 | 完整 Coupling、relation graph 与全部主输出 OFF |
+| Noise Overlay | 目标主输出至多发送一次 V2 OFF | 先保持 Noise disabled，再恢复 scale，最后按 baseline 恢复 enabled；整个阶段主输出保持 OFF | Noise Overlay 完整 target 与主输出 OFF |
+| Sync 配置 | 在物理 port binding 已冻结后，对 closure 中的 Sync 端口至多发送一次 OFF；只在 descriptor 声明副作用时关闭相关主输出 | 在 Sync 端口保持 OFF 时恢复 polarity／source channel；不恢复原 Sync ON | Sync 完整配置与全部绑定物理端口 OFF |
+| Sync enable | 对目标 Sync 物理端口至多发送一次 OFF | 不执行重新供能的 restore | Sync 端口 OFF readback 与 session health |
+
+每个 MAIN 字段和每个恢复字段都至多尝试一次；结果未知不重试。`poisoned` session 只关闭连接，
+不发送 OFF 或验证查询。任一恢复或回读失败时，artifact 必须记录 partial／unknown 状态，并把后续
+输出 ON、Sync enable 和相关配置写入保持为失败关闭。
+
+### 实施顺序与退出门
+
+1. 先用 Core fake driver 替换尚未发布的布尔 Coupling request，并补完整 target、graph drift、
+   MAIN／restore 每步故障注入；此阶段不修改真实插件 descriptor。
+2. 增加 Noise Overlay configure 的类型、静态门和 OFF-only transaction；输出 ON 继续受独立硬边界阻断。
+3. 先增加 Sync port ID／binding／closure topology，再设计 configure 与 disable；enable 只有在至少
+   两种普通信号发生器协议形态完成 A0，并由具体型号完成电气 profile 与 A5 物理端口证据后才能评审。
+4. 每项分别增加 Service、CLI、run plan、V1 route 分类和 operation artifact；不得以一个通用 advanced
+   configure 入口合并。
+5. 完成 Core 全量回归、真实 wheel／sdist、插件包检查和双合同兼容矩阵后，才可将 R8 候选改为
+   Accepted。当前分支不执行这些写入，也不提升任何生产 descriptor。
 
 ### R6 延后事项
 

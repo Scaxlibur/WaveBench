@@ -32,6 +32,11 @@ from wavebench.instruments.source_extensions import (
     SourceArbitraryStorageRequest,
     SourceArbitraryStorageResult,
     SourceArbitraryStorageSlot,
+    SourceArbitraryVolatileReplaceRequest,
+    SourceArbitraryVolatileReplaceResult,
+    SourceActivationPredicate,
+    SourceActivationRule,
+    SourceAnchorField,
     SourceConstraintApplicability,
     SourceFacetQueryContract,
     SourceFacetScope,
@@ -130,6 +135,7 @@ class _ArbitraryWriteDriver:
         session_state: InstrumentSessionState,
         output_enabled: bool = False,
         postcondition_mismatch: bool = False,
+        volatile_write_error: bool = False,
     ) -> None:
         self.transport = GuardedAuditedTransport(
             _TextTransport(),
@@ -137,22 +143,41 @@ class _ArbitraryWriteDriver:
         )
         self.output_enabled = output_enabled
         self.postcondition_mismatch = postcondition_mismatch
+        self.volatile_write_error = volatile_write_error
         self.basic = basic_facet()
         self.arbitrary = _arbitrary()
         self.slots: dict[str, bytes] = {}
         self.storage_requests: list[tuple[SourceArbitraryStorageRequest, bytes]] = []
         self.select_requests: list[SourceArbitrarySelectRequest] = []
+        self.volatile_requests: list[tuple[SourceArbitraryVolatileReplaceRequest, bytes]] = []
         self.output_requests: list[SourceOutputRequest] = []
         self.v1_upload_calls = 0
+        self.query_plans = []
+        self.query_records = []
 
     def close(self) -> None:
         self.transport.close()
 
     def execute_source_query_plan_v2(self, plan) -> SourceQueryExecutionRecord:
+        self.query_plans.append(plan)
         records = []
         for index, item in enumerate(plan.items):
             if index == 0:
                 self.transport.query("SOURCE:STATE?")
+            if (
+                item.activation_any
+                and self.basic.waveform_kind.value is not SourceWaveformKind.ARBITRARY
+            ):
+                records.append(
+                    SourceProtocolQueryRecord(
+                        item_id=item.item_id,
+                        effect=item.effect,
+                        outcome=SourceQueryItemOutcome.SKIPPED,
+                        query_count=0,
+                        reason_code=SourceReasonCode.INACTIVE_BY_ANCHOR,
+                    )
+                )
+                continue
             observations = []
             for field in item.fields:
                 if field.field is SourceFieldId.IDENTITY:
@@ -179,7 +204,7 @@ class _ArbitraryWriteDriver:
                     observations=tuple(observations),
                 )
             )
-        return SourceQueryExecutionRecord(
+        record = SourceQueryExecutionRecord(
             contract_version=SOURCE_CONTRACT_VERSION,
             plan_id=plan.plan_id,
             items=tuple(records),
@@ -187,6 +212,8 @@ class _ArbitraryWriteDriver:
             device_revision_token_before="revision-1",
             device_revision_token_after="revision-1",
         )
+        self.query_records.append(record)
+        return record
 
     def read_source_arbitrary_storage_v2(
         self,
@@ -268,6 +295,32 @@ class _ArbitraryWriteDriver:
             False,
         )
 
+    def replace_source_arbitrary_volatile_v2(
+        self,
+        request: SourceArbitraryVolatileReplaceRequest,
+        payload: bytes,
+    ) -> SourceArbitraryVolatileReplaceResult:
+        self.transport.write_bytes(payload)
+        self.volatile_requests.append((request, payload))
+        if self.volatile_write_error:
+            raise ConfigError("fake volatile binary write result is unknown")
+        self.basic = replace(
+            self.basic,
+            waveform_kind=Observed.value_of(SourceWaveformKind.ARBITRARY),
+            waveform_id=Observed.value_of("volatile"),
+        )
+        self.arbitrary = _arbitrary(slot_id="volatile")
+        return SourceArbitraryVolatileReplaceResult(
+            request.channel,
+            request.payload_sha256,
+            request.payload_size_bytes,
+            request.point_count,
+            "volatile",
+            True,
+            False,
+            False,
+        )
+
     def set_source_output_v2(self, request: SourceOutputRequest) -> SourceOutputResult:
         self.transport.write("SOURCE:OUTPUT")
         self.output_requests.append(request)
@@ -289,7 +342,9 @@ class _ArbitraryWriteDriver:
         )
 
     def _readback_arbitrary(self) -> ArbitraryFacet:
-        if not self.postcondition_mismatch or not self.select_requests:
+        if not self.postcondition_mismatch or not (
+            self.select_requests or self.volatile_requests
+        ):
             return self.arbitrary
         return replace(
             self.arbitrary,
@@ -303,6 +358,8 @@ def _extensions(
         SourceArbitraryPlaybackMode.DDS,
         SourceArbitraryPlaybackMode.TRUE_ARB,
     ),
+    v1_route_migration_enabled: bool = True,
+    arbitrary_active_only: bool = False,
 ):
     base = source_extensions()
     basic, output = base.features
@@ -324,19 +381,34 @@ def _extensions(
                 SourceStorageWriteMode.REPLACE_IF_DIGEST_MATCHES,
             ),
             storage_max_payload_bytes=4096,
+            volatile_replace_min_points=2,
+            volatile_replace_max_points=16_384,
+            volatile_replace_max_payload_bytes=32_768,
         ),
     )
     arbitrary_query = SourceFacetQueryContract(
         feature=SourceFeature.ARBITRARY,
         scope=SourceFacetScope.CHANNEL,
         fields=(SourceFieldId.ARBITRARY_SELECTION,),
-        activation_any=(),
+        activation_any=(
+            SourceActivationRule(
+                predicates=(
+                    SourceActivationPredicate(
+                        field=SourceAnchorField.WAVEFORM_KIND,
+                        equals=SourceWaveformKind.ARBITRARY,
+                    ),
+                ),
+            ),
+        )
+        if arbitrary_active_only
+        else (),
         effect=SourceQueryEffect.PURE_READ,
         max_queries=1,
-        required=True,
+        required=not arbitrary_active_only,
     )
     return replace(
         base,
+        v1_route_migration_enabled=v1_route_migration_enabled,
         features=(
             arbitrary,
             replace(
@@ -391,16 +463,21 @@ def _service(
     output_enabled: bool = False,
     postcondition_mismatch: bool = False,
     dual_contract: bool = False,
+    volatile: bool = False,
+    volatile_write_error: bool = False,
+    v1_route_migration_enabled: bool = True,
     playback_modes: tuple[SourceArbitraryPlaybackMode, ...] = (
         SourceArbitraryPlaybackMode.DDS,
         SourceArbitraryPlaybackMode.TRUE_ARB,
     ),
+    arbitrary_active_only: bool = False,
 ) -> tuple[SourceService, _ArbitraryWriteDriver]:
     session_state = InstrumentSessionState(epoch_id="source-arbitrary-v2")
     driver = _ArbitraryWriteDriver(
         session_state=session_state,
         output_enabled=output_enabled,
         postcondition_mismatch=postcondition_mismatch,
+        volatile_write_error=volatile_write_error,
     )
     capabilities = [
         "source.snapshot_v2",
@@ -410,8 +487,17 @@ def _service(
     ]
     if dual_contract:
         capabilities.append("source.arbitrary_upload")
+    if volatile:
+        capabilities.append("source.arbitrary_volatile_replace_v2")
     descriptor = replace(
-        source_descriptor(driver=driver, extensions=_extensions(playback_modes=playback_modes)),
+        source_descriptor(
+            driver=driver,
+            extensions=_extensions(
+                playback_modes=playback_modes,
+                v1_route_migration_enabled=v1_route_migration_enabled,
+                arbitrary_active_only=arbitrary_active_only,
+            ),
+        ),
         capabilities=tuple(capabilities),
     )
     validate_source_descriptor(descriptor)
@@ -442,6 +528,15 @@ def _storage_request(
         payload_sha256=_digest(payload),
         payload_size_bytes=len(payload),
         expected_previous_sha256=expected_previous_sha256,
+    )
+
+
+def _volatile_request(payload: bytes) -> SourceArbitraryVolatileReplaceRequest:
+    return SourceArbitraryVolatileReplaceRequest(
+        channel=1,
+        payload_sha256=_digest(payload),
+        payload_size_bytes=len(payload),
+        point_count=len(payload) // 2,
     )
 
 
@@ -592,8 +687,162 @@ def test_arbitrary_select_v2_postcondition_mismatch_runs_one_off_recovery() -> N
     }
 
 
+def test_arbitrary_volatile_replace_v2_writes_once_and_keeps_output_off() -> None:
+    service, driver = _service(volatile=True)
+    payload = b"\x00\x00\xff\x3f"
+    request = _volatile_request(payload)
+
+    result, artifact = service.replace_arbitrary_volatile_v2(
+        request,
+        payload=payload,
+        correlation_id="arb-volatile",
+    )
+
+    assert driver.volatile_requests == [(request, payload)]
+    assert driver.output_requests == []
+    assert driver.output_enabled is False
+    assert driver.transport.counters.binary_write_completed == 1
+    assert result.content_readback_verified is False
+    assert result.previous_content_restorable is False
+    assert artifact["operation"] == "source.arbitrary_volatile_replace_v2"
+    assert artifact["request"] == {
+        "type": "SourceArbitraryVolatileReplaceRequest",
+        "channel": 1,
+        "payload_sha256": _digest(payload),
+        "payload_size_bytes": len(payload),
+        "point_count": 2,
+    }
+    assert artifact["final_state"] == {
+        "session_health": "healthy",
+        "output_expected": "off",
+        "selection_expected": "volatile",
+        "content_readback_verified": False,
+        "previous_content": "unrecoverable",
+    }
+    assert payload.hex() not in repr(artifact)
+    assert [item["phase"] for item in artifact["phases"]] == [
+        "preflight",
+        "main",
+        "postcondition",
+    ]
+
+
+def test_arbitrary_volatile_replace_v2_accepts_an_inactive_preflight_selection() -> None:
+    service, driver = _service(volatile=True, arbitrary_active_only=True)
+    payload = b"\x00\x00\xff\x3f"
+
+    result, _ = service.replace_arbitrary_volatile_v2(
+        _volatile_request(payload),
+        payload=payload,
+    )
+
+    assert result.selected_waveform_id == "volatile"
+    assert driver.volatile_requests == [(_volatile_request(payload), payload)]
+    assert any(
+        record.outcome is SourceQueryItemOutcome.SKIPPED
+        for record in driver.query_records[0].items
+    )
+    assert any(
+        record.outcome is SourceQueryItemOutcome.OBSERVED
+        and any(
+            observation.field.field is SourceFieldId.ARBITRARY_SELECTION
+            for observation in record.observations
+        )
+        for record in driver.query_records[1].items
+    )
+
+
+def test_arbitrary_volatile_replace_v2_rejects_invalid_payload_and_preflight_before_write() -> None:
+    payload = b"\x00\x00\xff\x3f"
+    request = _volatile_request(payload)
+    service, driver = _service(volatile=True)
+
+    with pytest.raises(ConfigError, match="SHA-256"):
+        service.replace_arbitrary_volatile_v2(request, payload=b"\x00\x00\x00\x00")
+    with pytest.raises(ConfigError, match="must be bytes"):
+        service.replace_arbitrary_volatile_v2(
+            request,
+            payload=bytearray(payload),  # type: ignore[arg-type]
+        )
+    assert driver.transport.counters.binary_write_requests == 0
+    assert driver.transport.counters.query_calls == 0
+
+    output_on, output_on_driver = _service(output_enabled=True, volatile=True)
+    with pytest.raises(ConfigError, match="target output OFF"):
+        output_on.replace_arbitrary_volatile_v2(request, payload=payload)
+
+    below_minimum = SourceArbitraryVolatileReplaceRequest(
+        1,
+        _digest(b"\x00\x00"),
+        2,
+        1,
+    )
+    with pytest.raises(ConfigError, match="point count exceeds"):
+        service.replace_arbitrary_volatile_v2(below_minimum, payload=b"\x00\x00")
+
+    assert driver.volatile_requests == []
+    assert driver.transport.counters.binary_write_requests == 0
+    assert output_on_driver.volatile_requests == []
+    assert output_on_driver.transport.counters.binary_write_requests == 0
+
+
+@pytest.mark.parametrize(
+    ("postcondition_mismatch", "volatile_write_error", "message"),
+    (
+        (True, False, "selected waveform readback"),
+        (False, True, "volatile binary write result is unknown"),
+    ),
+)
+def test_arbitrary_volatile_replace_v2_failure_runs_one_off_recovery(
+    postcondition_mismatch: bool,
+    volatile_write_error: bool,
+    message: str,
+) -> None:
+    service, driver = _service(
+        volatile=True,
+        postcondition_mismatch=postcondition_mismatch,
+        volatile_write_error=volatile_write_error,
+    )
+    payload = b"\x00\x00\xff\x3f"
+    request = _volatile_request(payload)
+
+    with pytest.raises(ConfigError, match=message) as raised:
+        service.replace_arbitrary_volatile_v2(request, payload=payload)
+
+    artifact = raised.value.source_operation_artifact
+    assert driver.volatile_requests == [(request, payload)]
+    assert driver.transport.counters.binary_write_requests == 1
+    assert driver.output_requests == [SourceOutputRequest(channel=1, enabled=False)]
+    assert artifact["recovery"] == {
+        "status": "off_verified",
+        "session_health": "uncertain",
+    }
+    assert artifact["final_state"]["previous_content"] == "unrecoverable"
+
+
 def test_v1_arbitrary_upload_rejects_before_loading_file_or_io_for_dual_contract_driver() -> None:
     service, driver = _service(dual_contract=True)
+
+    with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
+        service.upload_arbitrary_waveform(
+            channel=1,
+            file_path="does-not-exist.csv",
+            playback_frequency_hz=1_000.0,
+            amplitude_vpp=1.0,
+        )
+
+    assert driver.v1_upload_calls == 0
+    assert driver.transport.counters.binary_write_requests == 0
+    assert driver.transport.counters.write_requests == 0
+    assert driver.transport.counters.query_calls == 0
+
+
+def test_v1_arbitrary_upload_keeps_the_advanced_overlap_gate_when_migration_is_disabled() -> None:
+    service, driver = _service(
+        dual_contract=True,
+        volatile=True,
+        v1_route_migration_enabled=False,
+    )
 
     with pytest.raises(ConfigError, match="cannot run for a Source V2 write driver"):
         service.upload_arbitrary_waveform(

@@ -165,12 +165,14 @@ def _contains_nonfinite(value: object) -> bool:
 class SourceFeature(StrEnum):
     BASIC = "basic"
     OUTPUT = "output"
+    NOISE_OVERLAY = "noise_overlay"
     HARMONICS = "harmonics"
     MODULATION = "modulation"
     SWEEP = "sweep"
     BURST = "burst"
     PULSE = "pulse"
     ARBITRARY = "arbitrary"
+    ARBITRARY_WORKSPACE = "arbitrary_workspace"
     COUNTER = "counter"
     REFERENCE_CLOCK = "reference_clock"
     SYNC = "sync"
@@ -233,6 +235,18 @@ class SourceOutputPolarity(StrEnum):
     NORMAL = "normal"
     INVERTED = "inverted"
     UNKNOWN = "unknown"
+
+
+class SourceSyncPolarity(StrEnum):
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    UNKNOWN = "unknown"
+
+
+class SourceNoiseOverlayScaleKind(StrEnum):
+    PERCENT = "percent"
+    RATIO = "ratio"
+    RATIO_DB = "ratio_db"
 
 
 class SourceLoadKind(StrEnum):
@@ -345,10 +359,51 @@ class SourceCounterMeasurementKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SourceCounterConfigurationField(StrEnum):
+    """A counter setting with a portable, independently readable meaning.
+
+    The deliberately short set excludes vendor presets (for example an
+    ``AUTO`` gate-time action), display preferences, and destructive
+    statistics clears.  Those need their own contract instead of becoming
+    incidental side effects of a measurement request.
+    """
+
+    COUPLING = "coupling"
+    IMPEDANCE_OHM = "impedance_ohm"
+    ATTENUATION = "attenuation"
+    TRIGGER_LEVEL_V = "trigger_level_v"
+    STATISTICS_ENABLED = "statistics_enabled"
+
+
 class SourceInputCoupling(StrEnum):
     AC = "ac"
     DC = "dc"
     UNKNOWN = "unknown"
+
+
+class SourceCouplingDimension(StrEnum):
+    AMPLITUDE = "amplitude"
+    FREQUENCY = "frequency"
+    PHASE = "phase"
+
+
+class SourceCouplingParameterKind(StrEnum):
+    AMPLITUDE_DEVIATION_VPP = "amplitude_deviation_vpp"
+    AMPLITUDE_RATIO = "amplitude_ratio"
+    FREQUENCY_DEVIATION_HZ = "frequency_deviation_hz"
+    FREQUENCY_RATIO = "frequency_ratio"
+    PHASE_DEVIATION_DEG = "phase_deviation_deg"
+    PHASE_RATIO = "phase_ratio"
+
+
+_COUPLING_PARAMETER_DIMENSIONS = {
+    SourceCouplingParameterKind.AMPLITUDE_DEVIATION_VPP: SourceCouplingDimension.AMPLITUDE,
+    SourceCouplingParameterKind.AMPLITUDE_RATIO: SourceCouplingDimension.AMPLITUDE,
+    SourceCouplingParameterKind.FREQUENCY_DEVIATION_HZ: SourceCouplingDimension.FREQUENCY,
+    SourceCouplingParameterKind.FREQUENCY_RATIO: SourceCouplingDimension.FREQUENCY,
+    SourceCouplingParameterKind.PHASE_DEVIATION_DEG: SourceCouplingDimension.PHASE,
+    SourceCouplingParameterKind.PHASE_RATIO: SourceCouplingDimension.PHASE,
+}
 
 
 class SourceReferenceClockMode(StrEnum):
@@ -468,6 +523,8 @@ class SourceBasicCapabilityProfile:
     offset_readable: bool
     phase_readable: bool
     square_duty_readable: bool
+    live_frequency_configurable: bool = False
+    live_amplitude_vpp_configurable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.waveform_kinds, SourceWaveformKind, "basic waveform_kinds")
@@ -476,6 +533,14 @@ class SourceBasicCapabilityProfile:
         _require_bool(self.offset_readable, "basic offset_readable")
         _require_bool(self.phase_readable, "basic phase_readable")
         _require_bool(self.square_duty_readable, "basic square_duty_readable")
+        _require_bool(
+            self.live_frequency_configurable,
+            "basic live_frequency_configurable",
+        )
+        _require_bool(
+            self.live_amplitude_vpp_configurable,
+            "basic live_amplitude_vpp_configurable",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,6 +553,21 @@ class SourceOutputCapabilityProfile:
         _require_bool(self.output_readable, "output output_readable")
         _require_bool(self.display_load_readable, "output display_load_readable")
         _require_bool(self.polarity_readable, "output polarity_readable")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayCapabilityProfile:
+    enabled_readable: bool
+    scale_kinds: tuple[SourceNoiseOverlayScaleKind, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_bool(self.enabled_readable, "noise overlay enabled_readable")
+        _require_enum_tuple(
+            self.scale_kinds,
+            SourceNoiseOverlayScaleKind,
+            "noise overlay scale_kinds",
+            allow_empty=True,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,6 +630,7 @@ class SourceSweepCapabilityProfile:
     timing_readable: bool
     marker_readable: bool
     configuration_readable: bool = False
+    implicit_disable_features: tuple[SourceFeature, ...] = ()
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.spacing_modes, SourceSweepSpacing, "sweep spacing_modes")
@@ -557,6 +638,19 @@ class SourceSweepCapabilityProfile:
         _require_bool(self.timing_readable, "sweep timing_readable")
         _require_bool(self.marker_readable, "sweep marker_readable")
         _require_bool(self.configuration_readable, "sweep configuration_readable")
+        _require_enum_tuple(
+            self.implicit_disable_features,
+            SourceFeature,
+            "sweep implicit_disable_features",
+            allow_empty=True,
+        )
+        if not set(self.implicit_disable_features) <= {
+            SourceFeature.BURST,
+            SourceFeature.MODULATION,
+        }:
+            raise ValueError(
+                "sweep implicit_disable_features only supports burst and modulation"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,6 +660,8 @@ class SourceBurstCapabilityProfile:
     timing_readable: bool
     gate_readable: bool
     triggered_internal_configuration_readable: bool = False
+    triggered_manual_configuration_readable: bool = False
+    inactive_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(self.modes, SourceBurstMode, "burst modes")
@@ -576,6 +672,11 @@ class SourceBurstCapabilityProfile:
             self.triggered_internal_configuration_readable,
             "burst triggered_internal_configuration_readable",
         )
+        _require_bool(
+            self.triggered_manual_configuration_readable,
+            "burst triggered_manual_configuration_readable",
+        )
+        _require_bool(self.inactive_readable, "burst inactive_readable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,6 +705,9 @@ class SourceArbitraryCapabilityProfile:
     storage_slot_metadata_readable: bool = False
     storage_write_modes: tuple[SourceStorageWriteMode, ...] = ()
     storage_max_payload_bytes: int | None = None
+    volatile_replace_min_points: int | None = None
+    volatile_replace_max_points: int | None = None
+    volatile_replace_max_payload_bytes: int | None = None
 
     def __post_init__(self) -> None:
         _require_enum_tuple(
@@ -637,6 +741,75 @@ class SourceArbitraryCapabilityProfile:
             raise ValueError(
                 "arbitrary storage_max_payload_bytes requires storage_write_modes"
             )
+        volatile_limits = (
+            self.volatile_replace_min_points,
+            self.volatile_replace_max_points,
+            self.volatile_replace_max_payload_bytes,
+        )
+        if any(value is not None for value in volatile_limits):
+            if any(value is None for value in volatile_limits):
+                raise ValueError(
+                    "arbitrary volatile replace limits must be provided together"
+                )
+            _require_int(
+                self.volatile_replace_min_points,
+                "arbitrary volatile_replace_min_points",
+                minimum=1,
+            )
+            _require_int(
+                self.volatile_replace_max_points,
+                "arbitrary volatile_replace_max_points",
+                minimum=1,
+            )
+            _require_int(
+                self.volatile_replace_max_payload_bytes,
+                "arbitrary volatile_replace_max_payload_bytes",
+                minimum=1,
+            )
+            assert self.volatile_replace_min_points is not None
+            assert self.volatile_replace_max_points is not None
+            if self.volatile_replace_min_points > self.volatile_replace_max_points:
+                raise ValueError(
+                    "arbitrary volatile_replace_min_points must not exceed "
+                    "volatile_replace_max_points"
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceCapabilityProfile:
+    """One unscoped volatile arbitrary-waveform workspace.
+
+    This profile deliberately describes storage only.  It does not assert that
+    a binary write selects a waveform on any particular output channel.
+    """
+
+    workspace_id: str
+    volatile_replace_min_points: int
+    volatile_replace_max_points: int
+    volatile_replace_max_payload_bytes: int
+
+    def __post_init__(self) -> None:
+        _require_token(self.workspace_id, "arbitrary workspace_id")
+        _require_int(
+            self.volatile_replace_min_points,
+            "arbitrary workspace volatile_replace_min_points",
+            minimum=1,
+        )
+        _require_int(
+            self.volatile_replace_max_points,
+            "arbitrary workspace volatile_replace_max_points",
+            minimum=1,
+        )
+        _require_int(
+            self.volatile_replace_max_payload_bytes,
+            "arbitrary workspace volatile_replace_max_payload_bytes",
+            minimum=1,
+        )
+        if self.volatile_replace_min_points > self.volatile_replace_max_points:
+            raise ValueError(
+                "arbitrary workspace volatile_replace_min_points must not exceed "
+                "volatile_replace_max_points"
+            )
 
 
 class SourceQueryEffect(StrEnum):
@@ -652,6 +825,9 @@ class SourceCounterCapabilityProfile:
     measurement_kinds: tuple[SourceCounterMeasurementKind, ...]
     configuration_readable: bool
     query_effect: SourceQueryEffect
+    readable_configuration_fields: tuple[SourceCounterConfigurationField, ...] = ()
+    configurable_fields: tuple[SourceCounterConfigurationField, ...] = ()
+    enabled_configurable: bool = False
 
     def __post_init__(self) -> None:
         _require_token_tuple(self.input_ids, "counter input_ids", allow_empty=False)
@@ -663,22 +839,113 @@ class SourceCounterCapabilityProfile:
         _require_bool(self.configuration_readable, "counter configuration_readable")
         if not isinstance(self.query_effect, SourceQueryEffect):
             raise ValueError("counter query_effect has an invalid type")
+        _require_enum_tuple(
+            self.readable_configuration_fields,
+            SourceCounterConfigurationField,
+            "counter readable_configuration_fields",
+            allow_empty=True,
+        )
+        _require_enum_tuple(
+            self.configurable_fields,
+            SourceCounterConfigurationField,
+            "counter configurable_fields",
+            allow_empty=True,
+        )
+        _require_bool(self.enabled_configurable, "counter enabled_configurable")
+        if self.readable_configuration_fields and not self.configuration_readable:
+            raise ValueError(
+                "counter readable_configuration_fields require configuration_readable"
+            )
+        if not set(self.configurable_fields) <= set(self.readable_configuration_fields):
+            raise ValueError(
+                "counter configurable_fields require matching readable_configuration_fields"
+            )
 
 
 @dataclass(frozen=True, slots=True)
-class SourceClockSyncCapabilityProfile:
-    reference_clock_modes: tuple[SourceReferenceClockMode, ...]
-    sync_readable: bool
-    cascade_readable: bool
+class SourceReferenceClockCapabilityProfile:
+    modes: tuple[SourceReferenceClockMode, ...]
+    frequency_readable: bool
+    lock_state_readable: bool
+
+    def __post_init__(self) -> None:
+        _require_enum_tuple(self.modes, SourceReferenceClockMode, "reference clock modes")
+        _require_bool(self.frequency_readable, "reference clock frequency_readable")
+        _require_bool(self.lock_state_readable, "reference clock lock_state_readable")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSyncCapabilityProfile:
+    enabled_readable: bool
+    polarity_readable: bool
+    source_channel_readable: bool
+    source_channels: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_bool(self.enabled_readable, "sync enabled_readable")
+        _require_bool(self.polarity_readable, "sync polarity_readable")
+        _require_bool(self.source_channel_readable, "sync source_channel_readable")
+        _require_positive_channels(
+            self.source_channels,
+            "sync source_channels",
+            allow_empty=not self.source_channel_readable,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCascadeCapabilityProfile:
+    enabled_readable: bool
+    role_readable: bool
+
+    def __post_init__(self) -> None:
+        _require_bool(self.enabled_readable, "cascade enabled_readable")
+        _require_bool(self.role_readable, "cascade role_readable")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingCapabilityProfile:
+    dimensions: tuple[SourceCouplingDimension, ...]
+    parameter_kinds: tuple[SourceCouplingParameterKind, ...]
+    supported_channel_sets: tuple[tuple[int, ...], ...]
+    global_state_readable: bool
+    reference_channel_readable: bool
+    relation_graph_readable: bool
+    configuration_readable: bool = False
 
     def __post_init__(self) -> None:
         _require_enum_tuple(
-            self.reference_clock_modes,
-            SourceReferenceClockMode,
-            "clock reference_clock_modes",
+            self.dimensions,
+            SourceCouplingDimension,
+            "coupling dimensions",
         )
-        _require_bool(self.sync_readable, "clock sync_readable")
-        _require_bool(self.cascade_readable, "clock cascade_readable")
+        _require_enum_tuple(
+            self.parameter_kinds,
+            SourceCouplingParameterKind,
+            "coupling parameter_kinds",
+        )
+        if any(
+            _COUPLING_PARAMETER_DIMENSIONS[kind] not in self.dimensions
+            for kind in self.parameter_kinds
+        ):
+            raise ValueError("coupling parameter_kinds reference an unsupported dimension")
+        if not isinstance(self.supported_channel_sets, tuple):
+            raise ValueError("coupling supported_channel_sets must be a tuple")
+        for channel_set in self.supported_channel_sets:
+            _require_positive_channels(channel_set, "coupling supported channel set")
+            if len(channel_set) < 2:
+                raise ValueError("coupling channel sets require at least two channels")
+        if (
+            len(set(self.supported_channel_sets)) != len(self.supported_channel_sets)
+            or tuple(sorted(self.supported_channel_sets)) != self.supported_channel_sets
+        ):
+            raise ValueError("coupling supported_channel_sets must be sorted and unique")
+        _require_bool(self.global_state_readable, "coupling global_state_readable")
+        _require_bool(
+            self.reference_channel_readable,
+            "coupling reference_channel_readable",
+        )
+        _require_bool(self.relation_graph_readable, "coupling relation_graph_readable")
+        _require_bool(self.configuration_readable, "coupling configuration_readable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -694,7 +961,6 @@ class SourceCrossChannelCapabilityProfile:
         allowed = {
             SourceFeature.COMBINE,
             SourceFeature.TRACKING,
-            SourceFeature.COUPLING,
             SourceFeature.COPY,
             SourceFeature.PHASE_RELATION,
             SourceFeature.SHARED_POWER,
@@ -726,14 +992,19 @@ class SourceCrossChannelCapabilityProfile:
 SourceFeatureProfile: TypeAlias = (
     SourceBasicCapabilityProfile
     | SourceOutputCapabilityProfile
+    | SourceNoiseOverlayCapabilityProfile
     | SourceHarmonicCapabilityProfile
     | SourceModulationCapabilityProfile
     | SourceSweepCapabilityProfile
     | SourceBurstCapabilityProfile
     | SourcePulseCapabilityProfile
     | SourceArbitraryCapabilityProfile
+    | SourceArbitraryWorkspaceCapabilityProfile
     | SourceCounterCapabilityProfile
-    | SourceClockSyncCapabilityProfile
+    | SourceReferenceClockCapabilityProfile
+    | SourceSyncCapabilityProfile
+    | SourceCascadeCapabilityProfile
+    | SourceCouplingCapabilityProfile
     | SourceCrossChannelCapabilityProfile
 )
 
@@ -785,6 +1056,7 @@ class SourceFieldId(StrEnum):
     IDENTITY = "source.identity"
     BASIC = "source.channel.basic"
     OUTPUT = "source.channel.output"
+    NOISE_OVERLAY = "source.channel.noise_overlay"
     DISPLAY_LOAD = "source.channel.display_load"
     HARMONICS = "source.channel.harmonics"
     MODULATION = "source.channel.modulation"
@@ -793,6 +1065,7 @@ class SourceFieldId(StrEnum):
     PULSE = "source.channel.pulse"
     ARBITRARY_SELECTION = "source.channel.arbitrary_selection"
     ARBITRARY_STORAGE = "source.channel.arbitrary_storage"
+    ARBITRARY_WORKSPACE = "source.instrument.arbitrary_workspace"
     ARM_STATE = "source.channel.arm_state"
     TRIGGER_STATE = "source.channel.trigger_state"
     COMBINE = "source.cross_channel.combine"
@@ -802,7 +1075,7 @@ class SourceFieldId(StrEnum):
     PHASE_RELATION = "source.cross_channel.phase_relation"
     RELATION_GRAPH = "source.cross_channel.relation_graph"
     REFERENCE_CLOCK = "source.instrument.reference_clock"
-    SYNC = "source.instrument.sync"
+    SYNC = "source.channel.sync"
     CASCADE = "source.instrument.cascade"
     SHARED_POWER = "source.instrument.shared_power"
     COUNTER = "source.input.counter"
@@ -812,6 +1085,7 @@ _FIELD_SCOPES: dict[SourceFieldId, frozenset[SourceFacetScope]] = {
     SourceFieldId.IDENTITY: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.BASIC: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.OUTPUT: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFieldId.NOISE_OVERLAY: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.DISPLAY_LOAD: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.HARMONICS: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.MODULATION: frozenset({SourceFacetScope.CHANNEL}),
@@ -820,6 +1094,7 @@ _FIELD_SCOPES: dict[SourceFieldId, frozenset[SourceFacetScope]] = {
     SourceFieldId.PULSE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.ARBITRARY_SELECTION: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.ARBITRARY_STORAGE: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFieldId.ARBITRARY_WORKSPACE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.ARM_STATE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.TRIGGER_STATE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFieldId.COMBINE: frozenset({SourceFacetScope.CHANNEL_SET}),
@@ -829,12 +1104,8 @@ _FIELD_SCOPES: dict[SourceFieldId, frozenset[SourceFacetScope]] = {
     SourceFieldId.PHASE_RELATION: frozenset({SourceFacetScope.CHANNEL_SET}),
     SourceFieldId.RELATION_GRAPH: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.REFERENCE_CLOCK: frozenset({SourceFacetScope.INSTRUMENT}),
-    SourceFieldId.SYNC: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
-    SourceFieldId.CASCADE: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
+    SourceFieldId.SYNC: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFieldId.CASCADE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.SHARED_POWER: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFieldId.COUNTER: frozenset({SourceFacetScope.INPUT}),
 }
@@ -860,6 +1131,7 @@ class SourceEnergyEffect(StrEnum):
     NONE = "none"
     DECREASE_ONLY = "decrease_only"
     POTENTIAL_WHILE_OFF = "potential_while_off"
+    LIVE_MUTATION = "live_mutation"
     MAY_INCREASE = "may_increase"
     EMIT = "emit"
     UNKNOWN = "unknown"
@@ -1066,6 +1338,39 @@ SOURCE_BASIC_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
 )
 
 
+SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.basic_live_configure_v2",
+    capability="source.basic_live_configure_v2",
+    feature=SourceFeature.BASIC,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.LIVE_MUTATION,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.BASIC,),
+    postcondition_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(
+        SourceV1WriteRouteId.SET_AMPLITUDE_VPP,
+        SourceV1WriteRouteId.SET_FREQUENCY,
+    ),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.UPLOAD_ARBITRARY,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=2,
+    verification_max_steps=2,
+)
+
+
 SOURCE_HARMONICS_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation="source.harmonics_configure_v2",
     capability="source.harmonics_configure_v2",
@@ -1217,6 +1522,38 @@ SOURCE_BURST_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
 )
 
 
+SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.burst_fire_v2",
+    capability="source.burst_fire_v2",
+    feature=SourceFeature.BURST,
+    direction=SourceFeatureDirection.FIRE,
+    energy_effect=SourceEnergyEffect.EMIT,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.BURST,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.BURST,),
+    postcondition_fields=(
+        SourceFieldId.BURST,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(SourceV1WriteRouteId.TRIGGER_BURST,),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_BURST,
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.SET_OUTPUT,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
 SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
     operation="source.sweep_configure_v2",
     capability="source.sweep_configure_v2",
@@ -1245,6 +1582,38 @@ SOURCE_SWEEP_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
         SourceV1WriteRouteId.CONFIGURE_SWEEP,
         SourceV1WriteRouteId.RESTORE,
         SourceV1WriteRouteId.TRIGGER_SWEEP,
+    ),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.sweep_fire_v2",
+    capability="source.sweep_fire_v2",
+    feature=SourceFeature.SWEEP,
+    direction=SourceFeatureDirection.FIRE,
+    energy_effect=SourceEnergyEffect.EMIT,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.SWEEP,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.SWEEP,),
+    postcondition_fields=(
+        SourceFieldId.OUTPUT,
+        SourceFieldId.SWEEP,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(SourceV1WriteRouteId.TRIGGER_SWEEP,),
+    v1_overlapping_routes=(
+        SourceV1WriteRouteId.CONFIGURE_SWEEP,
+        SourceV1WriteRouteId.RESTORE,
+        SourceV1WriteRouteId.SET_OUTPUT,
     ),
     operation_timeout_ms=5_000,
     main_max_steps=1,
@@ -1449,6 +1818,121 @@ SOURCE_ARBITRARY_SELECT_V2_OPERATION_CONTRACT = SourceOperationContract(
     cleanup_verification_fields=(SourceFieldId.OUTPUT,),
     v1_equivalent_routes=(),
     v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.arbitrary_volatile_replace_v2",
+    capability="source.arbitrary_volatile_replace_v2",
+    feature=SourceFeature.ARBITRARY,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.REPLACE,
+    required_fields=(
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.ARBITRARY_STORAGE,
+        SourceFieldId.BASIC,
+    ),
+    postcondition_fields=(
+        SourceFieldId.ARBITRARY_SELECTION,
+        SourceFieldId.BASIC,
+        SourceFieldId.OUTPUT,
+    ),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.arbitrary_workspace_volatile_replace_v2",
+    capability="source.arbitrary_workspace_volatile_replace_v2",
+    feature=SourceFeature.ARBITRARY_WORKSPACE,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.POTENTIAL_WHILE_OFF,
+    storage_effect=SourceStorageEffect.REPLACE,
+    required_fields=(
+        SourceFieldId.OUTPUT,
+        SourceFieldId.IDENTITY,
+    ),
+    changed_fields=(SourceFieldId.ARBITRARY_WORKSPACE,),
+    postcondition_fields=(SourceFieldId.OUTPUT,),
+    cleanup_verification_fields=(SourceFieldId.OUTPUT,),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(SourceV1WriteRouteId.UPLOAD_ARBITRARY,),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=8,
+    verification_max_steps=2,
+)
+
+
+SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.counter_configure_v2",
+    capability="source.counter_configure_v2",
+    feature=SourceFeature.COUNTER,
+    direction=SourceFeatureDirection.CONFIGURE,
+    energy_effect=SourceEnergyEffect.NONE,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(SourceFieldId.IDENTITY, SourceFieldId.COUNTER),
+    changed_fields=(SourceFieldId.COUNTER,),
+    postcondition_fields=(SourceFieldId.COUNTER,),
+    cleanup_verification_fields=(),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.counter_enable_v2",
+    capability="source.counter_enable_v2",
+    feature=SourceFeature.COUNTER,
+    direction=SourceFeatureDirection.ENABLE,
+    energy_effect=SourceEnergyEffect.NONE,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(SourceFieldId.IDENTITY, SourceFieldId.COUNTER),
+    changed_fields=(SourceFieldId.COUNTER,),
+    postcondition_fields=(SourceFieldId.COUNTER,),
+    cleanup_verification_fields=(),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(),
+    operation_timeout_ms=5_000,
+    main_max_steps=1,
+    recovery_max_steps=1,
+    verification_max_steps=2,
+)
+
+
+SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT = SourceOperationContract(
+    operation="source.counter_disable_v2",
+    capability="source.counter_enable_v2",
+    feature=SourceFeature.COUNTER,
+    direction=SourceFeatureDirection.DISABLE,
+    energy_effect=SourceEnergyEffect.DECREASE_ONLY,
+    storage_effect=SourceStorageEffect.NONE,
+    required_fields=(SourceFieldId.IDENTITY, SourceFieldId.COUNTER),
+    changed_fields=(SourceFieldId.COUNTER,),
+    postcondition_fields=(SourceFieldId.COUNTER,),
+    cleanup_verification_fields=(),
+    v1_equivalent_routes=(),
+    v1_overlapping_routes=(),
     operation_timeout_ms=5_000,
     main_max_steps=1,
     recovery_max_steps=1,
@@ -1816,19 +2300,21 @@ class SourceRuntimeIdentity:
 _FEATURE_PROFILE_TYPES: dict[SourceFeature, type[object]] = {
     SourceFeature.BASIC: SourceBasicCapabilityProfile,
     SourceFeature.OUTPUT: SourceOutputCapabilityProfile,
+    SourceFeature.NOISE_OVERLAY: SourceNoiseOverlayCapabilityProfile,
     SourceFeature.HARMONICS: SourceHarmonicCapabilityProfile,
     SourceFeature.MODULATION: SourceModulationCapabilityProfile,
     SourceFeature.SWEEP: SourceSweepCapabilityProfile,
     SourceFeature.BURST: SourceBurstCapabilityProfile,
     SourceFeature.PULSE: SourcePulseCapabilityProfile,
     SourceFeature.ARBITRARY: SourceArbitraryCapabilityProfile,
+    SourceFeature.ARBITRARY_WORKSPACE: SourceArbitraryWorkspaceCapabilityProfile,
     SourceFeature.COUNTER: SourceCounterCapabilityProfile,
-    SourceFeature.REFERENCE_CLOCK: SourceClockSyncCapabilityProfile,
-    SourceFeature.SYNC: SourceClockSyncCapabilityProfile,
-    SourceFeature.CASCADE: SourceClockSyncCapabilityProfile,
+    SourceFeature.REFERENCE_CLOCK: SourceReferenceClockCapabilityProfile,
+    SourceFeature.SYNC: SourceSyncCapabilityProfile,
+    SourceFeature.CASCADE: SourceCascadeCapabilityProfile,
     SourceFeature.COMBINE: SourceCrossChannelCapabilityProfile,
     SourceFeature.TRACKING: SourceCrossChannelCapabilityProfile,
-    SourceFeature.COUPLING: SourceCrossChannelCapabilityProfile,
+    SourceFeature.COUPLING: SourceCouplingCapabilityProfile,
     SourceFeature.COPY: SourceCrossChannelCapabilityProfile,
     SourceFeature.PHASE_RELATION: SourceCrossChannelCapabilityProfile,
     SourceFeature.SHARED_POWER: SourceCrossChannelCapabilityProfile,
@@ -1837,20 +2323,18 @@ _FEATURE_PROFILE_TYPES: dict[SourceFeature, type[object]] = {
 _FEATURE_SCOPES: dict[SourceFeature, frozenset[SourceFacetScope]] = {
     SourceFeature.BASIC: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.OUTPUT: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFeature.NOISE_OVERLAY: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.HARMONICS: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.MODULATION: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.SWEEP: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.BURST: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.PULSE: frozenset({SourceFacetScope.CHANNEL}),
     SourceFeature.ARBITRARY: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFeature.ARBITRARY_WORKSPACE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFeature.COUNTER: frozenset({SourceFacetScope.INPUT}),
     SourceFeature.REFERENCE_CLOCK: frozenset({SourceFacetScope.INSTRUMENT}),
-    SourceFeature.SYNC: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
-    SourceFeature.CASCADE: frozenset(
-        {SourceFacetScope.INSTRUMENT, SourceFacetScope.CHANNEL_SET}
-    ),
+    SourceFeature.SYNC: frozenset({SourceFacetScope.CHANNEL}),
+    SourceFeature.CASCADE: frozenset({SourceFacetScope.INSTRUMENT}),
     SourceFeature.COMBINE: frozenset(
         {SourceFacetScope.CHANNEL_SET, SourceFacetScope.INSTRUMENT}
     ),
@@ -2018,6 +2502,7 @@ class SourceBudgetBlockerCode(StrEnum):
     MODULATION_CONSTRAINT_MISSING = "modulation_constraint_missing"
     ARBITRARY_OVERSHOOT_MISSING = "arbitrary_overshoot_missing"
     NOISE_PEAK_MISSING = "noise_peak_missing"
+    NOISE_OVERLAY_BOUND_MISSING = "noise_overlay_bound_missing"
     SWEEP_DERATING_MISSING = "sweep_derating_missing"
     ACTIVE_CHANNEL_UNKNOWN = "active_channel_unknown"
     COMBINE_STATE_UNAVAILABLE = "combine_state_unavailable"
@@ -2566,6 +3051,43 @@ class OutputFacet:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceNoiseOverlayScale:
+    kind: SourceNoiseOverlayScaleKind
+    value: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, SourceNoiseOverlayScaleKind):
+            raise ValueError("noise overlay scale kind has an invalid type")
+        _require_finite(
+            self.value,
+            "noise overlay scale value",
+            minimum=None if self.kind is SourceNoiseOverlayScaleKind.RATIO_DB else 0.0,
+            maximum=100.0 if self.kind is SourceNoiseOverlayScaleKind.PERCENT else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NoiseOverlayFacet:
+    enabled: Observed[bool]
+    scales: Observed[tuple[SourceNoiseOverlayScale, ...]]
+
+    def __post_init__(self) -> None:
+        _require_observed(self.enabled, "noise overlay enabled")
+        _require_observed(self.scales, "noise overlay scales")
+        if self.enabled.availability is Availability.VALUE:
+            _require_bool(self.enabled.value, "noise overlay enabled value")
+        if self.scales.availability is Availability.VALUE:
+            scales = self.scales.value
+            if not isinstance(scales, tuple) or any(
+                not isinstance(item, SourceNoiseOverlayScale) for item in scales
+            ):
+                raise ValueError("noise overlay scales value has an invalid type")
+            keys = tuple(item.kind.value for item in scales)
+            if len(set(keys)) != len(keys) or tuple(sorted(keys)) != keys:
+                raise ValueError("noise overlay scales must be sorted and unique")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceBasicPatch:
     waveform_kind: PatchValue[SourceWaveformKind] = PatchValue(PatchAction.KEEP)
     frequency_hz: PatchValue[float] = PatchValue(PatchAction.KEEP)
@@ -2676,6 +3198,70 @@ class SourceArbitraryStorageRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArbitraryVolatileReplaceRequest:
+    """Replace one channel's un-named, volatile arbitrary-waveform workspace.
+
+    ``payload`` is intentionally passed separately to the driver.  The request
+    carries only a host-computed identity for those exact bytes; it does not
+    pretend that a device can expose a named slot, CAS token, or authoritative
+    payload digest.
+    """
+
+    channel: int
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source arbitrary volatile replace channel", minimum=1)
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary volatile replace payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary volatile replace payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary volatile replace point_count",
+            minimum=1,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceVolatileReplaceRequest:
+    """Replace an unscoped volatile arbitrary-waveform workspace.
+
+    The request deliberately carries no channel: devices using this contract do
+    not expose a verified selector for the workspace write.
+    """
+
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary workspace volatile replace payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary workspace volatile replace payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary workspace volatile replace point_count",
+            minimum=1,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceArbitraryStorageSlot:
     channel: int
     slot_id: str
@@ -2742,6 +3328,89 @@ class SourceArbitrarySelectRequest:
         )
         if self.sample_rate_hz <= 0:
             raise ValueError("source arbitrary true-ARB sample_rate_hz must be > 0")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterConfigurationPatch:
+    """One explicit, independently verified counter configuration change."""
+
+    coupling: PatchValue[SourceInputCoupling] = PatchValue(PatchAction.KEEP)
+    impedance_ohm: PatchValue[float] = PatchValue(PatchAction.KEEP)
+    attenuation: PatchValue[int] = PatchValue(PatchAction.KEEP)
+    trigger_level_v: PatchValue[float] = PatchValue(PatchAction.KEEP)
+    statistics_enabled: PatchValue[bool] = PatchValue(PatchAction.KEEP)
+
+    def __post_init__(self) -> None:
+        values = (
+            ("coupling", self.coupling),
+            ("impedance_ohm", self.impedance_ohm),
+            ("attenuation", self.attenuation),
+            ("trigger_level_v", self.trigger_level_v),
+            ("statistics_enabled", self.statistics_enabled),
+        )
+        if any(not isinstance(value, PatchValue) for _, value in values):
+            raise ValueError("counter configuration patch values must be PatchValue")
+        if sum(value.action is PatchAction.SET for _, value in values) != 1:
+            raise ValueError("counter configuration patch requires exactly one SET value")
+        if self.coupling.action is PatchAction.SET and self.coupling.value not in {
+            SourceInputCoupling.AC,
+            SourceInputCoupling.DC,
+        }:
+            raise ValueError("counter configuration patch coupling must be AC or DC")
+        if self.impedance_ohm.action is PatchAction.SET:
+            _require_finite(
+                self.impedance_ohm.value,
+                "counter configuration patch impedance_ohm",
+                minimum=0.0,
+            )
+            assert self.impedance_ohm.value is not None
+            if self.impedance_ohm.value <= 0:
+                raise ValueError("counter configuration patch impedance_ohm must be > 0")
+        if self.attenuation.action is PatchAction.SET:
+            _require_int(
+                self.attenuation.value,
+                "counter configuration patch attenuation",
+                minimum=1,
+            )
+        if self.trigger_level_v.action is PatchAction.SET:
+            _require_finite(
+                self.trigger_level_v.value,
+                "counter configuration patch trigger_level_v",
+            )
+        if self.statistics_enabled.action is PatchAction.SET:
+            _require_bool(
+                self.statistics_enabled.value,
+                "counter configuration patch statistics_enabled",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterConfigureRequest:
+    input_id: str
+    patch: SourceCounterConfigurationPatch
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter configure input_id")
+        if not isinstance(self.patch, SourceCounterConfigurationPatch):
+            raise ValueError("source counter configure patch has an invalid type")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterEnableRequest:
+    input_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter enable input_id")
+        _require_bool(self.enabled, "source counter enable enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterMeasureRequest:
+    input_id: str
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter measure input_id")
 
 
 def _validate_cross_channel_configure_request(
@@ -2884,6 +3553,7 @@ class SourceBurstConfigureRequest:
     phase_deg: float
     internal_period_s: float
     delay_s: float
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL
 
     def __post_init__(self) -> None:
         _require_int(self.channel, "source burst configure channel", minimum=1)
@@ -2909,6 +3579,13 @@ class SourceBurstConfigureRequest:
             minimum=0.0,
             maximum=85.0,
         )
+        if not isinstance(self.trigger_source, SourceTriggerSource) or self.trigger_source not in {
+            SourceTriggerSource.INTERNAL,
+            SourceTriggerSource.MANUAL,
+        }:
+            raise ValueError(
+                "source burst configure trigger_source must be internal or manual"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2919,6 +3596,7 @@ class SourceSweepConfigureRequest:
     spacing: SourceSweepSpacing
     steps: int
     sweep_time_s: float
+    trigger_source: SourceTriggerSource = SourceTriggerSource.INTERNAL
 
     def __post_init__(self) -> None:
         _require_int(self.channel, "source sweep configure channel", minimum=1)
@@ -2946,6 +3624,29 @@ class SourceSweepConfigureRequest:
             minimum=0.001,
             maximum=300.0,
         )
+        if not isinstance(self.trigger_source, SourceTriggerSource) or self.trigger_source not in {
+            SourceTriggerSource.INTERNAL,
+            SourceTriggerSource.MANUAL,
+        }:
+            raise ValueError(
+                "source sweep configure trigger_source must be internal or manual"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFireRequest:
+    channel: int
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source fire channel", minimum=1)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFireResult:
+    channel: int
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source fire result channel", minimum=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3101,6 +3802,47 @@ class SourceBasicConfigureResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceBasicLiveConfigureResult:
+    channel: int
+    basic: BasicWaveFacet
+    output_enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_int(self.channel, "source basic live configure result channel", minimum=1)
+        if not isinstance(self.basic, BasicWaveFacet):
+            raise ValueError("source basic live configure result basic has an invalid type")
+        _require_bool(
+            self.output_enabled,
+            "source basic live configure result output_enabled",
+        )
+        if not self.output_enabled:
+            raise ValueError(
+                "source basic live configure result requires output_enabled=True"
+            )
+        if (
+            self.basic.amplitude.availability is not Availability.VALUE
+            or not isinstance(self.basic.amplitude.value, SourceAmplitude)
+            or self.basic.amplitude.value.unit is not SourceAmplitudeUnit.VPP
+        ):
+            raise ValueError(
+                "source basic live configure result requires a final VPP amplitude readback"
+            )
+        _require_finite(
+            self.basic.amplitude.value.value,
+            "source basic live configure result final_amplitude",
+            minimum=0.0,
+        )
+        if self.basic.offset_v.availability is not Availability.VALUE:
+            raise ValueError(
+                "source basic live configure result requires a final offset readback"
+            )
+        _require_finite(
+            self.basic.offset_v.value,
+            "source basic live configure result final_offset_v",
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceOutputResult:
     channel: int
     enabled: bool
@@ -3166,6 +3908,113 @@ class SourceArbitraryStorageResult:
             raise ValueError("source arbitrary storage result requires write_completed=True")
         if not self.readback_verified:
             raise ValueError("source arbitrary storage result requires readback_verified=True")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryVolatileReplaceResult:
+    channel: int
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+    selected_waveform_id: str
+    write_completed: bool
+    content_readback_verified: bool
+    previous_content_restorable: bool
+
+    def __post_init__(self) -> None:
+        _require_int(
+            self.channel,
+            "source arbitrary volatile replace result channel",
+            minimum=1,
+        )
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary volatile replace result payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary volatile replace result payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary volatile replace result point_count",
+            minimum=1,
+        )
+        _require_token(
+            self.selected_waveform_id,
+            "source arbitrary volatile replace result selected_waveform_id",
+        )
+        _require_bool(
+            self.write_completed,
+            "source arbitrary volatile replace result write_completed",
+        )
+        _require_bool(
+            self.content_readback_verified,
+            "source arbitrary volatile replace result content_readback_verified",
+        )
+        _require_bool(
+            self.previous_content_restorable,
+            "source arbitrary volatile replace result previous_content_restorable",
+        )
+        if not self.write_completed:
+            raise ValueError(
+                "source arbitrary volatile replace result requires write_completed=True"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceArbitraryWorkspaceVolatileReplaceResult:
+    workspace_id: str
+    payload_sha256: str
+    payload_size_bytes: int
+    point_count: int
+    write_completed: bool
+    content_readback_verified: bool
+    previous_content_restorable: bool
+
+    def __post_init__(self) -> None:
+        _require_token(
+            self.workspace_id,
+            "source arbitrary workspace volatile replace result workspace_id",
+        )
+        if not isinstance(self.payload_sha256, str) or _SHA256.fullmatch(self.payload_sha256) is None:
+            raise ValueError(
+                "source arbitrary workspace volatile replace result payload_sha256 must be "
+                "sha256:<64 lowercase hex>"
+            )
+        _require_int(
+            self.payload_size_bytes,
+            "source arbitrary workspace volatile replace result payload_size_bytes",
+            minimum=1,
+        )
+        _require_int(
+            self.point_count,
+            "source arbitrary workspace volatile replace result point_count",
+            minimum=1,
+        )
+        _require_bool(
+            self.write_completed,
+            "source arbitrary workspace volatile replace result write_completed",
+        )
+        _require_bool(
+            self.content_readback_verified,
+            "source arbitrary workspace volatile replace result content_readback_verified",
+        )
+        _require_bool(
+            self.previous_content_restorable,
+            "source arbitrary workspace volatile replace result previous_content_restorable",
+        )
+        if not self.write_completed:
+            raise ValueError(
+                "source arbitrary workspace volatile replace result requires write_completed=True"
+            )
+        if self.previous_content_restorable:
+            raise ValueError(
+                "source arbitrary workspace volatile replace result cannot claim previous "
+                "content is restorable"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3473,13 +4322,6 @@ class SourceBurstConfigureResult:
             if observed.availability is not Availability.VALUE:
                 raise ValueError(f"source burst configure result requires {label} readback")
             values[label] = observed.value
-        SourceBurstConfigureRequest(
-            channel=self.channel,
-            cycles=values["cycles"],  # type: ignore[arg-type]
-            phase_deg=values["phase_deg"],  # type: ignore[arg-type]
-            internal_period_s=values["internal_period_s"],  # type: ignore[arg-type]
-            delay_s=values["delay_s"],  # type: ignore[arg-type]
-        )
         if self.burst.trigger.availability is not Availability.VALUE or not isinstance(
             self.burst.trigger.value,
             SourceTriggerState,
@@ -3488,9 +4330,20 @@ class SourceBurstConfigureResult:
         trigger = self.burst.trigger.value
         if (
             trigger.source.availability is not Availability.VALUE
-            or trigger.source.value is not SourceTriggerSource.INTERNAL
+            or trigger.source.value
+            not in {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
         ):
-            raise ValueError("source burst configure result requires internal trigger readback")
+            raise ValueError(
+                "source burst configure result requires internal or manual trigger readback"
+            )
+        SourceBurstConfigureRequest(
+            channel=self.channel,
+            cycles=values["cycles"],  # type: ignore[arg-type]
+            phase_deg=values["phase_deg"],  # type: ignore[arg-type]
+            internal_period_s=values["internal_period_s"],  # type: ignore[arg-type]
+            delay_s=values["delay_s"],  # type: ignore[arg-type]
+            trigger_source=trigger.source.value,
+        )
         if (
             trigger.slope.availability is not Availability.VALUE
             or trigger.slope.value is not SourceTriggerSlope.POSITIVE
@@ -3749,14 +4602,6 @@ class SourceSweepConfigureResult:
             if observed.availability is not Availability.VALUE:
                 raise ValueError(f"source sweep configure result requires {label} readback")
             values[label] = observed.value
-        SourceSweepConfigureRequest(
-            channel=self.channel,
-            start_hz=values["start_hz"],  # type: ignore[arg-type]
-            stop_hz=values["stop_hz"],  # type: ignore[arg-type]
-            spacing=values["spacing"],  # type: ignore[arg-type]
-            steps=values["steps"],  # type: ignore[arg-type]
-            sweep_time_s=values["sweep_time_s"],  # type: ignore[arg-type]
-        )
         for label, observed in (
             ("start_hold_s", self.sweep.start_hold_s),
             ("stop_hold_s", self.sweep.stop_hold_s),
@@ -3774,9 +4619,21 @@ class SourceSweepConfigureResult:
         trigger = self.sweep.trigger.value
         if (
             trigger.source.availability is not Availability.VALUE
-            or trigger.source.value is not SourceTriggerSource.INTERNAL
+            or trigger.source.value
+            not in {SourceTriggerSource.INTERNAL, SourceTriggerSource.MANUAL}
         ):
-            raise ValueError("source sweep configure result requires internal trigger readback")
+            raise ValueError(
+                "source sweep configure result requires internal or manual trigger readback"
+            )
+        SourceSweepConfigureRequest(
+            channel=self.channel,
+            start_hz=values["start_hz"],  # type: ignore[arg-type]
+            stop_hz=values["stop_hz"],  # type: ignore[arg-type]
+            spacing=values["spacing"],  # type: ignore[arg-type]
+            steps=values["steps"],  # type: ignore[arg-type]
+            sweep_time_s=values["sweep_time_s"],  # type: ignore[arg-type]
+            trigger_source=trigger.source.value,
+        )
         if (
             trigger.slope.availability is not Availability.VALUE
             or trigger.slope.value is not SourceTriggerSlope.POSITIVE
@@ -4048,6 +4905,49 @@ class SourceCounterInputState:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceCounterConfigureResult:
+    input_id: str
+    state: SourceCounterInputState
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter configure result input_id")
+        if not isinstance(self.state, SourceCounterInputState):
+            raise ValueError("source counter configure result state has an invalid type")
+        if self.state.input_id != self.input_id:
+            raise ValueError("source counter configure result input_id does not match state")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterEnableResult:
+    input_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter enable result input_id")
+        _require_bool(self.enabled, "source counter enable result enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCounterMeasureResult:
+    input_id: str
+    measurements: tuple[SourceCounterMeasurementV2, ...]
+
+    def __post_init__(self) -> None:
+        _require_token(self.input_id, "source counter measure result input_id")
+        if not isinstance(self.measurements, tuple) or not self.measurements:
+            raise ValueError("source counter measure result requires measurements")
+        if any(not isinstance(item, SourceCounterMeasurementV2) for item in self.measurements):
+            raise ValueError(
+                "source counter measure result measurements have an invalid type"
+            )
+        kinds = tuple(item.kind.value for item in self.measurements)
+        if len(set(kinds)) != len(kinds) or tuple(sorted(kinds)) != kinds:
+            raise ValueError(
+                "source counter measure result measurements must be sorted by kind and unique"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceReferenceClockState:
     mode: Observed[SourceReferenceClockMode]
     frequency_hz: Observed[float]
@@ -4066,7 +4966,7 @@ class SourceReferenceClockState:
 @dataclass(frozen=True, slots=True)
 class SourceSyncState:
     enabled: Observed[bool]
-    polarity: Observed[SourceOutputPolarity]
+    polarity: Observed[SourceSyncPolarity]
     source_channel: Observed[int]
 
     def __post_init__(self) -> None:
@@ -4075,8 +4975,79 @@ class SourceSyncState:
         _require_observed(self.source_channel, "sync source_channel")
         if self.enabled.availability is Availability.VALUE:
             _require_bool(self.enabled.value, "sync enabled value")
+        if self.polarity.availability is Availability.VALUE and not isinstance(
+            self.polarity.value,
+            SourceSyncPolarity,
+        ):
+            raise ValueError("sync polarity value has an invalid type")
         if self.source_channel.availability is Availability.VALUE:
             _require_int(self.source_channel.value, "sync source_channel value", minimum=1)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingParameter:
+    kind: SourceCouplingParameterKind
+    value: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, SourceCouplingParameterKind):
+            raise ValueError("source coupling parameter kind has an invalid type")
+        _require_finite(self.value, "source coupling parameter value")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingDimensionState:
+    dimension: SourceCouplingDimension
+    enabled: Observed[bool]
+    parameter: Observed[SourceCouplingParameter]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dimension, SourceCouplingDimension):
+            raise ValueError("source coupling dimension has an invalid type")
+        _require_observed(self.enabled, "source coupling dimension enabled")
+        _require_observed(self.parameter, "source coupling dimension parameter")
+        if self.enabled.availability is Availability.VALUE:
+            _require_bool(self.enabled.value, "source coupling dimension enabled value")
+        if self.parameter.availability is Availability.VALUE:
+            if not isinstance(self.parameter.value, SourceCouplingParameter):
+                raise ValueError("source coupling dimension parameter has an invalid type")
+            if _COUPLING_PARAMETER_DIMENSIONS[self.parameter.value.kind] is not self.dimension:
+                raise ValueError("source coupling parameter does not match its dimension")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCouplingState:
+    feature: SourceFeature
+    channels: tuple[int, ...]
+    enabled: Observed[bool]
+    reference_channel: Observed[int]
+    dimensions: tuple[SourceCouplingDimensionState, ...]
+
+    def __post_init__(self) -> None:
+        if self.feature is not SourceFeature.COUPLING:
+            raise ValueError("source coupling state feature must be coupling")
+        _require_positive_channels(self.channels, "source coupling state channels")
+        if len(self.channels) < 2:
+            raise ValueError("source coupling state requires two or more channels")
+        _require_observed(self.enabled, "source coupling state enabled")
+        _require_observed(self.reference_channel, "source coupling state reference_channel")
+        if self.enabled.availability is Availability.VALUE:
+            _require_bool(self.enabled.value, "source coupling state enabled value")
+        if self.reference_channel.availability is Availability.VALUE:
+            _require_int(
+                self.reference_channel.value,
+                "source coupling state reference_channel value",
+                minimum=1,
+            )
+            if self.reference_channel.value not in self.channels:
+                raise ValueError("source coupling reference_channel must be a participant")
+        if not isinstance(self.dimensions, tuple) or not self.dimensions or any(
+            not isinstance(item, SourceCouplingDimensionState) for item in self.dimensions
+        ):
+            raise ValueError("source coupling dimensions have an invalid type")
+        keys = tuple(item.dimension.value for item in self.dimensions)
+        if len(set(keys)) != len(keys) or tuple(sorted(keys)) != keys:
+            raise ValueError("source coupling dimensions must be sorted and unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -4103,7 +5074,6 @@ class SourceRelationState:
         if self.feature not in {
             SourceFeature.COMBINE,
             SourceFeature.TRACKING,
-            SourceFeature.COUPLING,
             SourceFeature.COPY,
             SourceFeature.PHASE_RELATION,
         }:
@@ -4137,7 +5107,7 @@ class SourceCrossChannelConfigureResult:
     feature: SourceFeature
     channels: tuple[int, ...]
     enabled: bool
-    relation: SourceRelationState
+    relation: SourceRelationState | SourceCouplingState
     outputs: tuple[SourceRelationOutputState, ...]
 
     def __post_init__(self) -> None:
@@ -4157,7 +5127,7 @@ class SourceCrossChannelConfigureResult:
                 "source cross-channel configure result requires two or more channels"
             )
         _require_bool(self.enabled, "source cross-channel configure result enabled")
-        if not isinstance(self.relation, SourceRelationState):
+        if not isinstance(self.relation, (SourceRelationState, SourceCouplingState)):
             raise ValueError(
                 "source cross-channel configure result relation has an invalid type"
             )
@@ -4209,7 +5179,6 @@ class SourceSharedPowerState:
 class SourceSystemStateV2:
     counters: tuple[SourceCounterInputState, ...]
     reference_clock: Observed[SourceReferenceClockState]
-    sync: Observed[SourceSyncState]
     cascade: Observed[SourceCascadeState]
 
     def __post_init__(self) -> None:
@@ -4221,19 +5190,19 @@ class SourceSystemStateV2:
         if len(set(ids)) != len(ids) or tuple(sorted(ids)) != ids:
             raise ValueError("source system counters must be sorted by input_id and unique")
         _require_observed(self.reference_clock, "source system reference_clock")
-        _require_observed(self.sync, "source system sync")
         _require_observed(self.cascade, "source system cascade")
 
 
 @dataclass(frozen=True, slots=True)
 class SourceCrossChannelStateV2:
-    relations: tuple[SourceRelationState, ...]
+    relations: tuple[SourceRelationState | SourceCouplingState, ...]
     relation_graph: Observed[SourceRelationGraph]
     shared_power: Observed[SourceSharedPowerState]
 
     def __post_init__(self) -> None:
         if not isinstance(self.relations, tuple) or any(
-            not isinstance(item, SourceRelationState) for item in self.relations
+            not isinstance(item, (SourceRelationState, SourceCouplingState))
+            for item in self.relations
         ):
             raise ValueError("source cross-channel relations have an invalid type")
         keys = tuple((item.feature.value, item.channels) for item in self.relations)
@@ -4254,6 +5223,8 @@ class SourceChannelStateV2:
     burst: Observed[BurstFacet]
     pulse: Observed[PulseFacet]
     arbitrary: Observed[ArbitraryFacet]
+    sync: Observed[SourceSyncState]
+    noise_overlay: Observed[NoiseOverlayFacet]
 
     def __post_init__(self) -> None:
         _require_int(self.channel, "source channel state channel", minimum=1)
@@ -4266,6 +5237,8 @@ class SourceChannelStateV2:
             ("burst", self.burst),
             ("pulse", self.pulse),
             ("arbitrary", self.arbitrary),
+            ("sync", self.sync),
+            ("noise_overlay", self.noise_overlay),
         ):
             _require_observed(value, f"source channel state {name}")
 
@@ -4445,6 +5418,7 @@ SourceObservationValue: TypeAlias = (
     SourceRuntimeIdentity
     | BasicWaveFacet
     | OutputFacet
+    | NoiseOverlayFacet
     | SourceDisplayLoad
     | HarmonicFacet
     | ModulationFacet
@@ -4455,6 +5429,7 @@ SourceObservationValue: TypeAlias = (
     | SourceCounterInputState
     | SourceReferenceClockState
     | SourceSyncState
+    | SourceCouplingState
     | SourceCascadeState
     | SourceRelationState
     | SourceRelationGraph
@@ -4468,6 +5443,7 @@ _OBSERVATION_TYPES: dict[SourceFieldId, type[object] | tuple[type[object], ...]]
     SourceFieldId.IDENTITY: SourceRuntimeIdentity,
     SourceFieldId.BASIC: BasicWaveFacet,
     SourceFieldId.OUTPUT: OutputFacet,
+    SourceFieldId.NOISE_OVERLAY: NoiseOverlayFacet,
     SourceFieldId.DISPLAY_LOAD: SourceDisplayLoad,
     SourceFieldId.HARMONICS: HarmonicFacet,
     SourceFieldId.MODULATION: ModulationFacet,
@@ -4479,7 +5455,7 @@ _OBSERVATION_TYPES: dict[SourceFieldId, type[object] | tuple[type[object], ...]]
     SourceFieldId.ARM_STATE: bool,
     SourceFieldId.TRIGGER_STATE: bool,
     SourceFieldId.COMBINE: SourceRelationState,
-    SourceFieldId.COUPLING: SourceRelationState,
+    SourceFieldId.COUPLING: SourceCouplingState,
     SourceFieldId.TRACKING: SourceRelationState,
     SourceFieldId.COPY: SourceRelationState,
     SourceFieldId.PHASE_RELATION: SourceRelationState,
@@ -4586,6 +5562,7 @@ class SourceDescriptorExtensions:
     features: tuple[SourceFeatureCapability, ...]
     query_contract: SourceQueryContract
     safety_profile: SourceSafetyProfile = SourceSafetyProfile()
+    v1_route_migration_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.contract_version != SOURCE_CONTRACT_VERSION:
@@ -4608,6 +5585,10 @@ class SourceDescriptorExtensions:
                 feature.profile.input_ids
             ) <= set(self.topology.input_ids):
                 raise ValueError("source counter profile references an unknown input_id")
+            if isinstance(feature.profile, SourceSyncCapabilityProfile) and not set(
+                feature.profile.source_channels
+            ) <= set(self.topology.channels):
+                raise ValueError("source sync profile references an unknown source channel")
             if isinstance(feature.profile, SourceCrossChannelCapabilityProfile) and any(
                 not set(channel_set) <= set(self.topology.channels)
                 for channel_set in feature.profile.supported_channel_sets
@@ -4615,10 +5596,27 @@ class SourceDescriptorExtensions:
                 raise ValueError(
                     "source cross-channel profile references an unknown channel"
                 )
+            if isinstance(feature.profile, SourceCouplingCapabilityProfile) and any(
+                not set(channel_set) <= set(self.topology.channels)
+                for channel_set in feature.profile.supported_channel_sets
+            ):
+                raise ValueError("source coupling profile references an unknown channel")
+            if (
+                isinstance(feature.profile, SourceCouplingCapabilityProfile)
+                and feature.scope is SourceFacetScope.CHANNEL_SET
+                and feature.channels not in feature.profile.supported_channel_sets
+            ):
+                raise ValueError(
+                    "source coupling feature channel set is not declared by its profile"
+                )
         if not isinstance(self.query_contract, SourceQueryContract):
             raise ValueError("source descriptor query_contract has an invalid type")
         if not isinstance(self.safety_profile, SourceSafetyProfile):
             raise ValueError("source descriptor safety_profile has an invalid type")
+        _require_bool(
+            self.v1_route_migration_enabled,
+            "source descriptor v1_route_migration_enabled",
+        )
 
 
 class SnapshotConsistencyState(StrEnum):
@@ -4740,6 +5738,14 @@ class SourceBasicConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceBasicLiveConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_basic_live_v2(
+        self,
+        request: SourceBasicConfigureRequest,
+    ) -> SourceBasicLiveConfigureResult: ...
+
+
+@runtime_checkable
 class SourceHarmonicConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_harmonics_v2(
         self,
@@ -4780,6 +5786,14 @@ class SourceBurstConfigureV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceBurstFireV2Driver(InstrumentDriver, Protocol):
+    def fire_source_burst_v2(
+        self,
+        request: SourceFireRequest,
+    ) -> SourceFireResult: ...
+
+
+@runtime_checkable
 class SourceFmModulationConfigureV2Driver(InstrumentDriver, Protocol):
     def configure_source_fm_modulation_v2(
         self,
@@ -4801,6 +5815,14 @@ class SourceSweepConfigureV2Driver(InstrumentDriver, Protocol):
         self,
         request: SourceSweepConfigureRequest,
     ) -> SourceSweepConfigureResult: ...
+
+
+@runtime_checkable
+class SourceSweepFireV2Driver(InstrumentDriver, Protocol):
+    def fire_source_sweep_v2(
+        self,
+        request: SourceFireRequest,
+    ) -> SourceFireResult: ...
 
 
 @runtime_checkable
@@ -4835,11 +5857,53 @@ class SourceArbitraryStorageV2Driver(InstrumentDriver, Protocol):
 
 
 @runtime_checkable
+class SourceArbitraryVolatileReplaceV2Driver(InstrumentDriver, Protocol):
+    def replace_source_arbitrary_volatile_v2(
+        self,
+        request: SourceArbitraryVolatileReplaceRequest,
+        payload: bytes,
+    ) -> SourceArbitraryVolatileReplaceResult: ...
+
+
+@runtime_checkable
+class SourceArbitraryWorkspaceVolatileReplaceV2Driver(InstrumentDriver, Protocol):
+    def replace_source_arbitrary_workspace_volatile_v2(
+        self,
+        request: SourceArbitraryWorkspaceVolatileReplaceRequest,
+        payload: bytes,
+    ) -> SourceArbitraryWorkspaceVolatileReplaceResult: ...
+
+
+@runtime_checkable
 class SourceArbitrarySelectV2Driver(InstrumentDriver, Protocol):
     def select_source_arbitrary_v2(
         self,
         request: SourceArbitrarySelectRequest,
     ) -> SourceArbitrarySelectResult: ...
+
+
+@runtime_checkable
+class SourceCounterConfigureV2Driver(InstrumentDriver, Protocol):
+    def configure_source_counter_v2(
+        self,
+        request: SourceCounterConfigureRequest,
+    ) -> SourceCounterConfigureResult: ...
+
+
+@runtime_checkable
+class SourceCounterEnableV2Driver(InstrumentDriver, Protocol):
+    def set_source_counter_enabled_v2(
+        self,
+        request: SourceCounterEnableRequest,
+    ) -> SourceCounterEnableResult: ...
+
+
+@runtime_checkable
+class SourceCounterMeasureV2Driver(InstrumentDriver, Protocol):
+    def measure_source_counter_v2(
+        self,
+        request: SourceCounterMeasureRequest,
+    ) -> SourceCounterMeasureResult: ...
 
 
 @runtime_checkable
@@ -4874,8 +5938,32 @@ class SourcePhaseRelationConfigureV2Driver(InstrumentDriver, Protocol):
     ) -> SourceCrossChannelConfigureResult: ...
 
 
-def source_v2_to_data(value: object) -> object:
-    """Convert Source V2 public values into strict JSON-compatible data."""
+def _source_v2_omits_additive_default(value: object, field_name: str) -> bool:
+    """Keep additive defaults out of canonical hashes for older plugin wheels."""
+
+    if isinstance(value, SourceBasicCapabilityProfile):
+        return (
+            field_name in {
+                "live_frequency_configurable",
+                "live_amplitude_vpp_configurable",
+            }
+            and getattr(value, field_name) is False
+        )
+    if isinstance(value, SourceSweepCapabilityProfile):
+        return field_name == "implicit_disable_features" and value.implicit_disable_features == ()
+    if isinstance(value, SourceBurstCapabilityProfile):
+        return (
+            field_name
+            in {"triggered_manual_configuration_readable", "inactive_readable"}
+            and getattr(value, field_name) is False
+        )
+    if isinstance(value, SourceDescriptorExtensions):
+        return field_name == "v1_route_migration_enabled" and value.v1_route_migration_enabled is True
+    return False
+
+
+def _source_v2_to_data(value: object, *, canonical: bool) -> object:
+    """Convert Source V2 values, optionally preserving historical hash semantics."""
 
     if isinstance(value, StrEnum):
         return value.value
@@ -4886,22 +5974,36 @@ def source_v2_to_data(value: object) -> object:
             raise ValueError("Source V2 JSON cannot contain non-finite floats")
         return value
     if isinstance(value, tuple):
-        return [source_v2_to_data(item) for item in value]
+        return [_source_v2_to_data(item, canonical=canonical) for item in value]
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             raise TypeError("Source V2 JSON object keys must be strings")
-        return {key: source_v2_to_data(value[key]) for key in sorted(value)}
+        return {
+            key: _source_v2_to_data(value[key], canonical=canonical)
+            for key in sorted(value)
+        }
     if is_dataclass(value) and not isinstance(value, type):
         payload: dict[str, object] = {"type": type(value).__name__}
         for item in fields(value):
-            payload[item.name] = source_v2_to_data(getattr(value, item.name))
+            if canonical and _source_v2_omits_additive_default(value, item.name):
+                continue
+            payload[item.name] = _source_v2_to_data(
+                getattr(value, item.name),
+                canonical=canonical,
+            )
         return payload
     raise TypeError(f"unsupported Source V2 JSON value: {type(value).__name__}")
 
 
+def source_v2_to_data(value: object) -> object:
+    """Convert Source V2 public values into strict JSON-compatible data."""
+
+    return _source_v2_to_data(value, canonical=False)
+
+
 def source_v2_canonical_json(value: object) -> str:
     return json.dumps(
-        source_v2_to_data(value),
+        _source_v2_to_data(value, canonical=True),
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
@@ -5006,7 +6108,6 @@ __all__ = [
     "SourceBurstMode",
     "SourceCascadeState",
     "SourceChannelStateV2",
-    "SourceClockSyncCapabilityProfile",
     "SourceComponentAmplitude",
     "SourceConstraintApplicability",
     "SourceCounterCapabilityProfile",
@@ -5177,4 +6278,50 @@ __all__ = [
     "SourcePhaseRelationConfigureRequest",
     "SourcePhaseRelationConfigureV2Driver",
     "SOURCE_PHASE_RELATION_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceCouplingCapabilityProfile",
+    "SourceCouplingDimension",
+    "SourceCouplingDimensionState",
+    "SourceCouplingParameter",
+    "SourceCouplingParameterKind",
+    "SourceCouplingState",
+    "SourceReferenceClockCapabilityProfile",
+    "SourceSyncCapabilityProfile",
+    "SourceSyncPolarity",
+    "SourceCascadeCapabilityProfile",
+    "NoiseOverlayFacet",
+    "SourceNoiseOverlayCapabilityProfile",
+    "SourceNoiseOverlayScale",
+    "SourceNoiseOverlayScaleKind",
+    "SourceBasicLiveConfigureResult",
+    "SourceBasicLiveConfigureV2Driver",
+    "SOURCE_BASIC_LIVE_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceFireRequest",
+    "SourceFireResult",
+    "SourceBurstFireV2Driver",
+    "SourceSweepFireV2Driver",
+    "SOURCE_BURST_FIRE_V2_OPERATION_CONTRACT",
+    "SOURCE_SWEEP_FIRE_V2_OPERATION_CONTRACT",
+    "SourceArbitraryVolatileReplaceRequest",
+    "SourceArbitraryVolatileReplaceResult",
+    "SourceArbitraryVolatileReplaceV2Driver",
+    "SOURCE_ARBITRARY_VOLATILE_REPLACE_V2_OPERATION_CONTRACT",
+    "SourceCounterConfigurationField",
+    "SourceCounterConfigurationPatch",
+    "SourceCounterConfigureRequest",
+    "SourceCounterConfigureResult",
+    "SourceCounterConfigureV2Driver",
+    "SOURCE_COUNTER_CONFIGURE_V2_OPERATION_CONTRACT",
+    "SourceCounterEnableRequest",
+    "SourceCounterEnableResult",
+    "SourceCounterEnableV2Driver",
+    "SOURCE_COUNTER_ENABLE_V2_OPERATION_CONTRACT",
+    "SOURCE_COUNTER_DISABLE_V2_OPERATION_CONTRACT",
+    "SourceCounterMeasureRequest",
+    "SourceCounterMeasureResult",
+    "SourceCounterMeasureV2Driver",
+    "SourceArbitraryWorkspaceCapabilityProfile",
+    "SourceArbitraryWorkspaceVolatileReplaceRequest",
+    "SourceArbitraryWorkspaceVolatileReplaceResult",
+    "SourceArbitraryWorkspaceVolatileReplaceV2Driver",
+    "SOURCE_ARBITRARY_WORKSPACE_VOLATILE_REPLACE_V2_OPERATION_CONTRACT",
 ]

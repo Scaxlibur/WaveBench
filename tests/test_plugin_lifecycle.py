@@ -258,6 +258,7 @@ def _plugin_wheel(
     *,
     version: str,
     driver_id: str = "example.scope",
+    additional_driver_id: str | None = None,
     distribution: str = "wavebench-example-scope",
     kind: str = "scope",
     capabilities: tuple[str, ...] = ("scope.idn",),
@@ -272,6 +273,10 @@ def _plugin_wheel(
 ) -> Path:
     if source_v2 and legacy_source_v1:
         raise ValueError("a fixture wheel cannot be both Source V1-only and Source V2")
+    if additional_driver_id is not None and (
+        broken_descriptor or source_v2 or legacy_source_v1 or additional_driver_id == driver_id
+    ):
+        raise ValueError("additional fixture entry points require distinct default descriptors")
     filename_name = distribution.replace("-", "_")
     dist_info = f"{filename_name}-{version}.dist-info"
     package_name = "wavebench_example_scope"
@@ -303,6 +308,15 @@ def _plugin_wheel(
             source_v2_write=source_v2_write,
         )
     else:
+        additional_descriptor = (
+            f"""
+
+def descriptor_v2():
+    return _descriptor({additional_driver_id!r})
+"""
+            if additional_driver_id is not None
+            else ""
+        )
         package = f'''from wavebench.instruments.api import InstrumentDescriptor
 
 
@@ -314,9 +328,9 @@ class Driver:
         pass
 
 
-def descriptor():
+def _descriptor(driver_id):
     return InstrumentDescriptor(
-        driver_id={driver_id!r},
+        driver_id=driver_id,
         kind={kind!r},
         display_name="Example Instrument",
         manufacturer="Example",
@@ -329,6 +343,11 @@ def descriptor():
         permissions=("instrument.io",),
         factory=lambda context: Driver(),
     )
+
+
+def descriptor():
+    return _descriptor({driver_id!r})
+{additional_descriptor}
 '''.encode()
     members = {
         f"{dist_info}/METADATA": metadata,
@@ -338,8 +357,12 @@ def descriptor():
         f"{package_name}/__init__.py": package,
     }
     if include_entry_point:
+        entries = [(driver_id, f"{package_name}:descriptor")]
+        if additional_driver_id is not None:
+            entries.append((additional_driver_id, f"{package_name}:descriptor_v2"))
         members[f"{dist_info}/entry_points.txt"] = (
-            f"[wavebench.instruments]\n{driver_id} = {package_name}:descriptor\n"
+            "[wavebench.instruments]\n"
+            + "".join(f"{name} = {target}\n" for name, target in entries)
         ).encode()
     output = io.StringIO(newline="")
     writer = csv.writer(output, lineterminator="\n")
@@ -792,6 +815,157 @@ def test_install_status_and_remove_round_trip(tmp_path):
     assert lifecycle.installed() == ()
 
 
+def test_multi_entry_point_distribution_installs_updates_and_removes_atomically(tmp_path):
+    python = _target_venv(tmp_path)
+    v1 = _plugin_wheel(
+        tmp_path,
+        version="0.1.0",
+        driver_id="example.scope",
+        additional_driver_id="example.scope-v2",
+        distribution="wavebench-example-multi",
+    )
+    v2 = _plugin_wheel(
+        tmp_path,
+        version="0.2.0",
+        driver_id="example.scope",
+        additional_driver_id="example.scope-v2",
+        distribution="wavebench-example-multi",
+    )
+    lifecycle = PluginLifecycle(python_executable=python)
+
+    assert lifecycle.install(v1).status == "installed"
+    assert [
+        (item.driver_id, item.version, item.status)
+        for item in lifecycle.installed()
+    ] == [
+        ("example.scope", "0.1.0", "healthy"),
+        ("example.scope-v2", "0.1.0", "healthy"),
+    ]
+    assert lifecycle.info("example.scope-v2").distribution == "wavebench-example-multi"
+    registry_script = """
+from wavebench.instruments.registry import build_instrument_registry
+
+registry = build_instrument_registry()
+assert registry.resolve("example.scope", expected_kind="scope").origin == "entry_point"
+assert registry.resolve("example.scope-v2", expected_kind="scope").origin == "entry_point"
+"""
+    _run([str(python), "-I", "-c", registry_script])
+
+    assert lifecycle.upgrade(v2).status == "upgraded"
+    assert {item.version for item in lifecycle.installed()} == {"0.2.0"}
+    assert lifecycle.remove("example.scope-v2").status == "removed"
+    assert lifecycle.installed() == ()
+    ledger = json.loads(lifecycle.ledger_path.read_text(encoding="utf-8"))
+    assert ledger["plugins"] == {}
+
+
+def test_lifecycle_migrates_a_single_entry_v1_ledger_on_next_mutation(tmp_path):
+    python = _target_venv(tmp_path)
+    wheel = _plugin_wheel(tmp_path, version="0.1.0")
+    lifecycle = PluginLifecycle(python_executable=python)
+    lifecycle.install(wheel)
+    current = json.loads(lifecycle.ledger_path.read_text(encoding="utf-8"))
+    record = next(iter(current["plugins"].values()))
+    entry = record["entry_points"][0]
+    legacy_record = {
+        "driver_id": entry["driver_id"],
+        "distribution": record["distribution"],
+        "normalized_distribution": record["normalized_distribution"],
+        "version": record["version"],
+        "entry_point": entry["value"],
+        "wheel_sha256": record["wheel_sha256"],
+        "metadata_sha256": record["metadata_sha256"],
+        "record_sha256": record["record_sha256"],
+        "wheel_cache": record["wheel_cache"],
+        "installed_files_sha256": record["installed_files_sha256"],
+        "installed_record_sha256": record["installed_record_sha256"],
+    }
+    lifecycle._write_json(
+        lifecycle.ledger_path,
+        {
+            "schema_version": 1,
+            "environment": current["environment"],
+            "generation": current["generation"],
+            "plugins": {entry["driver_id"]: legacy_record},
+        },
+    )
+
+    assert lifecycle.info("example.scope").status == "healthy"
+    assert lifecycle.remove("example.scope").status == "removed"
+    migrated = json.loads(lifecycle.ledger_path.read_text(encoding="utf-8"))
+    assert migrated["schema_version"] == 2
+    assert migrated["plugins"] == {}
+
+
+def test_lifecycle_upgrades_a_legacy_single_entry_distribution_to_add_opt_in_entry(tmp_path):
+    python = _target_venv(tmp_path)
+    v1 = _plugin_wheel(
+        tmp_path,
+        version="0.1.0",
+        driver_id="example.scope",
+        distribution="wavebench-example-multi",
+    )
+    v2 = _plugin_wheel(
+        tmp_path,
+        version="0.2.0",
+        driver_id="example.scope",
+        additional_driver_id="example.scope-v2",
+        distribution="wavebench-example-multi",
+    )
+    lifecycle = PluginLifecycle(python_executable=python)
+    lifecycle.install(v1)
+
+    assert lifecycle.upgrade(v2).status == "upgraded"
+    assert [item.driver_id for item in lifecycle.installed()] == [
+        "example.scope",
+        "example.scope-v2",
+    ]
+
+
+def test_lifecycle_recovers_a_v1_prepared_journal(tmp_path):
+    python = _target_venv(tmp_path)
+    wheel = _plugin_wheel(tmp_path, version="0.1.0")
+    lifecycle = PluginLifecycle(python_executable=python)
+    environment = lifecycle.environment()
+    lifecycle.state_dir.mkdir(mode=0o700)
+    with lifecycle._inspected_input(wheel) as package:
+        cached = lifecycle._cache_wheel(package)
+        record = lifecycle._package_record(package, cached)
+    entry = record["entry_points"][0]
+    legacy_record = {
+        "driver_id": entry["driver_id"],
+        "distribution": record["distribution"],
+        "normalized_distribution": record["normalized_distribution"],
+        "version": record["version"],
+        "entry_point": entry["value"],
+        "wheel_sha256": record["wheel_sha256"],
+        "metadata_sha256": record["metadata_sha256"],
+        "record_sha256": record["record_sha256"],
+        "wheel_cache": record["wheel_cache"],
+        "installed_files_sha256": record["installed_files_sha256"],
+        "installed_record_sha256": record["installed_record_sha256"],
+    }
+    lifecycle._write_json(
+        lifecycle.journal_path,
+        {
+            "schema_version": 1,
+            "environment": environment.to_json(),
+            "operation": "install",
+            "stage": "prepared",
+            "before_ledger": {
+                "schema_version": 1,
+                "environment": environment.to_json(),
+                "generation": 0,
+                "plugins": {},
+            },
+            "package": legacy_record,
+        },
+    )
+
+    assert lifecycle.recover().status == "recovered-before-mutation"
+    assert not lifecycle.journal_path.exists()
+
+
 def test_source_directory_install_keeps_built_wheel_alive_until_cached(tmp_path):
     python = _target_venv(tmp_path)
     source = _plugin_source(tmp_path)
@@ -996,7 +1170,7 @@ def test_prepared_journal_blocks_mutation_and_can_be_recovered(tmp_path):
     lifecycle.journal_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                    "schema_version": 2,
                 "environment": environment.to_json(),
                 "operation": "install",
                 "stage": "prepared",

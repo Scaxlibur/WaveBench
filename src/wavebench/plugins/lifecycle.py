@@ -23,13 +23,14 @@ from wavebench.services.platform_io import atomic_write_json, ensure_private_dir
 
 from .package_inspect import (
     PluginPackage,
+    WheelEntryPoint,
     build_subprocess_environment,
     inspect_plugin_package,
 )
 
 
-LEDGER_SCHEMA_VERSION = 1
-JOURNAL_SCHEMA_VERSION = 1
+LEDGER_SCHEMA_VERSION = 2
+JOURNAL_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -164,7 +165,7 @@ print(json.dumps(payload, sort_keys=True))
         file_owners = self._file_owners() if self._ledger_plugins(ledger) else {}
         results: list[InstalledPlugin] = []
         managed_distributions: set[str] = set()
-        for driver_id, raw_record in sorted(self._ledger_plugins(ledger).items()):
+        for raw_record in self._ledger_plugins(ledger).values():
             record = self._record(raw_record)
             normalized = canonicalize_name(record["distribution"])
             managed_distributions.add(normalized)
@@ -177,14 +178,16 @@ print(json.dumps(payload, sort_keys=True))
                 detail = "multiple installed distributions match / 存在多个同名分发"
             else:
                 item = matches[0]
-                expected_entry = (driver_id, record["entry_point"])
+                expected_entries = self._record_entry_point_pairs(record)
                 actual_entries = tuple(
-                    (entry["name"], entry["value"])
-                    for entry in item.get("entry_points", ())
+                    sorted(
+                        (str(entry["name"]), str(entry["value"]))
+                        for entry in item.get("entry_points", ())
+                    )
                 )
                 healthy = (
                     item.get("version") == record["version"]
-                    and expected_entry in actual_entries
+                    and actual_entries == expected_entries
                     and item.get("integrity") is True
                     and item.get("metadata_sha256") == record["metadata_sha256"]
                     and item.get("record_sha256") == record["installed_record_sha256"]
@@ -201,15 +204,16 @@ print(json.dumps(payload, sort_keys=True))
                 else:
                     status = "healthy" if healthy else "drifted"
                     detail = "" if healthy else "installed metadata or files drifted / 安装元数据或文件已漂移"
-            results.append(
+            results.extend(
                 InstalledPlugin(
-                    driver_id=driver_id,
+                    driver_id=entry.driver_id,
                     distribution=record["distribution"],
                     version=record["version"],
                     status=status,
                     wheel_sha256=record["wheel_sha256"],
                     detail=detail,
                 )
+                for entry in self._record_entry_points(record)
             )
         for normalized, matches in sorted(inventory.items()):
             if normalized in managed_distributions:
@@ -291,7 +295,7 @@ print(json.dumps(payload, sort_keys=True))
             ledger = self._load_ledger(environment)
             current = self.info(driver_id)
             self._require_healthy(current)
-            record = self._record(self._ledger_plugins(ledger)[driver_id])
+            record = self._record_for_driver_id(ledger, driver_id)
             self._assert_distribution_file_ownership(record["distribution"])
             rollback_wheel = self._record_wheel(record)
             journal = self._journal(
@@ -308,7 +312,7 @@ print(json.dumps(payload, sort_keys=True))
                 self._update_journal(journal, "pip_finished")
                 if self._distribution_inventory(record["distribution"]):
                     raise ConfigError("plugin remove postflight failed / 插件卸载后检查失败")
-                updated = self._without_record(ledger, driver_id)
+                updated = self._without_record(ledger, record["normalized_distribution"])
                 self._write_json(self.ledger_path, updated)
                 self._update_journal(journal, "ledger_committed")
                 self._remove_journal()
@@ -327,6 +331,9 @@ print(json.dumps(payload, sort_keys=True))
             if not self.journal_path.exists():
                 return LifecycleResult("nothing-to-recover", "", "", "")
             journal = self._read_json(self.journal_path, "transaction journal")
+            if journal.get("schema_version") == 1:
+                journal = self._migrate_journal_v1(journal)
+                self._write_json(self.journal_path, journal)
             self._validate_journal(journal, environment)
             return self._recover_journal(journal, environment)
 
@@ -339,7 +346,18 @@ print(json.dumps(payload, sort_keys=True))
     ) -> LifecycleResult:
         with self._inspected_input(path) as package:
             self._assert_package_identity(package)
-            driver_id = package.driver_ids[0]
+            ledger = self._load_ledger(self.environment())
+            current_record = self._record_for_distribution(
+                ledger,
+                package.normalized_distribution,
+            )
+            self._assert_replacement_entry_points(package, current_record)
+            self._assert_additional_entry_points_available(
+                package,
+                current_record,
+                ledger,
+            )
+            driver_id = self._record_entry_points(current_record)[0].driver_id
             current = self.info(driver_id)
             self._require_healthy(current)
             if canonicalize_name(current.distribution) != package.normalized_distribution:
@@ -378,7 +396,12 @@ print(json.dumps(payload, sort_keys=True))
                 environment = self.environment()
                 self._assert_no_pending_journal()
                 ledger = self._load_ledger(environment)
-                record = self._record(self._ledger_plugins(ledger).get(driver_id))
+                record = self._record_for_distribution(
+                    ledger,
+                    package.normalized_distribution,
+                )
+                self._assert_replacement_entry_points(package, record)
+                self._assert_additional_entry_points_available(package, record, ledger)
                 locked_current = self.info(driver_id)
                 if locked_current.status != "healthy":
                     raise ConfigError("managed plugin must be healthy before replacement / 替换前插件必须健康")
@@ -421,7 +444,7 @@ print(json.dumps(payload, sort_keys=True))
         package: PluginPackage,
         cached_wheel: Path,
         ledger: dict[str, object],
-        previous_record: dict[str, str] | None,
+        previous_record: dict[str, object] | None,
     ) -> None:
         environment = self.environment()
         record = self._package_record(package, cached_wheel)
@@ -441,7 +464,7 @@ print(json.dumps(payload, sort_keys=True))
             record["installed_files_sha256"] = postflight["files_sha256"]
             record["installed_record_sha256"] = postflight["record_sha256"]
             self._update_journal(journal, "postflight_finished")
-            updated = self._with_record(ledger, package.driver_ids[0], record)
+            updated = self._with_record(ledger, record)
             self._write_json(self.ledger_path, updated)
             self._update_journal(journal, "ledger_committed")
             self._remove_journal()
@@ -459,7 +482,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def _rollback_uninstall(
         self,
-        record: dict[str, str],
+        record: dict[str, object],
         ledger: dict[str, object],
         journal: dict[str, object],
         original: Exception,
@@ -481,7 +504,7 @@ print(json.dumps(payload, sort_keys=True))
     def _rollback_install(
         self,
         wheel: Path,
-        record: dict[str, str],
+        record: dict[str, object],
         ledger: dict[str, object],
         journal: dict[str, object],
         original: Exception,
@@ -520,9 +543,10 @@ print(json.dumps(payload, sort_keys=True))
         if not isinstance(before, dict) or not isinstance(package, dict):
             raise ConfigError("invalid plugin transaction journal / 插件事务日志无效")
         record = self._record(package)
-        driver_id = record["driver_id"]
+        driver_id = self._record_entry_points(record)[0].driver_id
+        record_key = record["normalized_distribution"]
         current_ledger = self._load_ledger(environment)
-        before_record_raw = self._ledger_plugins(before).get(driver_id)
+        before_record_raw = self._ledger_plugins(before).get(record_key)
         before_record = self._record(before_record_raw) if before_record_raw is not None else None
         before_matches = (
             self._distribution_absent(record)
@@ -543,9 +567,9 @@ print(json.dumps(payload, sort_keys=True))
 
         if stage == "ledger_committed":
             if operation == "remove":
-                ledger_matches = driver_id not in self._ledger_plugins(current_ledger)
+                ledger_matches = record_key not in self._ledger_plugins(current_ledger)
             else:
-                ledger_record = self._ledger_plugins(current_ledger).get(driver_id)
+                ledger_record = self._ledger_plugins(current_ledger).get(record_key)
                 ledger_matches = ledger_record == package
             if not desired_matches or not ledger_matches:
                 return self._recovery_required()
@@ -555,12 +579,12 @@ print(json.dumps(payload, sort_keys=True))
         if stage in {"pip_started", "pip_finished", "postflight_finished"}:
             if desired_matches:
                 if operation == "remove":
-                    updated = self._without_record(before, driver_id)
+                    updated = self._without_record(before, record_key)
                 else:
                     postflight = self._postflight(record)
                     record["installed_files_sha256"] = str(postflight["files_sha256"])
                     record["installed_record_sha256"] = str(postflight["record_sha256"])
-                    updated = self._with_record(before, driver_id, record)
+                    updated = self._with_record(before, record)
                 self._write_json(self.ledger_path, updated)
                 self._remove_journal()
                 return LifecycleResult("recovered-to-desired", driver_id, record["distribution"], record["version"])
@@ -584,7 +608,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def _record_matches_environment(
         self,
-        record: dict[str, str],
+        record: dict[str, object],
         *,
         allow_empty_digest: bool = False,
     ) -> bool:
@@ -592,16 +616,18 @@ print(json.dumps(payload, sort_keys=True))
         if len(matches) != 1:
             return False
         item = matches[0]
-        expected_entry = (record["driver_id"], record["entry_point"])
+        expected_entries = self._record_entry_point_pairs(record)
         actual_entries = tuple(
-            (entry["name"], entry["value"])
-            for entry in item.get("entry_points", ())
+            sorted(
+                (str(entry["name"]), str(entry["value"]))
+                for entry in item.get("entry_points", ())
+            )
         )
         digest_matches = item.get("files_sha256") == record["installed_files_sha256"]
         record_matches = item.get("record_sha256") == record["installed_record_sha256"]
         metadata_matches = bool(
             item.get("version") == record["version"]
-            and expected_entry in actual_entries
+            and actual_entries == expected_entries
             and item.get("integrity") is True
             and item.get("metadata_sha256") == record["metadata_sha256"]
         )
@@ -621,20 +647,21 @@ print(json.dumps(payload, sort_keys=True))
             return False
         return True
 
-    def _distribution_absent(self, record: dict[str, str]) -> bool:
+    def _distribution_absent(self, record: dict[str, object]) -> bool:
         return not self._distribution_inventory(record["distribution"])
 
     def _assert_package_identity(self, package: PluginPackage) -> None:
-        driver_id = package.driver_ids[0]
         builtin_references = {
             reference
             for descriptor in BUILTIN_INSTRUMENTS
             for reference in (descriptor.driver_id, *descriptor.aliases)
         }
-        if driver_id in builtin_references:
+        for driver_id in package.driver_ids:
+            if driver_id not in builtin_references:
+                continue
             expected_distribution = BUILTIN_MIGRATION_DISTRIBUTIONS.get(driver_id)
             if package.normalized_distribution == canonicalize_name(expected_distribution or ""):
-                return
+                continue
             raise ConfigError(
                 f"external plugin conflicts with built-in driver / "
                 f"外置插件与内置驱动冲突: {driver_id}"
@@ -645,15 +672,28 @@ print(json.dumps(payload, sort_keys=True))
         package: PluginPackage,
         ledger: dict[str, object],
     ) -> None:
-        driver_id = package.driver_ids[0]
-        if driver_id in self._ledger_plugins(ledger):
+        records = tuple(
+            self._record(raw_record)
+            for raw_record in self._ledger_plugins(ledger).values()
+        )
+        if package.normalized_distribution in self._ledger_plugins(ledger):
             raise ConfigError("plugin is already managed; use upgrade or downgrade / 插件已受管，请使用升级或降级")
+        managed_driver_ids = {
+            entry.driver_id
+            for record in records
+            for entry in self._record_entry_points(record)
+        }
+        if managed_driver_ids.intersection(package.driver_ids):
+            raise ConfigError("managed driver ID is already installed / 受管的驱动 ID 已安装")
         inventory = self._inventory()
         if package.normalized_distribution in inventory:
             raise ConfigError("unmanaged distribution is already installed / 未受管的同名分发已安装")
         for matches in inventory.values():
             for item in matches:
-                if any(entry["name"] == driver_id for entry in item.get("entry_points", ())):
+                if any(
+                    str(entry["name"]) in package.driver_ids
+                    for entry in item.get("entry_points", ())
+                ):
                     raise ConfigError("unmanaged driver ID is already installed / 未受管的同名驱动已安装")
         self._assert_no_file_ownership_conflicts(
             package,
@@ -736,7 +776,7 @@ print(json.dumps(payload, sort_keys=True))
         self._fsync_directory(target_dir)
         return target
 
-    def _record_wheel(self, record: dict[str, str]) -> Path:
+    def _record_wheel(self, record: dict[str, object]) -> Path:
         candidate = self.state_dir / record["wheel_cache"]
         try:
             candidate.resolve().relative_to(self.wheel_cache.resolve())
@@ -746,14 +786,15 @@ print(json.dumps(payload, sort_keys=True))
             raise ConfigError("managed rollback wheel is missing or changed / 受管回滚 wheel 缺失或已变化")
         return candidate
 
-    def _package_record(self, package: PluginPackage, cached_wheel: Path) -> dict[str, str]:
-        entry = package.entry_points[0]
+    def _package_record(self, package: PluginPackage, cached_wheel: Path) -> dict[str, object]:
         return {
-            "driver_id": entry.driver_id,
             "distribution": package.distribution,
             "normalized_distribution": package.normalized_distribution,
             "version": package.version,
-            "entry_point": entry.value,
+            "entry_points": [
+                {"driver_id": entry.driver_id, "value": entry.value}
+                for entry in package.entry_points
+            ],
             "wheel_sha256": package.sha256,
             "metadata_sha256": package.metadata_sha256,
             "record_sha256": package.record_sha256,
@@ -762,7 +803,7 @@ print(json.dumps(payload, sort_keys=True))
             "installed_record_sha256": "",
         }
 
-    def _postflight(self, record: dict[str, str]) -> dict[str, object]:
+    def _postflight(self, record: dict[str, object]) -> dict[str, object]:
         script = r'''
 import base64
 import csv
@@ -783,12 +824,20 @@ from wavebench.instruments.rf_source_capabilities import validate_rf_source_plug
 (
     expected_name,
     expected_version,
-    expected_driver,
-    expected_value,
+    expected_entries_json,
     expected_metadata_sha256,
     expected_installed_record_sha256,
     wheel_path,
 ) = __import__("sys").argv[1:]
+try:
+    expected_entries = tuple(
+        sorted(
+            (str(item["driver_id"]), str(item["value"]))
+            for item in json.loads(expected_entries_json)
+        )
+    )
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit("expected entry point record is invalid")
 paths = list(dict.fromkeys((sysconfig.get_paths()["purelib"], sysconfig.get_paths()["platlib"])))
 matches = []
 for dist in distributions(path=paths):
@@ -817,27 +866,34 @@ installed_record_sha256 = installed_metadata_hash(".dist-info/RECORD")
 if expected_installed_record_sha256 and installed_record_sha256 != expected_installed_record_sha256:
     raise SystemExit("installed RECORD hash mismatch")
 entries = [entry for entry in dist.entry_points if entry.group == "wavebench.instruments"]
-if len(entries) != 1 or entries[0].name != expected_driver or entries[0].value != expected_value:
+actual_entries = tuple(sorted((entry.name, entry.value) for entry in entries))
+if actual_entries != expected_entries:
     raise SystemExit("installed entry point mismatch")
-descriptor = descriptor_from_entry_point(entries[0].load())
-if descriptor.driver_id != expected_driver or descriptor.aliases:
-    raise SystemExit("descriptor identity mismatch")
-descriptor = descriptor.with_distribution(
-    distribution=dist.metadata.get("Name", ""),
-    version=dist.version,
-    source=f"entry_point:{expected_driver}",
-    origin="entry_point",
-)
-_validate_descriptor(descriptor, expected_kind=None)
-validate_source_conformance_distribution(descriptor, dist)
-validate_source_plugin_dependencies(
-    descriptor,
-    tuple(dist.metadata.get_all("Requires-Dist") or ()),
-)
-validate_rf_source_plugin_dependencies(
-    descriptor,
-    tuple(dist.metadata.get_all("Requires-Dist") or ()),
-)
+for expected_driver, expected_value in expected_entries:
+    entry = next(
+        item
+        for item in entries
+        if item.name == expected_driver and item.value == expected_value
+    )
+    descriptor = descriptor_from_entry_point(entry.load())
+    if descriptor.driver_id != expected_driver or descriptor.aliases:
+        raise SystemExit("descriptor identity mismatch")
+    descriptor = descriptor.with_distribution(
+        distribution=dist.metadata.get("Name", ""),
+        version=dist.version,
+        source=f"entry_point:{expected_driver}",
+        origin="entry_point",
+    )
+    _validate_descriptor(descriptor, expected_kind=None)
+    validate_source_conformance_distribution(descriptor, dist)
+    validate_source_plugin_dependencies(
+        descriptor,
+        tuple(dist.metadata.get_all("Requires-Dist") or ()),
+    )
+    validate_rf_source_plugin_dependencies(
+        descriptor,
+        tuple(dist.metadata.get_all("Requires-Dist") or ()),
+    )
 with zipfile.ZipFile(wheel_path) as archive:
     record_names = [name for name in archive.namelist() if name.endswith(".dist-info/RECORD")]
     if len(record_names) != 1:
@@ -877,7 +933,7 @@ for item in dist.files or ():
     file_rows.append((str(item), encoded))
 files_digest = hashlib.sha256(json.dumps(sorted(file_rows)).encode()).hexdigest()
 print(json.dumps({
-    "driver_id": descriptor.driver_id,
+    "driver_ids": [driver_id for driver_id, _value in expected_entries],
     "files_sha256": files_digest,
     "record_sha256": installed_record_sha256,
 }))
@@ -891,8 +947,13 @@ print(json.dumps({
                     script,
                     canonicalize_name(record["distribution"]),
                     record["version"],
-                    record["driver_id"],
-                    record["entry_point"],
+                    json.dumps(
+                        [
+                            {"driver_id": entry.driver_id, "value": entry.value}
+                            for entry in self._record_entry_points(record)
+                        ],
+                        sort_keys=True,
+                    ),
                     record["metadata_sha256"],
                     record["installed_record_sha256"],
                     str(self._record_wheel(record)),
@@ -1125,7 +1186,10 @@ print(json.dumps({
         if not self.ledger_path.exists():
             return self.empty_ledger(environment)
         ledger = self._read_json(self.ledger_path, "plugin ledger")
-        if ledger.get("schema_version") != LEDGER_SCHEMA_VERSION:
+        schema_version = ledger.get("schema_version")
+        if schema_version == 1:
+            ledger = self._migrate_ledger_v1(ledger)
+        elif schema_version != LEDGER_SCHEMA_VERSION:
             raise ConfigError("unsupported plugin ledger schema / 不支持的插件账本 schema")
         stored_environment = ledger.get("environment")
         if not isinstance(stored_environment, dict) or stored_environment.get("fingerprint") != environment.fingerprint:
@@ -1141,7 +1205,7 @@ print(json.dumps({
         return plugins
 
     @staticmethod
-    def _record(value: object) -> dict[str, str]:
+    def _legacy_record(value: object) -> dict[str, str]:
         if not isinstance(value, dict):
             raise ConfigError("invalid managed plugin record / 受管插件记录无效")
         required = (
@@ -1161,21 +1225,196 @@ print(json.dumps({
             raise ConfigError("invalid managed plugin record / 受管插件记录无效")
         return {field: str(value[field]) for field in required}
 
-    def _with_record(
+    def _migrate_ledger_v1(self, ledger: dict[str, object]) -> dict[str, object]:
+        migrated: dict[str, object] = {}
+        for driver_id, raw_record in self._ledger_plugins(ledger).items():
+            legacy = self._legacy_record(raw_record)
+            if driver_id != legacy["driver_id"]:
+                raise ConfigError("invalid plugin ledger / 插件账本无效")
+            normalized = legacy["normalized_distribution"]
+            if normalized in migrated:
+                raise ConfigError("legacy plugin ledger has duplicate distributions / 旧插件账本存在重复分发")
+            migrated[normalized] = self._legacy_record_to_record(legacy)
+        return {
+            "schema_version": LEDGER_SCHEMA_VERSION,
+            "environment": ledger.get("environment"),
+            "generation": ledger.get("generation", 0),
+            "plugins": migrated,
+        }
+
+    def _migrate_journal_v1(self, journal: dict[str, object]) -> dict[str, object]:
+        before = journal.get("before_ledger")
+        package = journal.get("package")
+        if not isinstance(before, dict) or not isinstance(package, dict):
+            raise ConfigError("invalid plugin transaction journal / 插件事务日志无效")
+        migrated = dict(journal)
+        migrated["schema_version"] = JOURNAL_SCHEMA_VERSION
+        migrated["before_ledger"] = self._migrate_ledger_v1(before)
+        migrated["package"] = self._legacy_record_to_record(self._legacy_record(package))
+        return migrated
+
+    @staticmethod
+    def _legacy_record_to_record(legacy: dict[str, str]) -> dict[str, object]:
+        return {
+            "distribution": legacy["distribution"],
+            "normalized_distribution": legacy["normalized_distribution"],
+            "version": legacy["version"],
+            "entry_points": [
+                {
+                    "driver_id": legacy["driver_id"],
+                    "value": legacy["entry_point"],
+                }
+            ],
+            "wheel_sha256": legacy["wheel_sha256"],
+            "metadata_sha256": legacy["metadata_sha256"],
+            "record_sha256": legacy["record_sha256"],
+            "wheel_cache": legacy["wheel_cache"],
+            "installed_files_sha256": legacy["installed_files_sha256"],
+            "installed_record_sha256": legacy["installed_record_sha256"],
+        }
+
+    @staticmethod
+    def _record(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            raise ConfigError("invalid managed plugin record / 受管插件记录无效")
+        required = (
+            "distribution",
+            "normalized_distribution",
+            "version",
+            "wheel_sha256",
+            "metadata_sha256",
+            "record_sha256",
+            "wheel_cache",
+            "installed_files_sha256",
+            "installed_record_sha256",
+        )
+        if any(not isinstance(value.get(field), str) for field in required):
+            raise ConfigError("invalid managed plugin record / 受管插件记录无效")
+        entries = value.get("entry_points")
+        if not isinstance(entries, list) or not entries:
+            raise ConfigError("invalid managed plugin record / 受管插件记录无效")
+        points: list[WheelEntryPoint] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ConfigError("invalid managed plugin record / 受管插件记录无效")
+            driver_id = entry.get("driver_id")
+            entry_point = entry.get("value")
+            if (
+                not isinstance(driver_id, str)
+                or not driver_id
+                or driver_id.strip() != driver_id
+                or any(character.isspace() for character in driver_id)
+                or not isinstance(entry_point, str)
+                or not entry_point.strip()
+                or ":" not in entry_point
+            ):
+                raise ConfigError("invalid managed plugin record / 受管插件记录无效")
+            points.append(WheelEntryPoint(driver_id, entry_point))
+        ordered = tuple(sorted(points, key=lambda entry: entry.driver_id))
+        if tuple(points) != ordered or len({entry.driver_id for entry in points}) != len(points):
+            raise ConfigError("invalid managed plugin record / 受管插件记录无效")
+        record = {field: str(value[field]) for field in required}
+        if record["normalized_distribution"] != canonicalize_name(record["distribution"]):
+            raise ConfigError("invalid managed plugin record / 受管插件记录无效")
+        record["entry_points"] = [
+            {"driver_id": entry.driver_id, "value": entry.value}
+            for entry in points
+        ]
+        return record
+
+    @staticmethod
+    def _record_entry_points(record: dict[str, object]) -> tuple[WheelEntryPoint, ...]:
+        return tuple(
+            WheelEntryPoint(str(entry["driver_id"]), str(entry["value"]))
+            for entry in record["entry_points"]
+        )
+
+    @classmethod
+    def _record_entry_point_pairs(cls, record: dict[str, object]) -> tuple[tuple[str, str], ...]:
+        return tuple((entry.driver_id, entry.value) for entry in cls._record_entry_points(record))
+
+    def _record_for_distribution(
+        self,
+        ledger: dict[str, object],
+        normalized_distribution: str,
+    ) -> dict[str, object]:
+        raw_record = self._ledger_plugins(ledger).get(normalized_distribution)
+        if raw_record is None:
+            raise ConfigError("managed plugin not found / 未找到受管插件")
+        return self._record(raw_record)
+
+    def _record_for_driver_id(
         self,
         ledger: dict[str, object],
         driver_id: str,
-        record: dict[str, str],
+    ) -> dict[str, object]:
+        for raw_record in self._ledger_plugins(ledger).values():
+            record = self._record(raw_record)
+            if any(entry.driver_id == driver_id for entry in self._record_entry_points(record)):
+                return record
+        raise ConfigError(f"installed plugin not found / 未找到已安装插件: {driver_id}")
+
+    def _assert_replacement_entry_points(
+        self,
+        package: PluginPackage,
+        record: dict[str, object],
+    ) -> None:
+        expected = set(self._record_entry_point_pairs(record))
+        actual = {(entry.driver_id, entry.value) for entry in package.entry_points}
+        if not expected <= actual:
+            raise ConfigError(
+                "replacement entry points do not preserve managed plugin / "
+                "替换包的 entry point 未保留受管插件"
+            )
+
+    def _assert_additional_entry_points_available(
+        self,
+        package: PluginPackage,
+        record: dict[str, object],
+        ledger: dict[str, object],
+    ) -> None:
+        existing_driver_ids = {
+            entry.driver_id for entry in self._record_entry_points(record)
+        }
+        additional_driver_ids = set(package.driver_ids) - existing_driver_ids
+        if not additional_driver_ids:
+            return
+        for raw_record in self._ledger_plugins(ledger).values():
+            candidate = self._record(raw_record)
+            if candidate["normalized_distribution"] == record["normalized_distribution"]:
+                continue
+            if additional_driver_ids.intersection(
+                entry.driver_id for entry in self._record_entry_points(candidate)
+            ):
+                raise ConfigError("managed driver ID is already installed / 受管的驱动 ID 已安装")
+        for normalized, matches in self._inventory().items():
+            if normalized == record["normalized_distribution"]:
+                continue
+            for item in matches:
+                if any(
+                    str(entry["name"]) in additional_driver_ids
+                    for entry in item.get("entry_points", ())
+                ):
+                    raise ConfigError("unmanaged driver ID is already installed / 未受管的同名驱动已安装")
+
+    def _with_record(
+        self,
+        ledger: dict[str, object],
+        record: dict[str, object],
     ) -> dict[str, object]:
         updated = json.loads(json.dumps(ledger))
         updated["generation"] = int(updated.get("generation", 0)) + 1
-        self._ledger_plugins(updated)[driver_id] = record
+        self._ledger_plugins(updated)[record["normalized_distribution"]] = record
         return updated
 
-    def _without_record(self, ledger: dict[str, object], driver_id: str) -> dict[str, object]:
+    def _without_record(
+        self,
+        ledger: dict[str, object],
+        normalized_distribution: str,
+    ) -> dict[str, object]:
         updated = json.loads(json.dumps(ledger))
         updated["generation"] = int(updated.get("generation", 0)) + 1
-        del self._ledger_plugins(updated)[driver_id]
+        del self._ledger_plugins(updated)[normalized_distribution]
         return updated
 
     def _journal(

@@ -31,6 +31,7 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
     assert inventoried_operations <= source_write_operations
     assert source_write_operations - inventoried_operations == {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
@@ -40,10 +41,17 @@ def test_source_v1_write_inventory_remains_complete_alongside_v2_operation_specs
         "source.modulation_fm_configure_v2",
         "source.modulation_pwm_configure_v2",
         "source.sweep_configure_v2",
+        "source.sweep_fire_v2",
         "source.burst_configure_v2",
+        "source.burst_fire_v2",
         "source.pulse_configure_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
+        "source.arbitrary_volatile_replace_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
+        "source.counter_configure_v2",
+        "source.counter_enable_v2",
+        "source.counter_disable_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -68,19 +76,27 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
     }
     expected_v2_run_steps = {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
+        "source.counter_configure_v2",
+        "source.counter_enable_v2",
+        "source.counter_disable_v2",
+        "source.counter_measure_v2",
         "source.harmonics_configure_v2",
         "source.harmonics_disable_v2",
         "source.modulation_configure_v2",
         "source.modulation_pm_configure_v2",
         "source.modulation_fm_configure_v2",
         "source.modulation_pwm_configure_v2",
-        "source.sweep_configure_v2",
-        "source.burst_configure_v2",
+            "source.sweep_configure_v2",
+            "source.sweep_fire_v2",
+            "source.burst_configure_v2",
         "source.pulse_configure_v2",
         "source.arbitrary_storage_v2",
-        "source.arbitrary_select_v2",
+            "source.arbitrary_select_v2",
+            "source.arbitrary_volatile_replace_v2",
+            "source.arbitrary_workspace_volatile_replace_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -94,6 +110,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
     } == expected_v1_run_steps | expected_v2_run_steps
     expected_v2_operations = {
         "source.basic_configure_v2",
+        "source.basic_live_configure_v2",
         "source.output_enable_v2",
         "source.output_disable_v2",
         "source.harmonics_configure_v2",
@@ -103,10 +120,16 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         "source.modulation_fm_configure_v2",
         "source.modulation_pwm_configure_v2",
         "source.sweep_configure_v2",
+        "source.sweep_fire_v2",
         "source.burst_configure_v2",
+        "source.burst_fire_v2",
         "source.pulse_configure_v2",
         "source.arbitrary_storage_v2",
         "source.arbitrary_select_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
+        "source.counter_configure_v2",
+        "source.counter_enable_v2",
+        "source.counter_disable_v2",
         "source.combine_configure_v2",
         "source.coupling_configure_v2",
         "source.tracking_configure_v2",
@@ -116,13 +139,21 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
         spec.operation
         for spec in list_operation_specs(instrument_kind="source")
         if "_v2" in spec.operation and spec.effect == "write"
-    } == expected_v2_operations
+    } == expected_v2_operations | {
+        "source.arbitrary_volatile_replace_v2",
+        "source.arbitrary_workspace_volatile_replace_v2",
+    }
 
     with TemporaryDirectory() as tmp:
         valid_steps = {
             "source.basic_configure_v2": "channel = 1\nfrequency_hz = 1000\n",
+            "source.basic_live_configure_v2": "channel = 1\nfrequency_hz = 1000\n",
             "source.output_enable_v2": "channel = 1\n",
             "source.output_disable_v2": "channel = 1\n",
+            "source.counter_configure_v2": "input_id = \"counter\"\ncoupling = \"dc\"\n",
+            "source.counter_enable_v2": "input_id = \"counter\"\n",
+            "source.counter_disable_v2": "input_id = \"counter\"\n",
+            "source.counter_measure_v2": "input_id = \"counter\"\n",
             "source.harmonics_configure_v2": "channel = 1\norder = 8\npreset = \"odd\"\n",
             "source.harmonics_disable_v2": "channel = 1\n",
             "source.modulation_configure_v2": "channel = 1\ndepth_percent = 80\ninternal_frequency_hz = 25\n",
@@ -134,6 +165,7 @@ def test_source_v1_indirect_write_entries_are_frozen_and_v2_steps_are_additive()
             "source.pulse_configure_v2": "channel = 1\nwidth_s = 1e-6\ndelay_s = 0\nleading_transition_s = 1e-8\ntrailing_transition_s = 1e-8\n",
             "source.arbitrary_storage_v2": "channel = 1\nslot_id = \"slot_a\"\nfile = \"payload.bin\"\nwrite_mode = \"create_only\"\n",
             "source.arbitrary_select_v2": "channel = 1\nslot_id = \"slot_a\"\nplayback_mode = \"dds\"\nplayback_frequency_hz = 1000\n",
+            "source.arbitrary_workspace_volatile_replace_v2": "file = \"payload.bin\"\npoint_count = 2\n",
             "source.combine_configure_v2": "channels = [1, 2]\nenabled = true\n",
             "source.coupling_configure_v2": "channels = [1, 2]\nenabled = true\n",
             "source.tracking_configure_v2": "channels = [1, 2]\nenabled = true\n",
