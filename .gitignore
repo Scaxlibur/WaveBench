@@ -8,6 +8,8 @@ tool-of-rei/
 /.agents/skills/*
 !/.agents/skills/wavebench/
 !/.agents/skills/wavebench/**
+!/.agents/skills/wavebench-docs/
+!/.agents/skills/wavebench-docs/**
 .codex/
 
 # Local WaveBench config and generated data

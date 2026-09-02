@@ -32,6 +32,10 @@ jobs:
       - name: Run Ruff
         run: python -m ruff check .
 
+      - name: Audit documentation
+        if: matrix.python-version == '3.11'
+        run: python .agents/skills/wavebench-docs/scripts/audit_docs.py --quiet-warnings
+
       - name: Run unit tests
         run: python -m pytest -q
 

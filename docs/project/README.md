@@ -32,6 +32,7 @@ DSG830 当前 production 范围包括只读状态、RF-OFF CW、RF-OFF 内部正
 
 ## design：设计说明
 
+- [文档系统审计与迁移提案](design/WaveBench_文档系统审计与迁移提案.md)
 - [项目边界](design/WaveBench_项目边界.md)
 - [设备抽象层](design/WaveBench_设备抽象层.md)
 - [多仪器流程设计](design/WaveBench_多仪器协同流程设计.md)
