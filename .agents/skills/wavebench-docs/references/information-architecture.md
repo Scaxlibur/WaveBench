@@ -91,7 +91,7 @@
 | 正式发布版本 | Git tag / release | 只有 tag/release 才能表示正式可用版本 |
 | 版本变化 | `CHANGELOG.md`，以对应 tag 和发布提交约束 | 开发分支进度不得伪装成发布历史 |
 | CLI 命令、参数和默认值 | CLI 实现和 `wavebench --help` | 参考页生成或验证；Guide 只保留任务所需命令 |
-| run plan step、字段和 schema | `run_plan.py` 和 `wavebench run schema` | 不在多个 Guide 复制完整 step 表 |
+| run plan step、字段和 schema | `run_plan.py` 和 `wavebench run schema`；派生页由 `scripts/generate_docs.py` 写入 `docs/reference/generated/run-schema.md` | 生成页必须以 `python scripts/generate_docs.py --check` 进入 CI；Guide 不复制完整 step 表 |
 | run template | 模板 registry 和 `wavebench run template --list` | 只在 Tutorial/How-to 选择适用示例 |
 | capability | descriptor、capability/operation registry 与 `capability explain` | 解释模型可以人工维护；精确可用性应查询或生成 |
 | 仪器支持状态 | Core 内建 descriptor 与 instrument plugin descriptor | Core 只给简短摘要；型号详情链接插件仓 |

@@ -12,6 +12,8 @@ python -m wavebench run template <name> --print
 
 三个命令都不连接仪器。`run schema` 输出顶层 TOML 表以及按 step kind 排序的字段清单；`run template --list` 列出当前模板；`--print` 将一个模板的 TOML 输出到标准输出。
 
+当前安装版本的完整离线输出也以版本控制形式保存在[生成的 run plan schema](generated/run-schema.md)。该页由源码生成；本页只说明查询方式和使用边界。
+
 ## 使用顺序
 
 1. 先运行 `run schema`，确认安装版本接受的 `kind` 和字段。
