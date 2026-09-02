@@ -35,7 +35,7 @@ python -m wavebench run check --plan plans/my-sine.toml
 
 ## 4. 连接前配置并做只读预检
 
-复制并修改配置时，不要覆盖已有实验台配置。资源、输入阻抗和安全限制见[配置文件格式](../project/reference/WaveBench_配置文件格式.md)。
+复制并修改配置时，不要覆盖已有实验台配置。资源、输入阻抗和安全限制见[配置实验台](../getting-started/configure-bench.md)和[配置 Reference](../reference/configuration.md)。
 
 ```bash
 python -m wavebench doctor --config wavebench.toml

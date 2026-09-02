@@ -92,3 +92,13 @@ def test_structure_does_not_flag_long_archive_pages(tmp_path):
         finding.path == "docs/current.md" and "long page" in finding.message
         for finding in findings
     )
+
+
+def test_structure_allows_unlinked_compatibility_entry(tmp_path):
+    compatibility = tmp_path / "docs" / "old.md"
+    compatibility.parent.mkdir(parents=True)
+    compatibility.write_text("# 旧页面旧入口\n", encoding="utf-8")
+
+    findings = AUDIT.check_structure([AUDIT.load_document(compatibility, tmp_path)], {}, max_lines=600)
+
+    assert not any("orphan Markdown page" in finding.message for finding in findings)

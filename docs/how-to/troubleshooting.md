@@ -40,4 +40,4 @@ python -m wavebench run schema
 - `steps/` 中同一序号的 JSON 记录；
 - 仪器当前读回状态和 plan 中的安全门／restore 条款。
 
-随后阅读[运行产物 Reference](../reference/artifacts.md)和[错误处理和日志策略](../project/reference/WaveBench_错误处理和日志策略.md)。需要继续硬件操作前，先确认输出已处于预期安全状态。
+随后阅读[运行产物 Reference](../reference/artifacts.md)和[错误 Reference](../reference/errors.md)。需要继续硬件操作前，先确认输出已处于预期安全状态。

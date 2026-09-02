@@ -54,7 +54,7 @@ py -3.11 -m venv .venv
 ## 下一步
 
 - 想理解模板如何进入真实实验流程，阅读[从模板到报告](../tutorials/from-template-to-report.md)。
-- 已准备连接实验台时，先阅读[执行一次实验](../how-to/run-an-experiment.md)和[配置文件格式](../project/reference/WaveBench_配置文件格式.md)。
+- 已准备连接实验台时，先阅读[配置实验台](configure-bench.md)和[执行一次实验](../how-to/run-an-experiment.md)。
 - 需要查询字段时，运行 `python -m wavebench run schema`，并阅读[run plan Reference](../reference/run-schema.md)。
 
 `run verify` 会对配置中的仪器执行只读身份查询，`run plan` 会执行真实实验；两者不属于本页的无硬件流程。

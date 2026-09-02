@@ -66,4 +66,4 @@ python -m wavebench run report data/runs/<run-dir>
 - `kind`、字段名或必填字段错误：阅读[run plan 排错](troubleshooting.md)，再运行 `run schema`。
 - 资源不可达或型号不匹配：检查 `wavebench.toml`，再运行 `doctor`。
 - 预检或安全限制失败：不要降低限制来绕过错误；先确认真实接线和安全边界。
-- step 执行失败：保留 run 目录，检查 `run.json` 和对应 `steps/` 记录，再查[错误处理和日志策略](../project/reference/WaveBench_错误处理和日志策略.md)。
+- step 执行失败：保留 run 目录，检查 `run.json` 和对应 `steps/` 记录，再查[错误 Reference](../reference/errors.md)。

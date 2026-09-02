@@ -255,7 +255,10 @@ def check_structure(
             and document.relative.parts[-1] == "SKILL.md"
             and "skills" in document.relative.parts
         )
-        if not is_entry and not inbound.get(document.canonical):
+        is_compatibility_entry = any(
+            heading.level == 1 and "旧入口" in heading.title for heading in document.headings
+        )
+        if not is_entry and not is_compatibility_entry and not inbound.get(document.canonical):
             findings.append(Finding("warning", document.relative.as_posix(), 1, "orphan Markdown page: no inbound Markdown link"))
 
     for duplicate_title, matches in titles.items():

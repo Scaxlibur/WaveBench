@@ -1,4 +1,4 @@
-# WaveBench run plan 使用指南
+# WaveBench run plan 使用指南旧入口
 
 本页保留原有链接，作为 run plan 的快速入口。当前页面按读者目标拆分；完整 step、字段、capability 和 artifact 不能再从单一长页手工维护。
 

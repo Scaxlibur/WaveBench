@@ -49,7 +49,7 @@ python3 -m venv .venv
 - `run plan`、输出控制、采集和部分 TUI 操作可能改变仪器状态。
 - WaveBench 不自动执行 `*RST`，也不会因设置电压、幅度或频率而自动开启输出。
 
-开始真实实验前，请阅读[执行一次实验](docs/how-to/run-an-experiment.md)和[配置实验台](docs/project/reference/WaveBench_配置文件格式.md)。
+开始真实实验前，请阅读[执行一次实验](docs/how-to/run-an-experiment.md)和[配置实验台](docs/getting-started/configure-bench.md)。
 
 ## 文档与贡献
 

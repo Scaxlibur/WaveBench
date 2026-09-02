@@ -8,11 +8,13 @@
 ## 第一次使用 WaveBench
 
 - [无硬件快速开始](getting-started/quickstart.md)：安装后打印示例 plan，并完成一次不连接仪器的检查。
+- [安装](getting-started/installation.md)：创建虚拟环境并验证 CLI 入口。
 - [项目首页](../README.md)：了解适用范围、核心能力和安全摘要。
 
 ## 连接实验仪器
 
-- [配置文件格式](project/reference/WaveBench_配置文件格式.md)：当前配置字段、资源和安全限制。
+- [配置实验台](getting-started/configure-bench.md)：从示例配置到 `doctor` 和 `run verify`。
+- [配置 Reference](reference/configuration.md)：当前配置表、访问策略和安全边界。
 - [执行一次实验](how-to/run-an-experiment.md)：`run check`、`doctor`、`run verify` 与 `run plan` 的顺序。
 - [示例计划目录](../plans/README.md)：每个示例的硬件副作用和适用范围。
 
@@ -31,10 +33,10 @@
 
 ## 查询精确参数
 
-- [CLI 形态](project/guides/WaveBench_CLI形态.md)
-- [配置文件格式](project/reference/WaveBench_配置文件格式.md)
+- [CLI Reference](reference/cli.md)
+- [配置 Reference](reference/configuration.md)
 - [run plan Reference](reference/run-schema.md)
-- [错误处理和日志策略](project/reference/WaveBench_错误处理和日志策略.md)
+- [错误 Reference](reference/errors.md)
 
 ## 理解模型与安全边界
 

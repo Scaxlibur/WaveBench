@@ -15,7 +15,7 @@
     00_<kind>.json     单个 step 记录
 ```
 
-`run report <run-dir>` 只读取已有产物并生成离线报告，不连接仪器，也不修改原始采集数据。
+`run report <run-dir>` 只读取已有产物并生成离线报告，不连接仪器，也不修改原始采集数据；它会在运行目录或显式输出位置写入派生的 HTML，使用 `--pdf` 时还会写入 PDF。
 
 ## `run.json`
 
@@ -44,6 +44,12 @@ recovered, expect_status, expect_failures, expect_fft_status, expect_fft_failure
 ```
 
 `summary.csv` 适合快速查看和表格导入。需要保留完整字段、条件字段或错误 evidence 的自动化工具应优先读取 `run.json` 和对应 step JSON。
+
+## 多个 run 的离线索引
+
+`run report-index` 读取一个或多个已有 run 目录，并在 `--output` 目录写入 `manifest.json`、`manifest.csv` 和 `index.html`。它不连接仪器；输出中的生成时间不应被当作实验时间或原始测量证据。
+
+运行产物与 scope capture package 是不同层次的对象：run 目录记录 plan 和 step 关系，capture package 保存单次波形及其 metadata。需要分析具体采集字段时，以对应的 typed result、package loader 和 `metadata.json` 为准。
 
 ## 相关页面
 
