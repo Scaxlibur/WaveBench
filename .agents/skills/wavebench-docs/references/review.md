@@ -25,7 +25,7 @@
 - 命令、参数、schema、capability、artifact 和示例是否与实现一致；
 - 中文页面最后使用 `tech-doc-style-chinese` 检查表达层。
 
-先读 diff，确定本次修改的 Markdown，再把这些路径显式传给机械 audit。例如：
+先读 diff。代码 diff 可先用 `scripts/docs_impact.py --base <base> --head HEAD` 找到 canonical 页面候选；它只缩小 review 范围，不能决定页面是否确实需要改动。确认本次修改的 Markdown 后，再把这些路径显式传给机械 audit。例如：
 
 ```bash
 python .agents/skills/wavebench-docs/scripts/audit_docs.py README.md docs/index.md
