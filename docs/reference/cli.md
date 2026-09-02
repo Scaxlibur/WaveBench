@@ -35,3 +35,4 @@ python -m wavebench --json <domain> <command> ...
 - [配置实验台](../getting-started/configure-bench.md)
 - [执行一次实验](../how-to/run-an-experiment.md)
 - [run plan Reference](run-schema.md)
+- [插件 Reference](plugins/index.md)

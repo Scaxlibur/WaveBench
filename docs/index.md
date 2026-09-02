@@ -23,8 +23,8 @@
 - [从模板到报告](tutorials/from-template-to-report.md)：用一个模板理解完整实验流程。
 - [执行一次实验](how-to/run-an-experiment.md)：已明确目标时的最短可靠步骤。
 - [run plan Reference](reference/run-schema.md)：查询当前 step、字段和离线 schema。
-- [TUI 终端控制面板](project/guides/WaveBench_TUI终端控制面板.md)：人工查看和受限控制。
-- [HTTP MCP 只读接口](project/guides/WaveBench_HTTP_MCP_只读接口.md)：本机自动化读取入口。
+- [使用 TUI](how-to/use-tui.md)：实验性的人工查看和受限控制。
+- [启动只读 MCP 服务](how-to/serve-mcp.md)：本机自动化读取入口。
 
 ## 分析与报告
 
@@ -46,10 +46,13 @@
 
 ## 扩展 WaveBench
 
-- [可安装仪器插件](project/guides/WaveBench_可安装仪器插件.md)
-- [插件开发指南](project/contributing/WaveBench_插件开发指南.md)
-- [新增仪器驱动指南](project/contributing/WaveBench_新增仪器驱动指南.md)
-- [插件市场索引](project/reference/plugins/WaveBench_插件市场索引.md)
+- [管理仪器插件](how-to/manage-plugins.md)
+- [插件 Reference](reference/plugins/index.md)
+- [插件开发](development/plugin-development.md)
+- [新增仪器驱动](development/instrument-drivers.md)
+- [贡献 WaveBench](development/contributing.md)
+- [测试 WaveBench](development/testing.md)
+- [文档工作流](development/documentation.md)
 - [仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins)：具体型号、SCPI、profile、quirk 和实机 evidence。
 
 ## RFC、历史与发布

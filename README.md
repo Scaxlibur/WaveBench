@@ -55,8 +55,8 @@ python3 -m venv .venv
 
 - [文档首页](docs/index.md)
 - [示例计划及硬件边界](plans/README.md)
-- [插件用户指南](docs/project/guides/WaveBench_可安装仪器插件.md)
-- [插件开发指南](docs/project/contributing/WaveBench_插件开发指南.md)
+- [管理仪器插件](docs/how-to/manage-plugins.md)
+- [插件开发](docs/development/plugin-development.md)
 - [更新日志](CHANGELOG.md)
 
 WaveBench 使用 MIT 许可证。感谢 Linux DO 社区提供交流和支持。
