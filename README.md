@@ -1,228 +1,62 @@
 # WaveBench
 
-[English documentation](docs/README_EN.md) · [中文文档总览](docs/README.md) · [更新日志](CHANGELOG.md) · [仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins)
+[中文文档](docs/index.md) · [English overview](docs/README_EN.md) · [更新日志](CHANGELOG.md) · [仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins)
 
 > [!WARNING]
-> WaveBench 可以连接并控制真实实验设备。执行会改动仪器状态的命令前，应确认接线、输入阻抗、输出状态和电压 / 电流限制。
+> WaveBench 可以连接并控制真实实验设备。执行会改变仪器状态的命令前，应确认接线、输入阻抗、输出状态以及电压／电流限制。
 
-WaveBench 是一个用 Python 编写的实验室自动测量台，面向电子设计竞赛调试和日常实验。它把仪器控制、实验步骤和采集证据放在同一条命令链中，支持先离线检查 plan，再决定是否连接硬件。
+WaveBench 是面向电子设计竞赛调试和日常实验的 Python 测量台。它将仪器操作、显式 run plan 和可复查的实验产物放在同一条工作流中：先离线检查，再连接实验台，最后执行受控实验。
 
-当前仓库开发线为 `0.8.26`，最新稳定 tag 为 `v0.8.0`。不同版本的命令和能力可能不同，以对应 tag 中的文档为准。
+![WaveBench 运行报告示例](docs/images/run_plan_result.png)
 
-## 🌟 特别鸣谢
+## 适用范围
 
-<p align='center'>
-  <a href='https://linux.do'>
-    <img src='docs/images/linuxdo.png' alt='LINUX DO' width='420' />
-  </a>
-</p>
-<p align='center'><b>学AI，上L站！祝小破站越来越好～</b></p>
+- 用信号源、示波器、电源和万用表组成可复现的实验流程。
+- 用 `run check` 在不连接仪器的情况下检查 plan。
+- 将采集包、运行记录和离线 HTML 报告保存在同一实验产物中。
+- 用显式命令控制输出、采集和恢复，不在后台隐式执行 reset 或输出切换。
+- 通过已安装的 instrument plugin 扩展具体仪器型号。
 
-## WaveBench 适合做什么
+## 无硬件快速开始
 
-- 把信号源、示波器、电源和万用表组合成一条可复现的实验流程。
-- 保存 CSV、NPY、JSON metadata、命令记录和报告，方便复查结果。
-- 用明确的命令控制输出，不在后台隐式执行 reset、autoscale 或输出切换。
-- 在主包内使用常见仪器；需要其他型号时，再显式安装受信任的本地插件。
-
-### WaveBench 特色功能
-
-#### 测试报告
-
-`run report` 会读取已有的 `run.json`、采集包和命令记录，生成可离线查看的 HTML 报告。报告汇总运行状态、验收结果、波形与频响分析、警告、恢复状态和原始证据链接，适合复查一次实验到底发生了什么。
-
-![测试报告示例](docs/images/run_plan_result.png)
-
-#### 普通扫频
-
-普通扫频在固定 Vpp 下沿频率轴采集 DUT 的幅频和相频响应。每条曲线对应一次固定幅值的扫频结果，便于观察通带、衰减和相位变化。
-
-![幅频特性曲线](docs/images/magnitude_response.png)
-
-![相频特性曲线](docs/images/phase_response.png)
-
-#### 二维扫频
-
-`sweep.frequency_response` 支持「请求 Vpp × 频率」二维扫频。每个网格点保留输入与输出波形、频率响应和质量状态，可进一步生成二维校准 LUT；安装 `.[report3d]` 后，还能在 HTML 报告中查看交互式三维增益曲面。
-
-![二维频率响应](docs/images/2d_frequency_response.gif)
-
-#### 多仪器 `run plan`
-
-显式 `run plan` 可以把信号源、示波器、电源和万用表编排到同一条实验流程中。执行前先用 `run check` 做离线校验，再用 `run verify` 做连接和安全预检；执行过程中保留每个步骤的状态、测量结果、失败证据和恢复记录。
-
-run 内的 Source / Power 基础写入会在实际 setter 前回读并比较状态；状态漂移会停止写入并写入差异。缺少完整 `scope.snapshot` 的驱动可通过 `scope status` 返回 `partial summary`，操作能力可用 `capability explain` 离线核对。需要固定 plan、配置和任意波形输入时，先生成 `run intent`，再用 `run plan --intent` 在打开仪器前核验摘要。
-
-典型流程是「信号源 → DUT → 示波器 / 万用表」。
-
-```mermaid
-flowchart LR
-    source[信号源] --> dut[DUT]
-    dut --> scope[示波器]
-    dut --> dmm[万用表]
-    plan[run plan] --> source
-    plan --> scope
-    plan --> dmm
-    scope --> artifacts[采集包 / 离线报告]
-    dmm --> artifacts
-```
-
-#### 示波器联合视图
-
-`scope focus` 用一个事务配置一个或多个目标模拟通道，并可同时设置完整横向时间范围、各目标通道的
-V/div，以及是否隐藏插件 profile 声明的其他模拟通道：
-
-```bash
-wavebench scope focus \
-  --channel 1 \
-  --channel 2 \
-  --time-range 0.01 \
-  --vertical-scale 1=0.2 \
-  --vertical-scale 2=0.5 \
-  --hide-others
-```
-
-Core 不定义仪器型号、通道数量或数值范围；这些 guard 由当前插件的 descriptor profile 声明。
-操作会先读取 profile 全部模拟通道及受保护的时基、位置和偏置字段。成功后保留目标视图；任一写入
-或回读失败时恢复完整 baseline 并重新查询，恢复不完整则停止该 session 的后续写入。该命令不启动
-采集、不调用 autoscale，也不修改耦合或输入终端。
-
-## 先在没有仪器时跑通
-
-下面的命令只生成和检查 plan，不会连接仪器，也不会打开输出。
-原生 Windows 与 Linux / WSL 均可运行离线命令。Windows 原生硬件访问使用
-`portalocker[win32]` 提供的跨进程锁；Windows 与 WSL 不共享同一锁域，同一台仪器应固定由一种运行环境访问。
+以下命令只安装包、列出模板并打印一个示例 plan；不会连接仪器或打开输出。
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
-source .venv/bin/activate
-
-wavebench run template --list
-wavebench run template source-scope-sine --output /tmp/wavebench-demo.toml --force
-wavebench run check --plan /tmp/wavebench-demo.toml
+.venv/bin/python -m wavebench run template --list
+.venv/bin/python -m wavebench run template source-scope-sine --print
+.venv/bin/python -m wavebench run check --plan plans/closure_sine_1k.toml
 ```
 
-PowerShell 示例：
+最后一条命令以 `safety_limits=ok / 安全上限=通过` 结束时，表示示例 plan 已通过离线检查。完整的预期结果、Windows 命令和下一步见[无硬件快速开始](docs/getting-started/quickstart.md)。
 
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev,analysis,tui]"
-.\.venv\Scripts\python.exe -m wavebench run template --list
-```
+## 支持范围
 
-Windows 串口资源使用 `COM3`、`COM10` 等形式；`\\.\COM10` 也会规范化为同一串口身份。
-VISA、SocketIO 和 USB 设备仍需安装对应的厂商驱动或后端。纯 Python 插件支持原生 Windows 的安装、升级、删除和恢复；包含原生 DLL 的插件不在本轮支持范围内。
-
-Windows 原生环境暂不保证与 WSL 进程对同一资源互相阻塞。需要使用 WSL 时，可继续使用
-[`scripts/wsl-run.ps1`](scripts/wsl-run.ps1) 作为兼容入口。
-
-查看终端界面时，可另外安装 TUI 依赖。`--fake` 使用模拟设备，不连接实验台：
-
-```bash
-.venv/bin/python -m pip install -e ".[tui]"
-wavebench tui --fake
-```
-
-执行 plan 前，应先核对 plan 中的 source、power、scope 步骤和恢复范围。`run verify` 用于连接与安全预检，`run plan` 才会进行真实实验。
-
-## 内建支持
-
-| 入口 | 内建设备 | 主要用途 | 状态 |
-| --- | --- | --- | --- |
-| 示波器 | R&S RTM2000/RTM2032、RIGOL DS1104Z/DS1000Z | 波形读取、单次采集、多通道和截图 | 主包能力 |
-| 信号源 | RIGOL DG4000/DG4202 | 基本波形、频率控制、扫频和任意波上传 | 主包能力 |
-| 电源 | RIGOL DP800 | 状态、保护、设定值和输出控制 | 主包能力 |
-| 万用表 | RIGOL DM3000/DM3058 | 常用读数、功能和部分量程/触发状态 | 主包能力 |
-| run plan | source、rf_source、power、scope、dmm、sleep、频响步骤 | 多仪器编排、质量检查和恢复 | 主入口 |
-| TUI | 电源、万用表、信号源面板 | 人工查看和少量控制 | 实验性 |
-| 插件 | `wavebench.instruments` 外部 driver | 添加或替换特定仪器实现 | 可选 |
-
-详细的能力边界和参数见 [文档总览](docs/README.md)、[项目文档分类](docs/project/README.md) 及 `docs/project/reference/` 下的参考页。
-
-## RF 信号源
-
-`rf_source` 是独立于普通 `source` 的仪器领域。DSG830 当前已开放只读状态、RF OFF 时的单字段 CW 配置、RF-OFF 内部正弦 AM／FM／PM 配置及按模式关闭、具有完整 safety 配置的 `rf_out` ON/OFF、RF-OFF internal／single Pulse 配置，以及 RF-OFF 的 frequency-only Step Sweep 配置。PM 的 production profile 限于 `1.25 rad`。A4-MO 已将受限 `rf_source.modulated_output_enable` 提升到 production：仅接受已激活且精确匹配的 AM `50 %`／`1 kHz`、FM `20 kHz`／`1 kHz`、PM `1.25 rad`／`1 kHz` profile，最大功率均为 `-50 dBm`；普通 `rf_source.output` 仍要求调制关闭。FM／PM 的 WaveBench CH2 分析只记录波形质量，不计量频偏或相偏。Step Sweep 固定为 `STEP`／`FWD`／`RAMP`／`LIN`，配置后保持 Sweep disabled。
-
-已完成的 A5 只覆盖一条后面板物理路径：DSG830 的「PULSE IN/OUT」按 output 方向、固定 internal／single／normal／`1 ms`／`100 μs` profile，提供 `rf_source.pulse_output` 与 `wavebench rf-source pulse-output`。它不启用 RF 输出，也不定义 Pulse input、`TRIGGER IN`、Sweep fire、sync／reference、Level Sweep 或 list。A5-0 仍仅是逻辑 Pulse／Sweep trigger configuration 的零写读取合同，DSG830 production descriptor 不声明 `rf_source.trigger_snapshot`。
-
-- 日常配置与操作：[RF 信号源使用指南](docs/project/guides/WaveBench_RF信号源使用指南.md)
-- 模型、安全语义和 capability 边界：[RF 信号源领域设计](docs/project/design/WaveBench_RF信号源设计.md)
-- Core／插件的同步计划和证据状态：[RF 信号源开发里程碑](docs/project/design/WaveBench_RF信号源开发里程碑.md)
-
-## 三条常用路径
-
-### source → scope 完整流程
-
-先用模板生成 plan，再检查它：
-
-```bash
-wavebench run template source-scope-sine --output plans/my-sine.toml
-wavebench run check --plan plans/my-sine.toml
-```
-
-确认接线、scope coupling 和安全限值后，才执行：
-
-```bash
-cp -n wavebench.example.toml wavebench.toml
-# 编辑 wavebench.toml，填写当前实验台的 resource；已有配置不要覆盖
-wavebench run verify --config wavebench.toml --plan plans/my-sine.toml
-wavebench run plan --config wavebench.toml --plan plans/my-sine.toml
-wavebench run report data/runs/<run-dir>
-```
-
-### power → DMM / scope
-
-DP800 的设定值、保护和输出是三类独立操作。示例计划见 [plans/README.md](plans/README.md)。厂商命令和型号资料由[仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins)维护；本仓库只说明 WaveBench 的调用边界。
-
-### 双通道频率响应
-
-使用 `source-scope-frequency-response` 模板可以生成 reference / response 双通道扫频 plan。基础频响采集不要求额外依赖；PCHIP、平滑样条和二维校准需要 `analysis`，PDF 报告需要 `pdf`，交互式三维 HTML 需要 `report3d`。详细说明见 [run plan 使用指南](docs/project/guides/WaveBench_run_plan_使用指南.md)；执行前仍需确认真实接线。
-
-频响结果可用 `run compare` 离线比较多个 run，并用 `run resume` 生成缺失点补测清单；两条命令都不会连接仪器。每个已生成采集包的频响点会保存 `case_id`、`acquisition_id`、请求 Vpp 与参考通道实测 Vpp，便于复查测量来源。
-
-## 命令的安全边界
-
-| 类别 | 例子 | 说明 |
+| 类别 | Core 提供的通用能力 | 精确型号状态 |
 | --- | --- | --- |
-| 离线 | `run schema`、`run template`、`run check`、`run report`、`run compare`、`run resume`、`capture inspect`、`tui --fake` | 不连接仪器；TUI 可能写本地日志 |
-| 连接读取 | `doctor`、`idn`、`status`、`run verify` | 会查询设备；仍应把它当作有状态的 I/O |
-| 修改设备 | `scope fetch/capture/autoscale`、source/power setter、output、`run plan`、非 fake TUI | 可能改变设置、触发采集或切换输出 |
+| 示波器 | 读取、采集、截图和受 capability 约束的控制 | 由内建或已安装插件 descriptor 声明 |
+| 信号源／RF 信号源 | 显式配置、输出控制、run plan 和安全预检 | 由对应插件的 profile 与 evidence 声明 |
+| 电源／万用表 | 状态、设定、读数与 run plan 集成 | 由对应插件 descriptor 声明 |
+| 插件 | 发现、安装和公开插件 API | 具体型号、SCPI、quirk 和限制见[仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins) |
 
-WaveBench 的默认行为包括：
+用[文档首页](docs/index.md)按任务进入正确页面；精确命令、字段和 capability 以程序输出、schema 与 descriptor 为准，而不是以本页摘要为准。
 
-- 不自动发送 `*RST`；
-- 不因设定电压或幅度而自动打开输出；
-- 不自动改变示波器输入阻抗；可能的 50 Ω 输入需要显式确认；
-- `power set` 不改变输出开关，`power output` 不改变电压/限流设定；
-- 各仪器配置支持 `access = "read_write"`、`"read_only"` 或 `"disabled"`；`read_only` 只允许状态和配置读取，`disabled` 只保留离线命令；
-- 启用 source restore 后只覆盖文档注明的 basic 状态，不能当成完整通道快照；
-- run step 默认在失败后停止后续步骤；只有显式 `on_failure = "continue"` 才会继续。需要保护输出时，可用 `[safety] safety_gate = true` 和授权的 OFF 通道列表；安全门会先关闭目标输出再停止 run；
-- HTTP MCP 的工具入口需要认证，当前只提供只读工具；`/health` 是例外，不需要 token。它不提供 raw SCPI 或输出开关。
+## 安全摘要
 
-外部 Python 插件按当前用户权限运行，不是安全沙箱。仅安装来源已确认的本地目录或 wheel；公开文档不得包含真实 IP、序列号、串口路径、凭据或实验产物。
+- `run schema`、`run template`、`run check` 和 `run report` 不连接仪器。
+- `doctor` 与 `run verify` 会查询真实设备；先确认资源与接线。
+- `run plan`、输出控制、采集和部分 TUI 操作可能改变仪器状态。
+- WaveBench 不自动执行 `*RST`，也不会因设置电压、幅度或频率而自动开启输出。
 
-## 按任务找文档
+开始真实实验前，请阅读[执行一次实验](docs/how-to/run-an-experiment.md)和[配置实验台](docs/project/reference/WaveBench_配置文件格式.md)。
 
-- 第一次安装和配置：[文档总览](docs/README.md)、[配置文件格式](docs/project/reference/WaveBench_配置文件格式.md)
-- 编写和检查 run plan：[run plan 使用指南](docs/project/guides/WaveBench_run_plan_使用指南.md)
-- 了解采集包和报告：[数据输出格式](docs/project/reference/WaveBench_数据输出格式.md)
-- 安装或开发插件：[插件用户指南](docs/project/guides/WaveBench_可安装仪器插件.md)、[插件开发指南](docs/project/contributing/WaveBench_插件开发指南.md)
-- 使用 TUI 或 HTTP MCP：[TUI 文档](docs/project/guides/WaveBench_TUI终端控制面板.md)、[HTTP MCP 文档](docs/project/guides/WaveBench_HTTP_MCP_只读接口.md)
-- 查厂商命令和历史验证：见[仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins)；本仓库只保留 WaveBench 自身的接口和设计文档
+## 文档与贡献
 
-目前中文文档覆盖最完整，英文入口提供安装、离线体验和安全摘要。命令、字段名和 schema 以程序输出为准。
-
-## 开发
-
-要求 Python 3.11 或更高版本。开发依赖和 optional extras 见 [pyproject.toml](pyproject.toml)。常用检查：
-
-```bash
-.venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/ruff check .
-.venv/bin/python -m pytest -q
-```
-
-## 许可证与致谢
+- [文档首页](docs/index.md)
+- [示例计划及硬件边界](plans/README.md)
+- [插件用户指南](docs/project/guides/WaveBench_可安装仪器插件.md)
+- [插件开发指南](docs/project/contributing/WaveBench_插件开发指南.md)
+- [更新日志](CHANGELOG.md)
 
 WaveBench 使用 MIT 许可证。感谢 Linux DO 社区提供交流和支持。
