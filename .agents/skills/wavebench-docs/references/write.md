@@ -28,6 +28,7 @@ WaveBench 核验，不重复页面类别规则。
 - 型号级 SCPI、profile、quirk 和验证状态链接 instrument plugin 仓库。
 - 在文档宪法允许出现状态的位置，Current、Experimental、Proposed 和 Historical 使用明确标签。
 - README 只保留 landing page 内容，不展开内部合同。
+- 面向读者的当前页面遵守[协作输出卫生](information-architecture.md#协作输出卫生)：写当前结果，不写纠正或删除过程；需要追溯的页面按宪法中的例外处理。
 
 ## 中文表达层
 

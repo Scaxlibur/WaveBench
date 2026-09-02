@@ -71,6 +71,9 @@ needs constitutional rules. Do not turn every review into a repository-wide audi
   apply `tech-doc-style-chinese` only after page responsibility and sources are
   settled. Do not assume that skill's unrelated `Project-Overrides.md` applies to
   WaveBench.
+- Apply the [协作输出卫生](references/information-architecture.md#协作输出卫生)
+  rule to reader-facing content. It is a contextual write/review judgment, not a
+  hook, text filter, or CI gate.
 - Prefer generated Reference when stable code or schema can produce it. Generated
   output must name its source and have a drift check before it becomes canonical.
 

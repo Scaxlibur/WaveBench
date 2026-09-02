@@ -23,6 +23,7 @@
 - Core/plugin 边界是否正确；
 - 链接、导航、文件路径和锚点是否有效；
 - 命令、参数、schema、capability、artifact 和示例是否与实现一致；
+- 面向读者的当前页面是否避免把纠正、删除或内部过程写成正文；RFC、archive、CHANGELOG 和审计等追溯页面是否仅保留必要事实；
 - 中文页面最后使用 `tech-doc-style-chinese` 检查表达层。
 
 先读 diff。代码 diff 可先用 `scripts/docs_impact.py --base <base> --head HEAD` 找到 canonical 页面候选；它只缩小 review 范围，不能决定页面是否确实需要改动。确认本次修改的 Markdown 后，再把这些路径显式传给机械 audit。例如：
