@@ -328,3 +328,132 @@ warning 默认不阻断 CI；CI 使用 `--quiet-warnings`，只显示并阻断 e
 - 全自动 anchor 阻断：不同 Markdown renderer 的 slug 规则仍可能产生误报。
 
 原则保持不变：lint 检查文档有没有坏，Agent 检查文档有没有长歪。
+
+## Step 3：目标架构与迁移图
+
+本节将审计结论转化为迁移决策。它不是当前产品 Reference，也不改变任何代码、CLI、schema、descriptor 或发布状态；Current 行为仍以文档宪法所列的 machine source 为准。
+
+### 最终导航树与页面职责
+
+目录只在已有明确读者目标和可迁入内容时建立。`archive/` 不进入主导航，历史页面只从其替代页面或 RFC 索引按需链接。
+
+```text
+docs/
+  index.md                         文档首页：按用户目标导航
+  getting-started/
+    quickstart.md                  无硬件完成首个离线结果
+    installation.md                安装 WaveBench
+    configure-bench.md             配置实验台并准备 doctor/verify
+  tutorials/
+    from-template-to-report.md     从模板学习一次完整实验流程
+  how-to/
+    run-an-experiment.md           预检、验证和执行一个既有 plan
+    frequency-response-and-calibration.md
+    troubleshooting.md
+    use-tui.md
+    serve-mcp.md
+    manage-plugins.md
+    use-rf-source.md
+  reference/
+    cli.md                         CLI 命令入口和副作用分类
+    configuration.md               配置模型与字段说明
+    run-schema.md                  run plan Reference 的说明入口
+    generated/run-schema.md        从 `wavebench run schema` 生成
+    artifacts.md                   run artifact 和分析产物
+    capabilities.md                capability 查询模型
+    instrument-support.md          Core 支持摘要与插件入口
+    errors.md
+    plugins/
+      index.md
+  concepts/
+    architecture.md
+    safety-model.md
+    capability-model.md
+    sessions-and-recovery.md
+    device-abstraction.md
+    plugin-model.md
+  development/
+    contributing.md
+    documentation.md
+    plugin-development.md
+    instrument-drivers.md
+    testing.md
+  rfcs/
+    index.md
+  archive/
+```
+
+| 导航类别 | 一句话职责 | 主要事实来源 |
+| --- | --- | --- |
+| 首页与开始使用 | 让首次使用者获得明确的离线结果或完成实验台准备 | 安装配置、模板命令和离线 CLI 输出 |
+| 教程与 How-to | 按学习目标或已知任务组织可验证步骤 | CLI、run schema、模板、artifact writer 与安全合同 |
+| Reference | 让读者查询精确、可追溯的当前行为 | 实现、`--help`、schema、model、descriptor 与测试 |
+| Concepts | 解释稳定模型、边界和取舍 | Core model/service contract 与测试 |
+| Development | 指导贡献、插件开发、测试和文档维护 | 公开 API、打包/验证流程与 RFC |
+| RFC 与 archive | 保留提案、裁决和历史，而不承诺当前可用性 | RFC、Git 历史、对应 release 和插件证据 |
+
+### Current → Target
+
+下表是逐步迁移图。`旧路径短说明` 表示保留原 URL 的简短说明和替代入口，直到内部入链与外部书签有明确迁移窗口；它不复制参数、版本或 capability 表。
+
+| 当前页面或页面组 | 目标页面 | Action | 迁移理由与依赖 |
+| --- | --- | --- | --- |
+| `README.md` | 保留 `README.md` | REWRITE | 收敛为 landing page；依赖 `docs/index.md` 和 Quickstart 承接导航与完整步骤。 |
+| `docs/README.md`、`docs/project/README.md` | `docs/index.md`，旧路径短说明 | MERGE / MOVE | 两页的导航职责重合，`docs/project/` 没有额外用户语义。 |
+| `docs/README_EN.md` | 保留原路径 | REWRITE | 只说明英文覆盖范围和中文完整文档入口，不维护第二套事实表。 |
+| `docs/project/guides/WaveBench_CLI形态.md` | `reference/cli.md`；相关 How-to/Concept | SPLIT / MOVE | 命令和参数转向 `--help`；任务步骤和模型解释各归其类。 |
+| `docs/project/guides/WaveBench_run_plan_使用指南.md` | Tutorial、`how-to/run-an-experiment.md`、`how-to/frequency-response-and-calibration.md`、`how-to/troubleshooting.md`、`reference/run-schema.md`、`reference/artifacts.md`；旧路径短说明 | SPLIT | 该页承担教程、运行步骤、schema、artifact、频响和排错；先建立接收页，再收缩旧页。 |
+| `docs/project/guides/WaveBench_RF信号源使用指南.md` | `how-to/use-rf-source.md` 和 capability Reference | SPLIT / MOVE | 操作步骤留 Core；型号 profile、SCPI、quirk 和证据回插件仓。 |
+| `docs/project/guides/WaveBench_TUI终端控制面板.md` | `how-to/use-tui.md` | MOVE | 页面职责单一，保留 Experimental 边界。 |
+| `docs/project/guides/WaveBench_HTTP_MCP_只读接口.md` | `how-to/serve-mcp.md` | MOVE | 页面职责单一；端点和选项由实现及 help 核验。 |
+| `docs/project/guides/WaveBench_可安装仪器插件.md` | `how-to/manage-plugins.md`、`reference/plugins/index.md` | SPLIT / MOVE | 用户生命周期与 API/transport 细节分离。 |
+| `docs/project/reference/WaveBench_配置文件格式.md` | `reference/configuration.md` | REWRITE / MOVE | 由 config model 核验，去除重复段和型号私有状态。 |
+| `docs/project/reference/WaveBench_数据输出格式.md` | `reference/artifacts.md`；只在独立读者目标成立时再拆 family 页 | SPLIT / MOVE | 以 writer、typed result 和 loader 重新核验字段。 |
+| `docs/project/reference/WaveBench_错误处理和日志策略.md` | `reference/errors.md`、`how-to/troubleshooting.md`、session Concept | SPLIT / MOVE | 错误查询、按症状排错和设计语义分离。 |
+| `docs/project/reference/plugins/WaveBench_可执行仪器插件API.md` | `reference/plugins/` 的生成式 API Reference + `development/plugin-development.md` | SPLIT / GENERATE | API 签名和 capability 映射不再长期手写。 |
+| `docs/project/reference/plugins/WaveBench_声明式SCPI插件.md`、`WaveBench_插件市场索引.md` | `reference/plugins/` 的人工说明 + generated schema | GENERATE | 字段和默认值由 parser/validator 生成或验证。 |
+| `docs/project/reference/plugins/WaveBench_插件注册表.md` | `reference/plugins/index.md`、`concepts/plugin-model.md` | SPLIT / MOVE | 使用路径和信任边界可解释；命令枚举转到 CLI Reference。 |
+| `docs/project/contributing/WaveBench_插件开发指南.md` | `development/plugin-development.md` 和 API Reference | SPLIT / MOVE | 开发流程与精确 API 合同分离。 |
+| `docs/project/contributing/WaveBench_新增仪器驱动指南.md` | `development/instrument-drivers.md` | MOVE | 保留其已有的单一开发目标。 |
+| `docs/project/design/WaveBench_项目边界.md`、`WaveBench_多仪器协同流程设计.md` | `concepts/architecture.md`、`safety-model.md`、`sessions-and-recovery.md` | SPLIT / REWRITE | 稳定模型迁入 Concept；schema、实机记录和阶段状态不进入 Current 页面。 |
+| `docs/project/design/WaveBench_设备抽象层.md` | `concepts/device-abstraction.md` | REWRITE / MOVE | 保留 Core/plugin 分层；移除早期目录、伪代码和型号历史。 |
+| `docs/project/design/WaveBench_sweep状态恢复设计.md`、`WaveBench_RF信号源开发里程碑.md` | `archive/`；旧路径短说明 | ARCHIVE | 分别是提案与里程碑，不能作为当前行为来源。 |
+| `docs/project/design/WaveBench_RF信号源设计.md` | `concepts/capability-model.md`、`how-to/use-rf-source.md`、`archive/` | SPLIT | 通用模型留 Core；型号 private facts 回插件仓；实施历史归档。 |
+| `docs/project/rfcs/README.md` | `rfcs/index.md`，旧路径短说明 | REWRITE / MOVE | RFC 索引只维护状态和决策入口，不复制开发线进度。 |
+| Scope、Source、transport、waveform RFC | `rfcs/` 的裁决页与 `archive/` 的实施记录 | SPLIT / MOVE | 将提案、已接受裁决、未发布实现和验收历史明确分层。 |
+| 已被替代的 Scope RFC-0001、RFC-0003 | `archive/rfcs/` | ARCHIVE | 保留决策历史和替代链接。 |
+| Scope RFC-0008、R1.3 acceptance addendum | 各自的主 RFC；旧路径短说明或 archive | MERGE | 避免两份页面维护相同裁决。 |
+| `plans/README.md` | 保留 `plans/README.md` | KEEP / 后续 GENERATE | 与 plan 目录同址；先保留风险说明，后续再决定派生清单是否生成。 |
+| `CHANGELOG.md` | 保留根路径 | KEEP | 仅表达正式 tag 的发布历史。 |
+
+### Target → Sources
+
+| 目标页面 | Canonical source | 人工页面可解释的内容 |
+| --- | --- | --- |
+| `getting-started/quickstart.md` | `pyproject.toml`、`wavebench --help`、template registry、`run check` 测试 | 最短离线步骤、预期输出和下一步。 |
+| `getting-started/installation.md`、`configure-bench.md` | `pyproject.toml`、config model、`doctor --help`、`run verify` | 安装、配置位置、连接读取边界。 |
+| `reference/cli.md` | `cli_parser.py` 与 `wavebench --help` | 命令分类、读取/写入风险和深层入口。 |
+| `reference/configuration.md` | `config.py`、parser、`wavebench.example.toml` | 配置目的和安全边界；示例不替代 schema。 |
+| `reference/run-schema.md`、`generated/run-schema.md` | `StepSchema`、`STEP_SCHEMAS`、`format_run_plan_schema()`、`wavebench run schema` | 人工说明页面解释用法；机器字段在 generated 页面中维护。 |
+| `reference/artifacts.md` | `run_artifacts.py`、typed results、package loader | 产物家族、解释方式和兼容策略。 |
+| `reference/capabilities.md`、`instrument-support.md` | descriptor、registry、`capability explain` 与插件 descriptor | 查询模型、Core/plugin 责任；不复制型号 profile。 |
+| `reference/errors.md` | error definitions、CLI error handling、logging/artifact writer、tests | 错误类别和稳定操作含义。 |
+| `concepts/*.md` | Core model/service contract 与聚焦测试 | 设计动机、模型和 trade-off。 |
+| `development/*.md` | public API、package checker、测试和贡献流程 | 如何扩展与验证；当前产品 Reference 另行链接。 |
+
+### 迁移依赖与推荐顺序
+
+1. `docs/index.md`、README 和 Quickstart 建立首次使用入口。
+2. 建立 run plan 的短 How-to、Tutorial、排错入口和 schema Reference；原长页只在所有内容有去向后收缩。
+3. 迁移 CLI、configuration、artifacts 和错误 Reference，修复这些事实的高频重复。
+4. 依序处理 Scope、Source、RF Source、Power/DMM 与 plugins；每次只移动一个领域并回查对应 machine source。
+5. 迁移稳定 Concept 与 development 页面；不让 Concept 重新承担命令或字段 Reference。
+6. 最后整理 RFC 和 archive，因为它们是入链密集的历史材料。
+
+每个切片必须先创建目标页、更新直接入链与导航、运行离线验证，再把旧页面改为短说明或 archive。不会为 Power/DMM、单独 Source、artifact family 或 RF Concept 创建没有实质内容的空页。
+
+### 生成候选与仓库边界
+
+首个生成切片是 `reference/generated/run-schema.md`：`format_run_plan_schema()` 的输出已排序、离线且不依赖真实仪器，适合由 CI 比较工作树。声明式 SCPI plugin schema 是第二候选；在 parser 尚未暴露稳定 schema emitter 前，先保持为评估项，不用手工表冒充生成结果。
+
+Core 文档只保留通用仪器抽象、CLI、run plan、artifact、安全、capability、session/recovery 和 plugin API。具体型号、SCPI、私有参数、profile、quirk、限制与实机 evidence 的迁移目标是 `wavebench-instrument-plugins`；Core 页面只链接该仓库或 descriptor 查询入口。历史 milestone、提案与未发布实现进入 RFC 或 archive，并在页首明确它们不能作为 Current 产品承诺。
