@@ -457,3 +457,44 @@ docs/
 首个生成切片是 `reference/generated/run-schema.md`：`format_run_plan_schema()` 的输出已排序、离线且不依赖真实仪器，适合由 CI 比较工作树。声明式 SCPI plugin schema 是第二候选；在 parser 尚未暴露稳定 schema emitter 前，先保持为评估项，不用手工表冒充生成结果。
 
 Core 文档只保留通用仪器抽象、CLI、run plan、artifact、安全、capability、session/recovery 和 plugin API。具体型号、SCPI、私有参数、profile、quirk、限制与实机 evidence 的迁移目标是 `wavebench-instrument-plugins`；Core 页面只链接该仓库或 descriptor 查询入口。历史 milestone、提案与未发布实现进入 RFC 或 archive，并在页首明确它们不能作为 Current 产品承诺。
+
+## Step 5：pilot 后审计
+
+### Before / after
+
+| 检查项 | Baseline | Pilot 后 | 结论 |
+| --- | --- | --- | --- |
+| 根 README | 228 行 mixed page，含版本、型号矩阵、RF 证据、命令细节和安全 Reference | 62 行 landing page，只保留项目定位、离线摘要、短支持概览、安全提醒和入口 | 职责清晰，易变事实不再由 README 维护。 |
+| 文档导航 | `docs/README.md` 与 `docs/project/README.md` 均复制当前状态 | `docs/index.md` 按用户目标导航，两个旧入口只保留迁移链接 | 导航不再承担版本、RFC 或型号事实。 |
+| 无硬件旅程 | README 中有命令，但没有独立的成功判据 | Quickstart 给出安装、模板打印、离线 check 和预期末行 | 旅程 A 已闭合，且不需要硬件。 |
+| run plan | 837 行混合教程、How-to、schema、artifact、频响、Source/RF 和历史 | 当前入口分为 Tutorial、执行 How-to、频响 How-to、排错、schema 和 artifacts；完整原页在 archive 保留 | 主要读者目标已分离，未丢失原有技术材料。 |
+| 重复事实 | 入口多处手写开发版本、型号状态、RF profile 和命令副作用 | 新入口只链接 canonical source；具体型号事实留插件仓 | 最严重的入口层重复已消除。 |
+| 机械完整性 | 0 error、12 warning | 0 error、11 warning | archive 长页不再被当成当前 mixed page；其余 warning 是下一轮领域迁移对象。 |
+
+warning 数量的下降不代表文档系统已经完成：它仅反映 archive 页面不应占用「当前页面过长」信号。当前仍需处理的 warning 包括 RF 开发线版本陈述、长的多仪器／artifact／插件 API 页面，以及 artifact Reference 的孤儿入口。
+
+### 用户旅程复核
+
+| 旅程 | 结果 | 仍需处理的事项 |
+| --- | --- | --- |
+| README → Quickstart → 离线结果 | 通过 | Quickstart 已显示模板、TOML 和 `safety_limits=ok` 成功判据。 |
+| Installation → Configure → doctor → verify | 部分通过 | 本轮由执行 How-to 串联配置、doctor 和 verify；独立 Installation／Configure Bench 页面留给 configuration 领域迁移。 |
+| Tutorial/How-to → plan → artifacts → report | 通过 | 新 Tutorial 与 How-to 直接指向 schema、产物和报告。 |
+| error → Troubleshooting → Error Reference | 部分通过 | 新排错页已建立；通用错误 Reference 仍在旧路径，待 errors 领域迁移。 |
+| search/navigation → Reference | 通过 | `run schema` 已成为明确的 Reference 入口；CLI、configuration 和 artifacts 的完整迁移仍待进行。 |
+| Concepts | 部分通过 | 现有设计页仍是过渡入口，待 Concepts 领域迁移。 |
+| Development → Driver/Plugin guide → API | 部分通过 | 当前导航保持可达，插件 API 的生成和开发页拆分留给 plugins 领域迁移。 |
+| RFC / CHANGELOG | 通过 | 导航已声明 RFC 不表示 Current；RFC 的逐页整理尚未开始。 |
+
+### 工作流复核
+
+以下规则在 pilot 中有效：先审计再迁移、旧路径短入口、先建立接收页、canonical source 优先、把硬件写入和离线命令分开，以及最后才应用中文表达层。
+
+pilot 暴露的一项机械误判是：完整 archive 快照会被「超长页面」规则当作需要拆分的 Current 页面。`audit_docs.py` 现已仅跳过 `docs/archive/` 的长度提示；它仍检查该目录的断链、标题、敏感资源、版本陈述和入链。聚焦测试覆盖了此边界。没有新增自动化规则去判断页面 type、是否应拆分或用户旅程，这些仍由 `wavebench-docs` review 负责。
+
+### 继续迁移前的债务
+
+1. CLI、configuration、artifacts 和 errors 仍有旧路径 Reference，需要按 machine source 迁移。
+2. Scope、Source、RF Source 和 plugins 仍有型号／实现细节与用户任务混写。
+3. Concepts、Development、RFC 和 archive 尚未按最终目录完成迁移。
+4. `run schema` 已有清晰 source，但尚未建立受 CI 检查的 generated 页面。

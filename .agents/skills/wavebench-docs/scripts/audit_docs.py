@@ -245,7 +245,7 @@ def check_structure(
             findings.append(Finding("warning", document.relative.as_posix(), h1[1].line, "page has more than one H1"))
         else:
             titles[h1[0].title.casefold()].append(document)
-        if len(document.lines) > max_lines:
+        if len(document.lines) > max_lines and document.relative.parts[:2] != ("docs", "archive"):
             findings.append(
                 Finding("warning", document.relative.as_posix(), 1, f"long page: {len(document.lines)} lines (threshold {max_lines})")
             )

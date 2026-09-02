@@ -72,3 +72,23 @@ def test_link_check_distinguishes_missing_targets_and_anchors(tmp_path):
         ("warning", 3),
     ]
     assert inbound[guide.resolve()] == {readme.resolve()}
+
+
+def test_structure_does_not_flag_long_archive_pages(tmp_path):
+    archive = tmp_path / "docs" / "archive" / "record.md"
+    current = tmp_path / "docs" / "current.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("# Archive\n\nHistorical detail\n", encoding="utf-8")
+    current.write_text("# Current\n\nCurrent detail\n", encoding="utf-8")
+    documents = [AUDIT.load_document(path, tmp_path) for path in (archive, current)]
+
+    findings = AUDIT.check_structure(documents, {}, max_lines=1)
+
+    assert not any(
+        finding.path == "docs/archive/record.md" and "long page" in finding.message
+        for finding in findings
+    )
+    assert any(
+        finding.path == "docs/current.md" and "long page" in finding.message
+        for finding in findings
+    )
