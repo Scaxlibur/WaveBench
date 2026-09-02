@@ -16,21 +16,9 @@
 
 ## 按类型写作
 
-### Tutorial
-
-固定一条可成功的学习路线。列出 prerequisites；每个关键步骤给可观察的预期结果；解释只保留完成路线所需内容，深层原因链接 Concept。
-
-### How-to
-
-从明确任务开始。给必要条件、真实硬件风险、最短可靠步骤、Verification 和常见失败；参数全集链接 Reference。
-
-### Reference
-
-覆盖 synopsis、syntax/schema、inputs、outputs、exact behavior、side effects、errors 和 compatibility/capability requirements。可从代码生成的表不手工复制。
-
-### Concept
-
-解释 problem、model、how it works、rationale 和 trade-offs；链接相关 Guide 与 Reference，不把操作步骤或发布流水账塞进来。
+先加载[文档宪法](information-architecture.md)中的页面类别与页面合同。它是
+Tutorial、How-to、Reference 和 Concept 的唯一结构来源；本文件只处理写作时的
+WaveBench 核验，不重复页面类别规则。
 
 ## WaveBench 特有检查
 
@@ -38,7 +26,7 @@
 - 涉及真实设备的步骤明确区分离线、连接读取和设备写入。
 - 不写入真实 IP、序列号、串口、凭据、本地实验目录或私有证据。
 - 型号级 SCPI、profile、quirk 和验证状态链接 instrument plugin 仓库。
-- Current、Experimental、Proposed 和 Historical 使用明确标签。
+- 在文档宪法允许出现状态的位置，Current、Experimental、Proposed 和 Historical 使用明确标签。
 - README 只保留 landing page 内容，不展开内部合同。
 
 ## 中文表达层
@@ -53,5 +41,5 @@
 - 事实均能追溯到 canonical source；
 - 示例与路径可执行或明确标注未执行原因；
 - 导航入口和 related pages 已更新；
-- 文档 audit 无新增错误；
+- 对单页 write，`audit_docs.py` 显式传入改动页及其直接导航入口，且无新增错误；只有已批准迁移或已证实的系统性问题才运行全量 audit；
 - 未验证、Experimental 或未来内容没有伪装成当前能力。

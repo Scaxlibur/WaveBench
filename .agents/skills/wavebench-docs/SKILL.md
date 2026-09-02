@@ -47,9 +47,9 @@ operation under the `wavebench` safety workflow.
 5. Preserve unrelated changes and do not move or rewrite broad document sets
    without an accepted audit and migration slice.
 
-Read [information-architecture.md](references/information-architecture.md) when
-deciding taxonomy, page contracts, sources of truth, Core/plugin ownership,
-README scope, or user journeys.
+Read [文档宪法](references/information-architecture.md) when deciding taxonomy,
+page contracts, sources of truth, Core/plugin ownership, README scope, status,
+lifecycle, or user journeys. This is the single normative source for those rules.
 
 ## Choose one mode
 
@@ -61,20 +61,12 @@ README scope, or user journeys.
 | `review` | Review a documentation PR or diff | [review.md](references/review.md) |
 
 Load only the selected mode plus `information-architecture.md` when that mode
-needs taxonomy or source ownership. Do not turn every review into a repository-wide
-audit.
+needs constitutional rules. Do not turn every review into a repository-wide audit.
 
 ## Invariants
 
-- One changing fact has one canonical source. Guides may explain or summarize it;
-  they must not become another complete copy.
-- Separate current reliable behavior, explicitly marked Experimental behavior,
-  and future RFC/roadmap work. Milestones and RFCs do not prove availability.
-- Core documentation owns generic models and contracts. Model-specific SCPI,
-  quirks, profiles, limits, and verification status belong to the instrument
-  plugin repository.
-- A page has one primary action: `KEEP`, `REWRITE`, `SPLIT`, `MERGE`, `MOVE`,
-  `GENERATE`, `ARCHIVE`, or `DELETE`.
+- Follow the document constitution for one-fact/one-source, status labels,
+  Core/plugin ownership and lifecycle actions.
 - Structure and facts come before prose polish. For Chinese writing or review,
   apply `tech-doc-style-chinese` only after page responsibility and sources are
   settled. Do not assume that skill's unrelated `Project-Overrides.md` applies to
@@ -84,11 +76,15 @@ audit.
 
 ## Mechanical audit
 
-Run the dependency-free checker from the repository root:
+In `audit` mode, run the dependency-free checker for the full requested scope:
 
 ```bash
 python .agents/skills/wavebench-docs/scripts/audit_docs.py
 ```
+
+For `write` or `review`, pass the changed page and its direct navigation entry as
+paths; use a full audit only for an approved migration or a demonstrated systemic
+problem.
 
 The script checks deterministic breakage and reports judgment-heavy concerns as
 warnings. It does not decide page type, migration action, user-journey quality, or

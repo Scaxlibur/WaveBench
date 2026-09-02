@@ -16,23 +16,15 @@ python .agents/skills/wavebench-docs/scripts/audit_docs.py
 
 ## Inventory
 
-每篇页面只给一个主要动作：
+每篇页面先按[文档宪法](information-architecture.md)确定主类别、读者目标、canonical
+source 和一个主要动作：
 
-| File | Type | Audience | Canonical | Problems | Action |
-| --- | --- | --- | --- | --- | --- |
+| File | Type | Audience | Reader Goal | Canonical? | Problems | Action |
+| --- | --- | --- | --- | --- | --- | --- |
 
-`Canonical` 说明页面自己是否为该事实的权威来源；若不是，写出实际来源。`Problems` 优先记录职责混合、重复事实、过时风险、旅程断点、Core/plugin 越界和 current/RFC 混杂，不以措辞偏好充数。
-
-动作含义：
-
-- `KEEP`：职责清楚，事实来源稳定。
-- `REWRITE`：路径与主职责可保留，但内容需要按单一读者结果重建。
-- `SPLIT`：一个页面承担多个独立目标。
-- `MERGE`：与另一页面重复维护同一职责或事实。
-- `MOVE`：内容职责合理，目录语义错误。
-- `GENERATE`：机器事实可由稳定模型、schema 或 registry 产生。
-- `ARCHIVE`：历史仍有价值，但不能继续作为当前说明。
-- `DELETE`：无独立价值且由 canonical 页面完整替代。
+`Canonical?` 说明页面是否为该事实的权威来源；若不是，写出实际来源。`Problems`
+优先记录职责混合、重复事实、过时风险、旅程断点、Core/plugin 越界和
+Current/RFC 混杂，不以措辞偏好充数。生命周期动作的定义只以文档宪法为准。
 
 ## 系统级输出
 

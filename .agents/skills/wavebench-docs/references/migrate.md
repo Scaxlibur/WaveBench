@@ -6,6 +6,7 @@
 
 迁移前确认：
 
+- 已加载[文档宪法](information-architecture.md)，并按其页面类别、状态与生命周期规则完成判断；
 - 页面主类型、受众和 reader outcome 已确定；
 - 每项易变事实已有 canonical source；
 - 旧页面的 `KEEP/REWRITE/SPLIT/MERGE/MOVE/GENERATE/ARCHIVE/DELETE` 已决定；

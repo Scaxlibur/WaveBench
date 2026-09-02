@@ -16,6 +16,7 @@
 
 ## Review order
 
+- 先按[文档宪法](information-architecture.md)确认页面类别、状态、事实源、边界和 lifecycle；
 - 页面 type、audience 和 reader outcome 是否一致；
 - 当前行为、Experimental、RFC 与历史是否清楚分离；
 - 易变事实是否回到唯一 canonical source；
