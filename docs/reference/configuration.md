@@ -9,7 +9,7 @@ WaveBench 从指定路径或默认的 `wavebench.toml` 加载本地实验台配�
 | 必需 | `[connection]`、`[scope]` |
 | 可选 | `[autoscale]`、`[waveform]`、`[output]`、`[quality]`、`[safety_limits]`、`[tui]`、`[source]`、`[rf_source]`、`[power]`、`[dmm]` |
 
-字段、默认值和跨字段约束由 config model 与 parser 定义。修改 plan 或配置前，先核对[示例配置](../../wavebench.example.toml)、当前 CLI help 和相关 Reference。
+字段、默认值和跨字段约束由 config model 与 parser 定义。修改 plan 或配置前，先核对[示例配置](https://github.com/Scaxlibur/wavebench/blob/master/wavebench.example.toml)、当前 CLI help 和相关 Reference。
 
 ## 最小结构
 

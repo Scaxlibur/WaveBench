@@ -9,7 +9,7 @@
 
 - [无硬件快速开始](getting-started/quickstart.md)：安装后打印示例 plan，并完成一次不连接仪器的检查。
 - [安装](getting-started/installation.md)：创建虚拟环境并验证 CLI 入口。
-- [项目首页](../README.md)：了解适用范围、核心能力和安全摘要。
+- [项目首页](https://github.com/Scaxlibur/wavebench#readme)：了解适用范围、核心能力和安全摘要。
 
 ## 连接实验仪器
 
@@ -17,7 +17,7 @@
 - [配置 Reference](reference/configuration.md)：当前配置表、访问策略和安全边界。
 - [执行一次实验](how-to/run-an-experiment.md)：`run check`、`doctor`、`run verify` 与 `run plan` 的顺序。
 - [使用 RF 信号源](how-to/use-rf-source.md)：从离线确认到 capability、安全与现场检查。
-- [示例计划目录](../plans/README.md)：每个示例的硬件副作用和适用范围。
+- [示例计划目录](https://github.com/Scaxlibur/wavebench/blob/master/plans/README.md)：每个示例的硬件副作用和适用范围。
 
 ## 自动化一次测量
 
@@ -62,4 +62,4 @@
 ## RFC、历史与发布
 
 - [RFC 索引](rfcs/index.md)：提案和设计裁决，不能用作当前能力承诺。
-- [更新日志](../CHANGELOG.md)：已发布版本的变更。
+- [更新日志](https://github.com/Scaxlibur/wavebench/blob/master/CHANGELOG.md)：已发布版本的变更。

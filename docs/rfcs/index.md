@@ -1,6 +1,6 @@
 # RFC 索引
 
-RFC 记录设计问题、约束、兼容性和验收门槛。它们不是当前用户行为、CLI 参数或型号支持状态的事实源；这些内容应分别查阅 [Reference](../reference/cli.md)、[run schema](../reference/run-schema.md)、安装插件的 descriptor 和[更新日志](../../CHANGELOG.md)。
+RFC 记录设计问题、约束、兼容性和验收门槛。它们不是当前用户行为、CLI 参数或型号支持状态的事实源；这些内容应分别查阅 [Reference](../reference/cli.md)、[run schema](../reference/run-schema.md)、安装插件的 descriptor 和[更新日志](https://github.com/Scaxlibur/wavebench/blob/master/CHANGELOG.md)。
 
 ## 状态含义
 

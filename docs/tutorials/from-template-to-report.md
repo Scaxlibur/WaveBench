@@ -64,4 +64,4 @@ python -m wavebench run report data/runs/<run-dir>
 
 - 已有明确实验目标时，使用[执行一次实验](../how-to/run-an-experiment.md)。
 - 遇到 plan 解析、字段或预检错误时，使用[run plan 排错](../how-to/troubleshooting.md)。
-- 需要频率响应、校准或其他专题步骤时，先从[旧 run plan 专题材料](../archive/run-plan-guide-pre-migration.md)追溯，再核对当前 `run schema` 和对应 Reference。
+- 需要频率响应或校准专题步骤时，阅读[频率响应与校准](../how-to/frequency-response-and-calibration.md)，再核对当前 `run schema` 和对应 Reference。

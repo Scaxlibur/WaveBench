@@ -49,4 +49,3 @@ python -m wavebench run compare data/runs/<baseline> data/runs/<current>
 - [执行一次实验](run-an-experiment.md)
 - [run plan Reference](../reference/run-schema.md)
 - [run plan 排错](troubleshooting.md)
-- [重构前的专题记录](../archive/run-plan-guide-pre-migration.md)：仅用于追溯历史细节，不作为当前 schema 或 capability 的来源。

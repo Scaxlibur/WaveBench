@@ -41,3 +41,15 @@ python scripts/docs_impact.py --base <base-revision> --head HEAD
 | `docs_impact.py` | 提示 | 只给出本次代码 diff 的 canonical 文档候选。 |
 
 推荐顺序为：代码 diff → impact 候选 → 更新 canonical 页面 → 中文表达检查（如需要）→ 机械验证 → scoped Agent review。
+
+## 站点预览与发布
+
+```bash
+python -m pip install -e ".[docs]"
+mkdocs serve
+mkdocs build --strict
+```
+
+`mkdocs.yml` 只映射当前的开始使用、教程、How-to、Reference、Concepts、开发和 RFC 入口；archive 与旧入口不在主导航中。GitHub Actions 会在文档或潜在事实源变化时执行严格构建。
+
+当前站点采用 default branch 的 latest 视图。需要稳定版时，建议从发布 tag 或 release branch 构建独立站点版本；在尚无实际发布需求前，不维护历史文档副本。GitHub Pages 发布应在仓库 Pages 策略、域名和权限明确后，由单独的 deploy workflow 处理；本仓库当前只验证构建，不自动发布。
