@@ -1,11 +1,61 @@
-# WaveBench
+<p align="center">
+  <img
+    src="docs/images/wavebench-banner.svg"
+    alt="WaveBench"
+    width="760"
+  />
+</p>
 
-[中文文档](docs/index.md) · [English overview](docs/README_EN.md) · [更新日志](CHANGELOG.md) · [仪器插件仓库](https://github.com/Scaxlibur/wavebench-instrument-plugins)
+<p align="center">
+  <em>Automate the bench. Measure what matters.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Scaxlibur/WaveBench/stargazers">
+    <img src="https://img.shields.io/github/stars/Scaxlibur/WaveBench?style=flat-square&color=111111&label=stars" alt="Stars">
+  </a>
+  <a href="https://github.com/Scaxlibur/WaveBench/releases">
+    <img src="https://img.shields.io/github/v/release/Scaxlibur/WaveBench?style=flat-square&color=111111&label=release" alt="Release">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/Scaxlibur/WaveBench?style=flat-square&color=111111&label=license" alt="License">
+  </a>
+  <img src="https://img.shields.io/badge/Python-3.11+-111111?style=flat-square" alt="Python">
+</p>
+
+<p align="center">
+  <strong>
+    Instrument Control &middot;
+    Automated Measurement &middot;
+    Data Analysis &middot;
+    Open Source
+  </strong>
+</p>
+
+<p align="center">
+  <sub>
+    An open-source toolkit for automated laboratory measurement and instrument control.
+  </sub>
+</p>
+
+---
+
+<p align="center">
+  <a href="docs/index.md">中文文档</a>
+  &middot;
+  <a href="docs/README_EN.md">English Overview</a>
+  &middot;
+  <a href="CHANGELOG.md">更新日志</a>
+  &middot;
+  <a href="https://github.com/Scaxlibur/wavebench-instrument-plugins">仪器插件仓库</a>
+</p>
+
+---
 
 > [!WARNING]
 > WaveBench 可以连接并控制真实实验设备。执行会改变仪器状态的命令前，应确认接线、输入阻抗、输出状态以及电压／电流限制。
 
-WaveBench 是面向电子设计竞赛调试和日常实验的 Python 测量台。它将仪器操作、显式 run plan 和可复查的实验产物放在同一条工作流中：先离线检查，再连接实验台，最后执行受控实验。
+WaveBench 是面向电子设计调试和日常实验的 Python 测量台。它将仪器操作、显式 run plan 和可复查的实验产物放在同一条工作流中：先离线检查，再连接实验台，最后执行受控实验。
 
 ![WaveBench 运行报告示例](docs/images/run_plan_result.png)
 
@@ -22,6 +72,8 @@ WaveBench 是面向电子设计竞赛调试和日常实验的 Python 测量台�
 以下命令只安装包、列出模板并打印一个示例 plan；不会连接仪器或打开输出。
 
 ```bash
+git clone https://github.com/Scaxlibur/WaveBench.git
+cd WaveBench
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 .venv/bin/python -m wavebench run template --list
