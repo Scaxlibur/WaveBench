@@ -1,6 +1,6 @@
 # WaveBench run plan 使用指南旧入口
 
-本页保留原有链接，作为 run plan 的快速入口。当前页面按读者目标拆分；完整 step、字段、capability 和 artifact 不能再从单一长页手工维护。
+本页是旧路径的兼容导航。请按目标选择当前页面；完整 step、字段、capability 和 artifact 以 schema、实现和对应 Reference 为准。
 
 ## 选择入口
 
@@ -12,4 +12,4 @@
 
 `run check` 不连接仪器；`run verify` 会查询配置的仪器；`run plan` 才会执行可能改变仪器状态的实验。真实实验前先确认接线、输入阻抗、输出状态、安全上限和 restore 范围。
 
-重构前的详细合并页面保留在[历史 run plan 原页](../../archive/run-plan-guide-pre-migration.md)，仅用于追溯和迁移核对，不作为当前 schema 或 capability 的来源。
+历史合并页面见[run plan 归档页](../../archive/run-plan-guide-pre-migration.md)，仅用于追溯，不作为当前 schema 或 capability 的来源。

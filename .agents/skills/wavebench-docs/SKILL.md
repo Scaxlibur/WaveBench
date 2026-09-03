@@ -72,8 +72,8 @@ needs constitutional rules. Do not turn every review into a repository-wide audi
   settled. Do not assume that skill's unrelated `Project-Overrides.md` applies to
   WaveBench.
 - Apply the [协作输出卫生](references/information-architecture.md#协作输出卫生)
-  rule to reader-facing content. It is a contextual write/review judgment, not a
-  hook, text filter, or CI gate.
+  rule to reader-facing content created or reviewed in this workflow. It is a
+  contextual write/review judgment, not a hook, text filter, or CI gate.
 - Prefer generated Reference when stable code or schema can produce it. Generated
   output must name its source and have a drift check before it becomes canonical.
 
@@ -97,7 +97,10 @@ For trigger-boundary maintenance, read [eval-prompts.md](references/eval-prompts
 
 ## Handoff
 
-Report the documentation scope, canonical sources checked, files changed, audit
-errors and warnings, commands or examples verified, content intentionally deferred,
-and whether any live hardware, local configuration, generated data, or virtual
-environment was touched.
+Treat the handoff as an execution and safety record under the
+[协作输出卫生](references/information-architecture.md#协作输出卫生) rule. Report the
+documentation scope, canonical sources checked, files changed, audit errors and
+warnings, commands or examples verified, content intentionally deferred, and whether
+any live hardware, local configuration, generated data, or virtual environment was
+touched. Omit feedback back-and-forth and discarded alternatives unless they affect
+a remaining decision or risk.

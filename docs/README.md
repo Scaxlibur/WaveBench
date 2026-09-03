@@ -1,6 +1,6 @@
 # WaveBench 文档旧入口
 
-中文文档首页已迁移到[文档首页](index.md)。该页面保留为旧链接入口，不再维护版本、命令、型号 capability 或 RFC 状态。
+当前中文文档入口为[文档首页](index.md)。此路径仅用于兼容旧链接。
 
 - 首次离线体验：[无硬件快速开始](getting-started/quickstart.md)
 - 按任务查阅：[文档首页](index.md)

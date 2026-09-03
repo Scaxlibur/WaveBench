@@ -1,6 +1,6 @@
 # 项目文档旧入口
 
-`docs/project/` 是迁移中的旧目录。新的任务导航位于[文档首页](../index.md)；该目录中的页面会按领域逐步迁移，并在旧路径保留简短说明或历史边界。
+`docs/project/` 保留兼容入口和历史材料；当前任务导航位于[文档首页](../index.md)。
 
 - 首次使用：[无硬件快速开始](../getting-started/quickstart.md)
 - 执行实验：[执行一次实验](../how-to/run-an-experiment.md)
