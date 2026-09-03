@@ -1,0 +1,66 @@
+name: Documentation
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - ".agents/skills/wavebench-docs/**"
+      - ".github/workflows/docs.yml"
+      - "CHANGELOG.md"
+      - "README.md"
+      - "docs/**"
+      - "mkdocs.yml"
+      - "plans/**"
+      - "pyproject.toml"
+      - "scripts/docs_impact.py"
+      - "scripts/generate_docs.py"
+      - "src/wavebench/**"
+      - "wavebench.example.toml"
+  pull_request:
+    paths:
+      - ".agents/skills/wavebench-docs/**"
+      - ".github/workflows/docs.yml"
+      - "CHANGELOG.md"
+      - "README.md"
+      - "docs/**"
+      - "mkdocs.yml"
+      - "plans/**"
+      - "pyproject.toml"
+      - "scripts/docs_impact.py"
+      - "scripts/generate_docs.py"
+      - "src/wavebench/**"
+      - "wavebench.example.toml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install documentation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,docs]"
+
+      - name: Check generated Reference
+        run: python scripts/generate_docs.py --check
+
+      - name: Audit documentation
+        run: python .agents/skills/wavebench-docs/scripts/audit_docs.py --quiet-warnings
+
+      - name: Build site
+        run: mkdocs build --strict
+
+      - name: Report documentation impact
+        run: python scripts/docs_impact.py

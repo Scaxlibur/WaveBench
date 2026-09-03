@@ -1,0 +1,76 @@
+site_name: WaveBench
+site_description: 可审计的 Python 仪器测量台文档
+repo_url: https://github.com/Scaxlibur/wavebench
+repo_name: Scaxlibur/wavebench
+edit_uri: edit/master/
+
+exclude_docs: |
+  README.md
+  README_EN.md
+  archive/**
+  project/README.md
+  project/contributing/**
+  project/design/**
+  project/guides/**
+  project/reference/**
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+
+nav:
+  - 首页: index.md
+  - 开始使用:
+      - 无硬件快速开始: getting-started/quickstart.md
+      - 安装: getting-started/installation.md
+      - 配置实验台: getting-started/configure-bench.md
+  - 教程:
+      - 从模板到报告: tutorials/from-template-to-report.md
+  - How-to:
+      - 执行一次实验: how-to/run-an-experiment.md
+      - 频率响应与校准: how-to/frequency-response-and-calibration.md
+      - 使用 RF 信号源: how-to/use-rf-source.md
+      - 管理仪器插件: how-to/manage-plugins.md
+      - 使用 TUI: how-to/use-tui.md
+      - 启动只读 MCP 服务: how-to/serve-mcp.md
+      - 排错: how-to/troubleshooting.md
+  - Reference:
+      - CLI: reference/cli.md
+      - 配置: reference/configuration.md
+      - run plan: reference/run-schema.md
+      - 生成的 run plan schema: reference/generated/run-schema.md
+      - 运行产物: reference/artifacts.md
+      - 错误: reference/errors.md
+      - 插件: reference/plugins/index.md
+  - Concepts:
+      - 架构与职责: concepts/architecture.md
+      - 设备抽象: concepts/device-abstraction.md
+      - Capability 模型: concepts/capability-model.md
+      - 安全模型: concepts/safety-model.md
+      - 会话与恢复: concepts/sessions-and-recovery.md
+      - 插件模型: concepts/plugin-model.md
+  - 开发:
+      - 贡献: development/contributing.md
+      - 测试: development/testing.md
+      - 文档工作流: development/documentation.md
+      - 插件开发: development/plugin-development.md
+      - 新增仪器驱动: development/instrument-drivers.md
+  - RFC: rfcs/index.md
+  - 更新日志: https://github.com/Scaxlibur/wavebench/blob/master/CHANGELOG.md

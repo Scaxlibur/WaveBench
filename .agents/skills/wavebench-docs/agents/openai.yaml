@@ -1,0 +1,6 @@
+interface:
+  display_name: "WaveBench Docs"
+  short_description: "审计、迁移、编写与评审 WaveBench 仓库文档"
+  default_prompt: "使用 $wavebench-docs 审计本次 WaveBench 文档改动，并核对事实源、导航和验证结果。"
+policy:
+  allow_implicit_invocation: true
