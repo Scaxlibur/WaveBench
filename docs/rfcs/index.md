@@ -12,6 +12,13 @@ RFC 记录设计问题、约束、兼容性和验收门槛。它们不是当前�
 | `Implemented` | 已随正式版本发布，稳定用法应已同步到 Reference。 |
 | `Superseded` | 已由更严格或后续合同取代，保留历史原因。 |
 
+## 进行中的提案（Draft）
+
+`Draft` 仍可修改，不能据此宣称接口已经提供。
+
+- [advisor 插件类别](../project/rfcs/WaveBench_advisor插件RFC.md)：`Draft`；提出插件类别抽象与
+  第二个类别 `advisor`，并把数据外发同意门与 decision artifact 收归 Core。
+
 ## 已接受的通用合同
 
 - [transport 重放与 session 健康](../project/rfcs/WaveBench_transport重放与session健康RFC.md)：`Accepted`；记录共享 session、重放与恢复合同。实现状态仍以正式 release 和当前 Reference 为准。
