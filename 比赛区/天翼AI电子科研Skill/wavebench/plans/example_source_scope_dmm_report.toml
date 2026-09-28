@@ -1,0 +1,104 @@
+# Example WaveBench run plan: DG4202 CH1 -> RTM2032 CH1, and DG4202 CH2 -> DM3058.
+# Confirm bench wiring before execution. This plan performs real source output on both channels
+# and restores both source channels afterwards.
+
+[experiment]
+name = "example_source_scope_dmm_report"
+label = "example_source_scope_dmm_report"
+
+[safety]
+scope_guard_channel = 1
+require_scope_coupling_not = ["DC", "AC"]
+
+[restore]
+source_state = true
+source_channels = [1, 2]
+
+[[steps]]
+kind = "source.status"
+channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 1.0
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 1000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.5
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "example_source_scope_dmm_report_scope_ch1"
+points = "def"
+window_frequency_hz = 1000
+target_cycles = 10
+expect_frequency_hz = 1000
+frequency_tolerance = 0.05
+target_vpp = 1.0
+save_csv = false
+save_npy = true
+screenshot = true
+quality_gate = true
+auto_recover = true
+
+[steps.expect]
+frequency_estimate_hz = { min = 950, max = 1050 }
+frequency_error_ratio = { max = 0.05 }
+voltage_vpp_v = { min = 0.8, max = 1.2 }
+
+[steps.expect_fft]
+peak_frequency_hz = { min = 990, max = 1010 }
+peak_amplitude_v = { min = 0.40, max = 0.60 }
+thd_ratio = { max = 0.08 }
+
+[[steps]]
+kind = "source.status"
+channel = 2
+
+[[steps]]
+kind = "source.set_func"
+channel = 2
+function = "sin"
+
+[[steps]]
+kind = "source.set_freq"
+channel = 2
+frequency_hz = 1000
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 2
+value_vpp = 1.0
+
+[[steps]]
+kind = "source.output"
+channel = 2
+state = "on"
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.5
+
+[[steps]]
+kind = "dmm.read"
+function = "acv"
+
+[steps.expect]
+value = { min = 0.34, max = 0.37 }

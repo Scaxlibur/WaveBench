@@ -1,0 +1,120 @@
+[experiment]
+name = "dg4202_duty_10k_power_ch2_check"
+label = "dg4202_duty_10k_power_ch2_check"
+
+[safety]
+require_scope_coupling_not = ["DC"]
+scope_guard_channel = 2
+
+[restore]
+source_state = true
+source_channel = 2
+
+[[steps]]
+kind = "power.status"
+channel = 1
+
+[[steps]]
+kind = "scope.capture"
+channel = 2
+label = "power_5v_before"
+points = "def"
+time_range_s = 0.01
+save_csv = false
+
+[[steps]]
+kind = "source.status"
+channel = 2
+
+[[steps]]
+kind = "source.set_func"
+channel = 2
+function = "SQU"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 2
+value_vpp = 3.3
+
+[[steps]]
+kind = "source.set_freq"
+channel = 2
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 2
+state = "on"
+
+[[steps]]
+kind = "source.set_duty"
+channel = 2
+duty_percent = 25
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.1
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "duty25_10k"
+points = "def"
+window_frequency_hz = 10000
+target_cycles = 10
+expect_frequency_hz = 10000
+frequency_tolerance = 0.05
+save_csv = false
+
+[[steps]]
+kind = "source.set_duty"
+channel = 2
+duty_percent = 50
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.1
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "duty50_10k"
+points = "def"
+window_frequency_hz = 10000
+target_cycles = 10
+expect_frequency_hz = 10000
+frequency_tolerance = 0.05
+save_csv = false
+
+[[steps]]
+kind = "source.set_duty"
+channel = 2
+duty_percent = 75
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.1
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "duty75_10k"
+points = "def"
+window_frequency_hz = 10000
+target_cycles = 10
+expect_frequency_hz = 10000
+frequency_tolerance = 0.05
+save_csv = false
+
+
+[[steps]]
+kind = "scope.capture"
+channel = 2
+label = "power_5v_after"
+points = "def"
+time_range_s = 0.01
+save_csv = false
+
+[[steps]]
+kind = "power.status"
+channel = 1

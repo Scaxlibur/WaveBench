@@ -1,0 +1,67 @@
+# 密集二维校准：使用 10..500 kHz 直通基线的完整有效域。
+# 101 频点 × 2 个请求 Vpp = 202 个测量点；不启用自适应，以固定密集网格形成 LUT。
+
+[experiment]
+name = "passive_filter_dense_2d_calibrated"
+label = "passive_filter_dense_2d_calibrated"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 0.05
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "passive_filter_dense"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10000
+stop_frequency_hz = 500000
+frequency_count = 101
+spacing = "linear"
+amplitudes_vpp = [0.05, 0.1]
+autoscale_each_amplitude = true
+target_cycles = 10
+settle_s = 3.0
+points = "dmax"
+save_csv = false
+screenshot = false
+
+[steps.baseline]
+run_dir = "../data/runs/20260804_221640_through_baseline_2d_stable"
+response = "through"
+mode = "complex_transfer"
+
+[steps.calibration]
+target_mode = "unity_gain"
+correction_min_db = -12
+correction_max_db = 12
+max_slope_db_per_octave = 6
+
+[steps.calibration.fixed_point]
+word_width = 16
+fractional_bits = 12
+formats = ["csv", "coe", "mem"]
+layout = "amplitude_major"
+rounding = "nearest"
+overflow = "error"

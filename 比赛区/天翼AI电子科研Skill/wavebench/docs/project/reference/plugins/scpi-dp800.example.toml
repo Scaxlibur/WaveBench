@@ -1,0 +1,12 @@
+driver_id = "rigol.dp800.local"
+kind = "power"
+display_name = "RIGOL DP800 Local SCPI Metadata"
+manufacturer = "RIGOL Technologies"
+models = ["DP800", "DP832", "DP832A"]
+capabilities = ["power.idn"]
+summary = "Local declarative SCPI metadata for read-only RIGOL DP800 identity probes."
+idn_patterns = ["RIGOL TECHNOLOGIES,DP8"]
+config_fields = ["resource"]
+
+[scpi]
+idn_query = "*IDN?"

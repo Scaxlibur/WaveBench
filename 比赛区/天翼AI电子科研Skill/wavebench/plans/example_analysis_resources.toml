@@ -1,0 +1,16 @@
+# Execution profile, not a RunPlan or an analysis recipe.
+# Use --analysis-resources with analysis commands or run check/intent/plan/report.
+schema = "wavebench.analysis_resources.v1"
+max_working_bytes = 536870912
+max_input_samples = 20000000
+max_fft_length = 1048576
+max_fir_taps = 4095
+max_zero_phase_fir_taps = 255
+max_work_units = 2000000000
+max_output_bytes = 1073741824
+max_temp_bytes = 1073741824
+max_peak_candidates = 100000
+max_report_curves = 32
+max_operations = 128
+max_output_files = 256
+max_metadata_bytes = 8388608

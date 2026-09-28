@@ -1,0 +1,47 @@
+# Example WaveBench run plan: DG4202 -> DM3058 ACV smoke.
+# Copy this file, adjust channels if needed, confirm the bench wiring,
+# then run `python -m wavebench run verify --config wavebench.toml --plan plans/example_dmm_acv_source_smoke.toml`.
+# This plan enables the source output briefly and restores the original source state afterwards.
+
+[experiment]
+name = "example_dmm_acv_source_smoke"
+label = "example_dmm_acv_source_smoke"
+
+[restore]
+source_state = true
+source_channel = 2
+
+[[steps]]
+kind = "source.status"
+channel = 2
+
+[[steps]]
+kind = "source.set_func"
+channel = 2
+function = "sin"
+
+[[steps]]
+kind = "source.set_freq"
+channel = 2
+frequency_hz = 1000
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 2
+value_vpp = 1.0
+
+[[steps]]
+kind = "source.output"
+channel = 2
+state = "on"
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.4
+
+[[steps]]
+kind = "dmm.read"
+function = "acv"
+
+[steps.expect]
+value = { min = 0.34, max = 0.37 }

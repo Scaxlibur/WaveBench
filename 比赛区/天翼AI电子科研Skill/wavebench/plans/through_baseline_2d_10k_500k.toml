@@ -1,0 +1,45 @@
+# 实机直通基线：DG4202 CH1 同时接 RTM CH1/CH2。
+# 操作者已确认两路为高阻 DC；本计划不包含 DUT 校准。
+
+[experiment]
+name = "through_baseline_2d_10k_500k"
+label = "through_baseline_2d_10k_500k"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 0.05
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "through"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [10000, 30000, 100000, 300000, 500000]
+amplitudes_vpp = [0.05, 0.1, 0.2]
+autoscale_each_amplitude = true
+target_cycles = 10
+settle_s = 1.0
+points = "def"
+save_csv = false
+screenshot = false

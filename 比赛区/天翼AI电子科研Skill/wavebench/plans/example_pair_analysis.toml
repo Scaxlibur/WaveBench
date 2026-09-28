@@ -1,0 +1,12 @@
+# Offline pair recipe for generate_pair_example.py's synthetic package.
+schema = "wavebench.analysis_pair_recipe.v1"
+reference_channel = 1
+response_channel = 2
+operations = [
+  { op = "delay", name = "timing", max_lag_s = 0.002, remove_mean = true, polarity = "either", min_overlap_ratio = 0.9, min_correlation = 0.8, ambiguity_delta = 0.01, metrics = ["response_delay_samples", "response_delay_s", "correlation", "polarity", "overlap_samples"] },
+  { op = "transfer", name = "system", window = "hann", nperseg = 1024, noverlap = 512, nfft = 1024, detrend = "constant", min_reference_density = 0.000000000001, min_response_density = 0.000000000001, min_coherence = 0.8, unwrap_phase = true, metrics = ["mean_coherence", "min_coherence", "valid_bin_count", "coherent_bin_count"] },
+  { op = "export", name = "transfer", formats = ["npy", "csv"] },
+]
+[expect]
+timing_response_delay_samples = { min = 7, max = 7 }
+system_mean_coherence = { min = 0.95 }

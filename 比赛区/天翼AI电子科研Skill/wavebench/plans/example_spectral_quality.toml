@@ -1,0 +1,7 @@
+# Offline recipe: use analysis check/run --recipe, not run plan --plan.
+schema = "wavebench.analysis_recipe.v1"
+operations = [
+  { op = "psd", method = "welch", window = "hann", nperseg = 1024, noverlap = 512, nfft = 1024, detrend = "constant", average = "mean" },
+  { op = "spectral_quality", name = "quality", metrics = ["snr_db", "sinad_db", "sfdr_db", "thdn_ratio", "fundamental_frequency_hz", "fundamental_power_v2", "harmonic_power_v2", "noise_power_v2", "noise_bandwidth_hz", "spur_frequency_hz", "spur_power_v2", "spur_dbc"], band_hz = [0, 8000], dc_exclude_hz = [0, 20], exclude_hz = [], fundamental = { search_hz = [900, 1100] }, fundamental_half_width_hz = 40, harmonic_orders = [2, 3, 4, 5], harmonic_half_width_hz = 40, min_fundamental_v2 = 0.001, min_peak_density_v2_per_hz = 0.00001, min_prominence_v2_per_hz = 0.00001, min_noise_bins = 10, spur_search_hz = [100, 7800], spur_half_width_hz = 40, spur_distance_hz = 100, spur_min_density_v2_per_hz = 0.0000001, spur_min_prominence_v2_per_hz = 0.0000001 },
+  { op = "export", name = "density", formats = ["npy", "csv"] },
+]

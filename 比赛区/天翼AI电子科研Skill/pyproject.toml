@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tianyi-electronics-skill"
+version = "1.0.0"
+description = "TeleAgent skill for LAN electronic-instrument discovery and signal analysis"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+visa = ["pyvisa>=1.14", "pyvisa-py>=0.8"]
+numpy = ["numpy>=2.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+tianyi-electronics = "tianyi_electronics_skill.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tianyi_electronics_skill"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

@@ -1,0 +1,48 @@
+# 原始二维扫频：不加载任何直通基线、LUT 或软件校正。
+# 3 个 Vpp 切片 × 101 个对数频点 = 303 个独立测量组合。
+
+[experiment]
+name = "passive_filter_raw_2d_10hz_1mhz_500mv_1v_2v"
+label = "passive_filter_raw_2d_10hz_1mhz_500mv_1v_2v"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 0.5
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "passive_filter_raw_2d"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+start_frequency_hz = 10
+stop_frequency_hz = 1000000
+frequency_count = 101
+spacing = "log"
+amplitudes_vpp = [0.5, 1.0, 2.0]
+autoscale_each_amplitude = true
+target_cycles = 10
+settle_s = 1.0
+points = "def"
+save_csv = false
+screenshot = false

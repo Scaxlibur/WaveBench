@@ -1,0 +1,264 @@
+# WaveBench local configuration example
+# Copy this file to `wavebench.toml` and edit it for your lab setup.
+# `wavebench.toml` is ignored by git because it may contain real instrument IPs and local paths.
+
+[connection]
+# Connection backend. "lan" selects the driver descriptor's preferred LAN
+# transport. External RTM2000 0.2+ prefers RsInstrument SocketIO; RIGOL
+# drivers continue to prefer PyVISA. Advanced RTM2000 compatibility choices
+# are rsinstrument, rsinstrument-rsvisa, and rsinstrument-pyvisa-py.
+backend = "lan"
+
+# VISA resource string for the oscilloscope.
+# Replace the IP address with your oscilloscope LAN address. For the external
+# RTM2000 SocketIO path, this INSTR form is opened as TCPIP::<host>::5025::SOCKET.
+# Use an explicit TCPIP::<host>::<port>::SOCKET resource for a non-default port.
+resource = "TCPIP::192.0.2.10::INSTR"
+
+# General VISA I/O timeout in milliseconds.
+timeout_ms = 10000
+
+# Timeout for long operations such as AUToscale and SINGle + *OPC?.
+opc_timeout_ms = 30000
+
+# Number of extra retries for read/query operations after a transient PyVISA failure.
+# Write operations are not retried automatically.
+read_retry_attempts = 1
+
+# Delay between read/query retries in milliseconds.
+read_retry_delay_ms = 200
+
+[scope]
+# Device driver name: "rtm2032" or "ds1104" ("ds1000z" is an alias).
+driver = "rtm2032"
+
+# Optional model hint used for friendly checks and messages.
+model_hint = "RTM2032"
+
+# Default channel used when CLI does not pass --channel.
+default_channel = 1
+
+# Do not reset the oscilloscope by default.
+# Keeping this false avoids wiping front-panel settings during experiments.
+reset_before_run = false
+
+# Query SYST:ERR? after important operations when possible.
+check_errors = true
+
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits status/profile reads but blocks writes and acquisitions.
+access = "read_write"
+
+# External RTM2000 0.2+ applies this timeout only to MAX/DMAX waveform data
+# reads. DEF and ordinary SCPI queries keep connection.timeout_ms.
+# [scope.options]
+# long_waveform_timeout_ms = 300000
+
+[autoscale]
+# AUToscale is asynchronous, so WaveBench should wait for completion.
+# MVP-1 may force this to true even if changed.
+wait_opc = true
+
+# Check instrument error queue after autoscale.
+check_errors = true
+
+[waveform]
+# Waveform transfer format. MVP-1 supports "real" only.
+format = "real"
+
+# Binary byte order for waveform transfer. RTM2000 examples use LSBF.
+# DS1104 uses BYTE transfer and ignores this field after validation.
+byte_order = "lsbf"
+
+# Sample range for waveform transfer. On DS1104, "def" reads the displayed
+# NORM waveform; "max" and "dmax" read stopped RAW memory in chunks.
+points = "dmax"
+
+[output]
+# Base directory for generated acquisition packages.
+directory = "data/raw"
+
+# Acquisition package naming rule.
+# Current plan: YYYYMMDD_HHMMSS_<label>.
+package_naming = "timestamp_label"
+
+# Save per-channel CSV files: index,time_s,voltage_v.
+save_csv = true
+
+# Save per-channel NPY files with shape (N, 2): [time_s, voltage_v].
+save_npy = true
+
+# Save metadata.json with instrument, operation, waveform header, and file references.
+save_json = true
+
+# Save commands.log with key SCPI commands and responses.
+save_commands_log = true
+
+# Screenshot export is reserved for later; disabled in MVP-1 by default.
+save_screenshot = false
+
+
+[tui]
+# Maximum number of lines kept in the persistent TUI debug log before trimming.
+log_max_lines = 10000
+
+# When the TUI debug log exceeds log_max_lines, keep only this many newest lines.
+log_keep_lines_after_trim = 1000
+
+
+[quality]
+# Maximum number of autoscale + recapture attempts after a quality-gated capture reports warnings.
+auto_recover_attempts = 2
+
+# Number of recent captures required before repeated warning results can be trusted by consistency.
+consistency_required_captures = 2
+
+# Repeated captures are considered consistent when these metric spans stay within tolerance.
+frequency_consistency_ratio = 0.02
+voltage_vpp_consistency_ratio = 0.05
+voltage_mean_consistency_v = 0.05
+duty_consistency = 0.03
+
+
+[safety_limits]
+# Optional execution guards. Omit a value to leave that axis unlimited.
+# Source amplitude writes above this Vpp are rejected before instrument I/O.
+max_source_vpp = 5.0
+
+# Source V2 energy-increasing operations also require this explicit signed port-voltage
+# interval. Do not infer it from max_source_vpp. Existing V1 operations ignore these
+# keys; omit both keys to leave Source V2 energy operations unauthorized.
+# min_source_port_voltage_v = -5.0
+# max_source_port_voltage_v = 5.0
+
+# Power voltage/current-limit writes above these values are rejected before instrument I/O.
+# Turning power output on also checks the currently configured setpoints first.
+max_power_voltage_v = 5.0
+max_power_current_limit_a = 0.2
+
+# Run plans can also include a [safety] table.
+# The default for scope capture/fetch/sweep is high-impedance only: RTM2032 DCL/ACL pass,
+# while possible 50 ohm coupling values such as DC/AC are refused unless explicitly allowed.
+# Use this only when the fixture is designed for 50 ohm termination:
+# [safety]
+# allow_50ohm = true
+
+
+[source]
+# Signal generator driver. Current MVP source support targets Rigol DG4202.
+driver = "dg4202"
+
+# VISA resource string for the signal generator.
+resource = "TCPIP::192.0.2.11::INSTR"
+
+# Default channel used when source CLI does not pass --channel.
+default_channel = 1
+
+# Query SYST:ERR? after source operations when possible.
+check_errors = true
+
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits status/profile reads but blocks writes and acquisitions.
+access = "read_write"
+
+# When setting a fixed frequency, switch SWE -> FIX first if needed.
+ensure_fix_mode_on_set_frequency = true
+
+# Extra wait after setting a fixed source frequency, in milliseconds.
+settle_ms_after_set_frequency = 500
+
+# Optional actual-termination evidence for future Source V2 energy operations.
+# This is deliberately independent of the instrument display load.
+# [[source.terminations]]
+# channel = 1
+# kind = "resistive"
+# minimum_ohm = 49.5
+# maximum_ohm = 50.5
+
+
+# RF signal sources use an independent domain: Hz and dBm on stable port IDs,
+# not the Vpp/channel model above. `read_only` remains the safe default for
+# identity/status. Install the matching RF plugin before enabling this section.
+# [rf_source]
+# driver = "rigol.dsg830"
+# resource = "TCPIP::192.0.2.13::INSTR"
+# access = "read_only"
+
+# DSG830 A2 output ON/OFF additionally requires `access = "read_write"`, its
+# production `rf_source.output` capability, and one complete local declaration
+# per port. CW frequency/power writes remain separately gated.
+# `actual_termination_ohm` is the physical termination evidence; it is not a
+# display-load setting and WaveBench never converts dBm to Vpp.
+# [[rf_source.safety.ports]]
+# port_id = "rf_out"
+# minimum_frequency_hz = 9000
+# maximum_frequency_hz = 3000000000
+# maximum_power_dbm = -20
+# actual_termination_ohm = 50
+
+
+[power]
+# Power supply driver. Current read-only power support targets Rigol DP800 series.
+driver = "dp800"
+
+# VISA resource string for the power supply.
+resource = "TCPIP::192.0.2.12::INSTR"
+
+# Default channel used when power CLI does not pass --channel.
+default_channel = 1
+
+# Query SYST:ERR? after explicit power set operations when possible.
+check_errors = true
+
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits status/profile reads but blocks writes and acquisitions.
+access = "read_write"
+
+# Wait after setting voltage/current limit before reading measured values.
+settle_ms_after_set = 2000
+
+# Wait after turning output on/off before reading measured values.
+settle_ms_after_output = 1000
+
+
+[dmm]
+# Digital multimeter driver. DM3058 uses the same narrow SCPI subset as the
+# DM3000-series skeleton here: *IDN? and :MEASure:*? one-shot readings.
+driver = "dm3058"
+
+# Transport backend for the DMM. Keep this separate from the device driver:
+# the DMM driver owns SCPI; the backend owns LAN/VISA or serial bytes.
+# Use "lan" for DM3058 over Ethernet/VISA, or "serial" for RS-232.
+backend = "lan"
+
+# DM3058 LAN resource. For RS-232 on native Windows, use COM3/COM10; on
+# Linux/WSL, prefer a stable path under /dev/serial/by-id.
+resource = "TCPIP::192.0.2.15::INSTR"
+
+# Serial-only settings. Ignored by LAN/VISA backends, kept here so switching
+# back to RS232 is an explicit config edit rather than a code change.
+baudrate = 9600
+bytesize = 8
+parity = "N"
+stopbits = 1
+timeout_ms = 3000
+
+# Serial line framing. DM3058 RS-232 hardware was verified with CRLF commands
+# and LF-terminated responses. Flow control remains disabled.
+write_termination = "crlf"
+read_termination = "lf"
+xonxoff = false
+rtscts = false
+dsrdtr = false
+
+# Access policy for this instrument: read_write, read_only, or disabled.
+# read_only permits measurement reads but blocks writes and acquisitions.
+access = "read_write"
+
+# Optional DMM stabilization wait before each reading. Set 0 for no wait.
+# 每次万用表读数前的可选稳定等待时间。设为 0 表示不等待。
+settle_ms_before_read = 0
+
+# Extra wait after changing DMM function before the first read.
+# 切换万用表功能后、第一次读数前的额外等待时间。
+settle_ms_after_function_change = 500

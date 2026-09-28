@@ -1,0 +1,448 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 1220 200"
+  role="img"
+  aria-labelledby="title desc"
+  shape-rendering="geometricPrecision"
+>
+  <title id="title">WaveBench</title>
+  <desc id="desc">
+    Multiple laboratory inputs converge into a measurement bench
+    and produce a waveform.
+  </desc>
+
+  <style>
+    /*
+     * Light theme
+     */
+    .fg-stroke {
+      fill: none;
+      stroke: #14283D;
+    }
+
+    .muted-stroke {
+      fill: none;
+      stroke: #8B99A6;
+    }
+
+    .accent-stroke {
+      fill: none;
+      stroke: #12BFC6;
+    }
+
+    .accent-fill {
+      fill: #12BFC6;
+    }
+
+    .node {
+      fill: #EEF9FA;
+      stroke: #12BFC6;
+    }
+
+    .wordmark {
+      fill: #14283D;
+    }
+
+    /*
+     * Dark theme
+     */
+    @media (prefers-color-scheme: dark) {
+      .fg-stroke {
+        stroke: #E8EEF3;
+      }
+
+      .muted-stroke {
+        stroke: #75838F;
+      }
+
+      .accent-stroke {
+        stroke: #20D4DA;
+      }
+
+      .accent-fill {
+        fill: #20D4DA;
+      }
+
+      .node {
+        fill: #102A32;
+        stroke: #20D4DA;
+      }
+
+      .wordmark {
+        fill: #E8EEF3;
+      }
+    }
+  </style>
+
+
+  <!-- =========================================================
+       Input symbols
+       ========================================================= -->
+
+  <g
+    class="fg-stroke"
+    stroke-width="6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+
+    <!-- Circle input -->
+    <circle
+      cx="48"
+      cy="48"
+      r="15"
+    />
+
+    <!-- Square input -->
+    <rect
+      x="33"
+      y="85"
+      width="30"
+      height="30"
+      rx="3"
+    />
+
+    <!-- Triangle input -->
+    <path
+      d="
+        M48 139
+        L65 168
+        H31
+        Z
+      "
+    />
+
+  </g>
+
+
+  <!-- =========================================================
+       Converging instrument paths
+       ========================================================= -->
+
+  <g
+    class="muted-stroke"
+    stroke-width="6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+
+    <!-- Top path -->
+    <path
+      d="
+        M63 48
+        H101
+
+        Q116 48 124 60
+
+        L145 86
+
+        Q153 96 166 96
+
+        H204
+      "
+    />
+
+    <!-- Middle path -->
+    <path
+      d="
+        M63 100
+        H204
+      "
+    />
+
+    <!-- Bottom path -->
+    <path
+      d="
+        M65 153
+        H101
+
+        Q116 153 125 141
+
+        L145 116
+
+        Q153 105 166 105
+
+        H204
+      "
+    />
+
+  </g>
+
+
+  <!-- Highlighted main signal path -->
+  <path
+    d="
+      M91 100
+      H204
+    "
+    class="accent-stroke"
+    stroke-width="6"
+    stroke-linecap="round"
+  />
+
+
+  <!-- =========================================================
+       Bench / orchestration node
+       ========================================================= -->
+
+  <rect
+    x="204"
+    y="64"
+    width="88"
+    height="72"
+    rx="16"
+    class="node"
+    stroke-width="7"
+  />
+
+  <!-- Central bench point -->
+  <circle
+    cx="248"
+    cy="100"
+    r="6"
+    class="accent-fill"
+  />
+
+
+  <!-- =========================================================
+       Output connection
+       ========================================================= -->
+
+  <path
+    d="
+      M292 100
+      H326
+    "
+    class="muted-stroke"
+    stroke-width="6"
+    stroke-linecap="round"
+  />
+
+  <circle
+    cx="337"
+    cy="100"
+    r="5"
+    class="accent-fill"
+  />
+
+
+  <!-- =========================================================
+       Measurement waveform
+       ========================================================= -->
+
+  <path
+    d="
+      M347 100
+
+      C360 100
+       363 80
+       376 80
+
+      C392 80
+       397 130
+       414 130
+
+      C433 130
+       440 61
+       460 61
+
+      C481 61
+       488 141
+       509 141
+
+      C530 141
+       537 72
+       557 72
+
+      C575 72
+       581 100
+       598 100
+    "
+    class="accent-stroke"
+    stroke-width="7"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+
+  <!-- =========================================================
+       WaveBench wordmark
+       Path outline — no font dependency
+       Based on a geometric sans-serif outline
+       ========================================================= -->
+
+  <g
+    class="wordmark"
+    transform="translate(600 141) scale(0.055 -0.055)"
+  >
+
+    <!-- W -->
+    <path
+      d="
+        M415 0H715
+        L942 862
+        C964 944 983 1033 1004 1132
+        C1025 1033 1044 944 1066 862
+        L1294 0H1593
+        L1996 1490H1716
+        L1519 687
+        C1489 558 1461 429 1435 301
+        C1408 429 1379 558 1347 687
+        L1144 1490H865
+        L660 687
+        C628 557 599 427 572 296
+        C547 427 519 557 489 687
+        L292 1490H13Z
+      "
+    />
+
+    <!-- a -->
+    <path
+      transform="translate(2009 0)"
+      d="
+        M434 -17
+        C606 -17 695 55 745 149
+        H749V0H997V720
+        C997 940 834 1077 559 1077
+        C283 1077 111 938 99 728
+        H342
+        C349 817 431 881 554 881
+        C675 881 747 817 747 727
+        V719
+        C747 647 680 644 484 622
+        C266 599 69 540 69 300
+        C69 89 224 -17 434 -17Z
+
+        M496 170
+        C386 170 315 219 315 302
+        C315 398 407 437 515 453
+        C619 469 717 485 748 505
+        V391
+        C748 268 661 170 496 170Z
+      "
+    />
+
+    <!-- v -->
+    <path
+      transform="translate(3117 0)"
+      d="
+        M415 0H691
+        L1088 1056H824
+        L634 506
+        C607 423 582 339 557 256
+        C531 339 505 423 478 506
+        L285 1056H18Z
+      "
+    />
+
+    <!-- e -->
+    <path
+      transform="translate(4223 0)"
+      d="
+        M578 -24
+        C825 -24 1021 119 1061 326
+        H825
+        C796 236 711 175 584 175
+        C414 175 316 290 310 462
+        H1074V531
+        C1074 855 872 1080 568 1080
+        C272 1080 63 848 63 527
+        C63 207 261 -24 578 -24Z
+
+        M312 636
+        C329 787 426 880 572 880
+        C718 880 816 787 832 636Z
+      "
+    />
+
+    <!-- B -->
+    <path
+      transform="translate(5356 0)"
+      d="
+        M124 0H726
+        C1071 0 1252 168 1252 419
+        C1252 631 1114 754 936 775
+        V777
+        C1096 821 1195 931 1195 1103
+        C1195 1336 1014 1490 700 1490
+        H124Z
+
+        M384 215V652H704
+        C880 652 981 566 981 428
+        C981 291 878 215 698 215Z
+
+        M384 859V1275H688
+        C839 1275 931 1195 931 1067
+        C931 940 839 859 688 859Z
+      "
+    />
+
+    <!-- e -->
+    <path
+      transform="translate(6672 0)"
+      d="
+        M578 -24
+        C825 -24 1021 119 1061 326
+        H825
+        C796 236 711 175 584 175
+        C414 175 316 290 310 462
+        H1074V531
+        C1074 855 872 1080 568 1080
+        C272 1080 63 848 63 527
+        C63 207 261 -24 578 -24Z
+
+        M312 636
+        C329 787 426 880 572 880
+        C718 880 816 787 832 636Z
+      "
+    />
+
+    <!-- n -->
+    <path
+      transform="translate(7805 0)"
+      d="
+        M364 597
+        C364 777 463 856 595 856
+        C730 856 808 775 808 620
+        V0H1061V660
+        C1061 931 905 1077 684 1077
+        C539 1077 432 1013 360 894
+        V1056H112V0H364Z
+      "
+    />
+
+    <!-- c -->
+    <path
+      transform="translate(8978 0)"
+      d="
+        M579 -24
+        C846 -24 1040 148 1058 379
+        H809
+        C785 262 714 186 582 186
+        C416 186 318 319 318 527
+        C318 736 417 870 582 870
+        C713 870 792 791 811 678
+        H1058
+        C1036 913 844 1080 579 1080
+        C270 1080 63 853 63 527
+        C63 201 270 -24 579 -24Z
+      "
+    />
+
+    <!-- h -->
+    <path
+      transform="translate(10093 0)"
+      d="
+        M364 597
+        C364 777 463 856 595 856
+        C730 856 808 775 808 620
+        V0H1061V660
+        C1061 931 905 1077 684 1077
+        C542 1077 436 1016 364 901
+        V1490H112V0H364Z
+      "
+    />
+
+  </g>
+
+</svg>

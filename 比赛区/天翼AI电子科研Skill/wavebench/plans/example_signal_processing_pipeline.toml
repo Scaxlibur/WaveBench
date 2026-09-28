@@ -1,0 +1,85 @@
+# Example WaveBench signal-processing run plan.
+# This plan performs a real scope acquisition. Confirm the input, probe ratio,
+# coupling, voltage range, and bench wiring before execution.
+# Demonstration input: 1 kHz sine, approximately 1 Vpp, uniform sampling
+# at >= 20 kSa/s, >= 4096 samples. Configure the source and acquisition first;
+# this plan does not configure or enable a signal generator.
+# All three analyses read the same capture. They do not feed each other.
+
+[experiment]
+name = "example_signal_processing_pipeline"
+label = "example_signal_processing_pipeline"
+
+[[steps]]
+id = "capture_main"
+kind = "scope.capture"
+channel = 1
+label = "signal_processing_source"
+points = "def"
+save_csv = false
+save_npy = true
+quality_gate = true
+auto_recover = true
+on_failure = "continue"
+
+[[steps]]
+id = "spectrum_main"
+kind = "analysis.pipeline"
+source = { step = "capture_main" }
+on_failure = "continue"
+operations = [
+  { op = "export", name = "original", formats = ["npy", "csv"] },
+  { op = "measure", metrics = ["voltage_mean_v", "voltage_rms_v", "voltage_vpp_v"] },
+  { op = "remove_dc" },
+  { op = "filter", family = "fir", response = "bandstop", cutoff_hz = [49.0, 51.0], numtaps = 101, mode = "zero_phase" },
+  { op = "filter", family = "iir", design = "butterworth", response = "highpass", cutoff_hz = 20.0, order = 4, mode = "causal" },
+  { op = "window", name = "hann" },
+  { op = "fft" },
+  { op = "measure", metrics = ["peak_frequency_hz", "peak_amplitude_v", "noise_floor_v", "thd_ratio", "harmonic_2_frequency_hz", "harmonic_2_amplitude_v"] },
+  { op = "export", name = "spectrum", formats = ["npy", "csv"] },
+]
+
+[steps.expect]
+peak_frequency_hz = { min = 990, max = 1010 }
+thd_ratio = { max = 0.05 }
+
+# Compare the original waveform with a smoothed, half-rate waveform.
+# Peak distance/width are in Hz after FFT; peak height/prominence are in V.
+[[steps]]
+id = "processed_main"
+kind = "analysis.pipeline"
+source = { step = "capture_main" }
+on_failure = "continue"
+operations = [
+  { op = "remove_dc" },
+  { op = "smooth", method = "savgol", window_length = 11, polyorder = 2, mode = "centered", boundary = "reflect" },
+  { op = "resample", up = 1, down = 2, window = "kaiser", beta = 5, padtype = "line" },
+  { op = "export", name = "processed", formats = ["npy", "csv"] },
+  { op = "window", name = "hann" },
+  { op = "fft" },
+  { op = "peaks", name = "tones", polarity = "positive", height = 0.02, prominence = 0.02, distance = 100, width = 0, max_peaks = 10, metrics = ["count"] },
+  { op = "measure", metrics = ["peak_frequency_hz", "peak_amplitude_v"] },
+  { op = "export", name = "processed_spectrum", formats = ["npy", "csv"] },
+]
+
+[steps.expect]
+peak_frequency_hz = { min = 990, max = 1010 }
+tones_count = { min = 1, max = 3 }
+
+# Independent density analysis of the same raw capture; no whole-signal window.
+[[steps]]
+id = "density_main"
+kind = "analysis.pipeline"
+source = { step = "capture_main" }
+operations = [
+  { op = "psd", method = "welch", window = "hann", nperseg = 1024, noverlap = 512, nfft = 1024, detrend = "constant", average = "mean" },
+  { op = "measure_band", name = "signal", band_hz = [0, 5000], exclude_hz = [], metrics = ["mean_square_v2", "rms_v"] },
+  { op = "measure_band", name = "noise", band_hz = [0, 5000], exclude_hz = [[800, 1200]], metrics = ["noise_rms_v"] },
+  { op = "export", name = "density", formats = ["npy", "csv"] },
+]
+
+# Demonstration limits, not a universal instrument specification.
+# Noise includes everything in 0..5 kHz outside the excluded 0.8..1.2 kHz band.
+[steps.expect]
+signal_rms_v = { min = 0.30, max = 0.40 }
+noise_noise_rms_v = { max = 0.03 }

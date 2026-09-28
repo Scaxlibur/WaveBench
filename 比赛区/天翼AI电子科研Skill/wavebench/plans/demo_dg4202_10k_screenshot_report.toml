@@ -1,0 +1,63 @@
+# Minimal hardware demo for WaveBench v0.2 reports.
+# Assumes DG4202 CH1 is connected to RTM2032 CH1.
+# The source state is restored at the end, even when expectation checks fail.
+
+[experiment]
+name = "demo_dg4202_10k_screenshot_report"
+label = "demo_dg4202_10k_screenshot_report"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.status"
+channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "SQU"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 3.3
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "source.set_duty"
+channel = 1
+duty_percent = 50
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.1
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "demo_duty50_10k_screenshot"
+points = "def"
+window_frequency_hz = 10000
+target_cycles = 10
+expect_frequency_hz = 10000
+frequency_tolerance = 0.05
+target_vpp = 3.3
+save_csv = false
+screenshot = true
+quality_gate = true
+auto_recover = true
+
+[steps.expect]
+frequency_estimate_hz = { min = 9500, max = 10500 }
+voltage_vpp_v = { min = 0.05 }

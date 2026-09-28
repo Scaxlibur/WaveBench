@@ -1,0 +1,7 @@
+schema = "wavebench.analysis_recipe.v1"
+operations = [
+  { op = "psd", method = "welch", window = "hann", nperseg = 256, noverlap = 128, nfft = 256, detrend = "constant", average = "mean" },
+  { op = "measure_band", name = "signal", band_hz = [0, 10000], exclude_hz = [], metrics = ["mean_square_v2", "rms_v"] },
+  { op = "export", name = "density", formats = ["npy", "csv"] },
+]
+# Requires an input sampling rate of at least 20 kHz.

@@ -1,0 +1,71 @@
+# Public closure example: DG4202 CH1 -> RTM2032 CH1, 1 kHz triangle, 1.0 Vpp.
+# Stable public example; still opens source output during execution.
+
+[experiment]
+name = "closure_triangle_1k"
+label = "closure_triangle_1k"
+
+[safety]
+scope_guard_channel = 1
+require_scope_coupling_not = ["DC", "AC"]
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.status"
+channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "triangle"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 1.0
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 1000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.3
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "closure_triangle_1k"
+points = "def"
+window_frequency_hz = 1000
+target_cycles = 10
+expect_frequency_hz = 1000
+frequency_tolerance = 0.05
+target_vpp = 1.0
+save_csv = false
+save_npy = true
+screenshot = true
+quality_gate = true
+auto_recover = true
+
+[steps.expect]
+frequency_estimate_hz = { min = 950, max = 1050 }
+frequency_error_ratio = { max = 0.05 }
+voltage_vpp_v = { min = 0.8, max = 1.2 }
+
+[steps.expect_fft]
+peak_frequency_hz = { min = 990, max = 1010 }
+peak_amplitude_v = { min = 0.34, max = 0.46 }
+harmonic_2_amplitude_v = { max = 0.02 }
+harmonic_3_amplitude_v = { min = 0.03, max = 0.08 }
+harmonic_5_amplitude_v = { min = 0.008, max = 0.03 }
+thd_ratio = { min = 0.08, max = 0.20 }

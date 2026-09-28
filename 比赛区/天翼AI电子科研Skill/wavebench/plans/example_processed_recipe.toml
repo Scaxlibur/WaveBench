@@ -1,0 +1,12 @@
+schema = "wavebench.analysis_recipe.v1"
+operations = [
+  { op = "export", name = "original", formats = ["npy"] },
+  { op = "remove_dc" },
+  { op = "smooth", method = "savgol", window_length = 11, polyorder = 2, mode = "centered", boundary = "reflect" },
+  { op = "resample", up = 1, down = 2, window = "kaiser", beta = 5, padtype = "line" },
+  { op = "export", name = "processed", formats = ["npy", "csv"] },
+  { op = "window", name = "hann" },
+  { op = "fft" },
+  { op = "peaks", name = "tones", polarity = "positive", height = 0.01, prominence = 0.01, distance = 10, width = 0, max_peaks = 20, metrics = ["count"] },
+  { op = "export", name = "spectrum", formats = ["npy", "csv"] },
+]

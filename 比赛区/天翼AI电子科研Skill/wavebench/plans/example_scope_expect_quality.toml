@@ -1,0 +1,63 @@
+# Example WaveBench run plan for public documentation.
+# It is intentionally generic: copy this file, adjust channels and resources in wavebench.toml,
+# then run `python -m wavebench run check --config wavebench.toml --plan plans/example_scope_expect_quality.toml`.
+
+[experiment]
+name = "example_scope_expect_quality"
+label = "example_scope_expect_quality"
+
+# Optional: restore the source channel after the plan finishes, including failed expectation checks.
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.status"
+channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "SQU"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 3.3
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "source.set_duty"
+channel = 1
+duty_percent = 50
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.1
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "example_duty50_10k"
+points = "DEF"
+window_frequency_hz = 10000
+target_cycles = 10
+expect_frequency_hz = 10000
+frequency_tolerance = 0.05
+save_csv = false
+quality_gate = true
+auto_recover = true
+
+[steps.expect]
+frequency_estimate_hz = { min = 9500, max = 10500 }
+duty_cycle = { min = 0.45, max = 0.55 }
+voltage_vpp_v = { min = 2.5, max = 4.0 }

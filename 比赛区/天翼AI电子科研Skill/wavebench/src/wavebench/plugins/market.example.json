@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "plugin_id": "wavebench-rigol-dg4202",
+      "driver_id": "rigol.dg4202",
+      "name": "RIGOL DG4202 driver",
+      "package": "wavebench",
+      "version": "0.7.0",
+      "kind": "source",
+      "summary": "Built-in metadata entry for the WaveBench RIGOL DG4000-series signal source driver.",
+      "homepage": "https://github.com/Scaxlibur/wavebench",
+      "capabilities": [
+        "source.idn",
+        "source.set_frequency",
+        "source.output",
+        "source.arbitrary_upload"
+      ],
+      "tags": ["builtin", "rigol", "source"]
+    },
+    {
+      "plugin_id": "wavebench-rs-rtm2032",
+      "driver_id": "rohde-schwarz.rtm2032",
+      "name": "Rohde & Schwarz RTM2032 driver",
+      "package": "wavebench",
+      "version": "0.7.0",
+      "kind": "scope",
+      "summary": "Built-in metadata entry for the WaveBench R&S RTM2000-series oscilloscope driver.",
+      "homepage": "https://github.com/Scaxlibur/wavebench",
+      "capabilities": [
+        "scope.idn",
+        "scope.fetch_waveform",
+        "scope.capture_waveform",
+        "scope.screenshot"
+      ],
+      "tags": ["builtin", "rohde-schwarz", "scope"]
+    }
+  ]
+}

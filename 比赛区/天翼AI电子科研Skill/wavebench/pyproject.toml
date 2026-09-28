@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wavebench"
+version = "0.8.27"
+description = "Lightweight VISA/SCPI measurement bench for contest debugging"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Scaxlibur" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX",
+]
+dependencies = ["RsInstrument>=1.90.0", "numpy>=2.0.0", "packaging>=24.0", "portalocker[win32]>=4.1.0,<5.0.0", "pyserial>=3.5", "pyvisa-py>=0.8.1"]
+
+[project.optional-dependencies]
+analysis = ["scipy>=1.14.0"]
+dev = ["hatchling==1.30.1", "pytest>=8.0.0", "ruff==0.15.20"]
+docs = ["mkdocs-material>=9.5,<10"]
+pdf = ["weasyprint>=62.0"]
+report3d = ["plotly>=6.0"]
+tui = ["textual>=0.86.0"]
+
+[project.scripts]
+wavebench = "wavebench.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wavebench"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/data", "/docs/instruments"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

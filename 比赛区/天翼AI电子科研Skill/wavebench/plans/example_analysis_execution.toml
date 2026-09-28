@@ -1,0 +1,10 @@
+# Execution profile, not a RunPlan or an analysis recipe.
+# Use --analysis-execution with analysis check/run or run check/intent/verify/plan.
+schema = "wavebench.analysis_execution.v1"
+timeout_s = 300.0
+grace_s = 2.0
+
+# Optional hard limit; unsupported environments fail preflight.
+# Windows uses a Job Object. Linux also requires a delegated cgroup v2 root.
+# memory_bytes = 1073741824
+# cgroup_root = "/path/to/delegated/cgroup"

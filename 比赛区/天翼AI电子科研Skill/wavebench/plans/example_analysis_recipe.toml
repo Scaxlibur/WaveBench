@@ -1,0 +1,8 @@
+schema = "wavebench.analysis_recipe.v1"
+operations = [
+  { op = "remove_dc" },
+  { op = "window", name = "hann" },
+  { op = "fft" },
+  { op = "measure", metrics = ["peak_frequency_hz", "peak_amplitude_v"] },
+  { op = "export", name = "spectrum", formats = ["npy", "csv"] },
+]

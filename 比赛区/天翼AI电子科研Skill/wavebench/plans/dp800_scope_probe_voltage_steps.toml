@@ -1,0 +1,47 @@
+[experiment]
+name = "dp800_scope_probe_voltage_capture"
+label = "dp800_scope_probe_voltage_capture"
+
+[safety]
+require_scope_coupling_not = ["DC"]
+scope_guard_channel = 2
+
+[[steps]]
+kind = "power.status"
+channel = 1
+
+[[steps]]
+kind = "scope.capture"
+channel = 2
+label = "before"
+points = "def"
+time_range_s = 0.01
+save_csv = false
+
+[[steps]]
+kind = "power.set"
+channel = 1
+voltage_v = 3.3
+current_limit_a = 0.1
+
+[[steps]]
+kind = "scope.capture"
+channel = 2
+label = "v3v3"
+points = "def"
+time_range_s = 0.01
+save_csv = false
+
+[[steps]]
+kind = "power.set"
+channel = 1
+voltage_v = 5.0
+current_limit_a = 0.1
+
+[[steps]]
+kind = "scope.capture"
+channel = 2
+label = "restore_5v"
+points = "def"
+time_range_s = 0.01
+save_csv = false

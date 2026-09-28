@@ -1,0 +1,12 @@
+driver_id = "example.scope"
+kind = "scope"
+display_name = "Example Scope"
+manufacturer = "Example"
+models = ["EX1"]
+capabilities = ["scope.idn"]
+summary = "Example local declarative SCPI plugin metadata."
+idn_patterns = ["EXAMPLE,EX1"]
+config_fields = ["resource"]
+
+[scpi]
+idn_query = "*IDN?"

@@ -1,0 +1,2056 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import difflib
+from math import log10
+import re
+from typing import Any
+import tomllib
+
+from wavebench.config import normalize_waveform_points
+from wavebench.data.signal_pipeline import (
+    ANALYSIS_FIR_MODES,
+    ANALYSIS_FIR_RESPONSES,
+    ANALYSIS_FREQUENCY_METRICS,
+    ANALYSIS_IIR_DESIGNS,
+    ANALYSIS_IIR_MAX_ATTENUATION_DB,
+    ANALYSIS_IIR_MAX_ORDER,
+    ANALYSIS_IIR_MAX_RIPPLE_DB,
+    ANALYSIS_TIME_METRICS,
+    normalize_psd_parameters,
+)
+from wavebench.errors import ConfigError, DataError
+from wavebench.data.pipeline_operations import (
+    normalize_band, normalize_peaks, normalize_smooth, normalize_resample,
+)
+from wavebench.services.frequency_response import FIT_METHODS
+from wavebench.services.frequency_response_adaptive import normalize_frequency_response_adaptive
+from wavebench.services.frequency_response_baseline import normalize_frequency_response_baseline
+from wavebench.services.frequency_response_calibration import normalize_frequency_response_calibration
+
+
+ALLOWED_STEP_KINDS = {
+    "analysis.pipeline",
+    "analysis.pair",
+    "scope.auto",
+    "scope.capture",
+    "sweep.frequency_response",
+    "source.status",
+    "rf_source.status",
+    "rf_source.trigger_status",
+    "rf_source.set_frequency",
+    "rf_source.set_power_dbm",
+    "rf_source.modulation_configure",
+    "rf_source.modulation_disable",
+    "rf_source.modulated_output_enable",
+    "rf_source.pulse_configure",
+    "rf_source.pulse_output_enable",
+    "rf_source.pulse_output_disable",
+    "rf_source.sweep_configure",
+    "rf_source.output_enable",
+    "rf_source.output_disable",
+    "source.set_freq",
+    "source.arb_load",
+    "source.set_func",
+    "source.set_vpp",
+    "source.set_duty",
+    "source.output",
+    "source.basic_configure_v2",
+    "source.basic_live_configure_v2",
+    "source.output_enable_v2",
+    "source.output_disable_v2",
+    "source.counter_configure_v2",
+    "source.counter_enable_v2",
+    "source.counter_disable_v2",
+    "source.counter_measure_v2",
+    "source.harmonics_configure_v2",
+    "source.harmonics_disable_v2",
+    "source.modulation_configure_v2",
+    "source.modulation_pm_configure_v2",
+    "source.modulation_fm_configure_v2",
+    "source.modulation_pwm_configure_v2",
+    "source.sweep_configure_v2",
+    "source.sweep_fire_v2",
+    "source.burst_configure_v2",
+    "source.pulse_configure_v2",
+    "source.arbitrary_storage_v2",
+    "source.arbitrary_volatile_replace_v2",
+    "source.arbitrary_workspace_volatile_replace_v2",
+    "source.arbitrary_select_v2",
+    "source.combine_configure_v2",
+    "source.coupling_configure_v2",
+    "source.tracking_configure_v2",
+    "source.phase_relation_configure_v2",
+    "power.status",
+    "power.set",
+    "power.output",
+    "dmm.read",
+    "sleep",
+}
+
+_SOURCE_STORAGE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,96}$")
+_SOURCE_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+_STEP_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+_ANALYSIS_EXPORT_NAME = _STEP_ID
+
+_REQUIRED_FIELDS = {
+    "analysis.pipeline": ("source", "operations"),
+    "analysis.pair": ("source", "reference_channel", "response_channel", "operations"),
+    "power.set": ("voltage_v", "current_limit_a"),
+    "power.output": ("state",),
+    "source.set_freq": ("frequency_hz",),
+    "source.arb_load": ("file", "frequency_hz", "amplitude_vpp"),
+    "source.set_func": ("function",),
+    "source.set_vpp": ("value_vpp",),
+    "source.set_duty": ("duty_percent",),
+    "source.output": ("state",),
+    "rf_source.trigger_status": ("port_id",),
+    "rf_source.set_frequency": ("port_id", "frequency_hz"),
+    "rf_source.set_power_dbm": ("port_id", "power_dbm"),
+    "rf_source.modulation_configure": (
+        "port_id",
+        "modulation_kind",
+        "internal_frequency_hz",
+    ),
+    "rf_source.modulation_disable": ("port_id", "modulation_kind"),
+    "rf_source.modulated_output_enable": (
+        "port_id",
+        "modulation_kind",
+        "internal_frequency_hz",
+    ),
+    "rf_source.pulse_configure": ("port_id", "period_s", "width_s", "polarity"),
+    "rf_source.pulse_output_enable": ("port_id", "interface_id"),
+    "rf_source.pulse_output_disable": ("port_id", "interface_id"),
+    "rf_source.sweep_configure": (
+        "port_id",
+        "start_frequency_hz",
+        "stop_frequency_hz",
+        "points",
+        "dwell_s",
+    ),
+    "rf_source.output_enable": ("port_id",),
+    "rf_source.output_disable": ("port_id",),
+    "source.basic_configure_v2": ("channel",),
+    "source.basic_live_configure_v2": ("channel",),
+    "source.output_enable_v2": ("channel",),
+    "source.output_disable_v2": ("channel",),
+    "source.counter_configure_v2": ("input_id",),
+    "source.counter_enable_v2": ("input_id",),
+    "source.counter_disable_v2": ("input_id",),
+    "source.counter_measure_v2": ("input_id",),
+    "source.harmonics_configure_v2": ("channel", "order", "preset"),
+    "source.harmonics_disable_v2": ("channel",),
+    "source.modulation_configure_v2": ("channel", "depth_percent", "internal_frequency_hz"),
+    "source.modulation_pm_configure_v2": (
+        "channel",
+        "phase_deviation_deg",
+        "internal_frequency_hz",
+    ),
+    "source.modulation_fm_configure_v2": (
+        "channel",
+        "frequency_deviation_hz",
+        "internal_frequency_hz",
+    ),
+    "source.modulation_pwm_configure_v2": (
+        "channel",
+        "internal_frequency_hz",
+    ),
+    "source.sweep_configure_v2": (
+        "channel",
+        "start_hz",
+        "stop_hz",
+        "spacing",
+        "steps",
+        "sweep_time_s",
+    ),
+    "source.sweep_fire_v2": ("channel",),
+    "source.burst_configure_v2": (
+        "channel",
+        "cycles",
+        "phase_deg",
+        "internal_period_s",
+        "delay_s",
+    ),
+    "source.pulse_configure_v2": (
+        "channel",
+        "width_s",
+        "delay_s",
+        "leading_transition_s",
+        "trailing_transition_s",
+    ),
+    "source.arbitrary_storage_v2": ("channel", "slot_id", "file", "write_mode"),
+    "source.arbitrary_volatile_replace_v2": ("channel", "file", "point_count"),
+    "source.arbitrary_workspace_volatile_replace_v2": ("file", "point_count"),
+    "source.arbitrary_select_v2": ("channel", "slot_id", "playback_mode"),
+    "source.combine_configure_v2": ("channels", "enabled"),
+    "source.coupling_configure_v2": ("channels", "enabled"),
+    "source.tracking_configure_v2": ("channels", "enabled"),
+    "source.phase_relation_configure_v2": ("channels", "enabled"),
+    "sweep.frequency_response": ("reference_channel", "response_channel"),
+    "sleep": ("duration_s",),
+}
+
+_OPTIONAL_FIELDS = {
+    "analysis.pipeline": {"expect", "on_failure", "resources"},
+    "analysis.pair": {"expect", "on_failure", "resources"},
+    "scope.auto": {"on_failure"},
+    "scope.capture": {
+        "channel", "channels", "synchronized",
+        "label",
+        "points",
+        "time_range_s",
+        "expect_frequency_hz",
+        "window_frequency_hz",
+        "target_cycles",
+        "frequency_tolerance",
+        "vertical_scale_v_per_div",
+        "target_vpp",
+        "save_csv",
+        "save_npy",
+        "screenshot",
+        "quality_gate",
+        "auto_recover",
+        "autoscale_before_capture",
+        "autoscale_settle_s",
+        "expect",
+        "expect_fft",
+        "on_failure",
+    },
+    "sweep.frequency_response": {
+        "label",
+        "source_channel",
+        "frequencies_hz",
+        "start_frequency_hz",
+        "stop_frequency_hz",
+        "frequency_count",
+        "spacing",
+        "target_cycles",
+        "settle_s",
+        "frequency_tolerance",
+        "min_signal_vpp",
+        "points",
+        "save_csv",
+        "screenshot",
+        "fit",
+        "amplitudes_vpp",
+        "start_vpp",
+        "stop_vpp",
+        "vpp_step",
+        "autoscale_each_amplitude",
+        "retry_warning_with_autoscale",
+        "calibration",
+        "baseline",
+        "adaptive",
+        "stop_conditions",
+        "resume_from",
+        "on_failure",
+    },
+    "source.status": {"channel", "on_failure"},
+    "rf_source.status": {"on_failure"},
+    "rf_source.trigger_status": {"on_failure"},
+    "rf_source.set_frequency": {"on_failure"},
+    "rf_source.set_power_dbm": {"on_failure"},
+    "rf_source.modulation_configure": {
+        "depth_percent",
+        "frequency_deviation_hz",
+        "phase_deviation_rad",
+        "on_failure",
+    },
+    "rf_source.modulation_disable": {"on_failure"},
+    "rf_source.modulated_output_enable": {
+        "depth_percent",
+        "frequency_deviation_hz",
+        "phase_deviation_rad",
+        "on_failure",
+    },
+    "rf_source.pulse_configure": set(),
+    "rf_source.sweep_configure": set(),
+    "rf_source.output_enable": {"on_failure"},
+    "rf_source.output_disable": {"on_failure"},
+    "source.set_freq": {"channel", "on_failure"},
+    "source.arb_load": {"channel", "offset_v", "sample_rate_hz", "max_points", "byte_order", "output_on", "on_failure"},
+    "source.set_func": {"channel", "on_failure"},
+    "source.set_vpp": {"channel", "on_failure"},
+    "source.set_duty": {"channel", "on_failure"},
+    "source.output": {"channel", "on_failure"},
+    "source.basic_configure_v2": {
+        "waveform_kind",
+        "frequency_hz",
+        "amplitude_vpp",
+        "offset_v",
+        "square_duty_cycle_percent",
+        "on_failure",
+    },
+    "source.basic_live_configure_v2": {
+        "frequency_hz",
+        "amplitude_vpp",
+        "on_failure",
+    },
+    "source.output_enable_v2": {"on_failure"},
+    "source.output_disable_v2": {"on_failure"},
+    "source.counter_configure_v2": {
+        "coupling",
+        "impedance_ohm",
+        "attenuation",
+        "trigger_level_v",
+        "statistics_enabled",
+        "on_failure",
+    },
+    "source.counter_enable_v2": {"on_failure"},
+    "source.counter_disable_v2": {"on_failure"},
+    "source.counter_measure_v2": {"on_failure"},
+    "source.harmonics_configure_v2": {"on_failure"},
+    "source.harmonics_disable_v2": {"on_failure"},
+    "source.modulation_configure_v2": {"on_failure"},
+    "source.modulation_pm_configure_v2": {"on_failure"},
+    "source.modulation_fm_configure_v2": {"on_failure"},
+    "source.modulation_pwm_configure_v2": {
+        "duty_deviation_percent",
+        "width_deviation_s",
+        "on_failure",
+    },
+    "source.sweep_configure_v2": {"trigger_source", "on_failure"},
+    "source.sweep_fire_v2": {"on_failure"},
+    "source.burst_configure_v2": {"on_failure"},
+    "source.pulse_configure_v2": {"on_failure"},
+    "source.arbitrary_storage_v2": {"expected_previous_sha256", "on_failure"},
+    "source.arbitrary_volatile_replace_v2": {"on_failure"},
+    "source.arbitrary_workspace_volatile_replace_v2": {"on_failure"},
+    "source.arbitrary_select_v2": {
+        "playback_frequency_hz",
+        "sample_rate_hz",
+        "on_failure",
+    },
+    "source.combine_configure_v2": set(),
+    "source.coupling_configure_v2": set(),
+    "source.tracking_configure_v2": set(),
+    "source.phase_relation_configure_v2": set(),
+    "power.status": {"channel", "on_failure"},
+    "power.set": {"channel", "on_failure"},
+    "power.output": {"channel", "on_failure"},
+    "dmm.read": {"function", "expect", "on_failure"},
+    "sleep": {"on_failure"},
+}
+
+# Failure handling is a common contract for every executable step.  Keeping the
+# fields in the schema table makes ``run schema`` and unknown-key diagnostics stay
+# in sync as new step kinds are added.
+for _step_kind, _step_fields in _OPTIONAL_FIELDS.items():
+    _step_fields.add("on_failure")
+    if _step_kind not in {"analysis.pipeline", "analysis.pair"}:
+        _step_fields.add("safety_gate")
+
+
+_STEP_NOTES = {
+    "analysis.pair": "Analyze two evidence-validated channels from one earlier capture package after hardware cleanup. Accepts synthetic or driver-owned frozen-single synchronization evidence.",
+    "analysis.pipeline": "Process one earlier scope.capture NPY after all hardware sessions close. Uses a validated linear operator list, checks optional dependencies on demand, and never opens an instrument.",
+    "scope.auto": "Explicit RTM2032 AUToscale. It changes front-panel settings and is never inserted implicitly.",
+    "scope.capture": "Trigger one acquisition, write a capture package, and optionally evaluate quality/expect checks. Use target_vpp or vertical_scale_v_per_div to fit the waveform vertically before capture.",
+    "sweep.frequency_response": "Sweep a source through discrete frequencies, capture reference and response channels in one acquisition per point, and write a Bode response CSV.",
+    "source.status": "Read signal-generator channel state without changing output.",
+    "rf_source.status": "Read a typed RF-source snapshot without changing output.",
+    "rf_source.trigger_status": "Read declared logical Pulse and Sweep trigger configuration without changing RF or trigger state.",
+    "rf_source.set_frequency": "Set one RF port frequency while its output, modulation, Pulse, and Sweep are OFF.",
+    "rf_source.set_power_dbm": "Set one RF port dBm level while its output, modulation, Pulse, and Sweep are OFF.",
+    "rf_source.modulation_configure": "Configure one OFF RF port with an internal-sine AM, FM, or PM profile; it does not enable RF output.",
+    "rf_source.modulation_disable": "Disable one known active internal-sine AM, FM, or PM mode while RF output is OFF; an already consistent disabled state makes no write.",
+    "rf_source.modulated_output_enable": "Enable one RF port only when its active internal-sine AM, FM, or PM profile exactly matches the requested bounded profile; it does not configure modulation or restore RF OFF.",
+    "rf_source.pulse_configure": "Configure one OFF RF port with a disabled internal single-pulse profile; it does not enable RF output or trigger a pulse.",
+    "rf_source.sweep_configure": "Configure one OFF RF port with a disabled frequency-only Step Sweep profile; it does not arm, fire, trigger, or enable RF output.",
+    "rf_source.output_enable": "Enable one RF port only after a fresh safety snapshot confirms the configured load, frequency, power, and inactive modulation, Pulse, Sweep, and blocking protection conditions.",
+    "rf_source.output_disable": "Disable one RF port and confirm OFF without requiring frequency, power, or protection readback.",
+    "source.arb_load": "Upload a DG4202 arbitrary waveform from CSV/NPY using DATA:DAC VOLATILE; output remains unchanged unless output_on = true.",
+    "source.set_freq": "Set fixed source frequency in Hz; config may force FIX mode first.",
+    "source.set_func": "Set source waveform function, for example SIN or SQU.",
+    "source.set_vpp": "Set source amplitude in Vpp.",
+    "source.set_duty": "Set square-wave duty cycle in percent; valid range is 0 < duty_percent < 100.",
+    "source.output": "Turn source channel output on or off.",
+    "source.basic_configure_v2": "Configure one Source V2 channel while its output is OFF. At least one basic field is required.",
+    "source.basic_live_configure_v2": "Change exactly one declared frequency or Vpp field while one Source V2 channel remains enabled.",
+    "source.output_enable_v2": "Turn one Source V2 channel output on after a fresh V2 readback.",
+    "source.output_disable_v2": "Turn one Source V2 channel output off without requiring Vpp or offset readback.",
+    "source.counter_configure_v2": "Configure exactly one declared Source V2 Counter field without enabling the Counter.",
+    "source.counter_enable_v2": "Enable one declared Source V2 Counter input after a fresh V2 readback.",
+    "source.counter_disable_v2": "Disable one declared Source V2 Counter input without changing its configuration.",
+    "source.counter_measure_v2": "Read one already-enabled Source V2 Counter input without changing its configuration.",
+    "source.harmonics_configure_v2": "Configure one OFF Source V2 channel with a declared Harmonic preset; it does not enable output.",
+    "source.harmonics_disable_v2": "Disable Harmonic on one OFF Source V2 channel; it does not enable output.",
+    "source.modulation_configure_v2": "Configure one OFF Source V2 channel with internal sine AM; it does not enable output.",
+    "source.modulation_pm_configure_v2": "Configure one OFF Source V2 channel with internal sine PM; it does not enable output.",
+    "source.modulation_fm_configure_v2": "Configure one OFF Source V2 channel with internal sine FM; it does not enable output.",
+    "source.modulation_pwm_configure_v2": "Configure one OFF Source V2 channel with internal sine PWM; it does not enable output.",
+    "source.sweep_configure_v2": "Configure one OFF Source V2 channel with an internal sweep; it does not enable or fire output.",
+    "source.sweep_fire_v2": "Fire one already configured manual Source V2 sweep in the same run session; external measurement is still required.",
+    "source.burst_configure_v2": "Configure one OFF Source V2 channel with an internal Triggered Burst; it does not enable or fire output.",
+    "source.pulse_configure_v2": "Configure one OFF Source V2 channel with a WIDTH pulse shape; it does not enable output.",
+    "source.arbitrary_storage_v2": "Write one named Source V2 ARB storage slot without selecting or enabling it. The payload file is recorded by digest only.",
+    "source.arbitrary_volatile_replace_v2": "Replace one volatile Source V2 ARB workspace while output is OFF. The previous workspace content is not recoverable; the payload file is recorded by digest only.",
+    "source.arbitrary_workspace_volatile_replace_v2": "Replace one unscoped volatile Source V2 ARB workspace only while every topology output is OFF. It does not identify an affected channel; the previous workspace content is not recoverable and the payload file is recorded by digest only.",
+    "source.arbitrary_select_v2": "Select one named Source V2 ARB waveform while the target output is OFF; it does not enable output.",
+    "source.combine_configure_v2": "Enable or disable one declared Source V2 Combine relation while every affected output is OFF.",
+    "source.coupling_configure_v2": "Enable or disable one declared Source V2 Coupling relation while every affected output is OFF.",
+    "source.tracking_configure_v2": "Enable or disable one declared Source V2 Tracking relation while every affected output is OFF.",
+    "source.phase_relation_configure_v2": "Enable or disable one declared Source V2 phase relation while every affected output is OFF.",
+    "power.status": "Read power-supply channel state without changing output.",
+    "power.set": "Set DP800 voltage/current limit; does not change output state.",
+    "power.output": "Turn power-supply channel output on or off; does not change voltage/current limit.",
+    "dmm.read": "Read one DMM measurement over the configured backend; default function is dcv unless overridden.",
+    "sleep": "Wait between hardware actions.",
+}
+
+
+@dataclass(frozen=True)
+class StepSchema:
+    kind: str
+    required: tuple[str, ...]
+    optional: frozenset[str]
+    notes: str = ""
+
+
+STEP_SCHEMAS = {
+    kind: StepSchema(
+        kind=kind,
+        required=_REQUIRED_FIELDS.get(kind, ()),
+        optional=frozenset(_OPTIONAL_FIELDS.get(kind, set())),
+        notes=_STEP_NOTES.get(kind, ""),
+    )
+    for kind in sorted(ALLOWED_STEP_KINDS)
+}
+
+
+def run_plan_schema_rows() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for schema in STEP_SCHEMAS.values():
+        required = ", ".join(schema.required) or "-"
+        optional = ", ".join(sorted(schema.optional)) or "-"
+        rows.append({
+            "kind": schema.kind,
+            "required": required,
+            "optional": optional,
+            "notes": schema.notes,
+        })
+    return rows
+
+
+def format_run_plan_schema() -> str:
+    lines = [
+        "WaveBench run plan schema",
+        "",
+        "Top-level tables:",
+        "  [experiment] optional: name, label",
+        "  [safety] optional: scope_guard_channel, require_scope_coupling_not, allow_50ohm, safety_gate, off_source_channels, off_power_channels",
+        "  [restore] optional: source_state, source_channel, source_channels",
+        "  [[steps]] required: kind",
+        "  [[steps]] optional structural field: id matching ^[a-z][a-z0-9_-]{0,63}$",
+        "",
+        "Supported step kinds:",
+    ]
+    for row in run_plan_schema_rows():
+        lines.append(f"  - {row['kind']}")
+        lines.append(f"      required: {row['required']}")
+        lines.append(f"      optional : {row['optional']}")
+        if row["notes"]:
+            lines.append(f"      note     : {row['notes']}")
+    lines.extend([
+        "",
+        "[steps.expect] metrics:",
+        "  scope.capture checks any numeric key from the capture quality summary with { min = ..., max = ... }.",
+        "  Common scope metrics: frequency_estimate_hz, frequency_error_ratio, voltage_vpp_v, voltage_mean_v, duty_cycle.",
+        "  dmm.read checks numeric keys from the DMM reading payload. Common DMM metric: value.",
+        "",
+        "scope.capture [steps.expect_fft] metrics:",
+        "  FFT checks analyze the saved NPY waveform.",
+        "  Common metrics: peak_frequency_hz, peak_amplitude_v, thd_ratio, harmonic_2_amplitude_v.",
+        "",
+        "analysis.pipeline metrics:",
+        "  Optional [steps.resources] tightens the execution resource profile; --analysis-resources selects an explicit environment TOML profile.",
+        "  Default resource admission bounds FIR taps, FFT length, working-set estimate, cumulative work/output and file counts before allocation. Actual source length is checked offline after capture.",
+        "  Time domain: voltage_min_v, voltage_max_v, voltage_mean_v, voltage_rms_v, voltage_vpp_v.",
+        "  Frequency domain: peak_frequency_hz, peak_amplitude_v, noise_floor_v, thd_ratio, and harmonic_2 through harmonic_5 frequency/amplitude fields.",
+        "  PSD domain: measure_band requires name, band_hz, exclude_hz and metrics=mean_square_v2|rms_v|noise_rms_v. Metric keys are <name>_<metric>.",
+        "",
+        "  scope.capture synchronized=true requires channels=[1,2], save_npy=true and DEF points; single-channel quality/auto-retry fields are not accepted. Requires scope.capture_synchronized capability.",
+        "analysis.pair: reference_channel and response_channel must be distinct; source uses one earlier scope.capture with explicit save_npy=true.",
+        "  Pair operations: delay (integer lag), transfer (mean Welch H1/coherence), export. Synthetic and driver_frozen_single evidence are accepted.",
+        "  spectral_quality requires explicit integration bands, fundamental mode, harmonic orders, detection thresholds and metrics; only mean Welch PSD is accepted.",
+        "  Quality metrics: snr_db, sinad_db, sfdr_db, thdn_ratio, fundamental_frequency_hz, fundamental_power_v2, harmonic_power_v2, noise_power_v2, noise_bandwidth_hz, spur_frequency_hz, spur_power_v2, spur_dbc.",
+        "analysis.pipeline PSD operation:",
+        "  psd requires method=welch, window=hann|hamming|blackman, nperseg>=4, 0<=noverlap<nperseg, nfft>=nperseg, detrend=none|constant|linear, average=mean|median.",
+        "  All parameters are explicit; lengths are integers. Segment windows are periodic.",
+        "  Requires time data before window or fft. Only export, measure_band, spectral_quality or peaks may follow psd; at least one PSD result is required.",
+        "  Requires optional SciPy. Exports frequency_hz,psd_v2_per_hz with one-sided density scaling.",
+        "  peaks requires name, polarity=positive|negative|both, height>=0, prominence>=0, distance>0, width>=0, max_peaks=1..10000, metrics=[count].",
+        "  Peak distance/width use seconds in time and Hz in spectra; spectral polarity must be positive. Produces <name>_count and JSON/CSV tables without changing signal domain.",
+        "  smooth requires method=moving_average|savgol, odd window_length=3..1001, mode=centered|causal, boundary=reflect|edge. Causal requires edge.",
+        "  savgol requires polyorder=0..min(5,window_length-1); moving_average rejects polyorder. Smooth requires uniform time data before window/fft/psd.",
+        "  resample requires positive integer up/down (reduced factors <=10000), window=kaiser, beta=0..30, padtype=constant|line. Output is limited to 20000000 samples.",
+        "  Resample requires uniform time data before window/fft/psd; preserves time origin, uses a pinned polyphase FIR design and updates downstream sampling metadata.",
+    ])
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class SafetyGuard:
+    scope_guard_channel: int | None
+    require_scope_coupling_not: tuple[str, ...]
+    allow_50ohm: bool = False
+    safety_gate: bool = False
+    off_source_channels: tuple[int, ...] = ()
+    off_power_channels: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class SourceRestorePolicy:
+    source_state: bool
+    source_channels: tuple[int, ...]
+
+    @property
+    def source_channel(self) -> int | None:
+        return self.source_channels[0] if self.source_channels else None
+
+
+@dataclass(frozen=True)
+class RunStep:
+    index: int
+    kind: str
+    fields: dict[str, Any]
+    id: str | None = None
+
+
+@dataclass(frozen=True)
+class RunPlan:
+    path: Path
+    name: str
+    label: str
+    safety: SafetyGuard
+    restore: SourceRestorePolicy
+    steps: list[RunStep]
+
+
+def load_run_plan(path: str | Path) -> RunPlan:
+    plan_path = Path(path)
+    if not plan_path.exists():
+        raise ConfigError(f"run plan not found: {plan_path}")
+    try:
+        raw = tomllib.loads(plan_path.read_bytes().decode("utf-8-sig"))
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"invalid TOML in {plan_path}: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise ConfigError("run plan must be a TOML table")
+
+    experiment = _table(raw.get("experiment", {}), "experiment")
+    name = str(experiment.get("name", plan_path.stem)).strip()
+    label = str(experiment.get("label", name)).strip()
+    if not name:
+        raise ConfigError("experiment.name must not be empty")
+    if not label:
+        raise ConfigError("experiment.label must not be empty")
+
+    safety = _parse_safety(raw.get("safety", {}))
+    restore = _parse_restore(raw.get("restore", {}))
+    steps_raw = raw.get("steps")
+    if not isinstance(steps_raw, list) or not steps_raw:
+        raise ConfigError("run plan requires at least one [[steps]] entry")
+    steps = [_parse_step(index, item) for index, item in enumerate(steps_raw)]
+    _validate_frequency_response_steps(steps)
+    _validate_analysis_steps(steps)
+    return RunPlan(path=plan_path, name=name, label=label, safety=safety, restore=restore, steps=steps)
+
+
+def _parse_restore(raw: Any) -> SourceRestorePolicy:
+    table = _table(raw, "restore")
+    allowed = {"source_state", "source_channel", "source_channels"}
+    _reject_unknown_keys(table, allowed, "restore")
+
+    source_state = table.get("source_state", False)
+    if not isinstance(source_state, bool):
+        raise ConfigError("restore.source_state must be true or false")
+    source_channel = table.get("source_channel")
+    source_channels_raw = table.get("source_channels")
+    if source_channel is not None and source_channels_raw is not None:
+        raise ConfigError("restore.source_channel and restore.source_channels are mutually exclusive")
+
+    source_channels: tuple[int, ...] = ()
+    if source_channel is not None:
+        source_channels = (_positive_int(source_channel, "restore.source_channel"),)
+    elif source_channels_raw is not None:
+        if not isinstance(source_channels_raw, list) or not source_channels_raw:
+            raise ConfigError("restore.source_channels must be a non-empty array of positive integers")
+        parsed = tuple(_positive_int(item, "restore.source_channels") for item in source_channels_raw)
+        if len(set(parsed)) != len(parsed):
+            raise ConfigError("restore.source_channels must not contain duplicate channels")
+        source_channels = parsed
+
+    if source_channels and not source_state:
+        raise ConfigError("restore source channel settings require restore.source_state = true")
+    return SourceRestorePolicy(source_state=source_state, source_channels=source_channels)
+
+
+def _parse_safety(raw: Any) -> SafetyGuard:
+    table = _table(raw, "safety")
+    allowed = {
+        "scope_guard_channel",
+        "require_scope_coupling_not",
+        "allow_50ohm",
+        "safety_gate",
+        "off_source_channels",
+        "off_power_channels",
+    }
+    _reject_unknown_keys(table, allowed, "safety")
+
+    channel = table.get("scope_guard_channel")
+    if channel is not None:
+        channel = _positive_int(channel, "safety.scope_guard_channel")
+
+    blocked_raw = table.get("require_scope_coupling_not", [])
+    if isinstance(blocked_raw, str):
+        blocked = (blocked_raw.strip().upper(),)
+    elif isinstance(blocked_raw, list):
+        blocked = tuple(str(item).strip().upper() for item in blocked_raw)
+    else:
+        raise ConfigError("safety.require_scope_coupling_not must be a string or list of strings")
+    if any(not item for item in blocked):
+        raise ConfigError("safety.require_scope_coupling_not entries must not be empty")
+    if blocked and channel is None:
+        raise ConfigError(
+            "safety.scope_guard_channel is required when require_scope_coupling_not is set"
+        )
+    allow_50ohm = table.get("allow_50ohm", False)
+    if not isinstance(allow_50ohm, bool):
+        raise ConfigError("safety.allow_50ohm must be true or false")
+    safety_gate_raw = table.get("safety_gate", False)
+    nested_source_channels: tuple[int, ...] = ()
+    nested_power_channels: tuple[int, ...] = ()
+    if isinstance(safety_gate_raw, dict):
+        _reject_unknown_keys(
+            safety_gate_raw,
+            {"enabled", "source_channels", "power_channels"},
+            "safety.safety_gate",
+        )
+        safety_gate = safety_gate_raw.get("enabled", True)
+        if not isinstance(safety_gate, bool):
+            raise ConfigError("safety.safety_gate.enabled must be true or false")
+        nested_source_channels = _parse_channel_list(
+            safety_gate_raw.get("source_channels"),
+            "safety.safety_gate.source_channels",
+        )
+        nested_power_channels = _parse_channel_list(
+            safety_gate_raw.get("power_channels"),
+            "safety.safety_gate.power_channels",
+        )
+    else:
+        safety_gate = safety_gate_raw
+        if not isinstance(safety_gate, bool):
+            raise ConfigError("safety.safety_gate must be true or false or a TOML table")
+    off_source_channels = _parse_channel_list(
+        table.get("off_source_channels"), "safety.off_source_channels"
+    )
+    off_power_channels = _parse_channel_list(
+        table.get("off_power_channels"), "safety.off_power_channels"
+    )
+    if nested_source_channels and off_source_channels:
+        raise ConfigError(
+            "safety.safety_gate.source_channels and safety.off_source_channels are mutually exclusive"
+        )
+    if nested_power_channels and off_power_channels:
+        raise ConfigError(
+            "safety.safety_gate.power_channels and safety.off_power_channels are mutually exclusive"
+        )
+    off_source_channels = off_source_channels or nested_source_channels
+    off_power_channels = off_power_channels or nested_power_channels
+    if (off_source_channels or off_power_channels) and not safety_gate:
+        raise ConfigError(
+            "safety.off_source_channels/off_power_channels require safety.safety_gate = true"
+        )
+    return SafetyGuard(
+        scope_guard_channel=channel,
+        require_scope_coupling_not=blocked,
+        allow_50ohm=allow_50ohm,
+        safety_gate=safety_gate,
+        off_source_channels=off_source_channels,
+        off_power_channels=off_power_channels,
+    )
+
+
+def _parse_step(index: int, raw: Any) -> RunStep:
+    table = _table(raw, f"steps[{index}]")
+    kind = str(table.get("kind", "")).strip()
+    if not kind:
+        raise ConfigError(
+            f"steps[{index}].kind is required. Run `python -m wavebench run schema` "
+            "to list supported step kinds."
+        )
+    if kind not in ALLOWED_STEP_KINDS:
+        allowed = ", ".join(sorted(ALLOWED_STEP_KINDS))
+        closest = difflib.get_close_matches(kind, sorted(ALLOWED_STEP_KINDS), n=1)
+        suggestion = f" Did you mean '{closest[0]}'?" if closest else ""
+        raise ConfigError(
+            f"steps[{index}].kind '{kind}' is not supported.{suggestion} "
+            f"Supported kinds: {allowed}. Run `python -m wavebench run schema` for field details."
+        )
+
+    schema = STEP_SCHEMAS[kind]
+    allowed_fields = {"id", "kind", *schema.required, *schema.optional}
+    _reject_unknown_keys(table, allowed_fields, f"steps[{index}]")
+    for field in schema.required:
+        if field not in table:
+            required = ", ".join(schema.required) or "-"
+            optional = ", ".join(sorted(schema.optional)) or "-"
+            raise ConfigError(
+                f"steps[{index}] {kind} missing required field '{field}'. "
+                f"Required fields: {required}. Optional fields: {optional}. "
+                "Run `python -m wavebench run schema` for examples."
+            )
+
+    step_id = _normalize_step_id(table["id"], f"steps[{index}].id") if "id" in table else None
+    fields = {key: value for key, value in table.items() if key not in {"id", "kind"}}
+    _normalize_step_fields(index, kind, fields)
+    return RunStep(index=index, kind=kind, fields=fields, id=step_id)
+
+
+def _normalize_step_fields(index: int, kind: str, fields: dict[str, Any]) -> None:
+    prefix = f"steps[{index}]"
+    if "on_failure" in fields:
+        on_failure = _non_empty_str(fields["on_failure"], f"{prefix}.on_failure").lower()
+        if on_failure not in {"stop", "continue"}:
+            raise ConfigError(f"{prefix}.on_failure must be 'stop' or 'continue'")
+        fields["on_failure"] = on_failure
+    if "safety_gate" in fields:
+        fields["safety_gate"] = _normalize_step_safety_gate(
+            fields["safety_gate"], f"{prefix}.safety_gate"
+        )
+    if "channel" in fields:
+        fields["channel"] = _positive_int(fields["channel"], f"{prefix}.channel")
+    if kind in {"analysis.pipeline", "analysis.pair"}:
+        _normalize_analysis_pipeline_fields(prefix, fields, pair=kind == "analysis.pair")
+    elif kind == "scope.capture":
+        if "synchronized" in fields and type(fields['synchronized']) is not bool:
+            raise ConfigError('scope.capture synchronized must be boolean')
+        if "channels" in fields or fields.get('synchronized'):
+            if fields.get('synchronized') is not True or fields.get('channels') != [1, 2] or any(type(ch) is not int for ch in fields['channels']):
+                raise ConfigError('synchronized scope.capture requires channels=[1,2]')
+            forbidden = {'channel', 'quality_gate', 'auto_recover', 'autoscale_before_capture', 'expect', 'expect_fft'} & set(fields)
+            if forbidden:
+                raise ConfigError('synchronized scope.capture does not accept single-channel quality/retry fields')
+            if fields.get('save_npy') is not True or not isinstance(fields.get('points', 'DEF'), str) or fields.get('points', 'DEF').upper() != 'DEF':
+                raise ConfigError('synchronized scope.capture requires save_npy=true and DEF points')
+            fields['points'] = 'DEF'
+        if "label" in fields:
+            fields["label"] = _non_empty_str(fields["label"], f"{prefix}.label")
+        if "points" in fields:
+            fields["points"] = normalize_waveform_points(
+                _non_empty_str(fields["points"], f"{prefix}.points")
+            )
+        for field in (
+            "time_range_s",
+            "expect_frequency_hz",
+            "window_frequency_hz",
+            "target_cycles",
+            "frequency_tolerance",
+        ):
+            if field in fields:
+                fields[field] = _positive_float(fields[field], f"{prefix}.{field}")
+        if "target_vpp" in fields:
+            fields["target_vpp"] = _positive_float(fields["target_vpp"], f"{prefix}.target_vpp")
+            fields.setdefault("vertical_scale_v_per_div", fields["target_vpp"] / 5.0)
+        if "vertical_scale_v_per_div" in fields:
+            fields["vertical_scale_v_per_div"] = _positive_float(fields["vertical_scale_v_per_div"], f"{prefix}.vertical_scale_v_per_div")
+        if "target_cycles" in fields:
+            window_frequency = fields.get("window_frequency_hz") or fields.get("expect_frequency_hz")
+            if window_frequency is None:
+                raise ConfigError(
+                    f"{prefix}.target_cycles requires window_frequency_hz or expect_frequency_hz"
+                )
+            if "time_range_s" not in fields:
+                fields["time_range_s"] = fields["target_cycles"] / window_frequency
+        for field in (
+            "save_csv",
+            "save_npy",
+            "screenshot",
+            "quality_gate",
+            "auto_recover",
+            "autoscale_before_capture",
+        ):
+            if field in fields and not isinstance(fields[field], bool):
+                raise ConfigError(f"{prefix}.{field} must be true or false")
+        if "autoscale_settle_s" in fields:
+            autoscale_settle_s = _finite_float(
+                fields["autoscale_settle_s"], f"{prefix}.autoscale_settle_s"
+            )
+            if autoscale_settle_s < 0:
+                raise ConfigError(f"{prefix}.autoscale_settle_s must be >= 0")
+            fields["autoscale_settle_s"] = autoscale_settle_s
+        if "expect" in fields:
+            fields["expect"] = _parse_expect(fields["expect"], f"{prefix}.expect")
+        if "expect_fft" in fields:
+            fields["expect_fft"] = _parse_expect(fields["expect_fft"], f"{prefix}.expect_fft")
+    elif kind == "sweep.frequency_response":
+        _normalize_frequency_response_fields(prefix, fields)
+    elif kind == "power.set":
+        fields["voltage_v"] = _positive_float(fields["voltage_v"], f"{prefix}.voltage_v")
+        fields["current_limit_a"] = _positive_float(
+            fields["current_limit_a"], f"{prefix}.current_limit_a"
+        )
+    elif kind in {"power.output", "source.output"}:
+        state = _non_empty_str(fields["state"], f"{prefix}.state").lower()
+        if state not in {"on", "off"}:
+            raise ConfigError(f"{prefix}.state must be 'on' or 'off'")
+        fields["state"] = state
+    elif kind == "source.set_freq":
+        fields["frequency_hz"] = _positive_float(fields["frequency_hz"], f"{prefix}.frequency_hz")
+    elif kind == "rf_source.set_frequency":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        fields["frequency_hz"] = _positive_float(
+            fields["frequency_hz"],
+            f"{prefix}.frequency_hz",
+        )
+    elif kind == "rf_source.trigger_status":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+    elif kind == "rf_source.set_power_dbm":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        fields["power_dbm"] = _finite_float(fields["power_dbm"], f"{prefix}.power_dbm")
+    elif kind == "rf_source.modulation_disable":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        modulation_kind = _non_empty_str(
+            fields["modulation_kind"],
+            f"{prefix}.modulation_kind",
+        ).lower()
+        if modulation_kind not in {"am", "fm", "pm"}:
+            raise ConfigError(f"{prefix}.modulation_kind must be one of am, fm, pm")
+        fields["modulation_kind"] = modulation_kind
+    elif kind in {"rf_source.modulation_configure", "rf_source.modulated_output_enable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        modulation_kind = _non_empty_str(
+            fields["modulation_kind"],
+            f"{prefix}.modulation_kind",
+        ).lower()
+        value_fields = {
+            "am": "depth_percent",
+            "fm": "frequency_deviation_hz",
+            "pm": "phase_deviation_rad",
+        }
+        expected_value_field = value_fields.get(modulation_kind)
+        if expected_value_field is None:
+            raise ConfigError(f"{prefix}.modulation_kind must be one of am, fm, pm")
+        present_value_fields = [field for field in value_fields.values() if field in fields]
+        if present_value_fields != [expected_value_field]:
+            raise ConfigError(
+                f"{prefix} {kind} requires only "
+                f"{expected_value_field} for modulation_kind {modulation_kind}"
+            )
+        fields[expected_value_field] = _finite_float(
+            fields[expected_value_field],
+            f"{prefix}.{expected_value_field}",
+        )
+        if fields[expected_value_field] < 0:
+            raise ConfigError(f"{prefix}.{expected_value_field} must be >= 0")
+        fields["modulation_kind"] = modulation_kind
+        fields["internal_frequency_hz"] = _positive_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+    elif kind == "rf_source.pulse_configure":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        period_s = _positive_float(fields["period_s"], f"{prefix}.period_s")
+        width_s = _positive_float(fields["width_s"], f"{prefix}.width_s")
+        if width_s >= period_s:
+            raise ConfigError(f"{prefix}.width_s must be less than period_s")
+        polarity = _non_empty_str(fields["polarity"], f"{prefix}.polarity").lower()
+        if polarity not in {"normal", "inverted"}:
+            raise ConfigError(f"{prefix}.polarity must be one of normal, inverted")
+        fields["period_s"] = period_s
+        fields["width_s"] = width_s
+        fields["polarity"] = polarity
+    elif kind in {"rf_source.pulse_output_enable", "rf_source.pulse_output_disable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        fields["interface_id"] = _rf_interface_id(
+            fields["interface_id"],
+            f"{prefix}.interface_id",
+        )
+    elif kind == "rf_source.sweep_configure":
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+        start_frequency_hz = _positive_float(
+            fields["start_frequency_hz"],
+            f"{prefix}.start_frequency_hz",
+        )
+        stop_frequency_hz = _positive_float(
+            fields["stop_frequency_hz"],
+            f"{prefix}.stop_frequency_hz",
+        )
+        if start_frequency_hz >= stop_frequency_hz:
+            raise ConfigError(
+                f"{prefix}.start_frequency_hz must be less than stop_frequency_hz"
+            )
+        points = fields["points"]
+        if isinstance(points, bool) or not isinstance(points, int) or points < 2:
+            raise ConfigError(f"{prefix}.points must be an integer >= 2")
+        fields["start_frequency_hz"] = start_frequency_hz
+        fields["stop_frequency_hz"] = stop_frequency_hz
+        fields["points"] = points
+        fields["dwell_s"] = _positive_float(fields["dwell_s"], f"{prefix}.dwell_s")
+    elif kind in {"rf_source.output_enable", "rf_source.output_disable"}:
+        fields["port_id"] = _rf_port_id(fields["port_id"], f"{prefix}.port_id")
+    elif kind == "source.arb_load":
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        fields["frequency_hz"] = _positive_float(fields["frequency_hz"], f"{prefix}.frequency_hz")
+        fields["amplitude_vpp"] = _positive_float(fields["amplitude_vpp"], f"{prefix}.amplitude_vpp")
+        if "offset_v" in fields:
+            fields["offset_v"] = _finite_float(fields["offset_v"], f"{prefix}.offset_v")
+        if "sample_rate_hz" in fields:
+            fields["sample_rate_hz"] = _positive_float(fields["sample_rate_hz"], f"{prefix}.sample_rate_hz")
+        if "max_points" in fields:
+            fields["max_points"] = _positive_int(fields["max_points"], f"{prefix}.max_points")
+        if "byte_order" in fields:
+            byte_order = _non_empty_str(fields["byte_order"], f"{prefix}.byte_order").lower()
+            if byte_order not in {"little", "big"}:
+                raise ConfigError(f"{prefix}.byte_order must be little or big")
+            fields["byte_order"] = byte_order
+        if "output_on" in fields and not isinstance(fields["output_on"], bool):
+            raise ConfigError(f"{prefix}.output_on must be true or false")
+    elif kind == "source.set_func":
+        fields["function"] = _non_empty_str(fields["function"], f"{prefix}.function")
+    elif kind == "source.set_vpp":
+        fields["value_vpp"] = _positive_float(fields["value_vpp"], f"{prefix}.value_vpp")
+    elif kind == "source.set_duty":
+        fields["duty_percent"] = _duty_percent(fields["duty_percent"], f"{prefix}.duty_percent")
+    elif kind == "source.basic_configure_v2":
+        patch_fields = {
+            "waveform_kind",
+            "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "square_duty_cycle_percent",
+        }
+        if not patch_fields & fields.keys():
+            raise ConfigError(f"{prefix} source.basic_configure_v2 requires at least one basic field")
+        if "waveform_kind" in fields:
+            waveform_kind = _non_empty_str(
+                fields["waveform_kind"],
+                f"{prefix}.waveform_kind",
+            ).lower()
+            if waveform_kind not in {"sine", "square", "ramp", "pulse", "noise", "dc"}:
+                raise ConfigError(
+                    f"{prefix}.waveform_kind must be one of sine, square, ramp, pulse, noise, dc"
+                )
+            fields["waveform_kind"] = waveform_kind
+        for field in ("frequency_hz", "amplitude_vpp"):
+            if field in fields:
+                value = _finite_float(fields[field], f"{prefix}.{field}")
+                if value < 0:
+                    raise ConfigError(f"{prefix}.{field} must be >= 0")
+                fields[field] = value
+        if "offset_v" in fields:
+            fields["offset_v"] = _finite_float(fields["offset_v"], f"{prefix}.offset_v")
+        if "square_duty_cycle_percent" in fields:
+            duty = _finite_float(
+                fields["square_duty_cycle_percent"],
+                f"{prefix}.square_duty_cycle_percent",
+            )
+            if not 0 <= duty <= 100:
+                raise ConfigError(f"{prefix}.square_duty_cycle_percent must be in [0, 100]")
+            fields["square_duty_cycle_percent"] = duty
+    elif kind == "source.basic_live_configure_v2":
+        live_fields = {"frequency_hz", "amplitude_vpp"}
+        selected = live_fields & fields.keys()
+        if len(selected) != 1:
+            raise ConfigError(
+                f"{prefix} source.basic_live_configure_v2 requires exactly one frequency_hz or amplitude_vpp"
+            )
+        field = next(iter(selected))
+        value = _finite_float(fields[field], f"{prefix}.{field}")
+        if value < 0:
+            raise ConfigError(f"{prefix}.{field} must be >= 0")
+        fields[field] = value
+    elif kind == "source.counter_configure_v2":
+        fields["input_id"] = _non_empty_str(fields["input_id"], f"{prefix}.input_id")
+        configurable = {
+            "coupling",
+            "impedance_ohm",
+            "attenuation",
+            "trigger_level_v",
+            "statistics_enabled",
+        }
+        selected = configurable & fields.keys()
+        if len(selected) != 1:
+            raise ConfigError(
+                f"{prefix} source.counter_configure_v2 requires exactly one Counter field"
+            )
+        field = next(iter(selected))
+        if field == "coupling":
+            coupling = _non_empty_str(fields[field], f"{prefix}.{field}").lower()
+            if coupling not in {"ac", "dc"}:
+                raise ConfigError(f"{prefix}.{field} must be 'ac' or 'dc'")
+            fields[field] = coupling
+        elif field == "impedance_ohm":
+            fields[field] = _positive_float(fields[field], f"{prefix}.{field}")
+        elif field == "attenuation":
+            fields[field] = _positive_int(fields[field], f"{prefix}.{field}")
+        elif field == "trigger_level_v":
+            fields[field] = _finite_float(fields[field], f"{prefix}.{field}")
+        elif not isinstance(fields[field], bool):
+            raise ConfigError(f"{prefix}.{field} must be true or false")
+    elif kind in {
+        "source.counter_enable_v2",
+        "source.counter_disable_v2",
+        "source.counter_measure_v2",
+    }:
+        fields["input_id"] = _non_empty_str(fields["input_id"], f"{prefix}.input_id")
+    elif kind == "source.harmonics_configure_v2":
+        order = fields["order"]
+        if isinstance(order, bool) or not isinstance(order, int):
+            raise ConfigError(f"{prefix}.order must be an integer >= 2")
+        if order < 2:
+            raise ConfigError(f"{prefix}.order must be >= 2")
+        preset = _non_empty_str(fields["preset"], f"{prefix}.preset").lower()
+        if preset not in {"all", "even", "odd"}:
+            raise ConfigError(f"{prefix}.preset must be one of all, even, odd")
+        fields["preset"] = preset
+    elif kind == "source.modulation_configure_v2":
+        depth = _finite_float(fields["depth_percent"], f"{prefix}.depth_percent")
+        if not 0 <= depth <= 100:
+            raise ConfigError(f"{prefix}.depth_percent must be in [0, 100]")
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["depth_percent"] = depth
+        fields["internal_frequency_hz"] = internal_frequency
+    elif kind == "source.modulation_pm_configure_v2":
+        phase_deviation = _finite_float(
+            fields["phase_deviation_deg"],
+            f"{prefix}.phase_deviation_deg",
+        )
+        if not 0 <= phase_deviation <= 360:
+            raise ConfigError(f"{prefix}.phase_deviation_deg must be in [0, 360]")
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["phase_deviation_deg"] = phase_deviation
+        fields["internal_frequency_hz"] = internal_frequency
+    elif kind == "source.modulation_fm_configure_v2":
+        frequency_deviation = _finite_float(
+            fields["frequency_deviation_hz"],
+            f"{prefix}.frequency_deviation_hz",
+        )
+        if frequency_deviation <= 0:
+            raise ConfigError(f"{prefix}.frequency_deviation_hz must be > 0")
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["frequency_deviation_hz"] = frequency_deviation
+        fields["internal_frequency_hz"] = internal_frequency
+    elif kind == "source.modulation_pwm_configure_v2":
+        has_duty = "duty_deviation_percent" in fields
+        has_width = "width_deviation_s" in fields
+        if has_duty == has_width:
+            raise ConfigError(
+                f"{prefix} source.modulation_pwm_configure_v2 requires exactly one deviation branch"
+            )
+        internal_frequency = _finite_float(
+            fields["internal_frequency_hz"],
+            f"{prefix}.internal_frequency_hz",
+        )
+        if internal_frequency <= 0:
+            raise ConfigError(f"{prefix}.internal_frequency_hz must be > 0")
+        fields["internal_frequency_hz"] = internal_frequency
+        if has_duty:
+            duty = _finite_float(
+                fields["duty_deviation_percent"],
+                f"{prefix}.duty_deviation_percent",
+            )
+            if not 0 <= duty <= 50:
+                raise ConfigError(f"{prefix}.duty_deviation_percent must be in [0, 50]")
+            fields["duty_deviation_percent"] = duty
+        if has_width:
+            width = _finite_float(
+                fields["width_deviation_s"],
+                f"{prefix}.width_deviation_s",
+            )
+            if not 0 <= width <= 500_000:
+                raise ConfigError(f"{prefix}.width_deviation_s must be in [0, 500000]")
+            fields["width_deviation_s"] = width
+    elif kind == "source.sweep_configure_v2":
+        start_hz = _finite_float(fields["start_hz"], f"{prefix}.start_hz")
+        stop_hz = _finite_float(fields["stop_hz"], f"{prefix}.stop_hz")
+        if start_hz <= 0 or stop_hz <= 0:
+            raise ConfigError(f"{prefix}.start_hz and stop_hz must be > 0")
+        if start_hz > stop_hz:
+            raise ConfigError(f"{prefix}.start_hz must not exceed stop_hz")
+        spacing = _non_empty_str(fields["spacing"], f"{prefix}.spacing").lower()
+        if spacing not in {"linear", "logarithmic", "step"}:
+            raise ConfigError(f"{prefix}.spacing must be one of linear, logarithmic, step")
+        steps = fields["steps"]
+        if isinstance(steps, bool) or not isinstance(steps, int) or not 2 <= steps <= 2_048:
+            raise ConfigError(f"{prefix}.steps must be an integer in [2, 2048]")
+        sweep_time_s = _finite_float(fields["sweep_time_s"], f"{prefix}.sweep_time_s")
+        if not 0.001 <= sweep_time_s <= 300:
+            raise ConfigError(f"{prefix}.sweep_time_s must be in [0.001, 300]")
+        fields["start_hz"] = start_hz
+        fields["stop_hz"] = stop_hz
+        fields["spacing"] = spacing
+        fields["sweep_time_s"] = sweep_time_s
+        if "trigger_source" in fields:
+            trigger_source = _non_empty_str(
+                fields["trigger_source"],
+                f"{prefix}.trigger_source",
+            ).lower()
+            if trigger_source not in {"internal", "manual"}:
+                raise ConfigError(
+                    f"{prefix}.trigger_source must be internal or manual"
+                )
+            fields["trigger_source"] = trigger_source
+    elif kind == "source.burst_configure_v2":
+        cycles = fields["cycles"]
+        if isinstance(cycles, bool) or not isinstance(cycles, int):
+            raise ConfigError(f"{prefix}.cycles must be an integer in [1, 500000]")
+        if not 1 <= cycles <= 500_000:
+            raise ConfigError(f"{prefix}.cycles must be in [1, 500000]")
+        phase = _finite_float(fields["phase_deg"], f"{prefix}.phase_deg")
+        if not 0 <= phase <= 360:
+            raise ConfigError(f"{prefix}.phase_deg must be in [0, 360]")
+        internal_period = _finite_float(
+            fields["internal_period_s"],
+            f"{prefix}.internal_period_s",
+        )
+        if internal_period <= 0:
+            raise ConfigError(f"{prefix}.internal_period_s must be > 0")
+        delay = _finite_float(fields["delay_s"], f"{prefix}.delay_s")
+        if not 0 <= delay <= 85:
+            raise ConfigError(f"{prefix}.delay_s must be in [0, 85]")
+        fields["phase_deg"] = phase
+        fields["internal_period_s"] = internal_period
+        fields["delay_s"] = delay
+    elif kind == "source.pulse_configure_v2":
+        width = _finite_float(fields["width_s"], f"{prefix}.width_s")
+        if width < 4.0e-9:
+            raise ConfigError(f"{prefix}.width_s must be >= 4e-09")
+        delay = _finite_float(fields["delay_s"], f"{prefix}.delay_s")
+        if delay < 0:
+            raise ConfigError(f"{prefix}.delay_s must be >= 0")
+        for field in ("leading_transition_s", "trailing_transition_s"):
+            value = _finite_float(fields[field], f"{prefix}.{field}")
+            if value <= 0:
+                raise ConfigError(f"{prefix}.{field} must be > 0")
+            if value > 0.625 * width:
+                raise ConfigError(f"{prefix}.{field} must be <= 0.625 times width_s")
+            fields[field] = value
+        fields["width_s"] = width
+        fields["delay_s"] = delay
+    elif kind == "source.arbitrary_storage_v2":
+        fields["slot_id"] = _non_empty_str(fields["slot_id"], f"{prefix}.slot_id")
+        if _SOURCE_STORAGE_TOKEN.fullmatch(fields["slot_id"]) is None:
+            raise ConfigError(f"{prefix}.slot_id must be a short safe token")
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        write_mode = _non_empty_str(fields["write_mode"], f"{prefix}.write_mode").lower()
+        if write_mode not in {"create_only", "replace_if_digest_matches"}:
+            raise ConfigError(
+                f"{prefix}.write_mode must be create_only or replace_if_digest_matches"
+            )
+        expected = fields.get("expected_previous_sha256")
+        if write_mode == "create_only":
+            if expected is not None:
+                raise ConfigError(
+                    f"{prefix}.expected_previous_sha256 is only valid for replace_if_digest_matches"
+                )
+        elif not isinstance(expected, str) or not expected:
+            raise ConfigError(
+                f"{prefix}.expected_previous_sha256 is required for replace_if_digest_matches"
+            )
+        if expected is not None and _SOURCE_SHA256.fullmatch(expected) is None:
+            raise ConfigError(
+                f"{prefix}.expected_previous_sha256 must be sha256:<64 lowercase hex>"
+            )
+        fields["write_mode"] = write_mode
+    elif kind == "source.arbitrary_volatile_replace_v2":
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        fields["point_count"] = _positive_int(
+            fields["point_count"],
+            f"{prefix}.point_count",
+        )
+    elif kind == "source.arbitrary_workspace_volatile_replace_v2":
+        fields["file"] = _non_empty_str(fields["file"], f"{prefix}.file")
+        fields["point_count"] = _positive_int(
+            fields["point_count"],
+            f"{prefix}.point_count",
+        )
+    elif kind == "source.arbitrary_select_v2":
+        fields["slot_id"] = _non_empty_str(fields["slot_id"], f"{prefix}.slot_id")
+        if _SOURCE_STORAGE_TOKEN.fullmatch(fields["slot_id"]) is None:
+            raise ConfigError(f"{prefix}.slot_id must be a short safe token")
+        playback_mode = _non_empty_str(
+            fields["playback_mode"],
+            f"{prefix}.playback_mode",
+        ).lower()
+        if playback_mode not in {"dds", "true_arb"}:
+            raise ConfigError(f"{prefix}.playback_mode must be dds or true_arb")
+        has_frequency = "playback_frequency_hz" in fields
+        has_sample_rate = "sample_rate_hz" in fields
+        if has_frequency == has_sample_rate:
+            raise ConfigError(
+                f"{prefix} source.arbitrary_select_v2 requires exactly one playback rate"
+            )
+        if playback_mode == "dds":
+            if not has_frequency:
+                raise ConfigError(
+                    f"{prefix}.playback_frequency_hz is required for dds playback"
+                )
+            fields["playback_frequency_hz"] = _positive_float(
+                fields["playback_frequency_hz"],
+                f"{prefix}.playback_frequency_hz",
+            )
+        else:
+            if not has_sample_rate:
+                raise ConfigError(
+                    f"{prefix}.sample_rate_hz is required for true_arb playback"
+                )
+            fields["sample_rate_hz"] = _positive_float(
+                fields["sample_rate_hz"],
+                f"{prefix}.sample_rate_hz",
+            )
+        fields["playback_mode"] = playback_mode
+    elif kind in {
+        "source.combine_configure_v2",
+        "source.coupling_configure_v2",
+        "source.tracking_configure_v2",
+        "source.phase_relation_configure_v2",
+    }:
+        raw_channels = fields["channels"]
+        if not isinstance(raw_channels, list) or len(raw_channels) < 2:
+            raise ConfigError(f"{prefix}.channels must be an array of two or more channels")
+        channels = tuple(_positive_int(channel, f"{prefix}.channels") for channel in raw_channels)
+        if len(set(channels)) != len(channels) or tuple(sorted(channels)) != channels:
+            raise ConfigError(f"{prefix}.channels must be sorted and unique")
+        if not isinstance(fields["enabled"], bool):
+            raise ConfigError(f"{prefix}.enabled must be true or false")
+        fields["channels"] = channels
+    elif kind == "dmm.read":
+        fields["function"] = _non_empty_str(fields.get("function", "dcv"), f"{prefix}.function").lower()
+        if "expect" in fields:
+            fields["expect"] = _parse_expect(fields["expect"], f"{prefix}.expect")
+    elif kind == "sleep":
+        fields["duration_s"] = _positive_float(fields["duration_s"], f"{prefix}.duration_s")
+
+
+def _validate_frequency_response_steps(steps: list[RunStep]) -> None:
+    response_steps = [step for step in steps if step.kind == "sweep.frequency_response"]
+    labels: set[str] = set()
+    for step in response_steps:
+        label = str(step.fields.get("label", f"frequency_response_{step.index:02d}"))
+        if label in labels:
+            raise ConfigError(f"sweep.frequency_response labels must be unique: {label!r}")
+        labels.add(label)
+
+
+def _validate_analysis_steps(steps: list[RunStep]) -> None:
+    by_id: dict[str, RunStep] = {}
+    for step in steps:
+        if step.id is None:
+            continue
+        if step.id in by_id:
+            raise ConfigError(f"duplicate step id: {step.id!r}")
+        by_id[step.id] = step
+
+    for step in steps:
+        if step.kind not in {"analysis.pipeline", "analysis.pair"}:
+            continue
+        source_id = step.fields["source"]["step"]
+        source = by_id.get(source_id)
+        if source is None:
+            raise ConfigError(
+                f"steps[{step.index}].source references unknown step id {source_id!r}"
+            )
+        if source.index >= step.index:
+            raise ConfigError(
+                f"steps[{step.index}].source must reference an earlier step"
+            )
+        if source.kind != "scope.capture":
+            raise ConfigError(
+                f"steps[{step.index}].source must reference a scope.capture step"
+            )
+        if source.fields.get("save_npy") is not True:
+            raise ConfigError(
+                f"steps[{step.index}].source scope.capture must explicitly set save_npy = true"
+            )
+
+    analysis_started = False
+    for step in steps:
+        if step.kind in {"analysis.pipeline", "analysis.pair"}:
+            analysis_started = True
+        elif analysis_started:
+            raise ConfigError("analysis.pipeline steps must form a contiguous suffix of the plan")
+
+
+def _normalize_step_id(value: Any, name: str) -> str:
+    if not isinstance(value, str) or _STEP_ID.fullmatch(value) is None:
+        raise ConfigError(f"{name} must match ^[a-z][a-z0-9_-]{{0,63}}$")
+    return value
+
+
+def _normalize_analysis_pipeline_fields(prefix: str, fields: dict[str, Any], *, pair=False) -> None:
+    source = _table(fields["source"], f"{prefix}.source")
+    _reject_unknown_keys(source, {"step"}, f"{prefix}.source")
+    if "step" not in source:
+        raise ConfigError(f"{prefix}.source.step is required")
+    fields["source"] = {
+        "step": _normalize_step_id(source["step"], f"{prefix}.source.step")
+    }
+    if pair:
+        from .pair_service import normalize_pair_fields
+        normalize_pair_fields(fields)
+    else:
+        normalize_analysis_operations(prefix, fields)
+
+
+def normalize_analysis_operations(prefix: str, fields: dict[str, Any]) -> None:
+    from wavebench.data.spectral_quality import QUALITY_FIELDS, normalize_quality
+    if "resources" in fields:
+        from wavebench.data.analysis_resources import normalize_limits
+
+        fields["resources"] = normalize_limits(fields["resources"])
+
+    raw_operations = fields["operations"]
+    if not isinstance(raw_operations, list) or not raw_operations:
+        raise ConfigError(f"{prefix}.operations must be a non-empty array")
+
+    normalized: list[dict[str, Any]] = []
+    transforms: set[str] = set()
+    measured: set[str] = set()
+    result_names: set[str] = set()
+    export_names: set[str] = set()
+    domain = "time"
+    has_result = False
+    psd_result = False
+
+    allowed_fields = {
+        "spectral_quality": QUALITY_FIELDS,
+        "remove_dc": {"op"},
+        "detrend": {"op", "method"},
+        "filter": {
+            "op",
+            "family",
+            "design",
+            "response",
+            "cutoff_hz",
+            "numtaps",
+            "order",
+            "ripple_db",
+            "attenuation_db",
+            "mode",
+        },
+        "window": {"op", "name"},
+        "fft": {"op"},
+        "psd": {"op", "method", "window", "nperseg", "noverlap", "nfft", "detrend", "average"},
+        "measure": {"op", "metrics"},
+        "measure_band": {"op", "name", "band_hz", "exclude_hz", "metrics"},
+        "peaks": {"op", "name", "polarity", "height", "prominence", "distance", "width", "max_peaks", "metrics"},
+        "smooth": {"op", "method", "window_length", "polyorder", "mode", "boundary"},
+        "resample": {"op", "up", "down", "window", "beta", "padtype"},
+        "export": {"op", "name", "formats"},
+    }
+    required_fields = {
+        "spectral_quality": QUALITY_FIELDS - {"op"},
+        "detrend": {"method"},
+        "filter": {"family", "response", "cutoff_hz", "mode"},
+        "window": {"name"},
+        "psd": {"method", "window", "nperseg", "noverlap", "nfft", "detrend", "average"},
+        "measure": {"metrics"},
+        "measure_band": {"name", "band_hz", "exclude_hz", "metrics"},
+        "peaks": {"name", "polarity", "height", "prominence", "distance", "width", "max_peaks", "metrics"},
+        "smooth": {"method", "window_length", "mode", "boundary"},
+        "resample": {"up", "down", "window", "beta", "padtype"},
+        "export": {"name", "formats"},
+    }
+
+    for operation_index, raw_operation in enumerate(raw_operations):
+        operation_prefix = f"{prefix}.operations[{operation_index}]"
+        if not isinstance(raw_operation, dict):
+            raise ConfigError(f"{operation_prefix} operation must be a TOML table")
+        raw_op = raw_operation.get("op")
+        if not isinstance(raw_op, str) or not raw_op.strip():
+            raise ConfigError(f"{operation_prefix}.op must be a non-empty string")
+        op = raw_op.strip().lower()
+        if op not in allowed_fields:
+            raise ConfigError(f"{operation_prefix} has unsupported op {op!r}")
+
+        unknown = sorted(set(raw_operation) - allowed_fields[op])
+        if unknown:
+            names = ", ".join(repr(name) for name in unknown)
+            raise ConfigError(f"{operation_prefix} {op} has unknown field {names}")
+        missing = sorted(required_fields.get(op, set()) - set(raw_operation))
+        if missing:
+            names = ", ".join(repr(name) for name in missing)
+            raise ConfigError(f"{operation_prefix} {op} missing required field {names}")
+
+        operation: dict[str, Any] = {"op": op}
+        if domain == "psd" and op not in {"export", "measure_band", "peaks", "spectral_quality"}:
+            raise ConfigError(f"{operation_prefix}: only export, measure_band or peaks is supported after psd")
+        if op == "psd":
+            if domain != "time" or "window" in transforms:
+                raise ConfigError(f"{operation_prefix}: psd requires time data before window or fft")
+        if op in {"remove_dc", "detrend", "window", "fft"}:
+            if op in transforms:
+                raise ConfigError(f"{prefix} operation {op!r} may appear at most once")
+            if op in {"remove_dc", "detrend"} and transforms & {"remove_dc", "detrend"}:
+                raise ConfigError(f"{prefix} remove_dc and detrend are mutually exclusive")
+            if domain == "frequency":
+                raise ConfigError(f"{prefix} operation {op!r} must appear before fft")
+            if op in {"remove_dc", "detrend"} and "window" in transforms:
+                raise ConfigError(f"{prefix} operation {op!r} must appear before window")
+            transforms.add(op)
+
+        if op in {"smooth", "resample"}:
+            if domain != "time" or "window" in transforms:
+                raise ConfigError(f"{operation_prefix}: {op} requires time data before window or fft")
+            try:
+                operation = (normalize_smooth(raw_operation) if op == "smooth"
+                             else normalize_resample(raw_operation))
+            except DataError as exc:
+                raise ConfigError(f"{operation_prefix}: {exc}") from exc
+        if op == "filter":
+            if domain == "frequency":
+                raise ConfigError(f"{prefix} operation 'filter' must appear before fft")
+            if "window" in transforms:
+                raise ConfigError(f"{prefix} operation 'filter' must appear before window")
+
+        if op == "filter":
+            family = raw_operation["family"]
+            if not isinstance(family, str) or family.strip().lower() not in {"fir", "iir"}:
+                raise ConfigError(f"{operation_prefix}.family must be 'fir' or 'iir'")
+            family = family.strip().lower()
+            if family == "fir":
+                _validate_analysis_filter_fields(
+                    raw_operation,
+                    allowed={"op", "family", "response", "cutoff_hz", "numtaps", "mode"},
+                    required={"numtaps"},
+                    prefix=operation_prefix,
+                )
+                design = None
+            else:
+                _validate_analysis_filter_fields(
+                    raw_operation,
+                    allowed=set(raw_operation),
+                    required={"design", "order"},
+                    prefix=operation_prefix,
+                )
+                raw_design = raw_operation["design"]
+                if (
+                    not isinstance(raw_design, str)
+                    or raw_design.strip().lower() not in ANALYSIS_IIR_DESIGNS
+                ):
+                    raise ConfigError(
+                        f"{operation_prefix}.design must be one of "
+                        "butterworth, chebyshev1, chebyshev2, elliptic"
+                    )
+                design = raw_design.strip().lower()
+                design_fields = {
+                    "butterworth": set(),
+                    "chebyshev1": {"ripple_db"},
+                    "chebyshev2": {"attenuation_db"},
+                    "elliptic": {"ripple_db", "attenuation_db"},
+                }[design]
+                _validate_analysis_filter_fields(
+                    raw_operation,
+                    allowed={
+                        "op",
+                        "family",
+                        "design",
+                        "response",
+                        "cutoff_hz",
+                        "order",
+                        "mode",
+                        *design_fields,
+                    },
+                    required=design_fields,
+                    prefix=operation_prefix,
+                )
+            response = raw_operation["response"]
+            if (
+                not isinstance(response, str)
+                or response.strip().lower() not in ANALYSIS_FIR_RESPONSES
+            ):
+                raise ConfigError(
+                    f"{operation_prefix}.response must be one of "
+                    "lowpass, highpass, bandpass, bandstop"
+                )
+            response = response.strip().lower()
+            cutoff = _normalize_analysis_filter_cutoff(
+                raw_operation["cutoff_hz"],
+                response=response,
+                name=f"{operation_prefix}.cutoff_hz",
+            )
+            mode = raw_operation["mode"]
+            if not isinstance(mode, str) or mode.strip().lower() not in ANALYSIS_FIR_MODES:
+                raise ConfigError(
+                    f"{operation_prefix}.mode must be 'causal' or 'zero_phase'"
+                )
+            normalized_mode = mode.strip().lower()
+            if family == "fir":
+                numtaps = raw_operation["numtaps"]
+                if (
+                    isinstance(numtaps, bool)
+                    or not isinstance(numtaps, int)
+                    or numtaps < 3
+                    or numtaps % 2 == 0
+                ):
+                    raise ConfigError(
+                        f"{operation_prefix}.numtaps must be an odd integer >= 3"
+                    )
+                operation = {
+                    "op": "filter",
+                    "family": "fir",
+                    "response": response,
+                    "cutoff_hz": cutoff,
+                    "numtaps": numtaps,
+                    "mode": normalized_mode,
+                }
+            else:
+                order = raw_operation["order"]
+                if (
+                    isinstance(order, bool)
+                    or not isinstance(order, int)
+                    or not 1 <= order <= ANALYSIS_IIR_MAX_ORDER
+                ):
+                    raise ConfigError(
+                        f"{operation_prefix}.order must be an integer from 1 to "
+                        f"{ANALYSIS_IIR_MAX_ORDER}"
+                    )
+                operation = {
+                    "op": "filter",
+                    "family": "iir",
+                    "design": design,
+                    "response": response,
+                    "cutoff_hz": cutoff,
+                    "order": order,
+                }
+                if "ripple_db" in raw_operation:
+                    operation["ripple_db"] = _analysis_bounded_positive_float(
+                        raw_operation["ripple_db"],
+                        f"{operation_prefix}.ripple_db",
+                        maximum=ANALYSIS_IIR_MAX_RIPPLE_DB,
+                    )
+                if "attenuation_db" in raw_operation:
+                    operation["attenuation_db"] = _analysis_bounded_positive_float(
+                        raw_operation["attenuation_db"],
+                        f"{operation_prefix}.attenuation_db",
+                        maximum=ANALYSIS_IIR_MAX_ATTENUATION_DB,
+                    )
+                if (
+                    design == "elliptic"
+                    and operation["ripple_db"] >= operation["attenuation_db"]
+                ):
+                    raise ConfigError(
+                        f"{operation_prefix}.ripple_db must be less than attenuation_db"
+                    )
+                operation["mode"] = normalized_mode
+        elif op == "detrend":
+            method = raw_operation["method"]
+            if not isinstance(method, str) or method.lower() != "linear":
+                raise ConfigError(f"{operation_prefix}.method must be 'linear'")
+            operation["method"] = "linear"
+        elif op == "window":
+            name = raw_operation["name"]
+            if not isinstance(name, str) or name.lower() not in {"hann", "hamming", "blackman"}:
+                raise ConfigError(
+                    f"{operation_prefix}.name must be one of hann, hamming, blackman"
+                )
+            operation["name"] = name.lower()
+        elif op == "fft":
+            domain = "frequency"
+        elif op == "psd":
+            try:
+                operation.update(normalize_psd_parameters(
+                    **{key: value for key, value in raw_operation.items() if key != "op"}
+                ))
+            except DataError as exc:
+                raise ConfigError(f"{operation_prefix}: {exc}") from exc
+            domain = "psd"
+        elif op in {"measure_band", "peaks", "spectral_quality"}:
+            if op in {"measure_band", "spectral_quality"} and domain != "psd":
+                raise ConfigError(f"{operation_prefix}: measure_band requires PSD data")
+            try:
+                operation = (normalize_quality(raw_operation) if op == "spectral_quality" else
+                             normalize_band(raw_operation) if op == "measure_band" else normalize_peaks(raw_operation))
+                if op == "spectral_quality" and next(item for item in reversed(normalized) if item["op"] == "psd")["average"] != "mean":
+                    raise DataError("spectral_quality requires mean Welch PSD")
+            except DataError as exc:
+                raise ConfigError(f"{operation_prefix}: {exc}") from exc
+            if op == "peaks" and domain != "time" and operation["polarity"] != "positive":
+                raise ConfigError(f"{operation_prefix}: spectral peaks require positive polarity")
+            keys = {f"{operation['name']}_{metric}" for metric in operation["metrics"]}
+            if keys & measured or operation["name"] in result_names:
+                raise ConfigError(f"{operation_prefix}: duplicate measurement name")
+            result_names.add(operation["name"])
+            measured.update(keys)
+            has_result = True
+            psd_result = psd_result or domain == "psd"
+        elif op == "measure":
+            raw_metrics = raw_operation["metrics"]
+            if not isinstance(raw_metrics, list) or not raw_metrics:
+                raise ConfigError(f"{operation_prefix}.metrics must be a non-empty array")
+            metrics: list[str] = []
+            permitted = ANALYSIS_TIME_METRICS if domain == "time" else ANALYSIS_FREQUENCY_METRICS
+            for raw_metric in raw_metrics:
+                if not isinstance(raw_metric, str) or not raw_metric:
+                    raise ConfigError(f"{operation_prefix}.metrics entries must be non-empty strings")
+                metric = raw_metric
+                if metric not in permitted:
+                    other_domain = (
+                        metric in ANALYSIS_FREQUENCY_METRICS
+                        if domain == "time"
+                        else metric in ANALYSIS_TIME_METRICS
+                    )
+                    if other_domain:
+                        raise ConfigError(
+                            f"{operation_prefix} metric {metric!r} requires "
+                            f"{'frequency' if domain == 'time' else 'time'}-domain data"
+                        )
+                    raise ConfigError(f"{operation_prefix} has unsupported metric {metric!r}")
+                if metric in measured:
+                    raise ConfigError(f"{prefix} has duplicate metric {metric!r}")
+                measured.add(metric)
+                metrics.append(metric)
+            operation["metrics"] = metrics
+            has_result = True
+        elif op == "export":
+            name = raw_operation["name"]
+            if not isinstance(name, str) or _ANALYSIS_EXPORT_NAME.fullmatch(name) is None:
+                raise ConfigError(
+                    f"{operation_prefix}.name must match ^[a-z][a-z0-9_-]{{0,63}}$"
+                )
+            if name in export_names:
+                raise ConfigError(f"{prefix} has duplicate export name {name!r}")
+            export_names.add(name)
+            raw_formats = raw_operation["formats"]
+            if not isinstance(raw_formats, list) or not raw_formats:
+                raise ConfigError(f"{operation_prefix}.formats must be a non-empty array")
+            formats: list[str] = []
+            for raw_format in raw_formats:
+                if not isinstance(raw_format, str) or raw_format.lower() not in {"npy", "csv"}:
+                    raise ConfigError(f"{operation_prefix} format must be one of npy, csv")
+                file_format = raw_format.lower()
+                if file_format in formats:
+                    raise ConfigError(f"{operation_prefix} has duplicate export format {file_format!r}")
+                formats.append(file_format)
+            operation["name"] = name
+            operation["formats"] = formats
+            has_result = True
+            psd_result = psd_result or domain == "psd"
+        normalized.append(operation)
+
+    if not has_result:
+        raise ConfigError(f"{prefix}.operations requires at least one measure or export operation")
+    if domain == "psd" and not psd_result:
+        raise ConfigError(f"{prefix}.operations requires export, measure_band or peaks after psd")
+    fields["operations"] = normalized
+
+    if "expect" in fields:
+        expect = _parse_expect(fields["expect"], f"{prefix}.expect")
+        unavailable = sorted(set(expect) - measured)
+        if unavailable:
+            raise ConfigError(
+                f"{prefix}.expect metric {unavailable[0]!r} must be selected by a measure operation"
+            )
+        fields["expect"] = expect
+
+
+def _analysis_positive_float(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{name} must be a positive number")
+    return _positive_float(value, name)
+
+
+def _analysis_bounded_positive_float(value: Any, name: str, *, maximum: float) -> float:
+    result = _analysis_positive_float(value, name)
+    if result > maximum:
+        raise ConfigError(f"{name} must be <= {maximum:g}")
+    return result
+
+
+def _normalize_analysis_filter_cutoff(
+    raw: Any,
+    *,
+    response: str,
+    name: str,
+) -> float | list[float]:
+    if response in {"lowpass", "highpass"}:
+        return _analysis_positive_float(raw, name)
+    if not isinstance(raw, list) or len(raw) != 2:
+        raise ConfigError(f"{name} must be a two-element array for {response}")
+    cutoff = [_analysis_positive_float(value, name) for value in raw]
+    if cutoff[1] <= cutoff[0]:
+        raise ConfigError(f"{name} must be strictly increasing")
+    return cutoff
+
+
+def _validate_analysis_filter_fields(
+    raw: dict[str, Any],
+    *,
+    allowed: set[str],
+    required: set[str],
+    prefix: str,
+) -> None:
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        names = ", ".join(repr(name) for name in unknown)
+        raise ConfigError(f"{prefix} filter has unknown field {names}")
+    missing = sorted(required - set(raw))
+    if missing:
+        names = ", ".join(repr(name) for name in missing)
+        raise ConfigError(f"{prefix} filter missing required field {names}")
+
+
+def _normalize_frequency_response_fields(prefix: str, fields: dict[str, Any]) -> None:
+    for name in ("source_channel", "reference_channel", "response_channel"):
+        if name in fields:
+            fields[name] = _positive_int(fields[name], f"{prefix}.{name}")
+    if fields["reference_channel"] == fields["response_channel"]:
+        raise ConfigError(f"{prefix}.reference_channel and response_channel must differ")
+    if "label" in fields:
+        fields["label"] = _non_empty_str(fields["label"], f"{prefix}.label")
+
+    explicit = fields.get("frequencies_hz")
+    generated_names = {"start_frequency_hz", "stop_frequency_hz", "frequency_count", "spacing"}
+    has_generated = any(name in fields for name in generated_names)
+    if explicit is not None and has_generated:
+        raise ConfigError(
+            f"{prefix} must use either frequencies_hz or start/stop/frequency_count, not both"
+        )
+    if explicit is not None:
+        if not isinstance(explicit, list) or len(explicit) < 2:
+            raise ConfigError(f"{prefix}.frequencies_hz must be an array with at least two frequencies")
+        frequencies = [_positive_float(value, f"{prefix}.frequencies_hz") for value in explicit]
+    else:
+        required = ("start_frequency_hz", "stop_frequency_hz", "frequency_count")
+        missing = [name for name in required if name not in fields]
+        if missing:
+            raise ConfigError(
+                f"{prefix} requires frequencies_hz or start_frequency_hz, stop_frequency_hz, and frequency_count"
+            )
+        start = _positive_float(fields["start_frequency_hz"], f"{prefix}.start_frequency_hz")
+        stop = _positive_float(fields["stop_frequency_hz"], f"{prefix}.stop_frequency_hz")
+        count = _positive_int(fields["frequency_count"], f"{prefix}.frequency_count")
+        if stop <= start:
+            raise ConfigError(f"{prefix}.stop_frequency_hz must be greater than start_frequency_hz")
+        if count < 2:
+            raise ConfigError(f"{prefix}.frequency_count must be >= 2")
+        spacing = _non_empty_str(fields.get("spacing", "log"), f"{prefix}.spacing").lower()
+        if spacing not in {"log", "linear"}:
+            raise ConfigError(f"{prefix}.spacing must be 'log' or 'linear'")
+        fields["start_frequency_hz"] = start
+        fields["stop_frequency_hz"] = stop
+        fields["frequency_count"] = count
+        fields["spacing"] = spacing
+        if spacing == "log":
+            step = (log10(stop) - log10(start)) / (count - 1)
+            frequencies = [10.0 ** (log10(start) + index * step) for index in range(count)]
+        else:
+            step = (stop - start) / (count - 1)
+            frequencies = [start + index * step for index in range(count)]
+    if any(second <= first for first, second in zip(frequencies, frequencies[1:])):
+        raise ConfigError(f"{prefix}.frequencies_hz must be strictly increasing and unique")
+    fields["frequencies_hz"] = frequencies
+
+    _normalize_frequency_response_amplitudes(prefix, fields)
+
+    fields["target_cycles"] = _positive_float(
+        fields.get("target_cycles", 10.0), f"{prefix}.target_cycles"
+    )
+    fields["min_signal_vpp"] = _positive_float(
+        fields.get("min_signal_vpp", 0.02), f"{prefix}.min_signal_vpp"
+    )
+    settle_s = _finite_float(fields.get("settle_s", 0.3), f"{prefix}.settle_s")
+    if settle_s < 0:
+        raise ConfigError(f"{prefix}.settle_s must be >= 0")
+    fields["settle_s"] = settle_s
+    if "frequency_tolerance" in fields:
+        fields["frequency_tolerance"] = _positive_float(
+            fields["frequency_tolerance"], f"{prefix}.frequency_tolerance"
+        )
+    if "points" in fields:
+        fields["points"] = normalize_waveform_points(
+            _non_empty_str(fields["points"], f"{prefix}.points")
+        )
+    retry_warning = fields.get("retry_warning_with_autoscale", True)
+    if not isinstance(retry_warning, bool):
+        raise ConfigError(f"{prefix}.retry_warning_with_autoscale must be true or false")
+    fields["retry_warning_with_autoscale"] = retry_warning
+    for name in ("save_csv", "screenshot"):
+        if name in fields and not isinstance(fields[name], bool):
+            raise ConfigError(f"{prefix}.{name} must be true or false")
+    if "fit" in fields:
+        fields["fit"] = _parse_frequency_response_fit(fields["fit"], f"{prefix}.fit")
+    if "calibration" in fields:
+        fields["calibration"] = normalize_frequency_response_calibration(
+            fields["calibration"], f"{prefix}.calibration"
+        ).as_dict()
+    if "baseline" in fields:
+        fields["baseline"] = normalize_frequency_response_baseline(
+            fields["baseline"], f"{prefix}.baseline"
+        ).as_dict()
+    if "adaptive" in fields:
+        fields["adaptive"] = normalize_frequency_response_adaptive(
+            fields["adaptive"], f"{prefix}.adaptive"
+        ).as_dict()
+        if fields["adaptive"]["max_frequency_points"] < len(fields["frequencies_hz"]):
+            raise ConfigError(
+                f"{prefix}.adaptive.max_frequency_points must be at least the initial frequency count"
+            )
+    if "stop_conditions" in fields:
+        fields["stop_conditions"] = _normalize_frequency_response_stop_conditions(
+            fields["stop_conditions"], f"{prefix}.stop_conditions"
+        )
+    if "resume_from" in fields:
+        fields["resume_from"] = _non_empty_str(fields["resume_from"], f"{prefix}.resume_from")
+
+
+def _normalize_frequency_response_stop_conditions(raw: Any, name: str) -> dict[str, Any]:
+    """Normalize explicit group-stop limits while retaining point-level tolerance."""
+
+    table = _table(raw, name)
+    _reject_unknown_keys(
+        table,
+        {
+            "max_failed_points",
+            "max_warning_points",
+            "max_consecutive_failed_points",
+            "max_gain_jump_db",
+        },
+        name,
+    )
+    result: dict[str, Any] = {}
+    for key in ("max_failed_points", "max_warning_points", "max_consecutive_failed_points"):
+        if key in table:
+            value = _positive_int(table[key], f"{name}.{key}")
+            result[key] = value
+    if "max_gain_jump_db" in table:
+        value = _positive_float(table["max_gain_jump_db"], f"{name}.max_gain_jump_db")
+        result["max_gain_jump_db"] = value
+    if not result:
+        raise ConfigError(f"{name} must define at least one stop condition")
+    return result
+
+
+def _normalize_frequency_response_amplitudes(prefix: str, fields: dict[str, Any]) -> None:
+    explicit = fields.get("amplitudes_vpp")
+    generated_names = {"start_vpp", "stop_vpp", "vpp_step"}
+    has_generated = any(name in fields for name in generated_names)
+    if explicit is not None and has_generated:
+        raise ConfigError(
+            f"{prefix} must use either amplitudes_vpp or start_vpp, stop_vpp, and vpp_step, not both"
+        )
+    amplitudes: list[float] | None = None
+    if explicit is not None:
+        if not isinstance(explicit, list) or not explicit:
+            raise ConfigError(f"{prefix}.amplitudes_vpp must be a non-empty array")
+        amplitudes = [_positive_float(value, f"{prefix}.amplitudes_vpp") for value in explicit]
+    elif has_generated:
+        required = ("start_vpp", "stop_vpp", "vpp_step")
+        missing = [name for name in required if name not in fields]
+        if missing:
+            raise ConfigError(f"{prefix} requires start_vpp, stop_vpp, and vpp_step together")
+        start = _positive_float(fields["start_vpp"], f"{prefix}.start_vpp")
+        stop = _positive_float(fields["stop_vpp"], f"{prefix}.stop_vpp")
+        step = _positive_float(fields["vpp_step"], f"{prefix}.vpp_step")
+        if stop <= start:
+            raise ConfigError(f"{prefix}.stop_vpp must be greater than start_vpp")
+        count = round((stop - start) / step)
+        if count < 1 or abs(start + count * step - stop) > max(1e-12, step * 1e-9):
+            raise ConfigError(f"{prefix}.vpp_step must divide the requested Vpp range exactly")
+        amplitudes = [round(start + index * step, 15) for index in range(count + 1)]
+    if amplitudes is not None:
+        if any(second <= first for first, second in zip(amplitudes, amplitudes[1:])):
+            raise ConfigError(f"{prefix}.amplitudes_vpp must be strictly increasing and unique")
+        fields["amplitudes_vpp"] = amplitudes
+    if amplitudes is not None or "autoscale_each_amplitude" in fields:
+        autoscale = fields.get("autoscale_each_amplitude", True)
+        if not isinstance(autoscale, bool):
+            raise ConfigError(f"{prefix}.autoscale_each_amplitude must be true or false")
+        fields["autoscale_each_amplitude"] = autoscale
+
+
+def _parse_frequency_response_fit(raw: Any, name: str) -> dict[str, Any]:
+    table = _table(raw, name)
+    _reject_unknown_keys(table, {"methods", "polynomial_degree"}, name)
+    methods_raw = table.get("methods", list(FIT_METHODS))
+    if not isinstance(methods_raw, list) or not methods_raw:
+        raise ConfigError(f"{name}.methods must be a non-empty array")
+    methods = [_non_empty_str(value, f"{name}.methods").lower() for value in methods_raw]
+    if any(method not in FIT_METHODS for method in methods):
+        raise ConfigError(f"{name}.methods must use: {', '.join(FIT_METHODS)}")
+    if len(set(methods)) != len(methods):
+        raise ConfigError(f"{name}.methods must not contain duplicates")
+    degree = _positive_int(table.get("polynomial_degree", 3), f"{name}.polynomial_degree")
+    if degree > 5:
+        raise ConfigError(f"{name}.polynomial_degree must be <= 5")
+    return {"methods": methods, "polynomial_degree": degree}
+
+
+def _parse_expect(raw: Any, name: str) -> dict[str, dict[str, float]]:
+    table = _table(raw, name)
+    if not table:
+        raise ConfigError(f"{name} must not be empty")
+    result: dict[str, dict[str, float]] = {}
+    for metric, limits_raw in table.items():
+        metric_name = _non_empty_str(metric, f"{name} metric")
+        limits = _table(limits_raw, f"{name}.{metric_name}")
+        _reject_unknown_keys(limits, {"min", "max"}, f"{name}.{metric_name}")
+        if "min" not in limits and "max" not in limits:
+            raise ConfigError(f"{name}.{metric_name} requires min or max")
+        parsed: dict[str, float] = {}
+        for key in ("min", "max"):
+            if key in limits:
+                parsed[key] = _finite_float(limits[key], f"{name}.{metric_name}.{key}")
+        if "min" in parsed and "max" in parsed and parsed["min"] > parsed["max"]:
+            raise ConfigError(f"{name}.{metric_name}.min must be <= max")
+        result[metric_name] = parsed
+    return result
+
+
+def _finite_float(value: Any, name: str) -> float:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a number")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a number") from exc
+    if result != result or result in (float("inf"), float("-inf")):
+        raise ConfigError(f"{name} must be finite")
+    return result
+
+
+def _rf_port_id(value: Any, name: str) -> str:
+    token = _non_empty_str(value, name)
+    if _SOURCE_STORAGE_TOKEN.fullmatch(token) is None:
+        raise ConfigError(f"{name} must be a short safe RF port ID")
+    return token
+
+
+def _rf_interface_id(value: Any, name: str) -> str:
+    token = _non_empty_str(value, name)
+    if _SOURCE_STORAGE_TOKEN.fullmatch(token) is None:
+        raise ConfigError(f"{name} must be a short safe RF physical interface ID")
+    return token
+
+
+def _table(raw: Any, name: str) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{name} must be a TOML table")
+    return raw
+
+
+def _parse_channel_list(raw: Any, name: str) -> tuple[int, ...]:
+    """Parse a channel list used by an explicit safety OFF policy."""
+
+    if raw is None:
+        return ()
+    values = [raw] if isinstance(raw, int) and not isinstance(raw, bool) else raw
+    if not isinstance(values, list) or not values:
+        raise ConfigError(f"{name} must be a non-empty array of positive integers")
+    parsed = tuple(_positive_int(value, name) for value in values)
+    if len(set(parsed)) != len(parsed):
+        raise ConfigError(f"{name} must not contain duplicate channels")
+    return parsed
+
+
+def _normalize_step_safety_gate(raw: Any, name: str) -> dict[str, Any]:
+    """Normalize a step-local safety gate without opening an implicit device."""
+
+    if isinstance(raw, bool):
+        return {"enabled": raw, "source_channels": [], "power_channels": []}
+    table = _table(raw, name)
+    _reject_unknown_keys(
+        table,
+        {"enabled", "source_channels", "power_channels", "off_source_channels", "off_power_channels"},
+        name,
+    )
+    enabled = table.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"{name}.enabled must be true or false")
+    source_raw = table.get("source_channels", table.get("off_source_channels", []))
+    power_raw = table.get("power_channels", table.get("off_power_channels", []))
+    source_channels = _parse_channel_list(source_raw, f"{name}.source_channels") if source_raw else ()
+    power_channels = _parse_channel_list(power_raw, f"{name}.power_channels") if power_raw else ()
+    if (source_channels or power_channels) and not enabled:
+        raise ConfigError(f"{name} channel targets require enabled = true")
+    return {
+        "enabled": enabled,
+        "source_channels": list(source_channels),
+        "power_channels": list(power_channels),
+    }
+
+
+def _reject_unknown_keys(table: dict[str, Any], allowed: set[str], name: str) -> None:
+    unknown = sorted(set(table) - allowed)
+    if unknown:
+        allowed_text = ", ".join(sorted(allowed)) or "-"
+        suggestions = _unknown_key_suggestions(unknown, allowed)
+        suggestion_text = f" {suggestions}" if suggestions else ""
+        hint = " Run `python -m wavebench run schema` for field details." if name.startswith("steps[") else ""
+        raise ConfigError(
+            f"{name} has unknown key(s): {', '.join(unknown)}.{suggestion_text} "
+            f"Allowed keys: {allowed_text}.{hint}"
+        )
+
+
+def _unknown_key_suggestions(unknown: list[str], allowed: set[str]) -> str:
+    parts = []
+    choices = sorted(allowed)
+    for key in unknown:
+        closest = difflib.get_close_matches(key, choices, n=1)
+        if closest:
+            parts.append(f"'{key}' -> '{closest[0]}'")
+    if not parts:
+        return ""
+    return "Did you mean " + ", ".join(parts) + "?"
+
+
+def _positive_int(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a positive integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a positive integer") from exc
+    if result < 1:
+        raise ConfigError(f"{name} must be >= 1")
+    return result
+
+
+def _positive_float(value: Any, name: str) -> float:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a positive number")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a positive number") from exc
+    if result != result or result in (float("inf"), float("-inf")):
+        raise ConfigError(f"{name} must be finite")
+    if result <= 0:
+        raise ConfigError(f"{name} must be > 0")
+    return result
+
+
+def _non_empty_str(value: Any, name: str) -> str:
+    result = str(value).strip()
+    if not result:
+        raise ConfigError(f"{name} must not be empty")
+    return result
+
+
+def _duty_percent(value: Any, name: str) -> float:
+    result = _positive_float(value, name)
+    if result >= 100:
+        raise ConfigError(f"{name} must be < 100")
+    return result

@@ -1,0 +1,45 @@
+# 实机二维直通基线：DG4202 CH1 同时接 RTM CH1/CH2。
+# 已由 100 mVpp 诊断验证；幅值切换后保留 3 秒稳定时间。
+
+[experiment]
+name = "through_baseline_2d_stable"
+label = "through_baseline_2d_stable"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 0.05
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 10000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sweep.frequency_response"
+label = "through"
+source_channel = 1
+reference_channel = 1
+response_channel = 2
+frequencies_hz = [10000, 50000, 200000, 500000]
+amplitudes_vpp = [0.05, 0.1]
+autoscale_each_amplitude = true
+target_cycles = 10
+settle_s = 3.0
+points = "def"
+save_csv = false
+screenshot = false

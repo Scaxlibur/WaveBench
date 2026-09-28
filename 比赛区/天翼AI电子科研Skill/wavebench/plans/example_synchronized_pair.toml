@@ -1,0 +1,25 @@
+# Requires an already connected, low-amplitude signal on both scope channels.
+# No source output is enabled by this plan. Scope capture remains stopped afterwards.
+# Requires a driver that declares scope.capture_synchronized.
+[[steps]]
+id = "capture_pair"
+kind = "scope.capture"
+channels = [1, 2]
+synchronized = true
+points = "DEF"
+time_range_s = 0.01
+vertical_scale_v_per_div = 0.2
+save_npy = true
+save_csv = true
+
+[[steps]]
+id = "pair_result"
+kind = "analysis.pair"
+source = { step = "capture_pair" }
+reference_channel = 1
+response_channel = 2
+operations = [
+  { op = "delay", name = "timing", max_lag_s = 0.00002, remove_mean = true, polarity = "same", min_overlap_ratio = 0.95, min_correlation = 0.95, ambiguity_delta = 0.0001, metrics = ["response_delay_s", "response_delay_samples", "correlation"] },
+  { op = "transfer", name = "system", window = "hann", nperseg = 1024, noverlap = 512, nfft = 1024, detrend = "constant", min_reference_density = 0.000000001, min_response_density = 0.000000001, min_coherence = 0.9, unwrap_phase = false, metrics = ["mean_coherence", "valid_bin_count"] },
+  { op = "export", name = "transfer", formats = ["npy", "csv"] },
+]

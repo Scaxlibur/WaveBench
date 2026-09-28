@@ -1,0 +1,51 @@
+# Historical v0.4 closure plan kept for reference.
+# Prefer `plans/closure_sine_1k.toml` for current public examples with built-in `[steps.expect_fft]`.
+
+[experiment]
+name = "closure_sine_1k_fft"
+label = "closure_sine_1k_fft"
+
+[restore]
+source_state = true
+source_channel = 1
+
+[[steps]]
+kind = "source.status"
+channel = 1
+
+[[steps]]
+kind = "source.set_func"
+channel = 1
+function = "sin"
+
+[[steps]]
+kind = "source.set_vpp"
+channel = 1
+value_vpp = 1.0
+
+[[steps]]
+kind = "source.set_freq"
+channel = 1
+frequency_hz = 1000
+
+[[steps]]
+kind = "source.output"
+channel = 1
+state = "on"
+
+[[steps]]
+kind = "sleep"
+duration_s = 0.2
+
+[[steps]]
+kind = "scope.capture"
+channel = 1
+label = "closure_sine_1k"
+points = "def"
+window_frequency_hz = 1000
+target_cycles = 10
+expect_frequency_hz = 1000
+frequency_tolerance = 0.05
+target_vpp = 1.0
+save_csv = false
+save_npy = true

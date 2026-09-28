@@ -1,0 +1,28 @@
+# Rei scratchpad / local helper workspace
+tool-of-rei/
+.codegraph/
+
+# Local agent/Codex metadata
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/wavebench/
+!/.agents/skills/wavebench/**
+!/.agents/skills/wavebench-docs/
+!/.agents/skills/wavebench-docs/**
+.codex/
+
+# Local WaveBench config and generated data
+wavebench.toml
+/data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv*/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+site/
+*.egg-info/

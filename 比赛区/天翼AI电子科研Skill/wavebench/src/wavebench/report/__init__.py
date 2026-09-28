@@ -1,0 +1,1 @@
+"""Offline report rendering helpers."""
