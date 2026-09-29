@@ -262,3 +262,18 @@ settle_ms_before_read = 0
 # Extra wait after changing DMM function before the first read.
 # 切换万用表功能后、第一次读数前的额外等待时间。
 settle_ms_after_function_change = 500
+
+[advisor]
+# advisor（外部判断模型，例如 TypeSafe Jev）总开关。默认 false：关闭时不会构造任何外发请求。
+# 打开时必须同时给出 endpoint_hosts 与 allowed_state_fields 白名单，否则配置校验直接失败。
+enabled = false
+
+# 允许外发的服务主机白名单（严格匹配）。留空表示不允许任何 endpoint。
+endpoint_hosts = []
+# 允许外发的状态字段白名单（严格匹配，字段名与插件声明一致）。留空表示不允许任何字段。
+allowed_state_fields = []
+
+# "概率 -> 动作"的阈值由 Core 拥有，插件不得自带；需满足 0 <= review <= accept <= 1。
+accept = 0.60
+review = 0.35
+

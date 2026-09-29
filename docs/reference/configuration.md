@@ -7,7 +7,7 @@ WaveBench 从指定路径或默认的 `wavebench.toml` 加载本地实验台配�
 | 类别 | 表 |
 | --- | --- |
 | 必需 | `[connection]`、`[scope]` |
-| 可选 | `[autoscale]`、`[waveform]`、`[output]`、`[quality]`、`[safety_limits]`、`[tui]`、`[source]`、`[rf_source]`、`[power]`、`[dmm]` |
+| 可选 | `[autoscale]`、`[waveform]`、`[output]`、`[quality]`、`[safety_limits]`、`[tui]`、`[source]`、`[rf_source]`、`[power]`、`[dmm]`、`[advisor]` |
 
 字段、默认值和跨字段约束由 config model 与 parser 定义。修改 plan 或配置前，先核对[示例配置](https://github.com/Scaxlibur/wavebench/blob/master/wavebench.example.toml)、当前 CLI help 和相关 Reference。
 
@@ -36,6 +36,14 @@ access = "read_only"
 | `disabled` | 拒绝仪器操作；离线命令仍可运行。 |
 
 配置中的 `access` 不能替代真实接线、操作系统权限或仪器自身保护。
+
+## Advisor 外发边界
+
+`[advisor]` 控制 advisor（外部判断模型）能否把状态发出本机。默认 `enabled = false`，关闭时不会构造任何外发请求；开启必须同时给出 `endpoint_hosts` 与 `allowed_state_fields` 白名单，否则配置校验直接失败。`accept`／`review` 是「概率 → 动作」的阈值，由 Core 拥有，必须满足 `0 <= review <= accept <= 1`。
+
+外发还需通过同意门：发送前产出完整预览（内容、字节数、sha256、逐条不可信来源），预览不联网；同意默认按次，可登记为同一 run 内有效，并绑定 endpoint 集合与允许字段集，任一变化即失效；非交互场景（run plan、CI、MCP）一律拒绝。结论写入对应 run 目录的 `decisions/`（schema `wavebench.decision.v1`），附加式，不影响 `run.json`、质量门或 `auto_recover`。
+
+实现状态与分期见 [advisor 插件类别 RFC](../project/rfcs/WaveBench_advisor插件RFC.md)（`Draft`）。
 
 ## 安全限制
 
