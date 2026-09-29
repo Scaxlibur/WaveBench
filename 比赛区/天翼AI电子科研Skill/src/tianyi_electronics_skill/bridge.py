@@ -37,7 +37,10 @@ def _relay(left: socket.socket, right: socket.socket) -> None:
 
     first = threading.Thread(target=pump, args=(left, right), daemon=True)
     second = threading.Thread(target=pump, args=(right, left), daemon=True)
-    first.start(); second.start(); first.join(); second.join()
+    first.start()
+    second.start()
+    first.join()
+    second.join()
 
 
 @dataclass
@@ -59,7 +62,9 @@ class BridgeServer:
             print(f"bridge server listening on {self.host}:{self.port}", flush=True)
             while True:
                 connection, address = listener.accept()
-                threading.Thread(target=self._handle, args=(connection, address), daemon=True).start()
+                threading.Thread(
+                    target=self._handle, args=(connection, address), daemon=True
+                ).start()
 
     def _handle(self, connection: socket.socket, address: tuple[str, int]) -> None:
         connection.settimeout(60)
@@ -68,7 +73,8 @@ class BridgeServer:
             first = reader.readline().decode("ascii", "replace").strip().split()
             if len(first) != 2 or first[0] not in {"REGISTER", "CONNECT"}:
                 connection.sendall(b"ERROR invalid-handshake\n")
-                reader.close(); connection.close()
+                reader.close()
+                connection.close()
                 return
             role, token = first
             if role == "REGISTER":
@@ -165,15 +171,23 @@ def run_connect(server: str, token: str, listen: str) -> None:
         print(f"bridge proxy listening on {listen_host}:{listen_port}", flush=True)
         while True:
             local_socket, _ = listener.accept()
-            threading.Thread(target=_connect_once, args=(local_socket, server_host, server_port, token), daemon=True).start()
+            threading.Thread(
+                target=_connect_once,
+                args=(local_socket, server_host, server_port, token),
+                daemon=True,
+            ).start()
 
 
-def _connect_once(local_socket: socket.socket, server_host: str, server_port: int, token: str) -> None:
+def _connect_once(
+    local_socket: socket.socket, server_host: str, server_port: int, token: str
+) -> None:
     try:
         upstream = socket.create_connection((server_host, server_port), timeout=10)
         upstream.sendall(f"CONNECT {token}\n".encode("ascii"))
         if upstream.makefile("rb").readline().strip() != b"START":
-            local_socket.close(); upstream.close(); return
+            local_socket.close()
+            upstream.close()
+            return
         _relay(local_socket, upstream)
     except OSError:
         local_socket.close()
