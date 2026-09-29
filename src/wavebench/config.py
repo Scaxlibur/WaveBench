@@ -8,6 +8,7 @@ import tomllib
 
 from .errors import ConfigError
 from .services.access_policy import AccessMode, normalize_access_mode
+from .services.advisor_consent import normalize_names
 
 WAVEFORM_POINTS_ALIASES = {
     "def": "DEF",
@@ -143,6 +144,34 @@ class DmmConfig:
     rtscts: bool = False
     dsrdtr: bool = False
     access: AccessMode = "read_write"
+
+@dataclass(frozen=True)
+class AdvisorConfig:
+    """advisor（外部判断模型）配置。
+
+    默认关闭；开启必须同时给出 endpoint 与字段白名单，避免"打开开关即放宽外发范围"。
+    概率阈值由 Core 拥有，插件不得自带。
+    """
+
+    enabled: bool = False
+    endpoint_hosts: tuple[str, ...] = ()
+    allowed_state_fields: tuple[str, ...] = ()
+    accept: float = 0.60
+    review: float = 0.35
+
+    def __post_init__(self) -> None:
+        if isinstance(self.accept, bool) or isinstance(self.review, bool):
+            raise ConfigError("advisor thresholds must be numbers")
+        if not 0.0 <= float(self.review) <= float(self.accept) <= 1.0:
+            raise ConfigError("advisor thresholds must satisfy 0 <= review <= accept <= 1")
+        object.__setattr__(
+            self, "endpoint_hosts", normalize_names(self.endpoint_hosts, label="advisor.endpoint_hosts")
+        )
+        object.__setattr__(
+            self,
+            "allowed_state_fields",
+            normalize_names(self.allowed_state_fields, label="advisor.allowed_state_fields"),
+        )
 
 @dataclass(frozen=True)
 class OutputConfig:
@@ -364,6 +393,37 @@ def _instrument_options(raw: dict, section: str) -> dict[str, object]:
         raise ConfigError(f"{section}.options must be a TOML table")
     return dict(options)
 
+
+def _name_list(raw: dict, key: str, *, path: str) -> tuple[str, ...]:
+    values = raw.get(key, [])
+    if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+        raise ConfigError(f"{path}.{key} must be an array of strings")
+    for value in values:
+        if not isinstance(value, str) or not value or value.strip() != value:
+            raise ConfigError(f"{path}.{key} must contain non-empty, trimmed strings")
+    return tuple(dict.fromkeys(values))
+
+
+def _advisor_config(raw: object) -> AdvisorConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("advisor must be a TOML table")
+    enabled = _strict_bool(raw, "enabled", False, path="advisor")
+    endpoints = _name_list(raw, "endpoint_hosts", path="advisor")
+    fields = _name_list(raw, "allowed_state_fields", path="advisor")
+    if enabled and not fields:
+        raise ConfigError(
+            "advisor.enabled requires a non-empty advisor.allowed_state_fields allowlist"
+        )
+    if enabled and not endpoints:
+        raise ConfigError("advisor.enabled requires a non-empty advisor.endpoint_hosts allowlist")
+    return AdvisorConfig(
+        enabled=enabled,
+        endpoint_hosts=endpoints,
+        allowed_state_fields=fields,
+        accept=_finite_number(raw.get("accept", 0.60), path="advisor.accept"),
+        review=_finite_number(raw.get("review", 0.35), path="advisor.review"),
+    )
+
 @dataclass(frozen=True)
 class WaveBenchConfig:
     connection: ConnectionConfig
@@ -380,6 +440,7 @@ class WaveBenchConfig:
     tui: TuiConfig = TuiConfig()
     # Append-only: preserve the public positional layout of existing config fields.
     rf_source: RfSourceConfig | None = None
+    advisor: AdvisorConfig = AdvisorConfig()
 
     def with_connection_timeout_ms(self, timeout_ms: int) -> "WaveBenchConfig":
         if timeout_ms <= 0:
@@ -666,6 +727,7 @@ def load_config(path: str | Path = "wavebench.toml") -> WaveBenchConfig:
                 log_keep_lines_after_trim=int(tui_raw.get("log_keep_lines_after_trim", 1_000)),
             ),
             rf_source=rf_source,
+            advisor=_advisor_config(raw.get("advisor", {})),
         )
     except KeyError as exc:
         raise ConfigError(f"missing required config key: {exc}") from exc
