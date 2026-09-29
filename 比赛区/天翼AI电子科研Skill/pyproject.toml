@@ -12,6 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 visa = ["pyvisa>=1.14", "pyvisa-py>=0.8"]
 numpy = ["numpy>=2.0"]
+can = ["python-can>=4.3"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

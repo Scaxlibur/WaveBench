@@ -1,0 +1,14 @@
+{
+  "kind": "binary-waveform",
+  "name": "vendor-can-f32-le",
+  "transport": "can",
+  "match": {"magic_hex": "57415645"},
+  "payload": {
+    "header_bytes": 4,
+    "sample_type": "f32",
+    "endian": "little",
+    "scale": 1.0,
+    "offset": 0.0,
+    "sample_rate_hz": 100000
+  }
+}

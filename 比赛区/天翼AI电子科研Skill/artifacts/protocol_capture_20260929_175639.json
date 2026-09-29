@@ -1,0 +1,44 @@
+{
+  "created_at": 1790675799.0776129,
+  "analysis": {
+    "samples": 24,
+    "sample_rate_hz": 8000.0,
+    "peak_v": -0.78,
+    "peak_to_peak_v": 1.55,
+    "minimum_v": -0.78,
+    "maximum_v": 0.77,
+    "mean_v": 0.013750000000000007,
+    "rms_v": 0.4970648222314671,
+    "frequency_hz": 1000.0,
+    "duty_cycle_percent": 62.5
+  },
+  "metadata": {
+    "source": "wavebench\\比赛区\\天翼AI电子科研Skill\\examples\\demo_capture.json"
+  },
+  "samples": [
+    -0.78,
+    -0.42,
+    0.02,
+    0.46,
+    0.77,
+    0.46,
+    0.02,
+    -0.42,
+    -0.78,
+    -0.42,
+    0.02,
+    0.46,
+    0.77,
+    0.46,
+    0.02,
+    -0.42,
+    -0.78,
+    -0.42,
+    0.02,
+    0.46,
+    0.77,
+    0.46,
+    0.02,
+    -0.42
+  ]
+}

@@ -38,3 +38,35 @@ python -m venv .venv
 ```
 
 输出统一为 JSON，可直接交给 TeleAgent 继续解释或保存到实验工作区。
+
+## 新增能力
+
+### 自定义协议与 CAN
+
+厂商二进制/CAN 协议不必伪装成 SCPI。把 manifest 放到 `examples/protocols/`，例如：
+
+```powershell
+python -m tianyi_electronics_skill protocol identify --file .\vendor_frame.bin --manifest-dir .\examples\protocols
+python -m tianyi_electronics_skill protocol decode --file .\vendor_frame.bin --manifest-dir .\examples\protocols --sample-rate 100000 --output-dir .\artifacts
+```
+
+Agent 会输出候选协议、置信度、统一波形帧和解析工件。
+
+Arm Linux 的 SocketCAN 采集：
+
+```bash
+python -m pip install '.[can]'
+python -m tianyi_electronics_skill protocol capture-can --channel can0 --count 16
+```
+
+### 单帧可视化工件
+
+```powershell
+python -m tianyi_electronics_skill frame --file .\examples\demo_capture.json --output-dir .\artifacts
+```
+
+每次生成 `.json`（完整数据）、`.csv`（逐点数据）和 `.svg`（带峰值/频率/RMS 标注的图片）。SVG 不依赖桌面 GUI，浏览器、IDE 和 TeleAgent 工作区都能直接打开。
+
+### 跨主机桥接
+
+设备所在主机主动连接中继端，因此 A/B 不需要处于同一个局域网。具体命令和安全边界见 `SKILL.md` 的“非局域网设备”部分。
