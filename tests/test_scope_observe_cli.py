@@ -1,6 +1,7 @@
 import io
 import json
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -65,8 +66,33 @@ class _FakeScopeService:
 
     def __init__(self, *, config, logger):
         self.config = config
+        self.session_state = None
         self.fetched_channels: list[int] = []
         _FakeScopeService.instances.append(self)
+
+    def session_context(self, **kwargs):
+        return nullcontext(self)
+
+    def validate_observation_access(self):
+        pass
+
+    def validate_observation_fetch(self):
+        pass
+
+    def preflight_observation_fetch(self, channels, *, allow_50ohm=False):
+        for channel in channels:
+            self.require_high_impedance(channel, allow_50ohm=allow_50ohm)
+
+    def observation_identity(self):
+        return self.idn()
+
+    def observation_status(self, channel):
+        return asdict(self.status(channel))
+
+    def observation_input_safety(self, channel, *, allow_50ohm=False):
+        return {"channel": channel,
+                "coupling": self.require_high_impedance(channel, allow_50ohm=allow_50ohm),
+                "accepted_for_capture": True}
 
     def idn(self):
         return "RIGOL TECHNOLOGIES,DS1104Z Plus,123,1.0"

@@ -6,7 +6,7 @@ import os
 import time
 import traceback
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -14,9 +14,11 @@ from uuid import uuid4
 
 import numpy as np
 
-from wavebench.config import WaveBenchConfig
+from wavebench.config import WaveBenchConfig, normalize_waveform_points
 from wavebench.data.package import new_package_dir
-from wavebench.errors import ConfigError, DataError, SessionHealthError, WaveBenchError
+from wavebench.errors import (
+    ConfigError, DataError, SessionCloseError, SessionHealthError, WaveBenchError,
+)
 from wavebench.instruments.api import InstrumentDescriptor, ScopeCouplingPolicy
 from wavebench.instruments.capabilities import require_capabilities
 from wavebench.instruments.contracts import (
@@ -61,6 +63,7 @@ from wavebench.instruments.models import (
     WaveformData,
 )
 from wavebench.instruments.registry import resolve_instrument_descriptor
+from wavebench.instruments.scope_extension_capabilities import validate_scope_descriptor
 from wavebench.instruments.scope_extensions import (
     ErrorCheckSpec,
     ScopeContinuousAcquisitionRequest,
@@ -339,7 +342,7 @@ class ScopeService(SessionStateAliasMixin):
                 coordinator.complete_verification(authorization)
                 return identity
 
-    def _open_scope(self) -> ScopeDriver:
+    def _open_scope(self, *, defer_driver_io: bool = False) -> ScopeDriver:
         self._prepare_session_open("scope")
         if self.lease is None:
             self.lease = ResourceLease(
@@ -360,6 +363,7 @@ class ScopeService(SessionStateAliasMixin):
             options=getattr(self.config.scope, "options", {}),
             access=getattr(self.config.scope, "access", "read_write"),
             lease=self.lease,
+            force_deferred_io=defer_driver_io,
         )
         self.descriptor = opened.descriptor
         self.transport = opened.transport
@@ -374,15 +378,168 @@ class ScopeService(SessionStateAliasMixin):
         return self._open_scope()
 
     @contextmanager
-    def _scope_session(self) -> Iterator[ScopeDriver]:
+    def session_context(self, *, observation: bool = False) -> Iterator[ScopeService]:
+        """Retain one epoch and lease; borrowed sessions remain owned by their caller.
+
+        Observation-owned sessions defer constructor I/O until factory validation.
+        """
+
         if self.session is not None:
-            yield self.session
+            if isinstance(self.transport, GuardedAuditedTransport) and self.transport.session_state is not self.session_state:
+                raise ConfigError("scope service and guarded transport require shared instrument session state")
+            lock = self.session_state.transaction_lock if self.session_state else nullcontext()
+            with lock:
+                yield self
             return
-        scope = self._open_scope()
+        owned_lease = self.lease is None or not self.lease.acquired
+        scope = self._open_scope(defer_driver_io=True) if observation else self._open_scope()
+        self.session = scope
+        body_error: BaseException | None = None
         try:
-            yield scope
+            lock = self.session_state.transaction_lock if self.session_state else nullcontext()
+            with lock:
+                yield self
+        except BaseException as exc:
+            body_error = exc
+            raise
         finally:
-            scope.close()
+            failures: list[tuple[str, BaseException]] = []
+            # A plugin close may fail before delegating to its core transport.
+            # The guard's close is idempotent and invalidates the epoch first.
+            for component, close in (
+                ("driver", scope.close),
+                ("transport", getattr(self.transport, "close", None)),
+                ("state", getattr(self.session_state, "close", None)),
+                ("lease", self.lease.release if owned_lease and self.lease else None),
+            ):
+                if callable(close):
+                    try:
+                        close()
+                    except BaseException as exc:
+                        failures.append((component, exc))
+            self.session = None
+            if failures:
+                error = SessionCloseError(failures)
+                if body_error is not None:
+                    body_error.add_note(str(error))
+                else:
+                    raise error from failures[0][1]
+
+    @contextmanager
+    def _scope_session(self) -> Iterator[ScopeDriver]:
+        with self.session_context():
+            assert self.session is not None
+            yield self.session
+
+    def _observation_state(self) -> InstrumentSessionState:
+        state = self.session_state
+        if (
+            not isinstance(self.transport, GuardedAuditedTransport)
+            or state is None
+            or self.transport.session_state is not state
+        ):
+            raise ConfigError("scope observation requires a core guarded session")
+        if self.transport.lease is None or not self.transport.lease.acquired:
+            raise ConfigError("scope observation requires an exclusive resource lease")
+        if state.health is not SessionHealth.HEALTHY:
+            raise SessionHealthError(
+                "scope observation requires a healthy session",
+                health=state.health.value,
+                io_kind="observation_preflight",
+                epoch_id=state.epoch_id,
+            )
+        return state
+
+    @contextmanager
+    def observation_queries(self, operation: str, *, max_queries: int = 128) -> Iterator[None]:
+        """Gate public transport I/O to text queries on the retained healthy epoch.
+
+        This is a transport authorization boundary, not a Python plugin sandbox.
+        Legacy snapshots have no pure-read field contract and are not used here.
+        """
+
+        state = self._observation_state()
+        timeout_ms = self.config.connection.timeout_ms
+        with SessionTransactionCoordinator(state).authorize_normal(
+            operation_id=operation,
+            allowed_io=("query",),
+            fields=("scope.observation",),
+            timeout_ms=timeout_ms,
+            max_steps=max_queries,
+            context_id="scope_observation",
+            correlation_id=uuid4().hex,
+            phase="query",
+            absolute_deadline=time.monotonic() + timeout_ms / 1000.0,
+        ):
+            yield
+
+    def observation_identity(self) -> str:
+        spec = self._require("scope.idn", "scope.idn")
+        with self._scope_session() as scope:
+            state = self._observation_state()
+            if "scope.identity" not in state.verified_fields:
+                return self._verify_scope_identity(scope, spec=spec)
+            with self.observation_queries("scope.observation.identity", max_queries=1):
+                return scope.idn()
+
+    def observation_status(self, channel: int) -> dict[str, Any]:
+        """Read a descriptor's pure-query V2 snapshot without consuming error queues."""
+
+        with self._scope_session():
+            self._observation_state()
+            return asdict(self.snapshot_v2(channel))
+
+    def observation_input_safety(self, channel: int, *, allow_50ohm: bool = False) -> dict[str, Any]:
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver, expected_kind="scope",
+        )
+        with self._scope_session():
+            with self.observation_queries("scope.observation.input_safety"):
+                if "scope.channel_input_state_v2" in descriptor.capabilities:
+                    state = assert_scope_input_state_safe(
+                        self.channel_input_state_v2(channel), allow_50ohm=allow_50ohm,
+                    )
+                    return {
+                        "channel": channel, "coupling": state.coupling,
+                        "termination": state.termination, "accepted_for_capture": True,
+                    }
+                coupling = self.require_high_impedance(channel, allow_50ohm=allow_50ohm)
+                return {"channel": channel, "coupling": coupling, "accepted_for_capture": True}
+
+    def validate_observation_access(self) -> None:
+        """Reject disabled access and missing identity support before any factory runs."""
+
+        self._require("scope.idn", "scope.idn")
+
+    def validate_observation_fetch(self) -> None:
+        """Reject all offline-invalid fetch settings before report mutation starts."""
+
+        self._waveform_fetch_spec()
+        self.validate_observation_access()
+        descriptor = self.descriptor or resolve_instrument_descriptor(
+            self.config.scope.driver, expected_kind="scope",
+        )
+        validate_scope_descriptor(descriptor)
+        if not {"scope.channel_input_state_v2", "scope.channel_coupling"} & set(descriptor.capabilities):
+            raise ConfigError("scope waveform observation has no safe query-only channel verifier")
+        profile = self._waveform_binary_profile()
+        if profile is not None:
+            try:
+                profile.operation_for("fetch")
+            except ValueError as exc:
+                raise ConfigError(str(exc)) from exc
+
+    def preflight_observation_fetch(self, channels: tuple[int, ...], *, allow_50ohm: bool = False) -> None:
+        self.validate_observation_fetch()
+        # Standard waveform profiles do not declare an operation-specific channel
+        # range. Validate every requested channel through the guarded input query;
+        # unrelated display/focus profiles cannot prove fetch support.
+        with self._scope_session() as scope:
+            for channel in channels:
+                self.observation_input_safety(channel, allow_50ohm=allow_50ohm)
+            if self._waveform_binary_profile() is not None:
+                self._bounded_waveform_executor(scope)
+            self._session_preflight("scope.fetch_waveform", scope)
 
     def idn(self) -> str:
         spec = self._require("scope.idn", "scope.idn")
@@ -1192,11 +1349,12 @@ class ScopeService(SessionStateAliasMixin):
                 check_errors=self.config.autoscale.check_errors,
             )
 
-    def fetch_waveform(self, channel: int) -> WaveformData:
+    def _waveform_fetch_spec(self) -> OperationSpec:
         if self.config.waveform.format.lower() != "real":
             raise ConfigError("MVP-1 only supports waveform.format = 'real'")
         if self.config.waveform.byte_order.lower() != "lsbf":
             raise ConfigError("MVP-1 only supports waveform.byte_order = 'lsbf'")
+        normalize_waveform_points(self.config.waveform.points)
         bounded_profile = self._waveform_binary_profile()
         required = ["scope.fetch_waveform"]
         if bounded_profile is not None:
@@ -1205,7 +1363,11 @@ class ScopeService(SessionStateAliasMixin):
                 required.append("scope.error_drain_v1")
         elif self.config.scope.check_errors:
             required.append("scope.errors")
-        self._require("scope.fetch_waveform", *required)
+        return self._require("scope.fetch_waveform", *required)
+
+    def fetch_waveform(self, channel: int) -> WaveformData:
+        self._waveform_fetch_spec()
+        bounded_profile = self._waveform_binary_profile()
         with self._scope_session() as scope:
             if bounded_profile is not None:
                 result = self._bounded_waveform_executor(scope).fetch(

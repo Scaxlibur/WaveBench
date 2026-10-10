@@ -1,4 +1,6 @@
 import shlex
+from contextlib import nullcontext
+from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -34,6 +36,13 @@ default_channel = 1
 class _FakeScopeService:
     def __init__(self, *, config, logger):
         self.config = config
+        self.session_state = None
+
+    def session_context(self, **kwargs):
+        return nullcontext(self)
+
+    def validate_observation_access(self):
+        pass
 
     def idn(self):
         return "RIGOL TECHNOLOGIES,DS1104Z Plus,123,1.0"
@@ -43,6 +52,17 @@ class _FakeScopeService:
 
     def require_high_impedance(self, channel, *, allow_50ohm=False):
         return "DC"
+
+    def observation_identity(self):
+        return self.idn()
+
+    def observation_status(self, channel):
+        return asdict(self.status(channel))
+
+    def observation_input_safety(self, channel, *, allow_50ohm=False):
+        return {"channel": channel,
+                "coupling": self.require_high_impedance(channel, allow_50ohm=allow_50ohm),
+                "accepted_for_capture": True}
 
 
 def _snapshot(channel: int):
@@ -248,3 +268,77 @@ def test_focus_command_hide_others_uses_real_cli_flag(hide_others):
     assert request.channels == (2,)
     assert request.vertical_scales[0].scale_v_per_div == 0.25
     assert request.hide_others is hide_others
+
+
+def test_advice_without_evidence_does_not_recommend_keeping_settings():
+    observation = _observation(fetch_waveform=False)
+    observation["status"] = "partial"
+    for section in observation["channels"]:
+        section["scope_status"] = {"status": "unavailable", "reason": "snapshot unsupported"}
+    payload = scope_advise_from_observation(observation)
+    assert [item["id"] for item in payload["recommendations"]] == [
+        "advice_unavailable", "advice_unavailable",
+    ]
+    assert [item["channel"] for item in payload["recommendations"]] == [1, 2]
+    assert all("command" not in item for item in payload["recommendations"])
+    assert payload["status"] == "partial"
+
+
+def test_unavailable_channel_does_not_hide_other_channel_advice():
+    observation = _observation(fetch_waveform=False)
+    observation["status"] = "partial"
+    observation["channels"][1]["scope_status"] = {"status": "unavailable"}
+    payload = scope_advise_from_observation(observation)
+    assert [(item["id"], item["channel"]) for item in payload["recommendations"]] == [
+        ("focus_channel", 1), ("advice_unavailable", 2),
+    ]
+
+
+def test_unavailable_snapshot_data_is_not_reused_as_evidence():
+    observation = _observation(fetch_waveform=False)
+    observation["channels"] = [observation["channels"][0]]
+    observation["channels"][0]["scope_status"]["status"] = "unavailable"
+    payload = scope_advise_from_observation(observation)
+    assert payload["recommendations"][0]["id"] == "advice_unavailable"
+
+
+def test_identity_only_v2_snapshot_returns_unavailable_advice():
+    from wavebench.instruments.models import (
+        SCOPE_SNAPSHOT_V2_FIELD_ORDER, ScopeIdentitySnapshot, ScopeSnapshotV2,
+    )
+
+    snapshot = ScopeSnapshotV2(
+        identity=ScopeIdentitySnapshot("FAKE", "Scope", "OFFLINE", "1.0"),
+        unavailable_fields=tuple(
+            field for field in SCOPE_SNAPSHOT_V2_FIELD_ORDER if not field.startswith("identity.")
+        ),
+    )
+    observation = _observation(fetch_waveform=False)
+    observation["channels"] = [observation["channels"][0]]
+    observation["channels"][0]["scope_status"]["data"] = asdict(snapshot)
+    payload = scope_advise_from_observation(observation)
+    assert payload["recommendations"][0]["id"] == "advice_unavailable"
+
+
+def test_configured_frequency_can_support_advice_without_snapshot():
+    observation = _observation(fetch_waveform=False)
+    observation["channels"] = [observation["channels"][0]]
+    observation["channels"][0]["scope_status"] = {"status": "unavailable"}
+    payload = scope_advise_from_observation(observation, expected_frequencies_hz={1: 1000.0})
+    recommendation = payload["recommendations"][0]
+    assert recommendation["id"] == "focus_channel"
+    assert recommendation["parameters"]["time_range_s"] == pytest.approx(0.01)
+    assert recommendation["parameters"]["frequency_confidence"] == "configured"
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+def test_nonfinite_metrics_are_not_usable_advice_evidence(invalid):
+    observation = _observation(fetch_waveform=True, measured_frequency={1: 1000.0})
+    section = observation["channels"][0]
+    observation["channels"] = [section]
+    section["scope_status"]["data"]["channel"]["scale_v_per_div"] = invalid
+    section["waveform"]["data"]["summary"].update(
+        frequency_estimate_hz=invalid, voltage_vpp_v=invalid, quality_warnings=[],
+    )
+    payload = scope_advise_from_observation(observation)
+    assert payload["recommendations"][0]["id"] == "advice_unavailable"

@@ -128,6 +128,7 @@ def _recommendations(
         channel = channel_section.get("channel")
         if not isinstance(channel, int):
             continue
+        recommendation_count = len(recommendations)
         summary = _waveform_summary(channel_section)
         snapshot = _scope_status_data(channel_section)
         frequency_hz, source, confidence, withheld_reason = _frequency_for_advice(
@@ -152,7 +153,8 @@ def _recommendations(
             "time_range_s": time_range,
             "vertical_scale_v_per_div": vertical_scale,
         }
-        if snapshot and snapshot.get("channel", {}).get("enabled") is False:
+        snapshot_channel = None if snapshot is None else snapshot.get("channel")
+        if isinstance(snapshot_channel, dict) and snapshot_channel.get("enabled") is False:
             recommendations.append(
                 _command_recommendation(
                     "display_on",
@@ -201,6 +203,8 @@ def _recommendations(
                     },
                 )
             )
+        if len(recommendations) == recommendation_count:
+            recommendations.append(_unavailable_advice(channel))
     span = _frequency_span(channel_profiles)
     if span is not None and span["ratio_high_over_low"] > 10.0:
         recommendations.append(
@@ -223,17 +227,25 @@ def _recommendations(
             }
         )
     if not recommendations:
-        recommendations.append(
-            {
-                "id": "no_adjustment_needed",
-                "priority": "low",
-                "action": "keep_current_scope_settings",
-                "reason": "No obvious display or acquisition-window issue was found.",
-                "mutates_instrument_if_applied": False,
-                "raw_scpi": False,
-            }
-        )
+        recommendations.append(_unavailable_advice(None))
     return recommendations
+
+
+def _unavailable_advice(channel: int | None) -> dict[str, Any]:
+    recommendation: dict[str, Any] = {
+        "id": "advice_unavailable",
+        "priority": "normal",
+        "action": "obtain_scope_evidence",
+        "reason": (
+            "No usable display settings, waveform metrics or expected frequency are available; "
+            "the current settings could not be assessed."
+        ),
+        "mutates_instrument_if_applied": False,
+        "raw_scpi": False,
+    }
+    if channel is not None:
+        recommendation["channel"] = channel
+    return recommendation
 
 
 def _waveform_summary(channel_section: dict[str, Any]) -> dict[str, Any] | None:
@@ -246,6 +258,8 @@ def _waveform_summary(channel_section: dict[str, Any]) -> dict[str, Any] | None:
 
 def _scope_status_data(channel_section: dict[str, Any]) -> dict[str, Any] | None:
     status = channel_section.get("scope_status", {})
+    if status.get("status") not in {"ok", "partial"}:
+        return None
     data = status.get("data")
     return data if isinstance(data, dict) else None
 
@@ -279,7 +293,10 @@ def _summary_frequency(summary: dict[str, Any] | None) -> float | None:
     if summary is None:
         return None
     value = summary.get("frequency_estimate_hz")
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+    if (
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+        or not math.isfinite(value) or value <= 0
+    ):
         return None
     return float(value)
 
@@ -304,12 +321,20 @@ def _recommended_vertical_scale(
     target_vertical_divisions: float,
 ) -> float | None:
     vpp = None if summary is None else summary.get("voltage_vpp_v")
-    if isinstance(vpp, (int, float)) and not isinstance(vpp, bool) and vpp > 0:
+    if (
+        isinstance(vpp, (int, float)) and not isinstance(vpp, bool)
+        and math.isfinite(vpp) and vpp > 0
+    ):
         return float(vpp) / target_vertical_divisions
     scale = None
     if snapshot is not None:
-        scale = snapshot.get("channel", {}).get("scale_v_per_div")
-    if isinstance(scale, (int, float)) and not isinstance(scale, bool) and scale > 0:
+        snapshot_channel = snapshot.get("channel")
+        if isinstance(snapshot_channel, dict):
+            scale = snapshot_channel.get("scale_v_per_div")
+    if (
+        isinstance(scale, (int, float)) and not isinstance(scale, bool)
+        and math.isfinite(scale) and scale > 0
+    ):
         return float(scale)
     return None
 
@@ -420,6 +445,8 @@ def _agent_hints(
     recommendations: list[dict[str, Any]],
 ) -> list[str]:
     hints = list(observation.get("agent_hints", []))
+    if any(item["id"] == "advice_unavailable" for item in recommendations):
+        hints.append("advise: insufficient evidence is not a recommendation to keep current settings")
     if any(item["id"] == "separate_timebase_profiles" for item in recommendations):
         hints.append("advise: run focus/observe per channel when frequencies differ greatly")
     if any(item["id"] == "timebase_advice_withheld" for item in recommendations):

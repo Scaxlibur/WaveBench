@@ -70,6 +70,7 @@ nav:
   - 开发:
       - 贡献: development/contributing.md
       - 测试: development/testing.md
+      - 开发线示波器观察: development/scope-observation.md
       - 文档工作流: development/documentation.md
       - 插件开发: development/plugin-development.md
       - 新增仪器驱动: development/instrument-drivers.md

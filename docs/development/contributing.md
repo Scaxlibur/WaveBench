@@ -13,3 +13,5 @@ WaveBench 的代码、文档、schema 和测试在同一仓库中维护。提交
 按[测试说明](testing.md)选择检查：局部修改先做聚焦验证，文档或 Skill 修改检查相关内容，跨模块或合并评估执行集成检查。远端 CI 仍按仓库 workflow 执行，不要求每个编辑步骤重跑全量测试。
 
 新增或修改用户可见行为时，更新唯一 canonical Reference，并用[文档工作流](documentation.md)进行 scoped review。插件专用流程见[插件开发](plugin-development.md)。
+
+尚未发布的示波器观察入口及执行验收合同见[开发线示波器观察](scope-observation.md)。

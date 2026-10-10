@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +11,13 @@ from wavebench.data.expectations import (
     validate_expectation,
 )
 from wavebench.data.relationships import analyze_waveform_relationships
-from wavebench.errors import ConfigError, WaveBenchError
+from wavebench.errors import (
+    ConfigError, ConnectionError, DataError, SessionHealthError, TransportIOError, WaveBenchError,
+)
 from wavebench.instruments.models import WaveformData
 from wavebench.logging import CommandLogger
 from wavebench.services.scope_service import ScopeService
+from wavebench.transport.session import SessionHealth
 
 # 读取波形可能造成的仪器状态影响。读取前不恢复原采集状态，调用方必须先确认。
 _WAVEFORM_STATE_EFFECTS = [
@@ -22,7 +25,29 @@ _WAVEFORM_STATE_EFFECTS = [
     "waveform transfer source/mode/format/points may be changed",
     "some drivers may enable the requested analog channel display before fetching",
     "the previous acquisition run state is not restored",
+    "the instrument error queue may be consumed when check_errors is enabled",
 ]
+
+
+@dataclass
+class _ObservationExecution:
+    service: ScopeService
+    stop_reason: str | None = None
+    mutation_block_reason: str | None = None
+
+    def io_failed(self, exc: Exception) -> None:
+        state = self.service.session_state
+        if (
+            isinstance(exc, (SessionHealthError, TransportIOError, ConnectionError, OSError))
+            or (state is not None and state.health is not SessionHealth.HEALTHY)
+            or not isinstance(exc, (ConfigError, DataError))
+        ):
+            self.stop_reason = f"instrument I/O stopped after {type(exc).__name__}: {exc}"
+
+    def check_health(self) -> None:
+        state = self.service.session_state
+        if state is not None and state.health is not SessionHealth.HEALTHY:
+            self.stop_reason = f"instrument I/O stopped because session health is {state.health.value}"
 
 
 def scope_observe_payload(
@@ -33,9 +58,10 @@ def scope_observe_payload(
     allow_50ohm: bool = False,
     resource: str | None = None,
 ) -> dict[str, Any]:
-    """严格只读的示波器观察：IDN、每通道快照和高阻安全判断。
+    """通过受限查询执行身份、可用 V2 快照和高阻安全判断。
 
-    该函数不读取波形，也不发送任何会改变仪器状态的命令，因此可以安全地通过 MCP 暴露。
+    该函数不读取波形，观察阶段限制为文本查询；V2 快照以 descriptor 的 pure-read 合同为准。
+    插件属于可信本地代码，guard 的 I/O 限制不替代插件查询语义的合同验证。
     需要波形、期望值检查或多通道关系时，请使用 ``scope_waveform_report_payload``
     （对应显式 CLI 命令 ``wavebench scope observe --fetch-waveform``）。
     """
@@ -62,7 +88,7 @@ def scope_waveform_report_payload(
     """显式读取波形并给出摘要、期望值检查和多通道关系。
 
     读取波形属于写操作：可能停止正在运行的采集、修改波形传输参数并打开通道显示。
-    所有输入（通道、期望值）都在任何仪器 I/O 之前完成校验，非法输入不会产生任何仪器写入。
+    所有通道和采集参数都在采集写入之前完成预检；型号相关通道验证可能需要只读查询。
     """
     normalized_expectations = _normalize_expectations(expectations)
     return _build_observation(
@@ -89,6 +115,8 @@ def _build_observation(
     config = load_config(config_path)
     if resource:
         config = config.with_resource(resource)
+    if not fetch_waveform and config.scope.access == "read_write":
+        config = replace(config, scope=replace(config.scope, access="read_only"))
     observed_channels = _scope_channels(
         channel=channel,
         channels=channels,
@@ -107,21 +135,53 @@ def _build_observation(
     warnings: list[str] = []
     fetched_waveforms: dict[int, WaveformData] = {}
     expectation_results: dict[int, dict[str, Any]] = {}
-
-    sections["identity"] = _attempt(lambda: {"idn": service.idn()}, warnings=warnings, name="identity")
-    channel_sections = [
-        _observe_channel(
-            service,
-            observed_channel,
-            fetch_waveform=fetch_waveform,
-            allow_50ohm=allow_50ohm,
-            warnings=warnings,
-            fetched_waveforms=fetched_waveforms,
-            expectations=expectations or {},
-            expectation_results=expectation_results,
+    execution = _ObservationExecution(service)
+    channel_sections: list[dict[str, Any]] = []
+    access_validation = _attempt(
+        service.validate_observation_access, warnings=warnings, name="observation_access",
+    )
+    if access_validation["status"] != "ok":
+        execution.stop_reason = "observation access/capability validation failed before session open"
+    if fetch_waveform:
+        validation = _attempt(
+            service.validate_observation_fetch, warnings=warnings, name="waveform_validation",
         )
-        for observed_channel in observed_channels
-    ]
+        if validation["status"] != "ok":
+            execution.stop_reason = "waveform configuration/access/capability validation failed before session open"
+
+    def collect() -> None:
+        with service.session_context(observation=True):
+            sections["identity"] = _attempt(
+                lambda: {"idn": service.observation_identity()},
+                warnings=warnings, name="identity", execution=execution, io=True,
+            )
+            if fetch_waveform and execution.mutation_block_reason is None:
+                preflight = _attempt(
+                    lambda: service.preflight_observation_fetch(
+                        observed_channels, allow_50ohm=allow_50ohm,
+                    ),
+                    warnings=warnings, name="waveform_preflight", execution=execution, io=True,
+                )
+                if preflight["status"] != "ok":
+                    execution.mutation_block_reason = "all-channel waveform preflight failed"
+            for observed_channel in observed_channels:
+                channel_sections.append(observe_channel(observed_channel))
+
+    def observe_channel(observed_channel: int) -> dict[str, Any]:
+        return _observe_channel(
+            service, observed_channel, fetch_waveform=fetch_waveform,
+            allow_50ohm=allow_50ohm, warnings=warnings,
+            fetched_waveforms=fetched_waveforms, expectations=expectations or {},
+            expectation_results=expectation_results, execution=execution,
+        )
+
+    lifecycle = _attempt(collect, warnings=warnings, name="session", execution=execution, io=True)
+    if lifecycle["status"] != "ok":
+        execution.stop_reason = "observation session unavailable or close failed"
+        sections["session"] = lifecycle
+        sections.setdefault("identity", lifecycle)
+        for observed_channel in observed_channels[len(channel_sections):]:
+            channel_sections.append(observe_channel(observed_channel))
     first_channel = channel_sections[0]
     sections["scope_status"] = first_channel["scope_status"]
     sections["coupling"] = first_channel["coupling"]
@@ -153,16 +213,19 @@ def _build_observation(
         "warnings": warnings,
     }
     if fetch_waveform:
-        # 每个通道各自打开 session，波形不保证来自同一次 acquisition；跨采集的时序关系不成立。
+        # 共享 session/lease 不能证明各通道来自同一次 acquisition。
         payload["waveform_source"] = {
             "same_acquisition": False,
             "reason": "channels are fetched channel-by-channel, not in one acquisition",
         }
-        payload["relationships"] = (
-            analyze_waveform_relationships(fetched_waveforms, same_acquisition=False)
-            if len(fetched_waveforms) >= 2
-            else []
-        )
+        payload["relationships"] = []
+        if len(fetched_waveforms) >= 2:
+            relationships = _attempt(
+                lambda: analyze_waveform_relationships(fetched_waveforms, same_acquisition=False),
+                warnings=warnings, name="relationships",
+            )
+            if relationships["status"] == "ok":
+                payload["relationships"] = relationships["data"]
         payload["expectations"] = expectation_summary(expectation_results)
     payload["agent_hints"] = _agent_hints(
         sections,
@@ -172,6 +235,7 @@ def _build_observation(
         expectation_results=expectation_results,
         fetch_waveform=fetch_waveform,
     )
+    payload["status"] = "ok" if not warnings else "partial"
     return payload
 
 
@@ -217,18 +281,21 @@ def _observe_channel(
     fetched_waveforms: dict[int, WaveformData],
     expectations: dict[int, dict[str, Any]],
     expectation_results: dict[int, dict[str, Any]],
+    execution: _ObservationExecution,
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
         "channel": channel,
         "scope_status": _attempt(
-            lambda: asdict(service.status(channel=channel)),
+            lambda: service.observation_status(channel=channel),
             warnings=warnings,
             name=f"ch{channel}_scope_status",
+            execution=execution, io=True,
         ),
         "coupling": _attempt(
             lambda: _coupling_payload(service, channel, allow_50ohm=allow_50ohm),
             warnings=warnings,
             name=f"ch{channel}_coupling",
+            execution=execution, io=True,
         ),
     }
     if not fetch_waveform:
@@ -239,9 +306,11 @@ def _observe_channel(
             channel,
             allow_50ohm=allow_50ohm,
             fetched_waveforms=fetched_waveforms,
+            execution=execution,
         ),
         warnings=warnings,
         name=f"ch{channel}_waveform",
+        execution=execution, mutation=True,
     )
     if channel in expectations and section["waveform"]["status"] == "ok":
         result = _attempt(
@@ -268,16 +337,32 @@ def _observe_channel(
     return section
 
 
-def _attempt(call, *, warnings: list[str], name: str) -> dict[str, Any]:
+def _attempt(
+    call, *, warnings: list[str], name: str,
+    execution: _ObservationExecution | None = None, io: bool = False, mutation: bool = False,
+) -> dict[str, Any]:
+    if execution is not None:
+        execution.check_health()
+        reason = execution.stop_reason or (execution.mutation_block_reason if mutation else None)
+        if reason and (io or mutation):
+            warnings.append(f"{name}_skipped: {reason}")
+            return {"status": "skipped", "reason": reason}
     try:
-        return {"status": "ok", "data": call()}
+        data = call()
+        if execution is not None:
+            execution.check_health()
+        return {"status": "ok", "data": data}
     except WaveBenchError as exc:
+        if execution is not None and io:
+            execution.io_failed(exc)
         warnings.append(f"{name}_unavailable: {exc}")
         return {
             "status": "unavailable",
             "error": {"type": type(exc).__name__, "message": str(exc)},
         }
     except Exception as exc:
+        if execution is not None and io:
+            execution.io_failed(exc)
         warnings.append(f"{name}_unavailable: {type(exc).__name__}: {exc}")
         return {
             "status": "unavailable",
@@ -291,12 +376,7 @@ def _coupling_payload(
     *,
     allow_50ohm: bool,
 ) -> dict[str, Any]:
-    coupling = service.require_high_impedance(channel, allow_50ohm=allow_50ohm)
-    return {
-        "channel": channel,
-        "coupling": coupling,
-        "accepted_for_capture": True,
-    }
+    return service.observation_input_safety(channel, allow_50ohm=allow_50ohm)
 
 
 def _waveform_payload(
@@ -305,16 +385,27 @@ def _waveform_payload(
     *,
     allow_50ohm: bool,
     fetched_waveforms: dict[int, WaveformData],
+    execution: _ObservationExecution,
 ) -> dict[str, Any]:
-    service.require_high_impedance(channel, allow_50ohm=allow_50ohm)
-    waveform = service.fetch_waveform(channel=channel)
+    try:
+        service.observation_input_safety(channel, allow_50ohm=allow_50ohm)
+        execution.check_health()
+        if execution.stop_reason:
+            raise ConfigError(execution.stop_reason)
+        waveform = service.fetch_waveform(channel=channel)
+    except Exception as exc:
+        execution.io_failed(exc)
+        if isinstance(exc, ConfigError):
+            execution.mutation_block_reason = f"waveform mutation stopped after ConfigError: {exc}"
+        raise
+    summary = waveform.summary(
+        expected_frequency_hz=service.config.waveform.expected_frequency_hz,
+        frequency_tolerance_ratio=service.config.waveform.frequency_tolerance_ratio,
+    )
     fetched_waveforms[channel] = waveform
     return {
         "channel": channel,
-        "summary": waveform.summary(
-            expected_frequency_hz=service.config.waveform.expected_frequency_hz,
-            frequency_tolerance_ratio=service.config.waveform.frequency_tolerance_ratio,
-        ),
+        "summary": summary,
         "raw_samples_included": False,
     }
 
@@ -364,7 +455,7 @@ def _agent_hints(
         elif result["status"] == "unavailable":
             hints.append(f"CH{channel}_expectation_unavailable: acceptance could not be evaluated")
     if sections.get("scope_status", {}).get("status") == "unavailable":
-        hints.append("driver lacks scope.snapshot or the status query failed; use identity cautiously")
+        hints.append("pure-query V2 snapshot is unavailable; identity alone cannot assess scope settings")
     if sections.get("coupling", {}).get("status") == "unavailable":
         hints.append("do not run capture until input coupling safety is confirmed")
     if warnings:

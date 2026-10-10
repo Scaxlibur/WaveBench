@@ -18,7 +18,7 @@ def test_waveform_pair_reports_frequency_voltage_and_phase_for_related_signals()
     left = _waveform(1, np.sin(2 * np.pi * 1000 * t), stop=float(t[-1]))
     right = _waveform(2, 0.5 * np.sin(2 * np.pi * 1000 * (t - 0.00025)) + 0.2, stop=float(t[-1]))
 
-    relationship = analyze_waveform_pair(left, right)
+    relationship = analyze_waveform_pair(left, right, same_acquisition=True)
 
     assert relationship["channels"] == [1, 2]
     assert relationship["common_time"]["overlap"] is True
@@ -60,7 +60,7 @@ def test_waveform_pair_reports_phase_lag_in_degrees():
             stop=float(t[-1]),
         )
 
-        relationship = analyze_waveform_pair(left, right)
+        relationship = analyze_waveform_pair(left, right, same_acquisition=True)
 
         assert relationship["phase_degrees_at_left_frequency"] == pytest.approx(
             expected_degrees, abs=0.5
@@ -74,6 +74,7 @@ def test_waveform_pair_reports_180_degrees_for_inverted_signal():
     relationship = analyze_waveform_pair(
         _waveform(1, left, stop=float(t[-1])),
         _waveform(2, -left, stop=float(t[-1])),
+        same_acquisition=True,
     )
 
     # 用相关峰绝对值选 lag 会把它报成 0°
@@ -87,7 +88,7 @@ def test_waveform_pair_phase_rejects_dc_leakage_in_noninteger_cycle_window():
         2, np.sin(2 * np.pi * 1000 * t - np.pi / 2) + 5.0, stop=float(t[-1]),
     )
 
-    relationship = analyze_waveform_pair(left, right)
+    relationship = analyze_waveform_pair(left, right, same_acquisition=True)
 
     assert relationship["frequency"]["left_hz"] == pytest.approx(1000.0, abs=0.1)
     assert relationship["frequency"]["right_hz"] == pytest.approx(1000.0, abs=0.1)
@@ -113,7 +114,7 @@ def test_waveform_pair_warns_when_frequency_confidence_is_low():
     left = _waveform(1, np.sin(2 * np.pi * 1000 * t), stop=float(t[-1]))
     right = _waveform(2, np.sin(2 * np.pi * 2000 * t), stop=float(t[-1]))
 
-    relationship = analyze_waveform_pair(left, right)
+    relationship = analyze_waveform_pair(left, right, same_acquisition=True)
 
     assert relationship["frequency"]["left_hz"] is None
     assert any("frequency_low_confidence" in warning for warning in relationship["warnings"])
@@ -124,7 +125,7 @@ def test_waveform_pair_reports_intersection_points():
     left = _waveform(1, t - 0.25, stop=float(t[-1]))
     right = _waveform(2, np.zeros_like(t), stop=float(t[-1]))
 
-    relationship = analyze_waveform_pair(left, right)
+    relationship = analyze_waveform_pair(left, right, same_acquisition=True)
 
     intersections = relationship["intersections"]
     assert intersections["mode"] == "finite"
@@ -141,7 +142,7 @@ def test_waveform_pair_can_truncate_many_intersections():
     left = _waveform(1, np.sin(2 * np.pi * 1000 * t), stop=float(t[-1]))
     right = _waveform(2, np.zeros_like(t), stop=float(t[-1]))
 
-    relationship = analyze_waveform_pair(left, right, max_intersections=3)
+    relationship = analyze_waveform_pair(left, right, same_acquisition=True, max_intersections=3)
 
     assert relationship["intersections"]["count"] > 3
     assert relationship["intersections"]["returned"] == 3
@@ -156,8 +157,32 @@ def test_waveform_pair_marks_coincident_waveforms_as_unbounded_intersections():
     relationship = analyze_waveform_pair(
         _waveform(1, values, stop=float(t[-1])),
         _waveform(2, values, stop=float(t[-1])),
+        same_acquisition=True,
     )
 
     assert relationship["intersections"]["mode"] == "coincident"
     assert relationship["intersections"]["count"] is None
     assert "waveforms_coincident_intersections_unbounded" in relationship["warnings"]
+
+
+def test_relationship_entry_points_default_to_unproven_timing():
+    t = np.linspace(0.0, 0.009, 1000)
+    waves = {
+        1: _waveform(1, np.sin(2 * np.pi * 1000 * t)),
+        2: _waveform(2, np.sin(2 * np.pi * 1000 * t - np.pi / 2)),
+    }
+    pair = analyze_waveform_pair(waves[1], waves[2])
+    multiple = analyze_waveform_relationships(waves)
+    for result in (pair, multiple[0]):
+        assert result["common_time"]["same_acquisition"] is False
+        assert result["phase_degrees_at_left_frequency"] is None
+        assert result["correlation"]["status"] == "skipped"
+        assert result["intersections"]["status"] == "skipped"
+        assert result["frequency"]["ratio_high_over_low"] == 1.0
+
+
+@pytest.mark.parametrize("assertion", ["false", 1, None])
+def test_relationship_rejects_truthy_non_boolean_sync_assertions(assertion):
+    wave = _waveform(1, np.zeros(10))
+    with pytest.raises(ValueError, match="same_acquisition"):
+        analyze_waveform_pair(wave, wave, same_acquisition=assertion)

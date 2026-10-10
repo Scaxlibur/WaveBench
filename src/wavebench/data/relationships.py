@@ -12,7 +12,7 @@ from wavebench.instruments.models import WaveformData
 def analyze_waveform_relationships(
     waveforms: dict[int, WaveformData],
     *,
-    same_acquisition: bool = True,
+    same_acquisition: bool = False,
     max_correlation_points: int = 4096,
     max_intersections: int = 64,
 ) -> list[dict[str, Any]]:
@@ -34,10 +34,17 @@ def analyze_waveform_pair(
     left: WaveformData,
     right: WaveformData,
     *,
-    same_acquisition: bool = True,
+    same_acquisition: bool = False,
     max_correlation_points: int = 4096,
     max_intersections: int = 64,
 ) -> dict[str, Any]:
+    """Summarize waveforms; timing requires an explicit shared-acquisition assertion.
+
+    This helper does not validate capture provenance. Real capture timing analysis
+    must use the validated synchronization contract in ``pair_analysis``.
+    """
+    if not isinstance(same_acquisition, bool):
+        raise ValueError("same_acquisition must be a boolean")
     left_summary = left.summary()
     right_summary = right.summary()
     warnings: list[str] = []

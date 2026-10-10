@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -89,6 +91,7 @@ class _FakeScopeService:
 
     def __init__(self, *, config, logger):
         self.config = config
+        self.session_state = None
         self.fetched_channels: list[int] = []
         self.allow_50ohm_seen: list[bool] = []
         _FakeScopeService.instances.append(self)
@@ -98,6 +101,33 @@ class _FakeScopeService:
 
     def status(self, channel):
         return _snapshot(channel)
+
+    @contextmanager
+    def session_context(self, *, observation=False):
+        yield self
+
+    def observation_identity(self):
+        return self.idn()
+
+    def observation_status(self, channel):
+        return asdict(self.status(channel))
+
+    def observation_input_safety(self, channel, *, allow_50ohm=False):
+        return {
+            "channel": channel,
+            "coupling": self.require_high_impedance(channel, allow_50ohm=allow_50ohm),
+            "accepted_for_capture": True,
+        }
+
+    def validate_observation_fetch(self):
+        pass
+
+    def validate_observation_access(self):
+        pass
+
+    def preflight_observation_fetch(self, channels, *, allow_50ohm=False):
+        for channel in channels:
+            self.observation_input_safety(channel, allow_50ohm=allow_50ohm)
 
     def require_high_impedance(self, channel, *, allow_50ohm=False):
         self.allow_50ohm_seen.append(allow_50ohm)
@@ -245,9 +275,13 @@ def test_scope_waveform_report_preserves_unavailable_expectations(failed_channel
         str(channel): "unavailable" if channel in failed_channels else "pass"
         for channel in (1, 2)
     }
+    # Any unsafe channel blocks the whole report before acquisition writes.
+    # An in-fetch ConfigError conservatively stops later mutations too.
+    if failure == "coupling" or (failure == "waveform" and 1 in failed_channels):
+        expected_statuses = {"1": "unavailable", "2": "unavailable"}
     assert payload["status"] == "partial"
     assert payload["expectations"] == {
-        "status": "unavailable" if len(failed_channels) == 2 else "partial",
+        "status": "unavailable" if set(expected_statuses.values()) == {"unavailable"} else "partial",
         "channels": expected_statuses,
     }
     for channel in failed_channels:
