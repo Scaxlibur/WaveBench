@@ -47,9 +47,9 @@ python scripts/docs_impact.py --base <base-revision> --head HEAD
 ## 站点预览与发布
 
 ```bash
-python -m pip install -e ".[docs]"
-mkdocs serve
-mkdocs build --strict
+uv sync --locked --extra dev --extra docs
+uv run --no-sync mkdocs serve
+uv run --no-sync mkdocs build --strict
 ```
 
 `mkdocs.yml` 只映射当前的开始使用、教程、How-to、Reference、Concepts、开发和 RFC 入口；archive 与旧入口不在主导航中。GitHub Actions 会在文档或潜在事实源变化时执行严格构建。

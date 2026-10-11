@@ -4,41 +4,35 @@
 
 ## 前置条件
 
-- Python 3.11 或更高版本。
+- Python 3.11 或更高版本，以及 [uv](https://docs.astral.sh/uv/getting-started/installation/)。
 - 一个新的 WaveBench 工作副本。
 - 不需要 `wavebench.toml`，也不需要连接仪器。
 
 ## 1. 创建虚拟环境并安装
 
-在仓库根目录运行：
+在新的仓库工作副本中运行，Bash 与 PowerShell 使用相同命令：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
+uv sync --locked
 ```
 
-PowerShell：
-
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
-```
-
-安装完成后，后续命令使用同一虚拟环境中的 Python；不依赖 shell 是否已激活虚拟环境。
+依赖版本来自 `uv.lock`，项目以 editable 方式安装到 `.venv`。
+已有仪器插件的环境不要执行默认同步，因为未声明的包会被移除；实际仪器使用采用
+[专用运行环境](../how-to/manage-plugins.md)。
 
 ## 2. 检查命令入口
 
 ```bash
-.venv/bin/python -m wavebench --help
+uv run --no-sync wavebench --help
 ```
 
-输出会列出 `run`、`scope`、`source`、`power`、`dmm`、`doctor`、`plugin` 和 `capability` 等命令域。PowerShell 中将前缀替换为 `.\.venv\Scripts\python.exe`。
+输出会列出 `run`、`scope`、`source`、`power`、`dmm`、`doctor`、`plugin` 和 `capability` 等命令域。`--no-sync` 使用已经准备好的环境，不在执行前更改依赖。
 
 ## 3. 查看并打印一个模板
 
 ```bash
-.venv/bin/python -m wavebench run template --list
-.venv/bin/python -m wavebench run template source-scope-sine --print
+uv run --no-sync wavebench run template --list
+uv run --no-sync wavebench run template source-scope-sine --print
 ```
 
 第一条命令应包含 `source-scope-sine`。第二条命令会把 TOML 打印到标准输出，其中包含实验段和 `[[steps]]`；它不会写文件、加载配置或连接仪器。
@@ -46,7 +40,7 @@ py -3.11 -m venv .venv
 ## 4. 离线检查现有示例
 
 ```bash
-.venv/bin/python -m wavebench run check --plan plans/closure_sine_1k.toml
+uv run --no-sync wavebench run check --plan plans/closure_sine_1k.toml
 ```
 
 成功时，输出末尾为 `safety_limits=ok / 安全上限=通过`。`run check` 会解析 plan、检查 schema、离线安全上限和声明的 capability；它不会打开 transport 或访问仪器。
