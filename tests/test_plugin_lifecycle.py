@@ -1147,6 +1147,53 @@ def test_out_of_band_change_is_reported_as_missing_or_drifted(tmp_path):
     assert lifecycle.info("example.scope").status == "missing"
 
 
+@pytest.mark.parametrize("rollback", ("complete", "interrupted", "tampered"))
+def test_failed_upgrade_restores_a_plugin_originally_installed_by_pip(tmp_path, monkeypatch, rollback):
+    python = _target_venv(tmp_path)
+    _run([str(python), "-m", "ensurepip"])
+    lifecycle = PluginLifecycle(python_executable=python)
+    original = _plugin_wheel(tmp_path, version="0.1.0")
+    broken = _plugin_wheel(tmp_path, version="0.2.0", broken_descriptor=True)
+
+    def install_with_pip(wheel):
+        _run([str(python), "-I", "-m", "pip", "install", "--isolated",
+              "--no-index", "--no-deps", "--force-reinstall", str(wheel)])
+
+    with monkeypatch.context() as legacy:
+        legacy.setattr(lifecycle, "_install_wheel", install_with_pip)
+        lifecycle.install(original)
+    _run([shutil.which("uv"), "pip", "uninstall", "--python", str(python), "pip"])
+
+    if rollback == "complete":
+        with pytest.raises(ConfigError, match="plugin postflight failed"):
+            lifecycle.upgrade(broken)
+    else:
+        install = lifecycle._install_wheel
+
+        def interrupt_rollback(wheel):
+            install(wheel)
+            if wheel.name == original.name:
+                if rollback == "tampered":
+                    module = Path(lifecycle.environment().purelib) / "wavebench_example_scope/__init__.py"
+                    module.write_text("raise RuntimeError('tampered')\n", encoding="utf-8")
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(lifecycle, "_install_wheel", interrupt_rollback)
+        with pytest.raises(KeyboardInterrupt):
+            lifecycle.upgrade(broken)
+        if rollback == "tampered":
+            with pytest.raises(ConfigError, match="recovery required"):
+                lifecycle.recover()
+            assert lifecycle.journal_path.exists()
+            return
+        assert lifecycle.recover().status == "recovered-after-rollback"
+
+    restored = lifecycle.info("example.scope")
+    assert restored.version == "0.1.0"
+    assert restored.status == "healthy"
+    assert not lifecycle.journal_path.exists()
+
+
 def test_same_version_file_tampering_is_reported_as_drifted(tmp_path):
     python = _target_venv(tmp_path)
     wheel = _plugin_wheel(tmp_path, version="0.1.0")

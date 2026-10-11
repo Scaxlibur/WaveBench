@@ -517,8 +517,8 @@ print(json.dumps(payload, sort_keys=True))
         try:
             self._update_journal(journal, "rollback_started")
             self._install_wheel(wheel)
-            self._postflight(record)
-            self._write_json(self.ledger_path, ledger)
+            restored = self._reinstalled_record(record)
+            self._write_json(self.ledger_path, self._with_record(ledger, restored))
             self._remove_journal()
         except Exception as rollback_error:
             raise ConfigError(
@@ -526,6 +526,15 @@ print(json.dumps(payload, sort_keys=True))
                 "需要恢复：插件操作与回滚均失败"
             ) from rollback_error
         raise ConfigError(f"plugin postflight failed / 插件操作后检查失败: {original}") from original
+
+    def _reinstalled_record(self, record: dict[str, object]) -> dict[str, object]:
+        # Installer-generated RECORD changes; revalidate every cached wheel member first.
+        postflight = self._postflight({**record, "installed_record_sha256": ""})
+        return {
+            **record,
+            "installed_files_sha256": postflight["files_sha256"],
+            "installed_record_sha256": postflight["record_sha256"],
+        }
 
     @contextmanager
     def _inspected_input(self, path: str | Path) -> Iterator[PluginPackage]:
@@ -598,7 +607,15 @@ print(json.dumps(payload, sort_keys=True))
                 self._remove_journal()
                 return LifecycleResult("recovered-to-before", driver_id, record["distribution"], record["version"])
 
-        if stage == "rollback_started" and before_matches:
+        if stage == "rollback_started":
+            if not before_matches:
+                if before_record is None:
+                    return self._recovery_required()
+                try:
+                    restored = self._reinstalled_record(before_record)
+                except ConfigError:
+                    return self._recovery_required()
+                before = self._with_record(before, restored)
             self._write_json(self.ledger_path, before)
             self._remove_journal()
             return LifecycleResult("recovered-after-rollback", driver_id, record["distribution"], record["version"])
