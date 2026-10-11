@@ -6,6 +6,7 @@ from hashlib import sha256
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -25,7 +26,7 @@ def _run(command: list[str], *, check: bool = True) -> subprocess.CompletedProce
 
 def _target_venv(root: Path) -> Path:
     target = root / "venv"
-    venv.EnvBuilder(with_pip=True).create(target)
+    venv.EnvBuilder(with_pip=False).create(target)
     python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     purelib = _run(
         [str(python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"]
@@ -377,18 +378,18 @@ def descriptor():
     return path
 
 
-def _raw_pip_install(python: Path, wheel: Path) -> None:
+def _raw_uv_install(python: Path, wheel: Path) -> None:
     _run(
         [
-            str(python),
-            "-I",
-            "-m",
+            shutil.which("uv"),
+            "--no-config",
+            "--offline",
             "pip",
             "install",
-            "--isolated",
+            "--python",
+            str(python),
             "--no-index",
             "--no-deps",
-            "--disable-pip-version-check",
             str(wheel),
         ]
     )
@@ -603,7 +604,7 @@ def test_dry_run_does_not_modify_target_venv(tmp_path):
 def test_dry_run_refuses_unmanaged_distribution_without_writing_state(tmp_path):
     python = _target_venv(tmp_path)
     wheel = _plugin_wheel(tmp_path, version="0.1.0")
-    _raw_pip_install(python, wheel)
+    _raw_uv_install(python, wheel)
     lifecycle = PluginLifecycle(python_executable=python)
 
     with pytest.raises(ConfigError, match="unmanaged"):
@@ -978,10 +979,39 @@ def test_source_directory_install_keeps_built_wheel_alive_until_cached(tmp_path)
     assert lifecycle.remove("example.source-scope").status == "removed"
 
 
+def test_missing_uv_rejects_install_before_writing_state(tmp_path, monkeypatch):
+    python = _target_venv(tmp_path)
+    wheel = _plugin_wheel(tmp_path, version="0.1.0")
+    lifecycle = PluginLifecycle(python_executable=python)
+    monkeypatch.setattr("wavebench.plugins.package_inspect.shutil.which", lambda name: None)
+
+    with pytest.raises(ConfigError, match="uv is required"):
+        lifecycle.install(wheel)
+
+    assert not lifecycle.state_dir.exists()
+
+
+def test_failed_rollback_preserves_recovery_journal(tmp_path, monkeypatch):
+    python = _target_venv(tmp_path)
+    broken = _plugin_wheel(tmp_path, version="0.1.0", broken_descriptor=True)
+    lifecycle = PluginLifecycle(python_executable=python)
+
+    def fail_uninstall(*args, **kwargs):
+        raise ConfigError("uv uninstall failed")
+
+    monkeypatch.setattr(lifecycle, "_uninstall_distribution", fail_uninstall)
+    with pytest.raises(ConfigError, match="recovery required"):
+        lifecycle.install(broken)
+
+    journal = json.loads(lifecycle.journal_path.read_text(encoding="utf-8"))
+    assert journal["stage"] == "rollback_started"
+    assert not lifecycle.ledger_path.exists()
+
+
 def test_install_refuses_to_take_over_unmanaged_distribution(tmp_path):
     python = _target_venv(tmp_path)
     wheel = _plugin_wheel(tmp_path, version="0.1.0")
-    _raw_pip_install(python, wheel)
+    _raw_uv_install(python, wheel)
     lifecycle = PluginLifecycle(python_executable=python)
 
     assert lifecycle.installed()[0].status == "unmanaged"
@@ -998,7 +1028,7 @@ def test_install_refuses_file_owned_by_another_distribution(tmp_path):
         include_entry_point=False,
     )
     target = _plugin_wheel(tmp_path, version="0.1.0")
-    _raw_pip_install(python, foreign)
+    _raw_uv_install(python, foreign)
     lifecycle = PluginLifecycle(python_executable=python)
 
     with pytest.raises(ConfigError, match="overlaps files"):
@@ -1016,7 +1046,7 @@ def test_install_refuses_unreadable_distribution_ownership(tmp_path):
         include_entry_point=False,
     )
     target = _plugin_wheel(tmp_path, version="0.1.0")
-    _raw_pip_install(python, foreign)
+    _raw_uv_install(python, foreign)
     purelib = Path(
         _run(
             [str(python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"]
@@ -1041,7 +1071,7 @@ def test_install_refuses_distribution_without_record(tmp_path):
         include_entry_point=False,
     )
     target = _plugin_wheel(tmp_path, version="0.1.0")
-    _raw_pip_install(python, foreign)
+    _raw_uv_install(python, foreign)
     purelib = Path(
         _run(
             [str(python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"]
@@ -1067,7 +1097,7 @@ def test_remove_refuses_files_shared_with_out_of_band_distribution(tmp_path):
         distribution="foreign-scope-plugin",
         include_entry_point=False,
     )
-    _raw_pip_install(python, foreign)
+    _raw_uv_install(python, foreign)
 
     installed = lifecycle.info("example.scope")
     assert installed.status == "broken"
@@ -1107,12 +1137,13 @@ def test_out_of_band_change_is_reported_as_missing_or_drifted(tmp_path):
     lifecycle = PluginLifecycle(python_executable=python)
     lifecycle.install(v1)
 
-    _raw_pip_install(python, v2)
+    _raw_uv_install(python, v2)
     assert lifecycle.info("example.scope").status == "drifted"
     with pytest.raises(ConfigError, match="healthy"):
         lifecycle.remove("example.scope")
 
-    _run([str(python), "-I", "-m", "pip", "uninstall", "--yes", "wavebench-example-scope"])
+    _run([shutil.which("uv"), "--no-config", "--offline", "pip", "uninstall",
+          "--python", str(python), "wavebench-example-scope"])
     assert lifecycle.info("example.scope").status == "missing"
 
 
@@ -1206,7 +1237,7 @@ def test_recover_commits_exact_desired_state_after_pip_finished(tmp_path):
     )
     lifecycle.state_dir.mkdir(mode=0o700, exist_ok=True)
     lifecycle._write_json(lifecycle.journal_path, journal)
-    lifecycle._pip_install(cached)
+    lifecycle._install_wheel(cached)
 
     result = lifecycle.recover()
 
@@ -1224,7 +1255,7 @@ def test_recover_refuses_unknown_partial_state(tmp_path):
     with lifecycle._inspected_input(wheel) as package:
         cached = lifecycle._cache_wheel(package)
         record = lifecycle._package_record(package, cached)
-    lifecycle._pip_install(cached)
+    lifecycle._install_wheel(cached)
     purelib = Path(environment.purelib)
     (purelib / "wavebench_example_scope/__init__.py").write_text(
         "# partial state\n",
