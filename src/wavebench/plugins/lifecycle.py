@@ -26,11 +26,13 @@ from .package_inspect import (
     WheelEntryPoint,
     build_subprocess_environment,
     inspect_plugin_package,
+    require_uv,
 )
 
 
 LEDGER_SCHEMA_VERSION = 2
 JOURNAL_SCHEMA_VERSION = 2
+# Persisted pip_started/pip_finished stages remain readable across the uv migration.
 
 
 @dataclass(frozen=True)
@@ -257,6 +259,7 @@ print(json.dumps(payload, sort_keys=True))
                 ledger = self._load_ledger(environment)
                 self._assert_first_install_allowed(package, ledger)
                 return result
+            require_uv()
             with self._locked():
                 environment = self.environment()
                 self._assert_no_pending_journal()
@@ -290,6 +293,7 @@ print(json.dumps(payload, sort_keys=True))
                 current.distribution,
                 current.version,
             )
+        require_uv()
         with self._locked():
             self._assert_no_pending_journal()
             ledger = self._load_ledger(environment)
@@ -308,7 +312,7 @@ print(json.dumps(payload, sort_keys=True))
             self._write_json(self.journal_path, journal)
             try:
                 self._update_journal(journal, "pip_started")
-                self._pip_uninstall(record["distribution"])
+                self._uninstall_distribution(record["distribution"])
                 self._update_journal(journal, "pip_finished")
                 if self._distribution_inventory(record["distribution"]):
                     raise ConfigError("plugin remove postflight failed / 插件卸载后检查失败")
@@ -392,6 +396,7 @@ print(json.dumps(payload, sort_keys=True))
             )
             if dry_run:
                 return result
+            require_uv()
             with self._locked():
                 environment = self.environment()
                 self._assert_no_pending_journal()
@@ -458,7 +463,7 @@ print(json.dumps(payload, sort_keys=True))
         self._write_json(self.journal_path, journal)
         try:
             self._update_journal(journal, "pip_started")
-            self._pip_install(cached_wheel)
+            self._install_wheel(cached_wheel)
             self._update_journal(journal, "pip_finished")
             postflight = self._postflight(record)
             record["installed_files_sha256"] = postflight["files_sha256"]
@@ -489,7 +494,7 @@ print(json.dumps(payload, sort_keys=True))
     ) -> None:
         try:
             self._update_journal(journal, "rollback_started")
-            self._pip_uninstall(record["distribution"], allow_missing=True)
+            self._uninstall_distribution(record["distribution"], allow_missing=True)
             if self._distribution_inventory(record["distribution"]):
                 raise ConfigError("rollback uninstall did not remove distribution")
             self._write_json(self.ledger_path, ledger)
@@ -511,9 +516,9 @@ print(json.dumps(payload, sort_keys=True))
     ) -> None:
         try:
             self._update_journal(journal, "rollback_started")
-            self._pip_install(wheel)
-            self._postflight(record)
-            self._write_json(self.ledger_path, ledger)
+            self._install_wheel(wheel)
+            restored = self._reinstalled_record(record)
+            self._write_json(self.ledger_path, self._with_record(ledger, restored))
             self._remove_journal()
         except Exception as rollback_error:
             raise ConfigError(
@@ -521,6 +526,15 @@ print(json.dumps(payload, sort_keys=True))
                 "需要恢复：插件操作与回滚均失败"
             ) from rollback_error
         raise ConfigError(f"plugin postflight failed / 插件操作后检查失败: {original}") from original
+
+    def _reinstalled_record(self, record: dict[str, object]) -> dict[str, object]:
+        # Installer-generated RECORD changes; revalidate every cached wheel member first.
+        postflight = self._postflight({**record, "installed_record_sha256": ""})
+        return {
+            **record,
+            "installed_files_sha256": postflight["files_sha256"],
+            "installed_record_sha256": postflight["record_sha256"],
+        }
 
     @contextmanager
     def _inspected_input(self, path: str | Path) -> Iterator[PluginPackage]:
@@ -593,7 +607,15 @@ print(json.dumps(payload, sort_keys=True))
                 self._remove_journal()
                 return LifecycleResult("recovered-to-before", driver_id, record["distribution"], record["version"])
 
-        if stage == "rollback_started" and before_matches:
+        if stage == "rollback_started":
+            if not before_matches:
+                if before_record is None:
+                    return self._recovery_required()
+                try:
+                    restored = self._reinstalled_record(before_record)
+                except ConfigError:
+                    return self._recovery_required()
+                before = self._with_record(before, restored)
             self._write_json(self.ledger_path, before)
             self._remove_journal()
             return LifecycleResult("recovered-after-rollback", driver_id, record["distribution"], record["version"])
@@ -1101,39 +1123,39 @@ print(json.dumps({
             (),
         )
 
-    def _pip_install(self, wheel: Path) -> None:
+    def _install_wheel(self, wheel: Path) -> None:
         self._run_command(
             [
-                self.environment().python,
-                "-I",
-                "-m",
+                require_uv(),
+                "--no-config",
+                "--offline",
+                "--no-python-downloads",
+                "--no-cache",
                 "pip",
                 "install",
-                "--isolated",
+                "--python",
+                self.environment().python,
                 "--no-index",
                 "--no-deps",
-                "--no-cache-dir",
-                "--no-input",
-                "--disable-pip-version-check",
-                "--force-reinstall",
+                "--reinstall",
                 str(wheel),
             ],
             action="plugin install / 插件安装",
         )
 
-    def _pip_uninstall(self, distribution: str, *, allow_missing: bool = False) -> None:
+    def _uninstall_distribution(self, distribution: str, *, allow_missing: bool = False) -> None:
         try:
             self._run_command(
                 [
-                    self.environment().python,
-                    "-I",
-                    "-m",
+                    require_uv(),
+                    "--no-config",
+                    "--offline",
+                    "--no-python-downloads",
+                    "--no-cache",
                     "pip",
                     "uninstall",
-                    "--isolated",
-                    "--no-input",
-                    "--disable-pip-version-check",
-                    "--yes",
+                    "--python",
+                    self.environment().python,
                     distribution,
                 ],
                 action="plugin remove / 插件卸载",
@@ -1155,6 +1177,8 @@ print(json.dumps({
             )
         except subprocess.TimeoutExpired as exc:
             raise ConfigError(f"{action} timed out / 操作超时") from exc
+        except OSError as exc:
+            raise ConfigError(f"{action} could not start / 无法启动操作: {exc}") from exc
         if completed.returncode != 0:
             detail = " ".join((completed.stderr or completed.stdout).split())[-1200:]
             raise ConfigError(f"{action} failed / 操作失败: {detail or 'no output'}")

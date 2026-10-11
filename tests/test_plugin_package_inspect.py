@@ -34,6 +34,9 @@ def test_subprocess_environment_preserves_required_windows_context(monkeypatch: 
     monkeypatch.setenv("USERPROFILE", r"C:\\Users\\tester")
     monkeypatch.setenv("ComSpec", r"C:\\Windows\\System32\\cmd.exe")
     monkeypatch.setenv("PIP_CONFIG_FILE", "should-not-survive")
+    monkeypatch.setenv("UV_CONFIG_FILE", "should-not-survive")
+    monkeypatch.setenv("UV_PYTHON", "wrong-python")
+    monkeypatch.setenv("UV_SYSTEM_PYTHON", "1")
 
     environment = build_subprocess_environment()
 
@@ -44,6 +47,7 @@ def test_subprocess_environment_preserves_required_windows_context(monkeypatch: 
     assert environment["USERPROFILE"] == r"C:\\Users\\tester"
     assert environment["ComSpec"].endswith("cmd.exe")
     assert environment["PIP_CONFIG_FILE"] != "should-not-survive"
+    assert not any(key.startswith("UV_") for key in environment)
     assert environment["PYTHONNOUSERSITE"] == "1"
 
 

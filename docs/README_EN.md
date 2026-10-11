@@ -6,12 +6,13 @@ The current complete documentation is maintained in Chinese. This page is an Eng
 
 ## Start without instruments
 
+Use a new checkout of the unreleased `Dev` branch, Python 3.11+, and [uv](https://docs.astral.sh/uv/getting-started/installation/) on PATH. The [installation guide](getting-started/installation.md) explains checkout and index configuration and links to released-version instructions.
+
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m wavebench run template --list
-.venv/bin/python -m wavebench run template source-scope-sine --print
-.venv/bin/python -m wavebench run check --plan plans/closure_sine_1k.toml
+uv sync --locked
+uv run --no-sync wavebench run template --list
+uv run --no-sync wavebench run template source-scope-sine --print
+uv run --no-sync wavebench run check --plan plans/closure_sine_1k.toml
 ```
 
 The last command succeeds with `safety_limits=ok / 安全上限=通过`. It performs no instrument I/O. See the [Chinese Quickstart](getting-started/quickstart.md) for expected output, Windows commands, and the next steps.

@@ -13,6 +13,11 @@
 
 ## 验证分层
 
+Core 新开发环境使用 `uv sync --locked --extra dev --extra analysis --extra tui`。
+按任务增加 `--extra pdf`、`--extra report3d` 或 `--extra docs`。
+已有仪器插件的环境不执行默认精确同步；优先新建隔离环境，或显式使用 `--inexact` 后核对插件状态。
+准备完成后可用 `uv run --no-sync` 执行命令，避免验证期间变更依赖。
+
 按风险选择最窄的验证集合：
 
 以下命令以 POSIX 虚拟环境路径为例；原生 Windows 将 `.venv/bin/python` 替换为

@@ -121,12 +121,12 @@ Reference 只从本入口直接链接，保持一层目录；详细命令和型�
 按阶段选择预检，不把以下命令作为每个任务的固定清单：
 
 ```bash
-.venv/bin/python -m pip check
+uv pip check --python .venv
 .venv/bin/wavebench run check --plan plans/<plan>.toml --config wavebench.toml
 .venv/bin/wavebench run verify --plan plans/<plan>.toml --config wavebench.toml
 ```
 
-`pip check` 用于依赖变化或环境诊断；`run check` 是离线检查；`run verify` 会连接仪器，只有已授权实时预检时执行。
+`uv pip check` 用于依赖变化或环境诊断；`run check` 是离线检查；`run verify` 会连接仪器，只有已授权实时预检时执行。
 已授权执行的真实计划遵循 `run check → run verify → run plan → run report`，并同时检查步骤状态、质量门、期望指标、产物和最终设备状态。仅检查计划的请求到离线检查结果即完成。TUI 界面开发使用 `tui --fake`。
 
 ## External research
