@@ -45,6 +45,25 @@ from wavebench.instruments.source_extensions import (
     SourceWaveformKind,
     SupportState,
 )
+from wavebench.transport.contracts import ReplayPolicy
+
+
+class TextTransport:
+    def __init__(self, resource: str) -> None:
+        self.resource = resource
+
+    def record_event(self, direction: str, text: str) -> None:
+        del direction, text
+
+    def query(self, command: str, *, replay: ReplayPolicy = ReplayPolicy.NO_REPLAY) -> str:
+        del command, replay
+        return "ok"
+
+    def write(self, command: str) -> None:
+        del command
+
+    def close(self) -> None:
+        pass
 
 
 def missing() -> Observed[object]:

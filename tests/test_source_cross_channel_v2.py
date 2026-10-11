@@ -66,28 +66,15 @@ from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
 from wavebench.services.run_plan import load_run_plan
 from wavebench.services.run_service import RunInstrumentServices, RunService
-from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import InstrumentSessionState
 
-from tests.source_v2_fixtures import basic_facet, source_descriptor, source_extensions
-
-
-class _TextTransport:
-    resource = "fake-source-cross-channel-v2"
-
-    def record_event(self, direction: str, text: str) -> None:
-        del direction, text
-
-    def query(self, command: str, *, replay: ReplayPolicy = ReplayPolicy.NO_REPLAY) -> str:
-        del command, replay
-        return "ok"
-
-    def write(self, command: str) -> None:
-        del command
-
-    def close(self) -> None:
-        pass
+from tests.source_v2_fixtures import (
+    TextTransport,
+    basic_facet,
+    source_descriptor,
+    source_extensions,
+)
 
 
 class _CrossChannelWriteDriver:
@@ -102,7 +89,7 @@ class _CrossChannelWriteDriver:
         feature: SourceFeature = SourceFeature.COMBINE,
     ) -> None:
         self.transport = GuardedAuditedTransport(
-            _TextTransport(),
+            TextTransport("fake-source-cross-channel-v2"),
             session_state=session_state,
         )
         self.outputs = {
