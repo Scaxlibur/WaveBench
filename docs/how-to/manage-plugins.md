@@ -2,12 +2,16 @@
 
 本页适用于需要检查、安装、升级、降级、卸载或恢复本地 WaveBench 仪器插件的维护者。可执行插件是可信 Python 代码，不是安全沙箱；只处理来源、版本和依赖均已确认的本地源码目录或 wheel。
 
+以下 uv 后端属于尚未发布的 `Dev` 开发线。验证它时使用该开发线构建的 Core wheel；已发布版本的安装入口见[安装说明](../getting-started/installation.md)。
+
 ## 前置条件
 
 - 在目标 WaveBench 虚拟环境中运行命令。
 - PATH 中已安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)；目标环境不需要 pip。
 - 已确认插件与当前 WaveBench 版本兼容。
 - 已确认源码 build backend 或 wheel 的来源可信。
+
+提示缺少 uv 时，安装 uv 并确认当前终端可以运行 `uv --version` 后重试。旧 pip 安装的插件无需重新安装；降回依赖 pip 的旧 Core 时，目标环境仍需提供 pip。
 
 ## 专用运行环境
 

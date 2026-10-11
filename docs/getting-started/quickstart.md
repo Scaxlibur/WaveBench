@@ -5,7 +5,7 @@
 ## 前置条件
 
 - Python 3.11 或更高版本，以及 [uv](https://docs.astral.sh/uv/getting-started/installation/)。
-- 一个新的 WaveBench 工作副本。
+- 一个新的 `Dev` 工作副本；该开发线尚未发布，获取方式与已发布版本入口见[安装说明](installation.md)。
 - 不需要 `wavebench.toml`，也不需要连接仪器。
 
 ## 1. 创建虚拟环境并安装
@@ -49,6 +49,6 @@ uv run --no-sync wavebench run check --plan plans/closure_sine_1k.toml
 
 - 想理解模板如何进入真实实验流程，阅读[从模板到报告](../tutorials/from-template-to-report.md)。
 - 已准备连接实验台时，先阅读[配置实验台](configure-bench.md)和[执行一次实验](../how-to/run-an-experiment.md)。
-- 需要查询字段时，运行 `python -m wavebench run schema`，并阅读[run plan Reference](../reference/run-schema.md)。
+- 需要查询字段时，运行 `uv run --no-sync wavebench run schema`，并阅读[run plan Reference](../reference/run-schema.md)。
 
 `run verify` 会对配置中的仪器执行只读身份查询，`run plan` 会执行真实实验；两者不属于本页的无硬件流程。

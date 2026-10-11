@@ -69,10 +69,10 @@ WaveBench 是面向电子设计调试和日常实验的 Python 测量台。它�
 
 ## 无硬件快速开始
 
-安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后，在新的工作副本运行以下命令。它们只安装包、列出模板并打印一个示例 plan，不会连接仪器或打开输出。
+以下 uv 流程面向尚未发布的 `Dev` 开发线，版本选择见[安装说明](docs/getting-started/installation.md)。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后，在新的工作副本运行以下命令。它们只安装包、列出模板并打印一个示例 plan，不会连接仪器或打开输出。
 
 ```bash
-git clone https://github.com/Scaxlibur/WaveBench.git
+git clone --branch Dev https://github.com/Scaxlibur/WaveBench.git
 cd WaveBench
 uv sync --locked
 uv run --no-sync wavebench run template --list
@@ -114,7 +114,6 @@ uv run --no-sync ruff check .
 
 `pdf`、`report3d` 和 `docs` 可按需用 `--extra` 加入。默认同步会移除未声明的包；
 已安装仪器插件的运行环境应与开发环境分开，详见[管理仪器插件](docs/how-to/manage-plugins.md)。
-
 
 - [文档首页](docs/index.md)
 - [示例计划及硬件边界](plans/README.md)

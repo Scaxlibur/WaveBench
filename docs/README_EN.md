@@ -6,6 +6,8 @@ The current complete documentation is maintained in Chinese. This page is an Eng
 
 ## Start without instruments
 
+Use a new checkout of the unreleased `Dev` branch, Python 3.11+, and [uv](https://docs.astral.sh/uv/getting-started/installation/) on PATH. The [installation guide](getting-started/installation.md) explains checkout and index configuration and links to released-version instructions.
+
 ```bash
 uv sync --locked
 uv run --no-sync wavebench run template --list
