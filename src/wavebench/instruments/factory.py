@@ -58,7 +58,16 @@ def open_instrument_driver(
     serial_config: DmmConfig | None = None,
     access: AccessMode = "read_write",
     lease: ResourceLease | None = None,
+    force_deferred_io: bool = False,
 ) -> OpenedInstrument:
+    """Construct and validate a driver, optionally deferring all guarded I/O.
+
+    Observation callers use force_deferred_io for legacy descriptors as well as
+    V2 descriptors. The latch is released only after factory validation succeeds.
+    """
+
+    if not isinstance(force_deferred_io, bool):
+        raise ConfigError("force_deferred_io must be bool")
     normalized_access = normalize_access_mode(access, "access")
     if lease is not None and lease.fingerprint != resource_fingerprint(resource, lease.lock_id):
         raise ConfigError("resource lease does not match configured instrument resource")
@@ -82,7 +91,9 @@ def open_instrument_driver(
     strict_v2_capability_opt_in = bool(
         set(descriptor.capabilities) & SCOPE_STRICT_V2_CAPABILITIES
     )
-    construction_latched = bounded_binary_profile_opt_in or strict_v2_capability_opt_in
+    construction_latched = (
+        force_deferred_io or bounded_binary_profile_opt_in or strict_v2_capability_opt_in
+    )
     backend = _select_backend(configured_backend, descriptor.backends)
     _validate_resource_scheme(resource, descriptor.resource_schemes)
     try:

@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryFile
+import tomllib
+from typing import Any
 
 import numpy as np
 
@@ -113,6 +115,8 @@ from .plugins.api import PluginDoctorRecord
 from .plugins.registry import build_plugin_registry, has_doctor_errors, plugin_doctor_records
 from .plugins.scpi import has_scpi_doctor_errors, load_scpi_plugin, probe_scpi_plugin, scpi_plugin_doctor_records
 from .services.scope_service import ScopeService
+from .services.agent_observe import scope_observe_payload, scope_waveform_report_payload
+from .services.agent_advise import scope_advise_from_observation, validate_scope_advice_targets
 from .services.source_service import SourceService
 from .services.rf_source_service import RfSourceService
 from .services.power_service import PowerService
@@ -609,6 +613,137 @@ def _scope_error_check(args: argparse.Namespace) -> ErrorCheckSpec | None:
         )
     except (TypeError, ValueError) as exc:
         raise ConfigError(str(exc)) from exc
+
+
+def _load_scope_expectations(path: str | None) -> dict[int, dict[str, Any]] | None:
+    """读取 --expect 指定的 TOML 期望值文件；校验在读取阶段完成，早于任何仪器 I/O。"""
+    if path is None:
+        return None
+    expectation_path = Path(path)
+    try:
+        raw = tomllib.loads(expectation_path.read_bytes().decode("utf-8-sig"))
+    except OSError as exc:
+        raise ConfigError(f"failed to read scope expectation file: {expectation_path}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"invalid scope expectation TOML: {expectation_path}") from exc
+    unknown = sorted(set(raw) - {"channels"})
+    if unknown:
+        raise ConfigError(f"unknown scope expectation section(s): {', '.join(unknown)}")
+    channels = raw.get("channels")
+    if not isinstance(channels, dict) or not channels:
+        raise ConfigError("scope expectation file must define a non-empty [channels] table")
+    expectations: dict[int, dict[str, Any]] = {}
+    for key, value in channels.items():
+        try:
+            channel = int(key)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("scope expectation channel keys must be numbers") from exc
+        if channel < 1:
+            raise ConfigError("scope expectation channels must be >= 1")
+        if not isinstance(value, dict):
+            raise ConfigError("scope expectation channel entries must be tables")
+        expectations[channel] = dict(value)
+    return expectations
+
+
+def _expectation_frequencies(
+    expectations: dict[int, dict[str, Any]] | None,
+) -> dict[int, float] | None:
+    if not expectations:
+        return None
+    values: dict[int, float] = {}
+    for channel, expectation in expectations.items():
+        value = expectation.get("frequency_hz")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            values[channel] = float(value)
+    return values or None
+
+
+def _run_scope_observe(args: argparse.Namespace) -> dict[str, Any]:
+    target_cycles, target_vertical_divisions = validate_scope_advice_targets(
+        target_cycles=10.0 if args.target_cycles is None else args.target_cycles,
+        target_vertical_divisions=(
+            5.0 if args.target_vertical_divisions is None else args.target_vertical_divisions
+        ),
+    )
+    channels = tuple(args.channels) if args.channels else None
+    expectations = _load_scope_expectations(args.expect)
+    if not args.fetch_waveform:
+        if expectations is not None:
+            raise ConfigError("scope observe --expect requires --fetch-waveform")
+        return scope_observe_payload(
+            config_path=args.config,
+            channels=channels,
+            allow_50ohm=args.allow_50ohm,
+            resource=args.resource,
+        )
+    observation = scope_waveform_report_payload(
+        config_path=args.config,
+        channels=channels,
+        allow_50ohm=args.allow_50ohm,
+        expectations=expectations,
+        resource=args.resource,
+    )
+    advice = scope_advise_from_observation(
+        observation,
+        expected_frequencies_hz=_expectation_frequencies(expectations),
+        target_cycles=target_cycles,
+        target_vertical_divisions=target_vertical_divisions,
+    )
+    observation["recommendations"] = advice["recommendations"]
+    observation["agent_hints"] = advice["agent_hints"]
+    return observation
+
+
+def _emit_scope_observe_result(payload: dict[str, Any], *, json_mode: bool) -> None:
+    if json_mode:
+        _emit_json_result(payload, status=str(payload.get("status", "ok")))
+        return
+    print(
+        f"status={payload.get('status')} read_only={payload.get('read_only')} "
+        f"mutates_instrument={payload.get('mutates_instrument')}"
+    )
+    identity = payload.get("identity")
+    if isinstance(identity, dict) and identity.get("status") == "ok":
+        print(f"idn={identity['data']['idn']}")
+    for channel_section in payload.get("channels", []) or []:
+        channel = channel_section.get("channel")
+        coupling = channel_section.get("coupling", {})
+        coupling_value = coupling.get("data", {}).get("coupling") if coupling.get("status") == "ok" else "unavailable"
+        print(f"ch{channel} coupling={coupling_value}")
+        waveform = channel_section.get("waveform")
+        if isinstance(waveform, dict) and waveform.get("status") == "ok":
+            summary = waveform["data"]["summary"]
+            print(
+                f"ch{channel} waveform samples={summary.get('samples')} "
+                f"vpp_v={summary.get('voltage_vpp_v')} mean_v={summary.get('voltage_mean_v')} "
+                f"frequency_hz={summary.get('frequency_estimate_hz')}"
+            )
+            for warning in summary.get("quality_warnings", []) or []:
+                print(f"ch{channel} quality_warning={warning}")
+        expectation = channel_section.get("expectation")
+        if isinstance(expectation, dict):
+            print(f"ch{channel} expectation={expectation.get('status')}")
+            for check in expectation.get("data", {}).get("checks", []) or []:
+                print(
+                    f"ch{channel} check={check.get('metric')} status={check.get('status')} "
+                    f"expected={check.get('expected')} actual={check.get('actual')}"
+                )
+    waveform_source = payload.get("waveform_source")
+    if isinstance(waveform_source, dict) and not waveform_source.get("same_acquisition", True):
+        print(f"waveform_source same_acquisition=False reason={waveform_source.get('reason')}")
+    for relationship in payload.get("relationships", []) or []:
+        channels = relationship.get("channels")
+        frequency = relationship.get("frequency", {})
+        print(
+            f"relationship ch{channels} ratio={frequency.get('ratio_high_over_low')} "
+            f"phase_deg={relationship.get('phase_degrees_at_left_frequency')}"
+        )
+    for recommendation in payload.get("recommendations", []) or []:
+        command = recommendation.get("command") or recommendation.get("action")
+        print(f"recommendation {recommendation.get('id')} priority={recommendation.get('priority')} {command}")
+    for warning in payload.get("warnings", []) or []:
+        print(f"warning={warning}")
 
 
 def _scope_channel_display_request(args: argparse.Namespace) -> ScopeChannelDisplayRequest:
@@ -1969,6 +2104,9 @@ def _main(argv: list[str] | None = None) -> int:
                 print(f"summary={result.summary_path}")
                 return 0
         if args.domain == "scope":
+            if args.command == "observe":
+                _emit_scope_observe_result(_run_scope_observe(args), json_mode=args.json)
+                return 0
             service = _load_service(args)
             if args.command == "idn":
                 print(service.idn())

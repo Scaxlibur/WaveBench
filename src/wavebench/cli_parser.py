@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from . import __version__
 from .discovery import DEFAULT_DISCOVERY_PORTS
 from .mcp_http import DEFAULT_MCP_HOST, DEFAULT_MCP_PORT, DEFAULT_MCP_TOKEN_ENV
 
@@ -28,6 +29,7 @@ def add_scope_error_options(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wavebench")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--json",
         action="store_true",
@@ -1545,6 +1547,46 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--points", default=None, help="Override waveform points: def, max, or dmax")
     fetch.add_argument("--allow-50ohm", action="store_true", help="Explicitly allow scope input coupling that may be 50 ohm; default requires high impedance")
     add_runtime_options(fetch)
+
+    observe = scope_sub.add_parser(
+        "observe",
+        help="Observe scope state; --fetch-waveform explicitly reads waveforms for summaries and checks",
+    )
+    observe.add_argument(
+        "--channel",
+        dest="channels",
+        type=int,
+        action="append",
+        default=None,
+        help="Observed analog channel; repeat for multiple channels",
+    )
+    observe.add_argument(
+        "--fetch-waveform",
+        action="store_true",
+        help=(
+            "Explicitly read waveforms. This is a write path: it may stop a running acquisition, "
+            "change waveform transfer source/mode/format/points and enable channel display"
+        ),
+    )
+    observe.add_argument(
+        "--allow-50ohm",
+        action="store_true",
+        help="Explicitly allow scope input coupling that may be 50 ohm; default requires high impedance",
+    )
+    observe.add_argument(
+        "--expect",
+        default=None,
+        metavar="PATH",
+        help="TOML file with per-channel [channels.N] expectation checks; requires --fetch-waveform",
+    )
+    observe.add_argument("--target-cycles", type=float, default=None, help="Target cycles for advice, default 10")
+    observe.add_argument(
+        "--target-vertical-divisions",
+        type=float,
+        default=None,
+        help="Target vertical divisions for advice, default 5",
+    )
+    add_runtime_options(observe)
 
     capture = scope_sub.add_parser("capture", help="Capture waveform data into an acquisition package")
     capture.add_argument("--channel", type=int, action="append", default=None, help="Capture channel; repeat for multiple channels")

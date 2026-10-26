@@ -140,11 +140,6 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "read")
         self.assertEqual(args.function, "dcv")
 
-    def test_dmm_profile_accepts_subcommand(self):
-        args = build_parser().parse_args(["dmm", "profile"])
-        self.assertEqual(args.domain, "dmm")
-        self.assertEqual(args.command, "profile")
-
     def test_dmm_profile_prints_stable_fields(self):
         class StubDmmService:
             def measurement_profile(self):
@@ -320,12 +315,6 @@ class CliTests(unittest.TestCase):
             stdout.getvalue().strip().splitlines(),
             ["previous_impedance=10M", "impedance=10G", "range_code=2", "changed=true"],
         )
-
-    def test_dmm_function_status_accepts_subcommand(self):
-        args = build_parser().parse_args(["dmm", "function", "status"])
-        self.assertEqual(args.domain, "dmm")
-        self.assertEqual(args.command, "function")
-        self.assertEqual(args.dmm_function_command, "status")
 
     def test_dmm_function_set_accepts_function(self):
         args = build_parser().parse_args(["dmm", "function", "set", "acv"])
@@ -659,24 +648,8 @@ class CliTests(unittest.TestCase):
             ]
         )
         output = build_parser().parse_args(["source", "output-v2", "--channel", "2", "on"])
-        counter_configure = build_parser().parse_args(
-            [
-                "source",
-                "counter-configure-v2",
-                "--input-id",
-                "counter",
-                "--coupling",
-                "dc",
-            ]
-        )
-        counter_enable = build_parser().parse_args(
-            ["source", "counter-enable-v2", "--input-id", "counter"]
-        )
         counter_disable = build_parser().parse_args(
             ["source", "counter-disable-v2", "--input-id", "counter"]
-        )
-        counter_measure = build_parser().parse_args(
-            ["source", "counter-measure-v2", "--input-id", "counter"]
         )
         harmonics = build_parser().parse_args(
             [
@@ -804,15 +777,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(output.command, "output-v2")
         self.assertEqual(output.channel, 2)
         self.assertEqual(output.state, "on")
-        self.assertEqual(counter_configure.command, "counter-configure-v2")
-        self.assertEqual(counter_configure.input_id, "counter")
-        self.assertEqual(counter_configure.coupling, "dc")
-        self.assertEqual(counter_enable.command, "counter-enable-v2")
-        self.assertEqual(counter_enable.input_id, "counter")
         self.assertEqual(counter_disable.command, "counter-disable-v2")
         self.assertEqual(counter_disable.input_id, "counter")
-        self.assertEqual(counter_measure.command, "counter-measure-v2")
-        self.assertEqual(counter_measure.input_id, "counter")
         self.assertEqual(harmonics.command, "harmonics-configure-v2")
         self.assertEqual(harmonics.channel, 2)
         self.assertEqual(harmonics.order, 8)

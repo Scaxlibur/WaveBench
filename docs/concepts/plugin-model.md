@@ -6,7 +6,7 @@ WaveBench 支持 metadata、可执行插件和声明式 SCPI 三条插件路径�
 
 | 路径 | 用途 | 边界 |
 | --- | --- | --- |
-| V1 metadata | 展示已有仪器 metadata | 不进入真实仪器执行。 |
+| V1 metadata（已弃用） | 兼容展示已有仪器 metadata | 不进入真实仪器执行，不扩展新插件类别。 |
 | V2 executable plugin | 提供 descriptor 和 driver | 只在配置选中该 driver 时进入执行；第三方代码属于可信本地代码。 |
 | 声明式 SCPI TOML | 检查和描述只读 IDN probe | 不提供任意 SCPI 或写入。 |
 

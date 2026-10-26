@@ -128,7 +128,7 @@ class _BoundedDriver:
         return object()
 
 
-def _open() -> object:
+def _open(*, force_deferred_io: bool = False) -> object:
     return open_instrument_driver(
         driver_reference="example.waveform",
         expected_kind="scope",
@@ -139,10 +139,12 @@ def _open() -> object:
         read_retry_attempts=1,
         read_retry_delay_ms=1,
         logger=CommandLogger(),
+        force_deferred_io=force_deferred_io,
     )
 
 
-def test_opt_in_factory_latch_blocks_all_instrument_io_until_validation(monkeypatch) -> None:
+@pytest.mark.parametrize("force_legacy", [False, True])
+def test_opt_in_factory_latch_blocks_all_instrument_io_until_validation(monkeypatch, force_legacy) -> None:
     inner = _InnerTransport()
     errors: list[TransportIOError] = []
 
@@ -167,7 +169,7 @@ def test_opt_in_factory_latch_blocks_all_instrument_io_until_validation(monkeypa
             errors.append(raised.value)
         return _BoundedDriver()
 
-    descriptor = _descriptor(factory=factory, profile=_profile())
+    descriptor = _descriptor(factory=factory, profile=None if force_legacy else _profile())
     monkeypatch.setattr(
         "wavebench.instruments.factory.resolve_instrument_descriptor",
         lambda reference, expected_kind: descriptor,
@@ -178,14 +180,14 @@ def test_opt_in_factory_latch_blocks_all_instrument_io_until_validation(monkeypa
         lambda **kwargs: None,
     )
 
-    opened = _open()
+    opened = _open(force_deferred_io=force_legacy)
 
     assert len(errors) == 7
     assert all(error.reason_code == "factory_construction_pending" for error in errors)
     assert all(error.attempts == 0 for error in errors)
     assert inner.queries == []
     assert inner.writes == []
-    assert opened.transport._has_verified_bounded_binary_backend()
+    assert opened.transport._has_verified_bounded_binary_backend() is (not force_legacy)
     assert opened.transport.query("*IDN?") == "ok"
     assert inner.queries == ["*IDN?"]
 

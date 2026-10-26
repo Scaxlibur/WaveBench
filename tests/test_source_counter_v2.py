@@ -56,32 +56,15 @@ from wavebench.instruments.source_extensions import (
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
-from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import InstrumentSessionState
 
-from tests.source_v2_fixtures import source_descriptor, source_extensions
-
-
-class _TextTransport:
-    resource = "fake-source-counter-v2"
-
-    def record_event(self, direction: str, text: str) -> None:
-        del direction, text
-
-    def query(self, command: str, *, replay: ReplayPolicy = ReplayPolicy.NO_REPLAY) -> str:
-        del command, replay
-        return "ok"
-
-    def write(self, command: str) -> None:
-        del command
-
-    def close(self) -> None:
-        pass
-
-
-def _missing() -> Observed[object]:
-    return Observed.missing(Availability.NOT_QUERIED, SourceReasonCode.NOT_REQUESTED)
+from tests.source_v2_fixtures import (
+    TextTransport,
+    missing as _missing,
+    source_descriptor,
+    source_extensions,
+)
 
 
 def _counter(
@@ -124,7 +107,10 @@ class _CounterDriver:
         enabled: bool = False,
         postcondition_mismatch: bool = False,
     ) -> None:
-        self.transport = GuardedAuditedTransport(_TextTransport(), session_state=session_state)
+        self.transport = GuardedAuditedTransport(
+            TextTransport("fake-source-counter-v2"),
+            session_state=session_state,
+        )
         self.counter = _counter(enabled=enabled)
         self.postcondition_mismatch = postcondition_mismatch
         self.configure_requests: list[SourceCounterConfigureRequest] = []

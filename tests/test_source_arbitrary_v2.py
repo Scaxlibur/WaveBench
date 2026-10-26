@@ -22,7 +22,6 @@ from wavebench.instruments.source_extension_capabilities import validate_source_
 from wavebench.instruments.source_extensions import (
     SOURCE_CONTRACT_VERSION,
     ArbitraryFacet,
-    Availability,
     Observed,
     OutputFacet,
     SourceArbitraryCapabilityProfile,
@@ -64,7 +63,12 @@ from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import InstrumentSessionState
 
-from tests.source_v2_fixtures import basic_facet, source_descriptor, source_extensions
+from tests.source_v2_fixtures import (
+    missing as _missing,
+    basic_facet,
+    source_descriptor,
+    source_extensions,
+)
 
 
 class _TextTransport:
@@ -85,10 +89,6 @@ class _TextTransport:
 
     def close(self) -> None:
         pass
-
-
-def _missing() -> Observed[object]:
-    return Observed.missing(Availability.NOT_QUERIED, SourceReasonCode.NOT_REQUESTED)
 
 
 def _digest(payload: bytes) -> str:

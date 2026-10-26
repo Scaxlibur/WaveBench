@@ -1,4 +1,5 @@
 import os
+import runpy
 import subprocess
 import sys
 import sysconfig
@@ -7,9 +8,12 @@ import venv
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ISOLATED_UTF8_FLAGS = ("-I", "-X", "utf8")
+check_release = runpy.run_path(str(PROJECT_ROOT / "scripts/check_release.py"))["check_release"]
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -105,6 +109,7 @@ def _assert_offline_artifact_smoke(python: Path, purelib: Path) -> None:
     assert origin.is_relative_to(purelib)
 
     for command in (
+        ("--version",),
         ("--help",),
         ("run", "schema"),
         ("run", "template", "--list"),
@@ -120,7 +125,9 @@ def test_sdist_excludes_runtime_data_and_vendor_manuals(tmp_path: Path) -> None:
     relative_members = [member.partition("/")[2] for member in members]
 
     assert any("/docs/project/" in member for member in members)
-    assert not any(member.startswith("data/") for member in relative_members)
+    assert not any(member.startswith(("data/", "tool-of-rei/", ".venv", ".git/"))
+                   for member in relative_members)
+    assert "wavebench.toml" not in relative_members
     assert not any("/docs/instruments/" in member for member in members)
 
 
@@ -129,6 +136,26 @@ def test_wheel_and_sdist_install_into_clean_offline_runtime(tmp_path: Path) -> N
     artifacts.mkdir()
     wheel = _build_artifact(target="wheel", output_dir=artifacts)
     sdist = _build_artifact(target="sdist", output_dir=artifacts)
+    version = check_release(PROJECT_ROOT, artifacts)
+    project = tmp_path / "project"
+    notes = project / "docs/releases" / f"v{version}.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text(f"# WaveBench v{version} 发布说明\n", encoding="utf-8")
+    for filename in ("pyproject.toml", "uv.lock"):
+        (project / filename).write_bytes((PROJECT_ROOT / filename).read_bytes())
+    (project / "CHANGELOG.md").write_text(f"[Release](docs/releases/v{version}.md)\n")
+    assert check_release(project, artifacts, f"v{version}") == version
+    with pytest.raises(ValueError, match="does not match"):
+        check_release(PROJECT_ROOT, artifacts, "v99.0.0")
+    notes.write_text("# Wrong version\n")
+    with pytest.raises(ValueError, match="heading"):
+        check_release(project, artifacts, f"v{version}")
+    (project / "uv.lock").write_text('[[package]]\nname = "wavebench"\nversion = "99.0"\n')
+    with pytest.raises(ValueError, match="uv.lock"):
+        check_release(project, artifacts)
+    (project / "pyproject.toml").write_text('[project]\nversion = "99.0"\n')
+    with pytest.raises(ValueError, match="distribution identity"):
+        check_release(project, artifacts)
 
     with ZipFile(wheel) as archive:
         members = set(archive.namelist())
@@ -141,3 +168,8 @@ def test_wheel_and_sdist_install_into_clean_offline_runtime(tmp_path: Path) -> N
         python, purelib = _prepare_artifact_venv(tmp_path / label)
         _install_artifact(python, artifact)
         _assert_offline_artifact_smoke(python, purelib)
+
+    with ZipFile(wheel, "a") as archive:
+        archive.writestr("incorrect.dist-info/METADATA", "Name: wavebench\nVersion: 99\n")
+    with pytest.raises(ValueError, match="exactly one METADATA"):
+        check_release(PROJECT_ROOT, artifacts)

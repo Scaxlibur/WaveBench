@@ -2,7 +2,7 @@ name: Documentation
 
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, Dev]
     paths:
       - ".agents/skills/wavebench-docs/**"
       - ".github/workflows/docs.yml"
@@ -12,6 +12,7 @@ on:
       - "mkdocs.yml"
       - "plans/**"
       - "pyproject.toml"
+      - "uv.lock"
       - "scripts/docs_impact.py"
       - "scripts/generate_docs.py"
       - "src/wavebench/**"
@@ -26,11 +27,16 @@ on:
       - "mkdocs.yml"
       - "plans/**"
       - "pyproject.toml"
+      - "uv.lock"
       - "scripts/docs_impact.py"
       - "scripts/generate_docs.py"
       - "src/wavebench/**"
       - "wavebench.example.toml"
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -46,21 +52,30 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.15"
+          enable-cache: true
 
       - name: Install documentation dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,docs]"
+        run: uv sync --locked --python 3.11 --extra dev --extra docs
 
       - name: Check generated Reference
-        run: python scripts/generate_docs.py --check
+        run: uv run --no-sync python scripts/generate_docs.py --check
 
       - name: Audit documentation
-        run: python .agents/skills/wavebench-docs/scripts/audit_docs.py --quiet-warnings
+        run: uv run --no-sync python .agents/skills/wavebench-docs/scripts/audit_docs.py --quiet-warnings
 
       - name: Build site
-        run: mkdocs build --strict
+        run: uv run --no-sync mkdocs build --strict
 
       - name: Report documentation impact
-        run: python scripts/docs_impact.py
+        run: uv run --no-sync python scripts/docs_impact.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation-site
+          path: site/
+          if-no-files-found: error

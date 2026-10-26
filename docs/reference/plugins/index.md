@@ -4,11 +4,14 @@ WaveBench 支持三条彼此独立的插件路径。它们的共同边界是：C
 
 | 路径 | 入口 | 是否进入真实执行 |
 | --- | --- | --- |
-| V1 metadata | `wavebench.drivers` / `wavebench.instrument.v1` | 否。用于展示 metadata。 |
+| V1 metadata（已弃用） | `wavebench.drivers` / `wavebench.instrument.v1` | 否。仅用于兼容展示 metadata。 |
 | V2 executable plugin | `wavebench.instruments` / `wavebench.instrument.v2` | 仅在配置选中 driver 后。 |
 | 声明式 SCPI TOML | 本地 TOML | 否；只允许显式只读 IDN probe。 |
 
 ## 加载与信任边界
+
+V1 metadata 保持已有兼容行为；新增可执行仪器插件使用 V2。本页的弃用标注不表示 V1
+运行时已经移除，也不增加 advisor 等尚未实现的插件类别。
 
 默认插件命令优先查看内建 metadata。`plugin ... --load` 会导入第三方 V2 descriptor；只在可信环境中使用。Service 仅在实际打开已配置的 driver 时加载对应插件，未选中的坏插件不应阻断其它内建路径。
 

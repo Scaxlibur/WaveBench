@@ -9,6 +9,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
+import shutil
 import stat
 import subprocess
 import sys
@@ -55,6 +56,14 @@ _SUBPROCESS_ENV_KEYS = (
     "ComSpec",
     "VIRTUAL_ENV",
 )
+
+
+def require_uv() -> str:
+    executable = shutil.which("uv")
+    if executable is None:
+        raise ConfigError("uv is required on PATH for plugin installation and builds / "
+                          "插件安装和构建需要 PATH 中可用的 uv")
+    return executable
 
 
 def build_subprocess_environment() -> dict[str, str]:
@@ -218,18 +227,18 @@ def build_source_wheel(
     output.mkdir(parents=True, exist_ok=True)
     before = {item.resolve() for item in output.glob("*.whl")}
     command = [
+        require_uv(),
+        "--no-config",
+        "--offline",
+        "--no-python-downloads",
+        "--no-cache",
+        "build",
+        "--wheel",
+        "--python",
         str(python_executable),
-        "-m",
-        "pip",
-        "--isolated",
-        "wheel",
         "--no-build-isolation",
-        "--no-deps",
         "--no-index",
-        "--disable-pip-version-check",
-        "--no-input",
-        "--no-cache-dir",
-        "--wheel-dir",
+        "--out-dir",
         str(output),
         str(source.path),
     ]
@@ -245,6 +254,8 @@ def build_source_wheel(
         )
     except subprocess.TimeoutExpired as exc:
         raise ConfigError("plugin wheel build timed out / 插件 wheel 构建超时") from exc
+    except OSError as exc:
+        raise ConfigError("cannot execute uv for plugin build / 无法执行 uv 构建插件") from exc
     if completed.returncode != 0:
         detail = _sanitize_subprocess_detail(completed.stderr or completed.stdout, source.path)
         raise ConfigError(f"plugin wheel build failed / 插件 wheel 构建失败: {detail}")
@@ -591,7 +602,7 @@ def _validate_wavebench_requirement(dependencies: tuple[str, ...]) -> None:
             matches.append(requirement)
     if len(matches) != 1:
         raise ConfigError("plugin must declare exactly one active WaveBench dependency / 插件必须声明一个生效的 WaveBench 依赖")
-    if Version(__version__) not in matches[0].specifier:
+    if not matches[0].specifier.contains(Version(__version__), prereleases=True):
         raise ConfigError(
             f"plugin requires {matches[0]}; current WaveBench is {__version__} / "
             "插件与当前 WaveBench 版本不兼容"

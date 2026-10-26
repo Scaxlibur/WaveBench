@@ -69,19 +69,15 @@ WaveBench 是面向电子设计调试和日常实验的 Python 测量台。它�
 
 ## 无硬件快速开始
 
-以下命令只安装包、列出模板并打印一个示例 plan；不会连接仪器或打开输出。
+正式发行包从 [GitHub Releases](https://github.com/Scaxlibur/WaveBench/releases) 获取，安装与开发线入口见[安装说明](docs/getting-started/installation.md)。在已安装 WaveBench 的环境中运行以下命令，可生成一个示例 plan，不会连接仪器或打开输出。
 
 ```bash
-git clone https://github.com/Scaxlibur/WaveBench.git
-cd WaveBench
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m wavebench run template --list
-.venv/bin/python -m wavebench run template source-scope-sine --print
-.venv/bin/python -m wavebench run check --plan plans/closure_sine_1k.toml
+python -m wavebench --version
+python -m wavebench run template --list
+python -m wavebench run template source-scope-sine --output example.toml
 ```
 
-最后一条命令以 `safety_limits=ok / 安全上限=通过` 结束时，表示示例 plan 已通过离线检查。完整的预期结果、Windows 命令和下一步见[无硬件快速开始](docs/getting-started/quickstart.md)。
+按[无硬件快速开始](docs/getting-started/quickstart.md)准备演示配置并执行离线检查。以 `safety_limits=ok / 安全上限=通过` 结束时，表示示例 plan 已通过检查。
 
 ## 支持范围
 
@@ -104,6 +100,17 @@ python3 -m venv .venv
 开始真实实验前，请阅读[执行一次实验](docs/how-to/run-an-experiment.md)和[配置实验台](docs/getting-started/configure-bench.md)。
 
 ## 文档与贡献
+
+Core 开发环境由 `uv.lock` 固定依赖版本：
+
+```bash
+uv sync --locked --extra dev --extra analysis --extra tui
+uv run --no-sync pytest -q
+uv run --no-sync ruff check .
+```
+
+`pdf`、`report3d` 和 `docs` 可按需用 `--extra` 加入。默认同步会移除未声明的包；
+已安装仪器插件的运行环境应与开发环境分开，详见[管理仪器插件](docs/how-to/manage-plugins.md)。
 
 - [文档首页](docs/index.md)
 - [示例计划及硬件边界](plans/README.md)

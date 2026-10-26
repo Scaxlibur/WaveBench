@@ -2,8 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, Dev]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -24,30 +28,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.15"
+          enable-cache: true
 
       - name: Install package and test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,analysis,pdf]"
+        run: uv sync --locked --python "${{ matrix.python-version }}" --extra dev --extra analysis --extra pdf
 
       - name: Run Ruff
-        run: python -m ruff check .
+        run: uv run --no-sync python -m ruff check .
 
       - name: Audit documentation
         if: matrix.python-version == '3.11'
-        run: python .agents/skills/wavebench-docs/scripts/audit_docs.py --quiet-warnings
+        run: uv run --no-sync python .agents/skills/wavebench-docs/scripts/audit_docs.py --quiet-warnings
 
       - name: Check generated Reference
         if: matrix.python-version == '3.11'
-        run: python scripts/generate_docs.py --check
+        run: uv run --no-sync python scripts/generate_docs.py --check
 
       - name: Report documentation impact
         if: matrix.python-version == '3.11'
-        run: python scripts/docs_impact.py
+        run: uv run --no-sync python scripts/docs_impact.py
 
       - name: Run unit tests
-        run: python -m pytest -q
+        run: uv run --no-sync python -m pytest -q
 
   test-windows:
     name: Windows Python ${{ matrix.python-version }} tests
@@ -67,25 +74,83 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.15"
+          enable-cache: true
 
       - name: Install package and Windows test dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,analysis,tui]"
-          python -m pip check
+        run: uv sync --locked --python "${{ matrix.python-version }}" --extra dev --extra analysis --extra tui
+
+      - name: Check dependencies
+        run: uv pip check --python .venv
 
       - name: Run Ruff
-        run: python -m ruff check .
+        run: uv run --no-sync python -m ruff check .
 
       - name: Run unit tests
-        run: python -m pytest -q
+        run: uv run --no-sync python -m pytest -q
 
       - name: Run offline CLI smoke tests
         shell: pwsh
         run: |
-          python -m wavebench --help
-          python -m wavebench run schema | Out-Null
-          python -m wavebench run template --list
-          python -m wavebench lock status TCPIP::192.0.2.10::INSTR
+          uv run --no-sync python -m wavebench --help
+          uv run --no-sync python -m wavebench run schema | Out-Null
+          uv run --no-sync python -m wavebench run template --list
+          uv run --no-sync python -m wavebench lock status TCPIP::192.0.2.10::INSTR
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.15"
+      - name: Build sdist and wheel from sdist
+        run: uv build --no-sources --out-dir "${{ runner.temp }}/distributions"
+      - name: Check release identity and notes
+        shell: bash
+        run: |
+          args=()
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then args=(--tag "$GITHUB_REF_NAME"); fi
+          python scripts/check_release.py --artifacts "${{ runner.temp }}/distributions" "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: ${{ runner.temp }}/distributions/*
+          if-no-files-found: error
+
+  wheel-smoke:
+    name: Wheel ${{ matrix.os }} Python ${{ matrix.python-version }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.15"
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: ${{ runner.temp }}/distributions
+      - name: Install and exercise wheel outside the checkout
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          python scripts/smoke_wheel.py --artifacts "${{ runner.temp }}/distributions" --version "$version"

@@ -21,7 +21,6 @@ from wavebench.instruments.models import SourceBurstConfiguration
 from wavebench.instruments.source_extension_capabilities import validate_source_descriptor
 from wavebench.instruments.source_extensions import (
     SOURCE_CONTRACT_VERSION,
-    Availability,
     BurstFacet,
     Observed,
     OutputFacet,
@@ -46,7 +45,6 @@ from wavebench.instruments.source_extensions import (
     SourceQueryEffect,
     SourceQueryExecutionRecord,
     SourceQueryItemOutcome,
-    SourceReasonCode,
     SourceRuntimeIdentity,
     SourceTriggerOutput,
     SourceTriggerSlope,
@@ -57,32 +55,16 @@ from wavebench.instruments.source_extensions import (
 )
 from wavebench.logging import CommandLogger
 from wavebench.services.source_service import SourceService
-from wavebench.transport.contracts import ReplayPolicy
 from wavebench.transport.guarded import GuardedAuditedTransport
 from wavebench.transport.session import InstrumentSessionState
 
-from tests.source_v2_fixtures import basic_facet, source_descriptor, source_extensions
-
-
-class _TextTransport:
-    resource = "fake-source-burst-v2"
-
-    def record_event(self, direction: str, text: str) -> None:
-        del direction, text
-
-    def query(self, command: str, *, replay: ReplayPolicy = ReplayPolicy.NO_REPLAY) -> str:
-        del command, replay
-        return "ok"
-
-    def write(self, command: str) -> None:
-        del command
-
-    def close(self) -> None:
-        pass
-
-
-def _missing() -> Observed[object]:
-    return Observed.missing(Availability.NOT_QUERIED, SourceReasonCode.NOT_REQUESTED)
+from tests.source_v2_fixtures import (
+    TextTransport,
+    missing as _missing,
+    basic_facet,
+    source_descriptor,
+    source_extensions,
+)
 
 
 def _burst(
@@ -122,7 +104,7 @@ class _BurstWriteDriver:
         raise_after_fire: bool = False,
     ) -> None:
         self.transport = GuardedAuditedTransport(
-            _TextTransport(),
+            TextTransport("fake-source-burst-v2"),
             session_state=session_state,
         )
         self.output_enabled = output_enabled
