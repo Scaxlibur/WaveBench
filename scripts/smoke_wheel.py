@@ -43,7 +43,8 @@ assert pathlib.Path(wavebench.__file__).resolve().is_relative_to(
     pathlib.Path(sysconfig.get_paths()['purelib']).resolve())
 assert wavebench.__version__ == version('wavebench') == sys.argv[1]
 """, expected_version)
-        for entry in ((cli,), (python, "-I", "-m", "wavebench")):
+        # Isolated Python ignores PYTHONUTF8; set UTF-8 explicitly for captured Windows output.
+        for entry in ((cli,), (python, "-I", "-X", "utf8", "-m", "wavebench")):
             if run(*entry, "--version").strip() != f"wavebench {expected_version}":
                 raise ValueError("CLI version differs from distribution")
             for arguments in (("--help",), ("run", "schema"), ("run", "template", "--list"),
