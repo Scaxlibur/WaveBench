@@ -2,7 +2,7 @@ site_name: WaveBench
 site_description: 可审计的 Python 仪器测量台文档
 repo_url: https://github.com/Scaxlibur/wavebench
 repo_name: Scaxlibur/wavebench
-edit_uri: edit/master/
+edit_uri: ""
 
 exclude_docs: |
   README.md
@@ -70,9 +70,11 @@ nav:
   - 开发:
       - 贡献: development/contributing.md
       - 测试: development/testing.md
-      - 开发线示波器观察: development/scope-observation.md
+      - 示波器观察实现与验收: development/scope-observation.md
+      - 发布版本: development/releasing.md
       - 文档工作流: development/documentation.md
       - 插件开发: development/plugin-development.md
       - 新增仪器驱动: development/instrument-drivers.md
   - RFC: rfcs/index.md
-  - 更新日志: https://github.com/Scaxlibur/wavebench/blob/master/CHANGELOG.md
+  - 本版发布说明: releases/v0.8.28.md
+  - 更新日志: https://github.com/Scaxlibur/wavebench/blob/v0.8.28/CHANGELOG.md

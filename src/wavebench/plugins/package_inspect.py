@@ -602,7 +602,7 @@ def _validate_wavebench_requirement(dependencies: tuple[str, ...]) -> None:
             matches.append(requirement)
     if len(matches) != 1:
         raise ConfigError("plugin must declare exactly one active WaveBench dependency / 插件必须声明一个生效的 WaveBench 依赖")
-    if Version(__version__) not in matches[0].specifier:
+    if not matches[0].specifier.contains(Version(__version__), prereleases=True):
         raise ConfigError(
             f"plugin requires {matches[0]}; current WaveBench is {__version__} / "
             "插件与当前 WaveBench 版本不兼容"

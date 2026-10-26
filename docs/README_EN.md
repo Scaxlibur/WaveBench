@@ -6,16 +6,15 @@ The current complete documentation is maintained in Chinese. This page is an Eng
 
 ## Start without instruments
 
-Use a new checkout of the unreleased `Dev` branch, Python 3.11+, and [uv](https://docs.astral.sh/uv/getting-started/installation/) on PATH. The [installation guide](getting-started/installation.md) explains checkout and index configuration and links to released-version instructions.
+Install a release wheel with Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/installation/). The [installation guide](getting-started/installation.md) separates release installations, fixed-tag source checkouts, and the unreleased `Dev` branch. Run the following with the installed environment's Python:
 
 ```bash
-uv sync --locked
-uv run --no-sync wavebench run template --list
-uv run --no-sync wavebench run template source-scope-sine --print
-uv run --no-sync wavebench run check --plan plans/closure_sine_1k.toml
+python -m wavebench --version
+python -m wavebench run template --list
+python -m wavebench run template source-scope-sine --output example.toml
 ```
 
-The last command succeeds with `safety_limits=ok / 安全上限=通过`. It performs no instrument I/O. See the [Chinese Quickstart](getting-started/quickstart.md) for expected output, Windows commands, and the next steps.
+These commands perform no instrument I/O. Follow the [Chinese Quickstart](getting-started/quickstart.md) to create an offline configuration and check the plan. A successful check prints `safety_limits=ok / 安全上限=通过`.
 
 ## Safety boundary
 

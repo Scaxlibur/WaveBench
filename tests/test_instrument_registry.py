@@ -6,6 +6,7 @@ from wavebench.errors import AccessDeniedError, ConfigError
 from wavebench.instruments.api import DriverContext, InstrumentDescriptor, OptionSpec
 from wavebench.instruments.factory import open_instrument_driver
 from wavebench.instruments.registry import InstrumentRegistry, build_instrument_registry
+from wavebench.plugins.package_inspect import _validate_wavebench_requirement
 from wavebench.logging import CommandLogger
 from wavebench.transport.guarded import GuardedAuditedTransport
 
@@ -195,6 +196,37 @@ def test_registry_rejects_kind_version_and_builtin_override():
     override_result = InstrumentRegistry(external_entry_points=(override,)).load_all()
     assert len(override_result.load_errors) == 1
     assert "conflicts with built-in" in override_result.load_errors[0].message
+
+
+@pytest.mark.parametrize("current,compatible", [
+    ("0.8.27", False),
+    ("0.8.28.dev1", False),
+    ("0.8.28rc1", False),
+    ("0.8.28", True),
+    ("0.8.29.dev1", True),
+    ("0.9.0rc1", False),
+    ("0.9.0", False),
+    ("0+unknown", False),
+])
+def test_descriptor_and_package_use_same_version_bounds(monkeypatch, current, compatible):
+    monkeypatch.setattr("wavebench.instruments.registry.__version__", current)
+    monkeypatch.setattr("wavebench.plugins.package_inspect.__version__", current)
+    descriptor = make_descriptor(wavebench_min_version="0.8.28", wavebench_max_version="0.9")
+    registry = InstrumentRegistry(builtins=(descriptor,))
+    if compatible:
+        assert registry.resolve("example.scope") == descriptor
+        _validate_wavebench_requirement(("wavebench>=0.8.28,<0.9",))
+    else:
+        with pytest.raises(ConfigError, match="supports WaveBench"):
+            registry.resolve("example.scope")
+        with pytest.raises(ConfigError, match="plugin requires"):
+            _validate_wavebench_requirement(("wavebench>=0.8.28,<0.9",))
+
+
+def test_invalid_descriptor_version_is_actionable():
+    registry = InstrumentRegistry(builtins=(make_descriptor(wavebench_min_version="invalid"),))
+    with pytest.raises(ConfigError, match="invalid WaveBench compatibility version"):
+        registry.resolve("example.scope")
 
 
 def test_migration_canonical_prefers_external_while_alias_keeps_builtin_fallback():

@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
-import re
 import sys
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion
 
 from wavebench import __version__
 from wavebench.errors import ConfigError
@@ -213,10 +214,14 @@ def _validate_descriptor(
     validate_scope_descriptor(descriptor)
     validate_source_descriptor(descriptor)
     validate_rf_source_descriptor(descriptor)
-    current = _version_tuple(__version__)
-    if current < _version_tuple(descriptor.wavebench_min_version) or current >= _version_tuple(
-        descriptor.wavebench_max_version
-    ):
+    try:
+        requirement = SpecifierSet(
+            f">={descriptor.wavebench_min_version},<{descriptor.wavebench_max_version}"
+        )
+        compatible = requirement.contains(__version__, prereleases=True)
+    except (InvalidSpecifier, InvalidVersion) as exc:
+        raise ConfigError(f"invalid WaveBench compatibility version: {exc}") from exc
+    if not compatible:
         raise ConfigError(
             f"instrument driver {descriptor.driver_id!r} supports WaveBench "
             f">={descriptor.wavebench_min_version}, <{descriptor.wavebench_max_version}; "
@@ -312,8 +317,3 @@ def _entry_point_belongs_to_current_environment(entry_point: EntryPoint) -> bool
     except (AttributeError, OSError, TypeError, ValueError):
         return False
     return True
-
-
-def _version_tuple(value: str) -> tuple[int, ...]:
-    numbers = [int(item) for item in re.findall(r"\d+", value)]
-    return tuple((numbers + [0, 0, 0])[:3])

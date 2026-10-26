@@ -1,6 +1,19 @@
 # WaveBench 更新日志
 
-这里记录已经打过 Git tag 的版本。内容以 tag 之前已经合入的代码、测试、发布说明和边界记录为事实源；路线图里的候选功能不算已发布能力。没有独立 tag 的 release notes 草稿只并入对应正式版本，不单列为版本。版本号和时间以仓库 tag 为准，当前开发分支的变化不放在历史版本里。
+版本变化以对应源码和发布说明为依据，正式发行状态以 [GitHub Releases](https://github.com/Scaxlibur/WaveBench/releases) 为准。未发布的设计继续保留在 RFC 中。
+
+## v0.8.28
+
+[完整发布说明](docs/releases/v0.8.28.md)。
+
+- 新增示波器观察、波形期望检查及只读 MCP 建议入口，明确采集副作用与不完整验收状态。
+- 开发环境和受管插件安装采用 uv，保留旧 pip 安装记录的恢复兼容。
+- 统一运行时版本身份和插件版本比较，增加独立 wheel 安装与 tag 发布门禁。
+- 修复 Windows 分析结果原子替换的短暂占用失败。
+
+## v0.8.27 — 2026-09-08
+
+[完整发布说明](https://github.com/Scaxlibur/WaveBench/releases/tag/v0.8.27)。该版本包含信号处理流水线、批量和双通道分析、Source／RF Source 扩展、状态恢复、资源租约与原生 Windows 支持。
 
 ## v0.8.0 — 2026-07-24
 
