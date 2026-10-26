@@ -1,17 +1,16 @@
-# 开发线示波器观察
+# 示波器观察实现与验收
 
-> 状态：`Proposed / Future`，开发线已实现、尚未正式发布。
-> 本页面向实现与测试人员，记录开发线的执行合同；不表示已安装的正式版本提供这些入口。
+本页面向 Core 实现与测试人员，记录 `0.8.28` 的执行合同。用户入口见 [CLI Reference](../reference/cli.md)和 [MCP 操作指南](../how-to/serve-mcp.md)。
 
 ## 实现入口与职责
 
 CLI 的 `scope observe` 和 MCP 的 `scope.observe` / `scope.advise` 由
 `services/agent_observe.py`、`services/agent_advise.py`、`ScopeService` 与 `mcp_http.py`
-共同实现。CLI 参数以本开发线的 `cli_parser.py` 和离线 `--help` 为准。
+共同实现。CLI 参数以 `cli_parser.py` 和离线 `--help` 为准。
 Core 表达观察、访问约束、会话和报告语义；型号通道、端接与传输差异由 descriptor 和 driver
 提供，不在观察层维护型号范围表。
 
-MCP 的 `doctor.config` 同属未发布入口，调用 `doctor_records()` 并返回结构化检查记录。
+MCP 的 `doctor.config` 调用 `doctor_records()` 并返回结构化检查记录。
 它不读取波形或执行建议；实际查询合同以 doctor 与 driver 实现为准。
 
 ## 观察与建议
@@ -77,9 +76,6 @@ duty_percent = 50
 剩余通道中止、禁用配置及离线失败零构造、legacy factory I/O 拦截、真实 guard 的观察零写，
 以及缺证据建议与同步默认值。测试只使用 fake
 transport 和合成信号，不连接设备；实机 evidence 属于单独授权的插件验证。
-
-发布时依据实际 tag 和实现将正式可用行为转入 CLI Reference 和 MCP How-to，并保留唯一
-事实来源。本页不提前承诺发布版本、插件支持范围或硬件验收结论。
 
 相关合同见[安全模型](../concepts/safety-model.md)、[会话与恢复](../concepts/sessions-and-recovery.md)、
 [插件模型](../concepts/plugin-model.md)和[测试说明](testing.md)。

@@ -14,4 +14,4 @@ WaveBench 的代码、文档、schema 和测试在同一仓库中维护。提交
 
 新增或修改用户可见行为时，更新唯一 canonical Reference，并用[文档工作流](documentation.md)进行 scoped review。插件专用流程见[插件开发](plugin-development.md)。
 
-尚未发布的示波器观察入口及执行验收合同见[开发线示波器观察](scope-observation.md)。
+示波器观察的实现与回归合同见[示波器观察实现与验收](scope-observation.md)。发布步骤见[发布版本](releasing.md)。

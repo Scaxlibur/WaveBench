@@ -2,7 +2,7 @@
 
 本页适用于需要检查、安装、升级、降级、卸载或恢复本地 WaveBench 仪器插件的维护者。可执行插件是可信 Python 代码，不是安全沙箱；只处理来源、版本和依赖均已确认的本地源码目录或 wheel。
 
-以下 uv 后端属于尚未发布的 `Dev` 开发线。验证它时使用该开发线构建的 Core wheel；已发布版本的安装入口见[安装说明](../getting-started/installation.md)。
+以下 uv 后端适用于 Core `0.8.28`。使用更早版本时查阅对应 tag 的文档；发行包与开发线的安装入口见[安装说明](../getting-started/installation.md)。
 
 ## 前置条件
 

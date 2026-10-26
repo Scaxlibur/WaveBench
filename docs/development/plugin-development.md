@@ -48,6 +48,8 @@ Core 内置 DG 回退驱动也提供该接口；内置版本随 Core 发布，�
 
 ## 验证
 
+Core `0.8.28` 起，descriptor 的最低／最高 Core 版本与包的 `Requires-Dist` 均按 PEP 440 范围校验。显式安装的开发版可以落在兼容区间内，但 `0.8.28.dev1` 不满足 `>=0.8.28`；`<0.9` 也不接受 `0.9.0rc1`。两个声明须使用一致边界，缺少 Core 安装元数据的 `0+unknown` 不应视为兼容版本。
+
 ```bash
 python -m wavebench plugin package check <plugin-path>
 python -m wavebench plugin install <plugin-path> --dry-run

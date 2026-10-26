@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from . import __version__
 from .discovery import DEFAULT_DISCOVERY_PORTS
 from .mcp_http import DEFAULT_MCP_HOST, DEFAULT_MCP_PORT, DEFAULT_MCP_TOKEN_ENV
 
@@ -28,6 +29,7 @@ def add_scope_error_options(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wavebench")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--json",
         action="store_true",

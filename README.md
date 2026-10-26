@@ -69,18 +69,15 @@ WaveBench 是面向电子设计调试和日常实验的 Python 测量台。它�
 
 ## 无硬件快速开始
 
-以下 uv 流程面向尚未发布的 `Dev` 开发线，版本选择见[安装说明](docs/getting-started/installation.md)。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后，在新的工作副本运行以下命令。它们只安装包、列出模板并打印一个示例 plan，不会连接仪器或打开输出。
+正式发行包从 [GitHub Releases](https://github.com/Scaxlibur/WaveBench/releases) 获取，安装与开发线入口见[安装说明](docs/getting-started/installation.md)。在已安装 WaveBench 的环境中运行以下命令，可生成一个示例 plan，不会连接仪器或打开输出。
 
 ```bash
-git clone --branch Dev https://github.com/Scaxlibur/WaveBench.git
-cd WaveBench
-uv sync --locked
-uv run --no-sync wavebench run template --list
-uv run --no-sync wavebench run template source-scope-sine --print
-uv run --no-sync wavebench run check --plan plans/closure_sine_1k.toml
+python -m wavebench --version
+python -m wavebench run template --list
+python -m wavebench run template source-scope-sine --output example.toml
 ```
 
-最后一条命令以 `safety_limits=ok / 安全上限=通过` 结束时，表示示例 plan 已通过离线检查。完整的预期结果、Windows 命令和下一步见[无硬件快速开始](docs/getting-started/quickstart.md)。
+按[无硬件快速开始](docs/getting-started/quickstart.md)准备演示配置并执行离线检查。以 `safety_limits=ok / 安全上限=通过` 结束时，表示示例 plan 已通过检查。
 
 ## 支持范围
 
